@@ -18,16 +18,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             SettingsService::set('app_name', trim($_POST['app_name'] ?? 'ColdAisle'));
             SettingsService::set('org_name', trim($_POST['org_name'] ?? ''), 'general');
             SettingsService::set('disposal_notify_days', (string)(int)($_POST['disposal_notify_days'] ?? 7), 'lifecycle');
-            $paypal = trim((string)($_POST['donation_paypal_url'] ?? ''));
-            if ($paypal !== '' && !preg_match('#^https?://#i', $paypal)) {
-                $paypal = 'https://' . $paypal;
-            }
-            SettingsService::set('donation_paypal_url', $paypal, 'general');
-            SettingsService::set(
-                'donation_show_footer',
-                !empty($_POST['donation_show_footer']) ? '1' : '0',
-                'general'
-            );
             $config['org_name'] = $_POST['org_name'] ?? $config['org_name'] ?? '';
             $config['timezone'] = $_POST['timezone'] ?? $config['timezone'] ?? 'UTC';
             $config['base_url'] = rtrim($_POST['base_url'] ?? '', '/');
@@ -135,8 +125,8 @@ try {
 } catch (Throwable $e) {
     $updStatus = null;
 }
-$paypalUrl = trim((string)SettingsService::get('donation_paypal_url', ''));
-$showDonateFooter = SettingsService::get('donation_show_footer', '1') === '1';
+// Fixed public donation link (not user-configurable)
+$paypalUrl = 'https://paypal.me/mattelsberry';
 
 layout_header('Settings', $user, 'settings');
 ?>
@@ -144,31 +134,23 @@ layout_header('Settings', $user, 'settings');
 <div class="card" id="support">
     <div class="card-header flex-between">
         <h2>Support ColdAisle</h2>
-        <?php if ($paypalUrl !== ''): ?>
-            <a class="btn btn-primary" href="<?= App::e($paypalUrl) ?>" target="_blank" rel="noopener noreferrer">
-                Donate with PayPal
-            </a>
-        <?php endif; ?>
+        <a class="btn btn-primary" href="<?= App::e($paypalUrl) ?>" target="_blank" rel="noopener noreferrer">
+            Donate with PayPal
+        </a>
     </div>
     <div class="card-body">
         <p class="text-muted" style="margin-top:0;font-size:.9rem">
             ColdAisle is free and open source. If it helps your datacenter, optional donations keep development going —
             no accounts, no paywalls, no marketing push.
         </p>
-        <?php if ($paypalUrl !== ''): ?>
-            <p style="margin:.5rem 0 0">
-                <a class="btn btn-primary" href="<?= App::e($paypalUrl) ?>" target="_blank" rel="noopener noreferrer">
-                    💙 Donate with PayPal
-                </a>
-                <a class="btn btn-secondary" href="https://github.com/sabap/ColdAisle" target="_blank" rel="noopener noreferrer">
-                    GitHub
-                </a>
-            </p>
-        <?php else: ?>
-            <p class="text-muted" style="font-size:.85rem;margin:0">
-                Set your PayPal.me (or PayPal donate) URL under <strong>General</strong> below to show the donate button here and in the footer.
-            </p>
-        <?php endif; ?>
+        <p style="margin:.5rem 0 0">
+            <a class="btn btn-primary" href="<?= App::e($paypalUrl) ?>" target="_blank" rel="noopener noreferrer">
+                💙 Donate with PayPal
+            </a>
+            <a class="btn btn-secondary" href="https://github.com/sabap/ColdAisle" target="_blank" rel="noopener noreferrer">
+                GitHub
+            </a>
+        </p>
     </div>
 </div>
 
@@ -188,19 +170,6 @@ layout_header('Settings', $user, 'settings');
                 <input class="form-control" name="base_url" value="<?= App::e($config['base_url'] ?? '') ?>" placeholder="https://dcim.contoso.com"></div>
             <div class="form-row"><label>Disposal notify (days)</label>
                 <input class="form-control" type="number" name="disposal_notify_days" value="<?= App::e(SettingsService::get('disposal_notify_days', '7')) ?>"></div>
-            <div class="form-row full"><label>PayPal donation URL</label>
-                <input class="form-control" name="donation_paypal_url" value="<?= App::e($paypalUrl) ?>"
-                       placeholder="https://paypal.me/YourName or PayPal donate link">
-                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
-                    Create a free link at
-                    <a href="https://www.paypal.com/paypalme" target="_blank" rel="noopener">paypal.me</a>
-                    (e.g. <code>https://paypal.me/YourAccount</code>).
-                </p>
-            </div>
-            <div class="form-row full"><label>
-                <input type="checkbox" name="donation_show_footer" value="1" <?= $showDonateFooter ? 'checked' : '' ?>>
-                Show “Donate” link in the site footer (when URL is set)
-            </label></div>
             <div class="form-row"><button class="btn btn-primary" type="submit">Save General</button></div>
         </form>
     </div>

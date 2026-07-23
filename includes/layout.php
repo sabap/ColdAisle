@@ -131,21 +131,12 @@ function layout_header(string $title, array $user, string $active = ''): void
 
 function layout_footer(): void
 {
-    $donateUrl = '';
-    $showDonate = false;
-    try {
-        $donateUrl = trim((string)SettingsService::get('donation_paypal_url', ''));
-        $showDonate = SettingsService::get('donation_show_footer', '1') === '1' && $donateUrl !== '';
-    } catch (Throwable $e) {
-        $showDonate = false;
-    }
+    $donateUrl = 'https://paypal.me/mattelsberry';
     ?>
         </main>
         <footer class="app-footer">
             ColdAisle v<?= App::VERSION ?> · <?= date('Y') ?>
-            <?php if ($showDonate): ?>
-                · <a href="<?= App::e($donateUrl) ?>" target="_blank" rel="noopener noreferrer">Donate</a>
-            <?php endif; ?>
+            · <a href="<?= App::e($donateUrl) ?>" target="_blank" rel="noopener noreferrer">Donate</a>
             · <a href="https://github.com/sabap/ColdAisle" target="_blank" rel="noopener noreferrer">GitHub</a>
         </footer>
     </div>

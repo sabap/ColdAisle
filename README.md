@@ -13,7 +13,7 @@ ColdAisle is free to use. If it helps your datacenter and you want to support de
 
 **[Donate with PayPal](https://paypal.me/mattelsberry)**
 
-In a running install: **Settings → Support ColdAisle**, or the footer **Donate** link.
+In a running install: **Settings → Support ColdAisle**, or the footer **Donate** link (always available).
 
 ## Updates (GitHub)
 
