@@ -383,9 +383,6 @@ function self_generate_config(array $dbCfg, array $form, string $baseUrl): strin
         ],
         'updates' => [
             'enabled' => true,
-            'github_owner' => 'sabap',
-            'github_repo' => 'ColdAisle',
-            'github_token' => '',
             'auto_check' => true,
             'check_interval_hours' => 24,
             'ssl_verify' => true,

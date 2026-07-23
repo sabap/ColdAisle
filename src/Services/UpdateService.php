@@ -12,29 +12,43 @@ class UpdateService
     public const CACHE_KEY_JSON = 'update_check_json';
     public const CACHE_KEY_AT = 'update_check_at';
 
+    /** Public release source — not user-configurable. */
+    public const GITHUB_OWNER = 'sabap';
+    public const GITHUB_REPO = 'ColdAisle';
+
     /** Suffix for deferred replacements when the live file is locked (Windows/IIS). */
     public const PENDING_SUFFIX = '.coldaisle-new';
 
     /** @var list<string> pending .coldaisle-new paths created this request */
     private static array $pendingCreated = [];
 
-    /** @return array<string,mixed> */
+    /**
+     * Update behaviour. Source repo is always sabap/ColdAisle (public; no token).
+     * @return array<string,mixed>
+     */
     public static function config(): array
     {
         $c = App::config('updates', []);
         if (!is_array($c)) {
             $c = [];
         }
-        return array_merge([
+        $merged = array_merge([
             'enabled' => true,
-            'github_owner' => 'sabap',
-            'github_repo' => 'ColdAisle',
-            'github_token' => '',
             'auto_check' => true,
             'check_interval_hours' => 24,
             // Windows PHP often lacks a CA bundle; set false only if verify fails in your lab
             'ssl_verify' => true,
         ], $c);
+        // Always pin public project — ignore any legacy config owner/repo/token
+        $merged['github_owner'] = self::GITHUB_OWNER;
+        $merged['github_repo'] = self::GITHUB_REPO;
+        $merged['github_token'] = '';
+        return $merged;
+    }
+
+    public static function githubUrl(): string
+    {
+        return 'https://github.com/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO;
     }
 
     public static function installedVersion(): string
