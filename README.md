@@ -11,9 +11,9 @@ Formerly known as **WinDCIM**. Built as a modern replacement path for environmen
 
 ColdAisle is free to use. If it helps your datacenter and you want to support development, optional donations via PayPal are welcome (no paywall, no accounts):
 
-**[Donate with PayPal](https://paypal.me/)** ← replace with your PayPal.me link in the repo About / this README once you create one.
+**[Donate with PayPal](https://paypal.me/mattelsberry)**
 
-In a running install: **Settings → Support ColdAisle** (configure your PayPal URL under **General**).
+In a running install: **Settings → Support ColdAisle**, or the footer **Donate** link.
 
 ## Updates (GitHub)
 
