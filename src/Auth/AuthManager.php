@@ -153,9 +153,13 @@ class AuthManager
     public static function login(array $user, string $source = 'local'): void
     {
         session_regenerate_id(true);
+        // Rotate CSRF after privilege change (session fixation / stolen token)
+        unset($_SESSION['_csrf']);
         $_SESSION['user_id'] = (int)$user['user_id'];
         $_SESSION['auth_source'] = $source;
         $_SESSION['login_at'] = time();
+        $_SESSION['last_activity'] = time();
+        $_SESSION['_ua'] = self::userAgentFingerprint();
 
         Database::update('users', [
             'last_login' => date('Y-m-d H:i:s'),
@@ -168,16 +172,111 @@ class AuthManager
 
     public static function logout(): void
     {
-        $user = self::user();
+        $user = null;
+        try {
+            $user = self::user();
+        } catch (Throwable $e) {
+            $user = null;
+        }
         if ($user) {
             AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'logout', 'user', (int)$user['user_id']);
         }
         $_SESSION = [];
-        if (ini_get('session.use_cookies')) {
+        if (session_status() === PHP_SESSION_ACTIVE && ini_get('session.use_cookies')) {
             $p = session_get_cookie_params();
-            setcookie(session_name(), '', time() - 42000, $p['path'], $p['domain'], $p['secure'], $p['httponly']);
+            setcookie(session_name(), '', [
+                'expires' => time() - 42000,
+                'path' => $p['path'] ?: '/',
+                'domain' => $p['domain'] ?? '',
+                'secure' => !empty($p['secure']),
+                'httponly' => !empty($p['httponly']),
+                'samesite' => $p['samesite'] ?? 'Lax',
+            ]);
         }
-        session_destroy();
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_destroy();
+        }
+    }
+
+    /**
+     * Idle / absolute session expiry + optional user-agent binding.
+     * Called from App::boot() on web requests.
+     */
+    public static function touchSession(): void
+    {
+        if (session_status() !== PHP_SESSION_ACTIVE || empty($_SESSION['user_id'])) {
+            return;
+        }
+
+        $sec = App::securityConfig();
+        $now = time();
+        $loginAt = (int)($_SESSION['login_at'] ?? $now);
+        $last = (int)($_SESSION['last_activity'] ?? $loginAt);
+
+        $absolute = (int)($sec['session_absolute_minutes'] ?? 1440);
+        if ($absolute > 0 && ($now - $loginAt) > ($absolute * 60)) {
+            self::expireSession('Session expired (maximum lifetime). Please sign in again.');
+            return;
+        }
+
+        $idle = (int)($sec['session_idle_minutes'] ?? 480);
+        if ($idle > 0 && ($now - $last) > ($idle * 60)) {
+            self::expireSession('Session expired due to inactivity. Please sign in again.');
+            return;
+        }
+
+        if (!empty($sec['bind_user_agent'])) {
+            $fp = self::userAgentFingerprint();
+            if (empty($_SESSION['_ua'])) {
+                $_SESSION['_ua'] = $fp;
+            } elseif (!hash_equals((string)$_SESSION['_ua'], $fp)) {
+                self::expireSession('Session invalidated (client changed). Please sign in again.');
+                return;
+            }
+        }
+
+        $_SESSION['last_activity'] = $now;
+    }
+
+    private static function expireSession(string $message): void
+    {
+        $user = null;
+        try {
+            if (!empty($_SESSION['user_id'])) {
+                $user = self::user();
+            }
+        } catch (Throwable $e) {
+            $user = null;
+        }
+        if ($user) {
+            try {
+                AuditService::log(
+                    (int)$user['user_id'],
+                    $user['username'] ?? '',
+                    'session_expired',
+                    'user',
+                    (int)$user['user_id'],
+                    ['reason' => $message]
+                );
+            } catch (Throwable $e) {
+                // non-fatal
+            }
+        }
+        // Clear auth data but keep the secure session (for flash + login CSRF)
+        $_SESSION = [];
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_regenerate_id(true);
+        }
+        $_SESSION['_flash'][] = ['type' => 'error', 'message' => $message];
+        if (App::isApiRequest()) {
+            App::json(['error' => 'Session expired', 'message' => $message], 401);
+        }
+        App::redirect('login.php');
+    }
+
+    private static function userAgentFingerprint(): string
+    {
+        return hash('sha256', (string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
     }
 
     /**

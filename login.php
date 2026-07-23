@@ -29,7 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $user = AuthManager::attempt($username, $password);
             if ($user) {
                 AuthManager::login($user, $user['auth_source'] ?? 'local');
-                $redirect = $_SESSION['return_url'] ?? 'index.php';
+                $redirect = App::safeReturnPath($_SESSION['return_url'] ?? null, 'index.php');
                 unset($_SESSION['return_url']);
                 App::redirect($redirect);
             }

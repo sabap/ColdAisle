@@ -73,6 +73,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             ];
         }
 
+        if ($section === 'security') {
+            $same = strtoupper(trim((string)($_POST['cookie_samesite'] ?? 'Lax')));
+            if (!in_array($same, ['LAX', 'STRICT', 'NONE'], true)) {
+                $same = 'LAX';
+            }
+            $sameLabel = match ($same) {
+                'STRICT' => 'Strict',
+                'NONE' => 'None',
+                default => 'Lax',
+            };
+            $cookieSecure = strtolower(trim((string)($_POST['cookie_secure'] ?? 'auto')));
+            if (!in_array($cookieSecure, ['auto', 'always', 'never'], true)) {
+                $cookieSecure = 'auto';
+            }
+            $config['security'] = [
+                'force_https' => !empty($_POST['force_https']),
+                'hsts' => !empty($_POST['hsts']),
+                'hsts_max_age' => max(0, min(63072000, (int)($_POST['hsts_max_age'] ?? 31536000))),
+                'cookie_secure' => $cookieSecure,
+                'cookie_samesite' => $sameLabel,
+                'session_idle_minutes' => max(0, min(10080, (int)($_POST['session_idle_minutes'] ?? 480))),
+                'session_absolute_minutes' => max(0, min(43200, (int)($_POST['session_absolute_minutes'] ?? 1440))),
+                'bind_user_agent' => !empty($_POST['bind_user_agent']),
+            ];
+        }
+
         if ($section === 'update_check') {
             $status = UpdateService::checkForUpdate(true);
             if (!empty($status['ok'])) {
@@ -109,7 +135,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
     } catch (Throwable $e) {
         App::flash('error', $e->getMessage());
     }
-    App::redirect('pages/settings.php' . (isset($_POST['section']) && str_starts_with((string)$_POST['section'], 'update') ? '#updates' : ''));
+    $redirHash = '';
+    $secPost = (string)($_POST['section'] ?? '');
+    if (str_starts_with($secPost, 'update')) {
+        $redirHash = '#updates';
+    } elseif ($secPost === 'security') {
+        $redirHash = '#security';
+    }
+    App::redirect('pages/settings.php' . $redirHash);
 }
 
 // Reload config after potential changes on GET
@@ -117,6 +150,7 @@ $config = is_file($configPath) ? require $configPath : $config;
 $roles = Database::fetchAll('SELECT role_id, name FROM roles ORDER BY role_id');
 $ldaps = $config['auth']['ldaps'] ?? [];
 $entra = $config['auth']['entra'] ?? [];
+$secCfg = App::securityConfig();
 $updCfg = UpdateService::config();
 $updStatus = null;
 try {
@@ -172,6 +206,71 @@ layout_header('Settings', $user, 'settings');
                 <input class="form-control" type="number" name="disposal_notify_days" value="<?= App::e(SettingsService::get('disposal_notify_days', '7')) ?>"></div>
             <div class="form-row"><button class="btn btn-primary" type="submit">Save General</button></div>
         </form>
+    </div>
+</div>
+
+<div class="card" id="security">
+    <div class="card-header"><h2>Security (HTTPS &amp; sessions)</h2></div>
+    <div class="card-body">
+        <form method="post" class="form-grid">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="security">
+            <div class="form-row full">
+                <p class="text-muted" style="margin:0;font-size:.85rem">
+                    Current request:
+                    <strong><?= App::isHttps() ? 'HTTPS' : 'HTTP' ?></strong>
+                    · Session cookie Secure flag follows cookie mode below.
+                    Enable <em>Force HTTPS</em> only after a certificate is bound in IIS.
+                </p>
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="force_https" value="1" <?= !empty($secCfg['force_https']) ? 'checked' : '' ?>>
+                Force HTTPS (301 redirect HTTP → HTTPS)
+            </label></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="hsts" value="1" <?= !empty($secCfg['hsts']) ? 'checked' : '' ?>>
+                Send HSTS header when already on HTTPS
+            </label></div>
+            <div class="form-row"><label>HSTS max-age (seconds)</label>
+                <input class="form-control" type="number" min="0" max="63072000" name="hsts_max_age"
+                       value="<?= (int)$secCfg['hsts_max_age'] ?>"></div>
+            <div class="form-row"><label>Session cookie Secure</label>
+                <select class="form-control" name="cookie_secure">
+                    <?php foreach (['auto' => 'Auto (Secure when HTTPS)', 'always' => 'Always Secure', 'never' => 'Never (lab HTTP only)'] as $val => $lab): ?>
+                        <option value="<?= $val ?>" <?= ($secCfg['cookie_secure'] ?? 'auto') === $val ? 'selected' : '' ?>>
+                            <?= App::e($lab) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row"><label>SameSite</label>
+                <select class="form-control" name="cookie_samesite">
+                    <?php foreach (['Lax', 'Strict', 'None'] as $ss): ?>
+                        <option value="<?= $ss ?>" <?= ($secCfg['cookie_samesite'] ?? 'Lax') === $ss ? 'selected' : '' ?>>
+                            <?= $ss ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row"><label>Idle timeout (minutes, 0=off)</label>
+                <input class="form-control" type="number" min="0" max="10080" name="session_idle_minutes"
+                       value="<?= (int)$secCfg['session_idle_minutes'] ?>"
+                       title="Default 480 = 8 hours"></div>
+            <div class="form-row"><label>Absolute timeout (minutes, 0=off)</label>
+                <input class="form-control" type="number" min="0" max="43200" name="session_absolute_minutes"
+                       value="<?= (int)$secCfg['session_absolute_minutes'] ?>"
+                       title="Default 1440 = 24 hours from login"></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="bind_user_agent" value="1" <?= !empty($secCfg['bind_user_agent']) ? 'checked' : '' ?>>
+                Bind session to browser user-agent (invalidate if UA changes)
+            </label></div>
+            <div class="form-row"><button class="btn btn-primary" type="submit">Save Security</button></div>
+        </form>
+        <p class="hint text-muted" style="margin-top:.75rem">
+            Headers always sent: <code>X-Content-Type-Options</code>, <code>X-Frame-Options</code>,
+            <code>Referrer-Policy</code>, <code>Permissions-Policy</code>, <code>CSP frame-ancestors</code>.
+            Session cookies are HttpOnly; IDs are never put in URLs.
+        </p>
     </div>
 </div>
 
