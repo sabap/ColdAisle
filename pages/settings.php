@@ -116,11 +116,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         }
 
         if ($section === 'update_apply') {
+            @set_time_limit(600);
             $result = UpdateService::applyUpdate(null);
             AuditService::log((int)$user['user_id'], $user['username'], 'update_apply', 'system', null, [
                 'version' => $result['version'] ?? null,
+                'ok' => !empty($result['ok']),
             ]);
-            App::flash('success', $result['message'] ?? 'Update applied.');
+            if (!empty($result['ok'])) {
+                App::flash('success', $result['message'] ?? 'Update applied.');
+            } else {
+                App::flash('error', $result['message'] ?? 'Update failed.');
+            }
             App::redirect('pages/settings.php#updates');
         }
 
@@ -453,27 +459,61 @@ layout_header('Settings', $user, 'settings');
             <div class="form-row"><button class="btn btn-primary" type="submit">Save update settings</button></div>
         </form>
 
-        <div class="flex gap-1" style="flex-wrap:wrap">
+        <div class="flex gap-1" style="flex-wrap:wrap" id="update-actions">
             <form method="post" style="display:inline">
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                 <input type="hidden" name="section" value="update_check">
                 <button class="btn btn-secondary" type="submit">Check for updates</button>
             </form>
             <?php if ($updStatus && !empty($updStatus['update_available'])): ?>
-            <form method="post" style="display:inline"
-                  onsubmit="return confirm('Backup this install and update to v<?= App::e((string)$updStatus['latest']) ?>? The site may be briefly unavailable.');">
+            <form method="post" style="display:inline" id="form-update-apply"
+                  onsubmit="return coldAisleStartUpdate(this, '<?= App::e((string)$updStatus['latest']) ?>');">
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                 <input type="hidden" name="section" value="update_apply">
-                <button class="btn btn-primary" type="submit">
+                <button class="btn btn-primary" type="submit" id="btn-update-apply">
                     Update to v<?= App::e((string)$updStatus['latest']) ?>
                 </button>
             </form>
             <?php endif; ?>
         </div>
+        <div id="update-progress" class="alert alert-success" style="display:none;margin-top:.75rem" role="status" aria-live="polite">
+            <strong>Updating…</strong>
+            <span id="update-progress-text"> Creating backup, downloading release, applying files. This can take 1–3 minutes — keep this tab open.</span>
+            <div style="margin-top:.5rem;height:6px;background:var(--surface-2,#1e293b);border-radius:4px;overflow:hidden">
+                <div id="update-progress-bar" style="height:100%;width:30%;background:var(--accent,#3b82f6);border-radius:4px;animation:coldaisle-indeterminate 1.2s ease-in-out infinite"></div>
+            </div>
+        </div>
         <p class="text-muted" style="font-size:.75rem;margin:.75rem 0 0">
             Backups are written to <code>storage/backups/</code>. Requires PHP <code>curl</code>
             <?= extension_loaded('zip') ? ' and <code>zip</code>' : ' (and PowerShell Expand-Archive if <code>zip</code> is missing)' ?>.
+            The IIS app pool needs <strong>Modify</strong> on the whole site folder (not only <code>config</code>/<code>storage</code>) for updates to replace application files.
         </p>
+        <style>
+            @keyframes coldaisle-indeterminate {
+                0% { transform: translateX(-100%); width: 40%; }
+                50% { width: 60%; }
+                100% { transform: translateX(250%); width: 40%; }
+            }
+        </style>
+        <script>
+        function coldAisleStartUpdate(form, version) {
+            if (!confirm('Backup this install and update to v' + version + '? The site may be briefly unavailable.')) {
+                return false;
+            }
+            var prog = document.getElementById('update-progress');
+            var btn = document.getElementById('btn-update-apply');
+            if (prog) prog.style.display = 'block';
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = 'Updating to v' + version + '…';
+            }
+            // Allow other buttons to be disabled so the admin does not double-submit
+            document.querySelectorAll('#update-actions button').forEach(function (b) {
+                if (b !== btn) b.disabled = true;
+            });
+            return true;
+        }
+        </script>
     </div>
 </div>
 
