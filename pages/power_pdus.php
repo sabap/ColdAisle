@@ -131,24 +131,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'notes' => trim($_POST['notes'] ?? '') !== '' ? trim($_POST['notes']) : null,
             ], $elec);
 
-            // On update: blank passphrases mean "keep existing" when not applying a profile
+            // On update: blank secrets mean "keep existing" when not applying a profile
             if ($action === 'update_pdu' && !$profileId) {
                 $pidKeep = (int)($_POST['pdu_id'] ?? 0);
-                if ($pidKeep > 0 && ($snmpAuthPass === null || $snmpPrivPass === null)) {
+                if ($pidKeep > 0) {
                     $prev = Database::fetchOne(
-                        'SELECT snmp_auth_passphrase, snmp_priv_passphrase FROM pdus WHERE pdu_id = ?',
+                        'SELECT snmp_community, snmp_auth_passphrase, snmp_priv_passphrase FROM pdus WHERE pdu_id = ?',
                         [$pidKeep]
                     );
                     if ($prev) {
-                        if ($snmpAuthPass === null) {
+                        if (($row['snmp_community'] === null || $row['snmp_community'] === '')
+                            && !empty($prev['snmp_community'])) {
+                            $row['snmp_community'] = $prev['snmp_community'];
+                        }
+                        if ($snmpAuthPass === null && !empty($prev['snmp_auth_passphrase'])) {
                             $row['snmp_auth_passphrase'] = $prev['snmp_auth_passphrase'];
                         }
-                        if ($snmpPrivPass === null) {
+                        if ($snmpPrivPass === null && !empty($prev['snmp_priv_passphrase'])) {
                             $row['snmp_priv_passphrase'] = $prev['snmp_priv_passphrase'];
                         }
                     }
                 }
             }
+
+            // New v1/v2c PDUs: default community when left blank
+            if ($action === 'add_pdu'
+                && ($row['snmp_community'] === null || $row['snmp_community'] === '')
+                && in_array((string)($row['snmp_version'] ?? ''), ['1', '2c'], true)
+            ) {
+                $row['snmp_community'] = 'public';
+            }
+
+            // Seal SNMP secrets at rest
+            $row = Crypto::sealFields($row, [
+                'snmp_community', 'snmp_auth_passphrase', 'snmp_priv_passphrase',
+            ]);
 
             if ($row['name'] === '') {
                 throw new RuntimeException('Name is required.');
@@ -407,6 +424,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 if ($row['priv_passphrase'] === null || $row['priv_passphrase'] === '') {
                     $row['priv_passphrase'] = $existing['priv_passphrase'];
                 }
+            }
+            // Seal target secrets (already-encrypted from profile/PDU pass through)
+            $row = Crypto::sealFields($row, ['auth_passphrase', 'priv_passphrase']);
+
+            if ($existing) {
                 Database::update('snmp_targets', $row, 'target_id = :id', [':id' => (int)$existing['target_id']]);
                 $msg = 'Updated SNMP target for this PDU';
             } else {
@@ -434,10 +456,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 $pduPatch['snmp_priv_protocol'] = $privProto;
             }
             if ($authPass) {
-                $pduPatch['snmp_auth_passphrase'] = $authPass;
+                $pduPatch['snmp_auth_passphrase'] = Crypto::encrypt((string)$authPass);
             }
             if ($privPass) {
-                $pduPatch['snmp_priv_passphrase'] = $privPass;
+                $pduPatch['snmp_priv_passphrase'] = Crypto::encrypt((string)$privPass);
             }
             Database::update('pdus', $pduPatch, 'pdu_id = :id', [':id' => $pid]);
 

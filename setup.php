@@ -259,7 +259,9 @@ function self_generate_config(array $dbCfg, array $form, string $baseUrl): strin
 {
     $export = var_export([
         'app_name' => 'ColdAisle',
-        'version' => '1.0.0',
+        'version' => '0.2.1',
+        // 32-byte key, base64 — used to encrypt SNMP/API secrets at rest in the DB
+        'app_key' => base64_encode(random_bytes(32)),
         'timezone' => $form['timezone'],
         'base_url' => $baseUrl,
         'org_name' => $form['org_name'],
@@ -296,6 +298,15 @@ function self_generate_config(array $dbCfg, array $form, string $baseUrl): strin
                 'scopes' => 'openid profile email offline_access',
                 'default_role_id' => null,
             ],
+        ],
+        'updates' => [
+            'enabled' => true,
+            'github_owner' => 'sabap',
+            'github_repo' => 'ColdAisle',
+            'github_token' => '',
+            'auto_check' => true,
+            'check_interval_hours' => 24,
+            'ssl_verify' => true,
         ],
         'installed_at' => date('c'),
     ], true);

@@ -108,9 +108,9 @@ class SnmpPoller
             $t['snmp_version'] ?? '3',
             $t['security_name'] ?? '',
             $t['auth_protocol'] ?? '',
-            $t['auth_passphrase'] ?? '',
+            Crypto::decryptQuiet($t['auth_passphrase'] ?? null) ?? '',
             $t['priv_protocol'] ?? '',
-            $t['priv_passphrase'] ?? '',
+            Crypto::decryptQuiet($t['priv_passphrase'] ?? null) ?? '',
             $t['context_name'] ?? ''
         );
 
@@ -400,15 +400,19 @@ class SnmpPoller
     public static function pollPdu(array $pdu): void
     {
         // Direct poll using credentials on the PDU row (sysDescr heartbeat)
+        $version = (string)($pdu['snmp_version'] ?? '3');
+        $communityOrUser = $version === '3'
+            ? (string)($pdu['snmp_security_name'] ?? '')
+            : (string)(Crypto::decryptQuiet($pdu['snmp_community'] ?? null) ?? 'public');
         $session = self::openSession(
             $pdu['ip_address'],
             (int)($pdu['snmp_port'] ?? 161),
-            $pdu['snmp_version'] ?? '3',
-            $pdu['snmp_security_name'] ?? '',
+            $version,
+            $communityOrUser,
             $pdu['snmp_auth_protocol'] ?? '',
-            $pdu['snmp_auth_passphrase'] ?? '',
+            Crypto::decryptQuiet($pdu['snmp_auth_passphrase'] ?? null) ?? '',
             $pdu['snmp_priv_protocol'] ?? '',
-            $pdu['snmp_priv_passphrase'] ?? '',
+            Crypto::decryptQuiet($pdu['snmp_priv_passphrase'] ?? null) ?? '',
             $pdu['snmp_context'] ?? ''
         );
 

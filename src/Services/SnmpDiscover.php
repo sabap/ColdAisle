@@ -396,10 +396,10 @@ class SnmpDiscover
             'snmp_version' => $version,
             'security_name' => (string)($device['snmp_v3_user'] ?? ''),
             'auth_protocol' => (string)($device['snmp_v3_auth_proto'] ?? 'SHA'),
-            'auth_passphrase' => (string)($device['snmp_v3_auth_pass'] ?? ''),
+            'auth_passphrase' => (string)(Crypto::decryptQuiet($device['snmp_v3_auth_pass'] ?? null) ?? ''),
             'priv_protocol' => (string)($device['snmp_v3_priv_proto'] ?? 'AES'),
-            'priv_passphrase' => (string)($device['snmp_v3_priv_pass'] ?? ''),
-            'community' => (string)($device['snmp_community'] ?? 'public'),
+            'priv_passphrase' => (string)(Crypto::decryptQuiet($device['snmp_v3_priv_pass'] ?? null) ?? ''),
+            'community' => (string)(Crypto::decryptQuiet($device['snmp_community'] ?? null) ?? 'public'),
         ];
         // Profile overrides when set
         if (!empty($device['snmp_v3_profile_id'])) {
@@ -413,10 +413,10 @@ class SnmpDiscover
                     $creds['auth_protocol'] = (string)($prof['auth_protocol'] ?? $creds['auth_protocol']);
                     $creds['priv_protocol'] = (string)($prof['priv_protocol'] ?? $creds['priv_protocol']);
                     if (!empty($prof['auth_passphrase'])) {
-                        $creds['auth_passphrase'] = (string)$prof['auth_passphrase'];
+                        $creds['auth_passphrase'] = (string)(Crypto::decryptQuiet((string)$prof['auth_passphrase']) ?? '');
                     }
                     if (!empty($prof['priv_passphrase'])) {
-                        $creds['priv_passphrase'] = (string)$prof['priv_passphrase'];
+                        $creds['priv_passphrase'] = (string)(Crypto::decryptQuiet((string)$prof['priv_passphrase']) ?? '');
                     }
                     $creds['snmp_version'] = '3';
                 }
@@ -625,7 +625,7 @@ class SnmpDiscover
         if ($version === '') {
             $version = '3';
         }
-        $community = (string)($pdu['snmp_community'] ?? 'public');
+        $community = (string)(Crypto::decryptQuiet($pdu['snmp_community'] ?? null) ?? 'public');
         $secName = (string)($pdu['snmp_security_name'] ?? '');
         // v1/v2c: security_name often holds community in targets; prefer explicit community
         if (($version === '1' || $version === '2c') && $secName === '') {
@@ -637,9 +637,9 @@ class SnmpDiscover
             'snmp_version' => $version,
             'security_name' => $secName,
             'auth_protocol' => (string)($pdu['snmp_auth_protocol'] ?? 'SHA'),
-            'auth_passphrase' => (string)($pdu['snmp_auth_passphrase'] ?? ''),
+            'auth_passphrase' => (string)(Crypto::decryptQuiet($pdu['snmp_auth_passphrase'] ?? null) ?? ''),
             'priv_protocol' => (string)($pdu['snmp_priv_protocol'] ?? 'AES'),
-            'priv_passphrase' => (string)($pdu['snmp_priv_passphrase'] ?? ''),
+            'priv_passphrase' => (string)(Crypto::decryptQuiet($pdu['snmp_priv_passphrase'] ?? null) ?? ''),
             'community' => $community !== '' ? $community : 'public',
             'context' => (string)($pdu['snmp_context'] ?? ''),
         ];
@@ -654,10 +654,10 @@ class SnmpDiscover
                     $creds['auth_protocol'] = (string)($prof['auth_protocol'] ?? $creds['auth_protocol']);
                     $creds['priv_protocol'] = (string)($prof['priv_protocol'] ?? $creds['priv_protocol']);
                     if (!empty($prof['auth_passphrase'])) {
-                        $creds['auth_passphrase'] = (string)$prof['auth_passphrase'];
+                        $creds['auth_passphrase'] = (string)(Crypto::decryptQuiet((string)$prof['auth_passphrase']) ?? '');
                     }
                     if (!empty($prof['priv_passphrase'])) {
-                        $creds['priv_passphrase'] = (string)$prof['priv_passphrase'];
+                        $creds['priv_passphrase'] = (string)(Crypto::decryptQuiet((string)$prof['priv_passphrase']) ?? '');
                     }
                     if (!empty($prof['context_name'])) {
                         $creds['context'] = (string)$prof['context_name'];

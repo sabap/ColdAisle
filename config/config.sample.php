@@ -7,7 +7,10 @@ declare(strict_types=1);
 
 return [
     'app_name' => 'ColdAisle',
-    'version' => '0.1.0',
+    'version' => '0.2.1',
+    // Generate: base64_encode(random_bytes(32)) — used to encrypt secrets in the DB
+    // Never commit a real production key.
+    'app_key' => '',
     'timezone' => 'UTC',
     'base_url' => '', // e.g. https://dcim.contoso.com
     'org_name' => 'My Organization',

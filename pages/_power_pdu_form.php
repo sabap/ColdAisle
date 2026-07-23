@@ -209,7 +209,11 @@ $preZone = (int)($edit['zone_id'] ?? ($filterZone ?? 0));
     <div class="form-row power-snmp-any" style="display:none"><label>SNMP port</label>
         <input class="form-control" type="number" name="snmp_port" value="<?= App::e((string)($edit['snmp_port'] ?? '161')) ?>"></div>
     <div class="form-row power-snmp-v12" style="display:none"><label>Public community</label>
-        <input class="form-control" name="snmp_community" value="<?= App::e($edit['snmp_community'] ?? 'public') ?>" autocomplete="off"></div>
+        <input class="form-control" name="snmp_community" value=""
+               placeholder="<?= !empty($edit['snmp_community'])
+                   ? '•••• saved (leave blank to keep)'
+                   : 'public' ?>"
+               autocomplete="off"></div>
     <div class="form-row full power-snmp-v3" style="display:none">
         <label>SNMPv3 credential profile</label>
         <select class="form-control" name="snmp_v3_profile_id" id="power_snmp_v3_profile_id">

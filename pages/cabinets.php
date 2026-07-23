@@ -724,16 +724,22 @@ if ($id) {
                     { value: '3', label: '3' }
                 ], pdu.snmp_version || '2c', false) + '</select></div>';
             html += '<div class="form-row snmp-any"><label>SNMP port</label><input class="form-control" type="number" name="snmp_port" value="' + esc(pdu.snmp_port != null ? pdu.snmp_port : '161') + '"></div>';
-            html += '<div class="form-row snmp-v12"><label>Public community</label><input class="form-control" name="snmp_community" value="' + esc(pdu.snmp_community || 'public') + '" autocomplete="off"></div>';
+            var hasCommunity = !!(pdu.snmp_community);
+            var hasAuthPass = !!(pdu.snmp_auth_passphrase);
+            var hasPrivPass = !!(pdu.snmp_priv_passphrase);
+            html += '<div class="form-row snmp-v12"><label>Public community</label><input class="form-control" name="snmp_community" value="" placeholder="' +
+                esc(hasCommunity ? '•••• saved (leave blank to keep)' : 'public') + '" autocomplete="off"></div>';
             html += '<div class="form-row snmp-v3"><label>Security level</label><select class="form-control" name="snmp_v3_sec_level">' +
                 optionsHtml(['noAuthNoPriv', 'authNoPriv', 'authPriv'], pdu.snmp_v3_sec_level || 'authPriv', true) + '</select></div>';
             html += '<div class="form-row snmp-v3"><label>Security name (user)</label><input class="form-control" name="snmp_security_name" value="' + esc(pdu.snmp_security_name || '') + '"></div>';
             html += '<div class="form-row snmp-v3"><label>Auth protocol</label><select class="form-control" name="snmp_auth_protocol">' +
                 optionsHtml(['MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512'], pdu.snmp_auth_protocol, true) + '</select></div>';
-            html += '<div class="form-row snmp-v3"><label>Auth passphrase</label><input class="form-control" type="password" name="snmp_auth_passphrase" value="' + esc(pdu.snmp_auth_passphrase || '') + '" autocomplete="new-password"></div>';
+            html += '<div class="form-row snmp-v3"><label>Auth passphrase</label><input class="form-control" type="password" name="snmp_auth_passphrase" value="" placeholder="' +
+                esc(hasAuthPass ? '•••• saved (leave blank to keep)' : '') + '" autocomplete="new-password"></div>';
             html += '<div class="form-row snmp-v3"><label>Priv protocol</label><select class="form-control" name="snmp_priv_protocol">' +
                 optionsHtml(['DES', 'AES', 'AES192', 'AES256'], pdu.snmp_priv_protocol, true) + '</select></div>';
-            html += '<div class="form-row snmp-v3"><label>Priv passphrase</label><input class="form-control" type="password" name="snmp_priv_passphrase" value="' + esc(pdu.snmp_priv_passphrase || '') + '" autocomplete="new-password"></div>';
+            html += '<div class="form-row snmp-v3"><label>Priv passphrase</label><input class="form-control" type="password" name="snmp_priv_passphrase" value="" placeholder="' +
+                esc(hasPrivPass ? '•••• saved (leave blank to keep)' : '') + '" autocomplete="new-password"></div>';
             html += '<div class="form-row snmp-v3"><label>Context</label><input class="form-control" name="snmp_context" value="' + esc(pdu.snmp_context || '') + '"></div>';
             html += '<div class="form-row full"><label>Notes</label><textarea class="form-control" name="notes" rows="2">' + esc(pdu.notes || '') + '</textarea></div>';
             html += '</div>';
