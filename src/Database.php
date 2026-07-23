@@ -199,6 +199,16 @@ class Database
         return $stmt;
     }
 
+    /**
+     * Run non-prepared SQL on the shared connection (e.g. SET IDENTITY_INSERT).
+     * Prefer this over query() for session-level SET options — some ODBC drivers
+     * do not apply prepared SET statements the same way as exec().
+     */
+    public static function exec(string $sql): int|false
+    {
+        return self::connection()->exec($sql);
+    }
+
     public static function fetchAll(string $sql, array $params = []): array
     {
         return self::query($sql, $params)->fetchAll();
