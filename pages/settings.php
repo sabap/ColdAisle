@@ -58,16 +58,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         }
 
         if ($section === 'updates') {
-            $prev = is_array($config['updates'] ?? null) ? $config['updates'] : [];
-            $token = trim((string)($_POST['github_token'] ?? ''));
-            if ($token === '') {
-                $token = (string)($prev['github_token'] ?? '');
-            }
+            // Do not persist owner/repo/token — hard-coded to public sabap/ColdAisle
             $config['updates'] = [
                 'enabled' => !empty($_POST['updates_enabled']),
-                'github_owner' => trim((string)($_POST['github_owner'] ?? 'sabap')) ?: 'sabap',
-                'github_repo' => trim((string)($_POST['github_repo'] ?? 'ColdAisle')) ?: 'ColdAisle',
-                'github_token' => $token,
                 'auto_check' => !empty($_POST['updates_auto_check']),
                 'check_interval_hours' => max(1, min(168, (int)($_POST['check_interval_hours'] ?? 24))),
                 'ssl_verify' => !empty($_POST['updates_ssl_verify']),
@@ -394,11 +387,11 @@ layout_header('Settings', $user, 'settings');
     </div>
     <div class="card-body">
         <p class="text-muted" style="font-size:.9rem;margin-top:0">
-            ColdAisle checks the public GitHub repo
-            <a href="https://github.com/sabap/ColdAisle" target="_blank" rel="noopener"><strong>sabap/ColdAisle</strong></a>
-            for newer tags/releases, backs up this install, downloads the package, and applies it
+            Checks the public project
+            <a href="<?= App::e(UpdateService::githubUrl()) ?>" target="_blank" rel="noopener"><strong>sabap/ColdAisle</strong></a>
+            for newer versions, backs up this install, downloads the package, and applies it
             (preserving <code>config/config.php</code> and <code>storage/</code> uploads &amp; logs).
-            A personal access token is <strong>optional</strong> (only needed for higher API rate limits or if you fork to a private repo).
+            No GitHub account or token is required.
         </p>
 
         <?php if ($updStatus): ?>
@@ -433,18 +426,6 @@ layout_header('Settings', $user, 'settings');
                 <input type="checkbox" name="updates_enabled" value="1" <?= !empty($updCfg['enabled']) ? 'checked' : '' ?>>
                 Enable update checks
             </label></div>
-            <div class="form-row"><label>GitHub owner</label>
-                <input class="form-control" name="github_owner" value="<?= App::e((string)$updCfg['github_owner']) ?>"></div>
-            <div class="form-row"><label>Repository</label>
-                <input class="form-control" name="github_repo" value="<?= App::e((string)$updCfg['github_repo']) ?>"></div>
-            <div class="form-row full"><label>GitHub personal access token (optional)</label>
-                <input class="form-control" type="password" name="github_token" autocomplete="new-password"
-                       placeholder="<?= trim((string)$updCfg['github_token']) !== '' ? '•••••••• (leave blank to keep)' : 'Optional for public repo' ?>">
-                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
-                    Not required while the repo is public. For private forks: Contents (read). Stored only in
-                    <code>config/config.php</code> (not in git).
-                </p>
-            </div>
             <div class="form-row full"><label>
                 <input type="checkbox" name="updates_auto_check" value="1" <?= !empty($updCfg['auto_check']) ? 'checked' : '' ?>>
                 Auto-check on dashboard (uses cache interval below)
@@ -565,11 +546,10 @@ layout_header('Settings', $user, 'settings');
             <tr><td>Config File</td><td><code><?= App::e($configPath) ?></code></td></tr>
             <tr><td>SQL Host</td><td><?= App::e(($config['database']['host'] ?? '') . '/' . ($config['database']['database'] ?? '')) ?></td></tr>
             <tr><td>Update source</td><td>
-                <a href="https://github.com/<?= App::e(rawurlencode((string)$updCfg['github_owner']) . '/' . rawurlencode((string)$updCfg['github_repo'])) ?>"
-                   target="_blank" rel="noopener">
-                    <?= App::e((string)$updCfg['github_owner'] . '/' . (string)$updCfg['github_repo']) ?>
+                <a href="<?= App::e(UpdateService::githubUrl()) ?>" target="_blank" rel="noopener">
+                    sabap/ColdAisle
                 </a>
-                · token <?= trim((string)$updCfg['github_token']) !== '' ? 'configured' : 'not set (public OK)' ?>
+                · public (no token)
             </td></tr>
         </table>
     </div>

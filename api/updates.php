@@ -21,9 +21,9 @@ try {
             'installed' => UpdateService::installedVersion(),
             'config' => [
                 'enabled' => !empty(UpdateService::config()['enabled']),
-                'owner' => UpdateService::config()['github_owner'],
-                'repo' => UpdateService::config()['github_repo'],
-                'has_token' => trim((string)UpdateService::config()['github_token']) !== '',
+                'owner' => UpdateService::GITHUB_OWNER,
+                'repo' => UpdateService::GITHUB_REPO,
+                'source' => UpdateService::githubUrl(),
                 'auto_check' => !empty(UpdateService::config()['auto_check']),
             ],
         ]);
