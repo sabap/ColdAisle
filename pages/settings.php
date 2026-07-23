@@ -462,10 +462,20 @@ layout_header('Settings', $user, 'settings');
         </form>
 
         <div class="flex gap-1" style="flex-wrap:wrap;margin:.75rem 0" id="update-actions">
-            <form method="post" style="display:inline">
+            <?php
+            $caOk = !empty($caStatus['found']);
+            $caBtnTitle = $caOk
+                ? 'Already installed — TLS certificate verification is ready. You only need this if Status shows Missing, or to refresh the CA list later.'
+                : 'Download Mozilla CA list into config/cacert.pem so “Verify TLS certificates” can work';
+            ?>
+            <form method="post" style="display:inline"
+                  onsubmit="<?= $caOk ? 'return false;' : 'return true;' ?>">
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                 <input type="hidden" name="section" value="install_ca_bundle">
-                <button class="btn btn-secondary" type="submit" title="Download Mozilla CA list into config/cacert.pem">
+                <button class="btn btn-secondary" type="submit"
+                        <?= $caOk ? 'disabled' : '' ?>
+                        title="<?= App::e($caBtnTitle) ?>"
+                        style="<?= $caOk ? 'opacity:.45;cursor:not-allowed;' : '' ?>">
                     Install CA certificates
                 </button>
             </form>
