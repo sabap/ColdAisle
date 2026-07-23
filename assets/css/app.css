@@ -114,6 +114,8 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
   padding: .75rem 1.5rem; color: var(--muted); font-size: .8rem;
   border-top: 1px solid var(--border);
 }
+.app-footer a { color: #38bdf8; text-decoration: none; }
+.app-footer a:hover { text-decoration: underline; color: #7dd3fc; }
 
 /* Buttons */
 .btn {
