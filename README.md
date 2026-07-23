@@ -88,6 +88,22 @@ Details and parameters: [`scripts/README-Prereqs.md`](scripts/README-Prereqs.md)
 2. Install [Microsoft Drivers for PHP for SQL Server](https://learn.microsoft.com/en-us/sql/connect/php/download-drivers-php-sql-server) (`php_pdo_sqlsrv.dll`)
 3. Or install [ODBC Driver 18 for SQL Server](https://learn.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server) and enable `pdo_odbc`
 
+## Site backup / restore (migration)
+
+On a **working** site (admin):
+
+1. **Settings → Site backup & migration → Download site backup**
+2. Keep the ZIP private (users, password hashes, encrypted SNMP secrets, and `app_key`)
+
+On a **new** install:
+
+1. Run the platform installer as usual, open **setup.php**
+2. Choose **Restore from backup**
+3. Enter the **new** SQL connection details and upload the ZIP
+4. Sign in with an account from the backup (not a new setup admin)
+
+The package includes database rows, `storage/uploads`, config overlay (auth/security), and `app_key`. It does **not** include the old SQL password.
+
 ## Quick install
 
 1. On the IIS/SQL server, open elevated PowerShell in this repo’s `scripts\` folder and run:
