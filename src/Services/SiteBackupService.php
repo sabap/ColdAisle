@@ -143,10 +143,7 @@ class SiteBackupService
             throw new RuntimeException('Backup file not found.');
         }
 
-        $work = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'coldaisle-restore-' . bin2hex(random_bytes(6));
-        if (!@mkdir($work, 0775, true)) {
-            throw new RuntimeException('Cannot create temp restore directory.');
-        }
+        $work = self::makeWorkDir('restore');
 
         try {
             self::extractZip($zipPath, $work);
@@ -337,8 +334,7 @@ class SiteBackupService
     /** Validate a package without restoring. */
     public static function inspect(string $zipPath): array
     {
-        $work = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'coldaisle-inspect-' . bin2hex(random_bytes(4));
-        @mkdir($work, 0775, true);
+        $work = self::makeWorkDir('inspect');
         try {
             self::extractZip($zipPath, $work);
             $root = self::findPackageRoot($work);
@@ -350,6 +346,40 @@ class SiteBackupService
         } finally {
             self::rrmdir($work);
         }
+    }
+
+    /**
+     * App-local temp dir (IIS often cannot use C:\\Windows\\Temp).
+     * Uses storage/tmp under the app root — granted Modify by the installer.
+     */
+    private static function makeWorkDir(string $prefix): string
+    {
+        $base = App::ROOT . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'tmp';
+        if (!is_dir($base) && !@mkdir($base, 0775, true) && !is_dir($base)) {
+            // Last resort: system temp (may fail under locked-down IIS)
+            $base = rtrim(sys_get_temp_dir(), "\\/");
+            if (!is_dir($base) || !is_writable($base)) {
+                throw new RuntimeException(
+                    'Cannot create storage/tmp for restore. Grant Modify on storage\\ to the IIS app pool identity.'
+                );
+            }
+        }
+        // Ensure writable
+        $probe = $base . DIRECTORY_SEPARATOR . '.write_test_' . bin2hex(random_bytes(3));
+        if (@file_put_contents($probe, 'ok') === false) {
+            throw new RuntimeException(
+                'storage/tmp is not writable by PHP. Grant Modify on '
+                . $base . ' to IIS AppPool\\DefaultAppPool (and IUSR if impersonating).'
+            );
+        }
+        @unlink($probe);
+
+        $work = $base . DIRECTORY_SEPARATOR . 'coldaisle-' . preg_replace('/[^a-z0-9_-]/i', '', $prefix)
+            . '-' . bin2hex(random_bytes(6));
+        if (!@mkdir($work, 0775, true) && !is_dir($work)) {
+            throw new RuntimeException('Cannot create work directory: ' . $work);
+        }
+        return $work;
     }
 
     // ─── table export / import ───────────────────────────────────────────
@@ -708,20 +738,28 @@ class SiteBackupService
 
     private static function rrmdir(string $dir): void
     {
-        if (!is_dir($dir)) {
+        if ($dir === '' || !is_dir($dir)) {
             return;
         }
-        $items = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
-            RecursiveIteratorIterator::CHILD_FIRST
-        );
-        foreach ($items as $item) {
-            /** @var SplFileInfo $item */
-            if ($item->isDir()) {
-                @rmdir($item->getPathname());
-            } else {
-                @unlink($item->getPathname());
+        try {
+            $items = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator(
+                    $dir,
+                    FilesystemIterator::SKIP_DOTS | FilesystemIterator::CURRENT_AS_FILEINFO
+                ),
+                RecursiveIteratorIterator::CHILD_FIRST
+            );
+            foreach ($items as $item) {
+                /** @var SplFileInfo $item */
+                if ($item->isDir()) {
+                    @rmdir($item->getPathname());
+                } else {
+                    @unlink($item->getPathname());
+                }
             }
+        } catch (Throwable $e) {
+            // Best-effort cleanup — do not fail restore because Windows Temp is locked
+            App::log('rrmdir ' . $dir . ': ' . $e->getMessage(), 'warning');
         }
         @rmdir($dir);
     }

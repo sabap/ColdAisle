@@ -666,7 +666,7 @@ Or add a Handler Mapping in IIS Manager: *.php -> FastCgiModule -> $phpCgi
             } else {
                 $identities = @('IIS AppPool\DefaultAppPool') + $identities
             }
-            foreach ($sub in @('config', 'storage', 'storage\logs', 'storage\uploads')) {
+            foreach ($sub in @('config', 'storage', 'storage\logs', 'storage\uploads', 'storage\backups', 'storage\tmp')) {
                 $p = Join-Path $SitePhysicalPath $sub
                 if (-not (Test-Path $p)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
                 foreach ($identity in $identities) {
@@ -974,7 +974,7 @@ Pass -DeploySource path\to\ColdAisle or run this script from the project scripts
     $excludeFiles = @('phpinfo-test.php', 'config.php')
 
     # Ensure runtime dirs exist on target
-    foreach ($sub in @('storage\logs', 'storage\uploads', 'storage\backups', 'config')) {
+    foreach ($sub in @('storage\logs', 'storage\uploads', 'storage\backups', 'storage\tmp', 'config')) {
         $p = Join-Path $SitePhysicalPath $sub
         if (-not (Test-Path $p)) {
             New-Item -ItemType Directory -Path $p -Force | Out-Null
@@ -1103,7 +1103,7 @@ function Invoke-PrereqVerification {
         } else {
             Write-Warn "setup.php not found under $SitePhysicalPath"
         }
-        foreach ($d in @('config', 'storage\logs', 'storage\uploads')) {
+        foreach ($d in @('config', 'storage\logs', 'storage\uploads', 'storage\backups', 'storage\tmp')) {
             if (Test-Path (Join-Path $SitePhysicalPath $d)) {
                 Write-Ok "Dir: $d"
             } else {
