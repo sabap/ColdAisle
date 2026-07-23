@@ -556,14 +556,158 @@ if (!$editTarget && $preselectPduId > 0) {
     }
 }
 
+// Authenticated download of the enable script (scripts/ is blocked by web.config)
+if (isset($_GET['download']) && (string)$_GET['download'] === 'enable_snmp') {
+    $path = dirname(__DIR__) . '/scripts/Enable-ColdAisle-Snmp.ps1';
+    if (!is_file($path)) {
+        http_response_code(404);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo "Script not found on this server. Download from GitHub:\n";
+        echo "https://raw.githubusercontent.com/sabap/ColdAisle/main/scripts/Enable-ColdAisle-Snmp.ps1\n";
+        exit;
+    }
+    header('Content-Type: application/octet-stream');
+    header('Content-Disposition: attachment; filename="Enable-ColdAisle-Snmp.ps1"');
+    header('Content-Length: ' . (string)filesize($path));
+    header('X-Content-Type-Options: nosniff');
+    readfile($path);
+    exit;
+}
+
+$snmpEnableCmd = 'Set-ExecutionPolicy Bypass -Scope Process -Force; '
+    . 'irm https://raw.githubusercontent.com/sabap/ColdAisle/main/scripts/Enable-ColdAisle-Snmp.ps1 '
+    . '-OutFile $env:TEMP\\Enable-ColdAisle-Snmp.ps1; '
+    . 'powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\\Enable-ColdAisle-Snmp.ps1';
+$snmpEnableDownload = App::url('pages/snmp.php?download=enable_snmp');
+$snmpEnableGithub = 'https://raw.githubusercontent.com/sabap/ColdAisle/main/scripts/Enable-ColdAisle-Snmp.ps1';
+
 layout_header('SNMP Polling', $user, 'snmp');
 ?>
 
-<?php if (!$hasSnmp): ?>
-<div class="alert alert-warning">
-    PHP SNMP extension is not loaded. Targets can be configured now; enable <code>extension=snmp</code> (or php_snmp.dll on Windows)
-    and schedule <code>scripts/poll_snmp.php</code> via Task Scheduler for live polling.
+<?php if ($hasSnmp): ?>
+<div class="alert alert-success" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+    <span><strong>PHP SNMP extension:</strong> loaded — Discover OIDs and Poll now can talk to devices.</span>
+    <span class="badge badge-success">SNMP OK</span>
 </div>
+<?php else: ?>
+<div class="alert alert-warning" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+    <div>
+        <strong>PHP SNMP extension is not loaded.</strong>
+        You can still configure profiles and templates; live Discover / poll need the extension.
+    </div>
+    <button type="button" class="btn btn-primary" id="btnEnableSnmp">Enable SNMP…</button>
+</div>
+
+<div class="modal-overlay" id="enableSnmpModal" hidden>
+    <div class="modal-panel modal-panel-wide" role="dialog" aria-modal="true" aria-labelledby="enableSnmpTitle">
+        <div class="modal-header">
+            <h2 id="enableSnmpTitle">Enable PHP SNMP</h2>
+            <button type="button" class="modal-close" id="enableSnmpClose" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p style="margin-top:0">
+                ColdAisle cannot turn on system PHP extensions from the website (IIS runs without admin rights).
+                Enabling SNMP is done with a short, <strong>reviewable</strong> PowerShell script on the server.
+            </p>
+            <div class="alert alert-info" style="margin-bottom:1rem">
+                <strong>What the script does</strong>
+                <ul style="margin:.4rem 0 0;padding-left:1.2rem">
+                    <li>Enables <code>extension=snmp</code> in <code>php.ini</code> (default <code>C:\PHP</code>)</li>
+                    <li>Sets a local <code>snmp.mib_directory</code> to reduce Windows MIB path noise</li>
+                    <li>Recycles the IIS app pool so PHP reloads</li>
+                    <li>Verifies with <code>php -m</code></li>
+                </ul>
+                It does <strong>not</strong> open firewall ports or change SQL/IIS security beyond recycling the pool.
+            </div>
+            <p class="text-muted" style="font-size:.9rem">
+                Requires <strong>Administrator</strong> PowerShell on the ColdAisle host.
+                After it finishes, refresh this page (Ctrl+F5).
+            </p>
+
+            <h3 style="font-size:.95rem;margin:1rem 0 .4rem">Option 1 — Download &amp; run</h3>
+            <p style="margin:.25rem 0 .75rem">
+                <a class="btn btn-primary" href="<?= App::e($snmpEnableDownload) ?>">
+                    Download Enable-ColdAisle-Snmp.ps1
+                </a>
+                <a class="btn btn-secondary" href="<?= App::e($snmpEnableGithub) ?>" target="_blank" rel="noopener">
+                    View on GitHub
+                </a>
+            </p>
+            <p class="text-muted" style="font-size:.8rem;margin:0 0 1rem">
+                Then: right-click the file → <em>Run with PowerShell</em> is not enough if not elevated.
+                Open <strong>PowerShell as Administrator</strong>, <code>cd</code> to the download folder, run:
+                <code>.\Enable-ColdAisle-Snmp.ps1</code>
+            </p>
+
+            <h3 style="font-size:.95rem;margin:1rem 0 .4rem">Option 2 — One-line (elevated PowerShell)</h3>
+            <p class="text-muted" style="font-size:.8rem;margin:0 0 .4rem">
+                Paste into an <strong>Administrator</strong> PowerShell window on this server:
+            </p>
+            <div class="snmp-enable-cmd-wrap">
+                <textarea class="form-control snmp-enable-cmd" id="snmpEnableCmd" rows="3" readonly><?= App::e($snmpEnableCmd) ?></textarea>
+                <button type="button" class="btn btn-secondary btn-sm" id="snmpEnableCopy">Copy command</button>
+            </div>
+            <p class="text-muted" style="font-size:.75rem;margin:.5rem 0 0">
+                Custom PHP path? Download the script and run
+                <code>.\Enable-ColdAisle-Snmp.ps1 -PhpInstallPath 'D:\PHP'</code>
+            </p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="enableSnmpCancel">Close</button>
+            <button type="button" class="btn btn-primary" id="enableSnmpRecheck">I’ve run it — recheck</button>
+        </div>
+    </div>
+</div>
+<script>
+(function () {
+    var modal = document.getElementById('enableSnmpModal');
+    var openBtn = document.getElementById('btnEnableSnmp');
+    if (!modal || !openBtn) return;
+    function openM() {
+        modal.hidden = false;
+        document.body.classList.add('modal-open');
+    }
+    function closeM() {
+        modal.hidden = true;
+        document.body.classList.remove('modal-open');
+    }
+    openBtn.addEventListener('click', openM);
+    ['enableSnmpClose', 'enableSnmpCancel'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('click', closeM);
+    });
+    modal.addEventListener('click', function (e) {
+        if (e.target === modal) closeM();
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !modal.hidden) closeM();
+    });
+    var copyBtn = document.getElementById('snmpEnableCopy');
+    var cmdEl = document.getElementById('snmpEnableCmd');
+    if (copyBtn && cmdEl) {
+        copyBtn.addEventListener('click', function () {
+            cmdEl.select();
+            try {
+                if (navigator.clipboard) {
+                    navigator.clipboard.writeText(cmdEl.value);
+                } else {
+                    document.execCommand('copy');
+                }
+                copyBtn.textContent = 'Copied';
+                setTimeout(function () { copyBtn.textContent = 'Copy command'; }, 2000);
+            } catch (err) {
+                copyBtn.textContent = 'Select & Ctrl+C';
+            }
+        });
+    }
+    var recheck = document.getElementById('enableSnmpRecheck');
+    if (recheck) {
+        recheck.addEventListener('click', function () {
+            window.location.reload();
+        });
+    }
+})();
+</script>
 <?php endif; ?>
 
 <div class="flex-between mb-2">
