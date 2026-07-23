@@ -124,8 +124,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             App::redirect('pages/settings.php#updates');
         }
 
-        // Write config.php (for general / auth / updates)
-        if (!in_array($section, ['update_check', 'update_apply'], true)) {
+        if ($section === 'export_site_backup') {
+            @set_time_limit(600);
+            $path = SiteBackupService::export([
+                'include_audit' => !empty($_POST['include_audit']),
+                'include_readings' => !empty($_POST['include_readings']),
+            ]);
+            AuditService::log((int)$user['user_id'], $user['username'], 'site_backup_export', 'system', null, [
+                'file' => basename($path),
+                'bytes' => @filesize($path) ?: null,
+            ]);
+            $name = basename($path);
+            header('Content-Type: application/zip');
+            header('Content-Disposition: attachment; filename="' . $name . '"');
+            header('Content-Length: ' . (string)filesize($path));
+            header('Cache-Control: no-store');
+            readfile($path);
+            exit;
+        }
+
+        // Write config.php (for general / auth / updates / security)
+        if (!in_array($section, ['update_check', 'update_apply', 'export_site_backup'], true)) {
             $export = var_export($config, true);
             $php = "<?php\n/** ColdAisle configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
             if (file_put_contents($configPath, $php) === false) {
@@ -142,6 +161,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#updates';
     } elseif ($secPost === 'security') {
         $redirHash = '#security';
+    } elseif ($secPost === 'export_site_backup') {
+        $redirHash = '#backup';
     }
     App::redirect('pages/settings.php' . $redirHash);
 }
@@ -438,6 +459,40 @@ layout_header('Settings', $user, 'settings');
         <p class="text-muted" style="font-size:.75rem;margin:.75rem 0 0">
             Backups are written to <code>storage/backups/</code>. Requires PHP <code>curl</code>
             <?= extension_loaded('zip') ? ' and <code>zip</code>' : ' (and PowerShell Expand-Archive if <code>zip</code> is missing)' ?>.
+        </p>
+    </div>
+</div>
+
+<div class="card" id="backup">
+    <div class="card-header"><h2>Site backup &amp; migration</h2></div>
+    <div class="card-body">
+        <p class="text-muted" style="margin-top:0;font-size:.9rem">
+            Export a portable package of this site (database rows, uploads, and <code>app_key</code>)
+            to restore on a new web/SQL pair via <strong>setup.php → Restore from backup</strong>.
+            The package does <em>not</em> include the SQL password — you enter connection details on the new server.
+        </p>
+        <form method="post" class="form-grid">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="export_site_backup">
+            <div class="form-row full"><label>
+                <input type="checkbox" name="include_audit" value="1" checked>
+                Include audit log
+            </label></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="include_readings" value="1" checked>
+                Include SNMP / PDU historical readings
+            </label></div>
+            <div class="form-row">
+                <button class="btn btn-primary" type="submit"
+                        onclick="return confirm('Create and download a site backup ZIP now? Large sites may take a minute.');">
+                    Download site backup
+                </button>
+            </div>
+        </form>
+        <p class="hint text-muted" style="margin-top:.75rem">
+            Files are also stored under <code>storage/backups/</code>. Keep backups private —
+            they contain password hashes and encrypted SNMP secrets (and <code>app_key</code> to decrypt them).
+            <?= extension_loaded('zip') ? '' : ' PHP <code>zip</code> extension recommended (PowerShell Compress-Archive used as fallback).' ?>
         </p>
     </div>
 </div>

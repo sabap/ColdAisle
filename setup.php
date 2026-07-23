@@ -15,6 +15,10 @@ if (App::isInstalled() && !isset($_GET['force'])) {
 }
 
 $step = (int)($_GET['step'] ?? $_POST['step'] ?? 1);
+$mode = (string)($_GET['mode'] ?? $_POST['mode'] ?? 'fresh');
+if (!in_array($mode, ['fresh', 'restore'], true)) {
+    $mode = 'fresh';
+}
 $errors = [];
 $success = [];
 $form = [
@@ -49,6 +53,7 @@ $hasMbstring = extension_loaded('mbstring');
 $hasCurl = extension_loaded('curl');
 $hasLdap = extension_loaded('ldap');
 $hasSnmp = extension_loaded('snmp');
+$hasZip = extension_loaded('zip') || (defined('PHP_OS_FAMILY') && PHP_OS_FAMILY === 'Windows');
 $configWritable = is_writable(__DIR__ . '/config') || is_writable(__DIR__);
 $storageWritable = is_writable(__DIR__ . '/storage') || @mkdir(__DIR__ . '/storage/logs', 0775, true);
 
@@ -73,6 +78,73 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         } catch (Throwable $e) {
             $errors[] = 'Connection failed: ' . $e->getMessage();
             $step = 2;
+        }
+    }
+
+    if ($action === 'restore_backup') {
+        $mode = 'restore';
+        $step = 2;
+        @set_time_limit(900);
+        try {
+            if ($form['sql_host'] === '' || $form['sql_database'] === '') {
+                throw new RuntimeException('SQL host and database name are required.');
+            }
+            $file = $_FILES['backup_file'] ?? null;
+            if (!is_array($file) || (int)($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+                $code = is_array($file) ? (int)($file['error'] ?? -1) : -1;
+                $hint = $code === UPLOAD_ERR_INI_SIZE || $code === UPLOAD_ERR_FORM_SIZE
+                    ? ' File exceeds PHP upload_max_filesize / post_max_size.'
+                    : '';
+                throw new RuntimeException('Upload a ColdAisle site backup ZIP.' . $hint);
+            }
+            $tmp = (string)($file['tmp_name'] ?? '');
+            $orig = (string)($file['name'] ?? 'backup.zip');
+            if ($tmp === '' || !is_uploaded_file($tmp)) {
+                throw new RuntimeException('Invalid upload.');
+            }
+            if (!preg_match('/\.zip$/i', $orig)) {
+                throw new RuntimeException('Backup must be a .zip file from Settings → Site backup.');
+            }
+
+            // Stage upload under storage (survives long restore)
+            $stageDir = __DIR__ . '/storage/backups';
+            if (!is_dir($stageDir) && !@mkdir($stageDir, 0775, true)) {
+                throw new RuntimeException('Cannot write storage/backups for restore staging.');
+            }
+            $stagePath = $stageDir . '/restore_upload_' . date('Ymd_His') . '.zip';
+            if (!@move_uploaded_file($tmp, $stagePath)) {
+                throw new RuntimeException('Could not store uploaded backup.');
+            }
+
+            $inspect = SiteBackupService::inspect($stagePath);
+            $success[] = 'Package OK'
+                . (isset($inspect['app_version']) ? ' (source v' . $inspect['app_version'] . ')' : '')
+                . ' · format ' . ($inspect['format_version'] ?? '?');
+
+            $dbCfg = [
+                'host' => $form['sql_host'],
+                'port' => (int)$form['sql_port'],
+                'database' => $form['sql_database'],
+                'username' => $form['sql_username'],
+                'password' => $form['sql_password'],
+                'encrypt' => $form['sql_encrypt'],
+                'trust_server_certificate' => $form['sql_trust_cert'],
+                'odbc_driver' => $form['odbc_driver'],
+            ];
+            $result = SiteBackupService::import($stagePath, $dbCfg, [
+                'create_database' => $form['create_database'],
+                'base_url' => rtrim($form['base_url'], '/'),
+                'timezone' => $form['timezone'] !== '' ? $form['timezone'] : 'UTC',
+            ]);
+            $success[] = $result['message'] ?? 'Restore complete.';
+            $success[] = 'Sign in with an account from the backup (not a new setup admin).';
+            @unlink($stagePath);
+            $step = 4;
+            $mode = 'restore';
+        } catch (Throwable $e) {
+            $errors[] = 'Restore failed: ' . $e->getMessage();
+            $step = 2;
+            $mode = 'restore';
         }
     }
 
@@ -259,7 +331,7 @@ function self_generate_config(array $dbCfg, array $form, string $baseUrl): strin
 {
     $export = var_export([
         'app_name' => 'ColdAisle',
-        'version' => '0.2.3',
+        'version' => '0.2.4',
         // 32-byte key, base64 — used to encrypt SNMP/API secrets at rest in the DB
         'app_key' => base64_encode(random_bytes(32)),
         'timezone' => $form['timezone'],
@@ -382,7 +454,9 @@ function req_badge(bool $ok): string
         <div class="setup-steps">
             <span class="<?= $step >= 1 ? ($step > 1 ? 'done' : 'active') : '' ?>">1. Requirements</span>
             <span class="<?= $step >= 2 ? ($step > 2 ? 'done' : 'active') : '' ?>">2. Database</span>
-            <span class="<?= $step >= 3 ? ($step > 3 ? 'done' : 'active') : '' ?>">3. Organization</span>
+            <span class="<?= $step >= 3 ? ($step > 3 ? 'done' : 'active') : '' ?>">
+                <?= $mode === 'restore' ? '3. Restore' : '3. Organization' ?>
+            </span>
             <span class="<?= $step >= 4 ? 'active' : '' ?>">4. Complete</span>
         </div>
 
@@ -406,6 +480,7 @@ function req_badge(bool $ok): string
                 <tr><td>cURL (Entra SSO)</td><td><?= $hasCurl ? req_badge(true) : '<span class="badge warn">Recommended</span>' ?></td></tr>
                 <tr><td>LDAP (LDAPS auth)</td><td><?= $hasLdap ? req_badge(true) : '<span class="badge warn">Optional</span>' ?></td></tr>
                 <tr><td>SNMP extension</td><td><?= $hasSnmp ? req_badge(true) : '<span class="badge warn">Optional</span>' ?></td></tr>
+                <tr><td>Zip (backup restore)</td><td><?= $hasZip ? req_badge(true) : '<span class="badge warn">Needed for restore</span>' ?></td></tr>
                 <tr><td>config/ writable</td><td><?= req_badge($configWritable) ?></td></tr>
                 <tr><td>storage/ writable</td><td><?= req_badge($storageWritable) ?></td></tr>
             </table>
@@ -415,15 +490,95 @@ function req_badge(bool $ok): string
                     or enable <strong>pdo_odbc</strong> with ODBC Driver 17/18 for SQL Server.
                 </div>
             <?php endif; ?>
+            <h3 style="margin-top:1.5rem">Installation type</h3>
+            <p class="hint">Fresh empty site, or restore a package from another ColdAisle install
+                (Settings → Site backup &amp; migration).</p>
             <div class="btn-row">
-                <a class="btn btn-primary" href="?step=2" <?= !$phpOk || !$hasPdo ? 'style="pointer-events:none;opacity:.5"' : '' ?>>Continue →</a>
+                <a class="btn btn-primary" href="?step=2&amp;mode=fresh"
+                   <?= !$phpOk || !$hasPdo ? 'style="pointer-events:none;opacity:.5"' : '' ?>>
+                    Fresh install →
+                </a>
+                <a class="btn btn-secondary" href="?step=2&amp;mode=restore"
+                   <?= !$phpOk || !$hasPdo || !$hasZip ? 'style="pointer-events:none;opacity:.5"' : '' ?>>
+                    Restore from backup →
+                </a>
             </div>
+
+        <?php elseif ($step === 2 && $mode === 'restore'): ?>
+            <h2>Restore from site backup</h2>
+            <p class="hint">
+                Upload a <code>coldaisle-site_*.zip</code> from the source server.
+                Provide SQL details for <em>this</em> environment. Log in later with an account from the backup.
+            </p>
+            <form method="post" enctype="multipart/form-data">
+                <input type="hidden" name="sql_submitted" value="1">
+                <input type="hidden" name="step" value="2">
+                <input type="hidden" name="mode" value="restore">
+                <div class="form-grid">
+                    <div class="form-row">
+                        <label>SQL Host / Instance</label>
+                        <input type="text" name="sql_host" value="<?= htmlspecialchars($form['sql_host']) ?>" required>
+                        <p class="hint">e.g. sql-server.contoso.local or IP</p>
+                    </div>
+                    <div class="form-row">
+                        <label>Port</label>
+                        <input type="number" name="sql_port" value="<?= htmlspecialchars((string)$form['sql_port']) ?>">
+                    </div>
+                    <div class="form-row">
+                        <label>Database Name</label>
+                        <input type="text" name="sql_database" value="<?= htmlspecialchars($form['sql_database']) ?>" required>
+                    </div>
+                    <div class="form-row">
+                        <label>ODBC Driver Name</label>
+                        <input type="text" name="odbc_driver" value="<?= htmlspecialchars($form['odbc_driver']) ?>">
+                    </div>
+                    <div class="form-row">
+                        <label>SQL Username</label>
+                        <input type="text" name="sql_username" value="<?= htmlspecialchars($form['sql_username']) ?>" required>
+                    </div>
+                    <div class="form-row">
+                        <label>SQL Password</label>
+                        <input type="password" name="sql_password" value="<?= htmlspecialchars($form['sql_password']) ?>">
+                    </div>
+                    <div class="form-row">
+                        <label>Timezone (optional override)</label>
+                        <input type="text" name="timezone" value="<?= htmlspecialchars($form['timezone']) ?>">
+                    </div>
+                    <div class="form-row">
+                        <label>Base URL (optional)</label>
+                        <input type="text" name="base_url" value="<?= htmlspecialchars($form['base_url']) ?>" placeholder="https://dcim.contoso.com">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label class="check-label"><input type="checkbox" name="create_database" <?= $form['create_database'] ? 'checked' : '' ?>> Create database if it does not exist</label>
+                </div>
+                <div class="form-row">
+                    <label class="check-label"><input type="checkbox" name="sql_encrypt" <?= $form['sql_encrypt'] ? 'checked' : '' ?>> Encrypt connection</label>
+                </div>
+                <div class="form-row">
+                    <label class="check-label"><input type="checkbox" name="sql_trust_cert" <?= $form['sql_trust_cert'] ? 'checked' : '' ?>> Trust server certificate</label>
+                </div>
+                <div class="form-row">
+                    <label>Backup ZIP</label>
+                    <input type="file" name="backup_file" accept=".zip,application/zip" required>
+                    <p class="hint">Large files may need higher <code>upload_max_filesize</code> / <code>post_max_size</code> in php.ini.</p>
+                </div>
+                <div class="btn-row">
+                    <button type="submit" name="action" value="test_connection" class="btn btn-secondary">Test Connection</button>
+                    <button type="submit" name="action" value="restore_backup" class="btn btn-primary"
+                            onclick="return confirm('This loads the backup into the target database (schema + data). Continue?');">
+                        Restore site →
+                    </button>
+                    <a class="btn btn-ghost" href="?step=1">← Back</a>
+                </div>
+            </form>
 
         <?php elseif ($step === 2): ?>
             <h2>SQL Server Connection</h2>
             <form method="post">
                 <input type="hidden" name="sql_submitted" value="1">
                 <input type="hidden" name="step" value="2">
+                <input type="hidden" name="mode" value="fresh">
                 <div class="form-grid">
                     <div class="form-row">
                         <label>SQL Host / Instance</label>
@@ -565,15 +720,25 @@ function req_badge(bool $ok): string
             </form>
 
         <?php else: ?>
-            <h2>Installation Complete</h2>
-            <p>ColdAisle is ready. Sign in with the administrator account you created.</p>
+            <h2><?= $mode === 'restore' ? 'Restore complete' : 'Installation complete' ?></h2>
+            <?php if ($mode === 'restore'): ?>
+                <p>ColdAisle was restored from your site backup. Sign in with a user account that existed on the source system.</p>
+            <?php else: ?>
+                <p>ColdAisle is ready. Sign in with the administrator account you created.</p>
+            <?php endif; ?>
             <div class="alert alert-success">
                 <strong>Next steps</strong>
                 <ul style="margin:.5rem 0 0;padding-left:1.25rem">
-                    <li>Log in and open <strong>Settings</strong> to configure LDAPS or Microsoft Entra SSO</li>
-                    <li>Use the <strong>Floor Planner</strong> to drag cabinets onto the room canvas</li>
-                    <li>Add devices to U-slots, configure power zones and PDUs</li>
+                    <?php if ($mode === 'restore'): ?>
+                        <li>Confirm <strong>Settings → Security</strong> (HTTPS) and base URL for this host</li>
+                        <li>Verify SNMP credentials still poll (same <code>app_key</code> was restored for sealed secrets)</li>
+                    <?php else: ?>
+                        <li>Log in and open <strong>Settings</strong> to configure LDAPS or Microsoft Entra SSO</li>
+                        <li>Use the <strong>Floor Planner</strong> to drag cabinets onto the room canvas</li>
+                        <li>Add devices to U-slots, configure power zones and PDUs</li>
+                    <?php endif; ?>
                     <li>Schedule the SNMP poll script via Task Scheduler (see README)</li>
+                    <li>Use <strong>Settings → Site backup</strong> to export migration packages from this site</li>
                 </ul>
             </div>
             <div class="btn-row">
