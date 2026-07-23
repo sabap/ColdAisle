@@ -52,6 +52,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'default_role_id' => $_POST['ldaps_default_role_id'] !== '' ? (int)$_POST['ldaps_default_role_id'] : null,
             ];
             SettingsService::set('auth_ldaps_enabled', !empty($_POST['ldaps_enabled']) ? '1' : '0', 'auth');
+
+            // Enterprise CA upload (PEM/CER) for LDAPS TLS trust
+            if (!empty($_POST['ldaps_remove_ca'])) {
+                if (LdapAuth::removeEnterpriseCa()) {
+                    App::flash('success', 'Removed config/ldap-ca.pem (enterprise CA).');
+                }
+            } elseif (!empty($_FILES['ldaps_ca_file']['name'])) {
+                $install = LdapAuth::installEnterpriseCaUpload(
+                    $_FILES['ldaps_ca_file'],
+                    !empty($_POST['ldaps_ca_append'])
+                );
+                AuditService::log((int)$user['user_id'], $user['username'], 'ldaps_ca_install', 'system', null, [
+                    'cert_count' => $install['cert_count'] ?? 0,
+                    'subjects' => $install['subjects'] ?? [],
+                ]);
+                App::flash('success', $install['message'] ?? 'Enterprise CA installed.');
+            }
         }
 
         if ($section === 'entra') {
@@ -220,6 +237,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#security';
     } elseif ($secPost === 'export_site_backup') {
         $redirHash = '#backup';
+    } elseif ($secPost === 'ldaps') {
+        $redirHash = '#ldaps';
     }
     App::redirect('pages/settings.php' . $redirHash);
 }
@@ -232,6 +251,7 @@ $entra = $config['auth']['entra'] ?? [];
 $secCfg = App::securityConfig();
 $updCfg = UpdateService::config();
 $caStatus = UpdateService::caBundleStatus();
+$ldapCaStatus = LdapAuth::enterpriseCaStatus();
 $updStatus = null;
 try {
     // Non-forced: use cache when fresh
@@ -390,10 +410,10 @@ layout_header('Settings', $user, 'settings');
     </div>
 </div>
 
-<div class="card">
+<div class="card" id="ldaps">
     <div class="card-header"><h2>LDAPS Authentication</h2></div>
     <div class="card-body">
-        <form method="post" class="form-grid">
+        <form method="post" class="form-grid" enctype="multipart/form-data">
             <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
             <input type="hidden" name="section" value="ldaps">
             <div class="form-row full"><label><input type="checkbox" name="ldaps_enabled" value="1" <?= !empty($ldaps['enabled']) ? 'checked' : '' ?>> Enable LDAPS</label></div>
@@ -421,13 +441,51 @@ layout_header('Settings', $user, 'settings');
             </div>
             <div class="form-row"><label><input type="checkbox" name="ldaps_use_ssl" value="1" <?= ($ldaps['use_ssl'] ?? true) ? 'checked' : '' ?>> Use LDAPS (SSL)</label></div>
             <div class="form-row"><label><input type="checkbox" name="ldaps_start_tls" value="1" <?= !empty($ldaps['start_tls']) ? 'checked' : '' ?>> STARTTLS</label></div>
+            <div class="form-row full" style="margin-top:.35rem;padding-top:.75rem;border-top:1px solid var(--border,#2a3648)">
+                <label style="font-weight:600">Enterprise CA (AD Certificate Services)</label>
+                <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 .5rem">
+                    Upload your <strong>root</strong> (and intermediate if needed) CA certificate so PHP can trust
+                    <code>ldaps://</code> with verification enabled. Stored as <code>config/ldap-ca.pem</code> (not in git).
+                    Export from AD CS as <em>Base-64 X.509 (.CER)</em> or PEM.
+                </p>
+                <?php if (!empty($ldapCaStatus['installed'])): ?>
+                    <p style="font-size:.85rem;margin:0 0 .5rem">
+                        Status: <span class="badge ok">Installed</span>
+                        · <?= (int)$ldapCaStatus['cert_count'] ?> cert(s)
+                        · <?= number_format((int)$ldapCaStatus['bytes']) ?> bytes
+                        <?php if (!empty($ldapCaStatus['subjects'])): ?>
+                            <br><span class="text-muted">Subject(s):
+                                <?= App::e(implode(' · ', $ldapCaStatus['subjects'])) ?></span>
+                        <?php endif; ?>
+                    </p>
+                <?php else: ?>
+                    <p style="font-size:.85rem;margin:0 0 .5rem">
+                        Status: <span class="badge fail">Not installed</span>
+                        — LDAPS verify will fail until a CA is uploaded (or skip-verify is enabled).
+                    </p>
+                <?php endif; ?>
+            </div>
+            <div class="form-row full"><label>Upload CA certificate (.pem / .crt / .cer)</label>
+                <input class="form-control" type="file" name="ldaps_ca_file"
+                       accept=".pem,.crt,.cer,.cert,application/x-x509-ca-cert,application/x-pem-file,text/plain">
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="ldaps_ca_append" value="1">
+                Append to existing chain (keep current ldap-ca.pem and add this cert)
+            </label></div>
+            <?php if (!empty($ldapCaStatus['installed'])): ?>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="ldaps_remove_ca" value="1">
+                Remove installed enterprise CA (delete config/ldap-ca.pem)
+            </label></div>
+            <?php endif; ?>
             <div class="form-row full"><label>
                 <input type="checkbox" name="ldaps_tls_insecure" value="1" <?= !empty($ldaps['tls_insecure']) ? 'checked' : '' ?>>
-                Skip LDAPS certificate verify (internal PKI / lab)
+                Skip LDAPS certificate verify (temporary / lab)
             </label>
                 <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
-                    If the test fails with <code>Can't contact LDAP server</code> after Connect succeeds, PHP often cannot trust your domain controller certificate.
-                    Prefer installing your enterprise root CA as <code>config/ldap-ca.pem</code>; use this checkbox only when that is not practical.
+                    Use only until your enterprise CA is uploaded above. After upload, uncheck this and run
+                    <strong>Test connection</strong> again.
                 </p>
             </div>
             <div class="form-row full" style="margin-top:.5rem;padding-top:.75rem;border-top:1px solid var(--border,#2a3648)">
