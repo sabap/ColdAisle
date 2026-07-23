@@ -1,0 +1,33 @@
+# Local site config (secrets)
+/config/config.php
+
+# Runtime data
+/storage/logs/*
+!/storage/logs/.gitkeep
+/storage/uploads/*
+!/storage/uploads/.gitkeep
+
+# Backups / dumps (local)
+*.bak
+*.sql.gz
+/backups/
+/storage/backups/
+
+# OS / editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# Composer / Node (if added later)
+/vendor/
+/node_modules/
+composer.lock
+package-lock.json
+
+# Local smoke / temp scripts
+/scripts/_*.php

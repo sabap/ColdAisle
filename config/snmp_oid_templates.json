@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "description": "Curated numeric OID packs for WinDCIM SNMP targets. Prefer numeric OIDs (Windows PHP SNMP). Always verify against your model/firmware.",
+  "templates": [
+    {
+      "id": "custom",
+      "vendor": "Custom",
+      "label": "Custom / blank",
+      "notes": "Enter OIDs manually. Metric names containing watt or amp update linked PDU load.",
+      "oid_map": {
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "watts": "",
+        "amps": "",
+        "temperature": ""
+      }
+    },
+    {
+      "id": "generic_mib2",
+      "vendor": "Generic",
+      "label": "MIB-II system only",
+      "notes": "sysDescr / sysUpTime only — useful as a connectivity check. No power metrics.",
+      "oid_map": {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "sysName": "1.3.6.1.2.1.1.5.0"
+      }
+    },
+    {
+      "id": "windcim_lab_agent",
+      "vendor": "WinDCIM",
+      "label": "PowerShell lab agent (enterprise 99999)",
+      "notes": "Matches the WinDCIM PowerShell SNMPv3 test agent. simulatedAmps is Gauge ×10 (stored as amps_x10 → ÷10).",
+      "oid_map": {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "watts": "1.3.6.1.4.1.99999.2.1.0",
+        "amps_x10": "1.3.6.1.4.1.99999.2.2.0",
+        "agentStatus": "1.3.6.1.4.1.99999.2.3.0"
+      }
+    },
+    {
+      "id": "apc_ups_powernet",
+      "vendor": "APC / Schneider",
+      "label": "APC UPS (PowerNet typical)",
+      "notes": "Common Smart-UPS / NMC OIDs. upsAdvOutputLoad is % of capacity (not watts). Active power OID varies by firmware — confirm with snmpwalk. Link PDU only if values match expected units.",
+      "oid_map": {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "load_pct": "1.3.6.1.4.1.318.1.1.1.4.2.3.0",
+        "watts": "1.3.6.1.4.1.318.1.1.1.4.2.8.0",
+        "output_voltage": "1.3.6.1.4.1.318.1.1.1.4.2.1.0",
+        "battery_capacity": "1.3.6.1.4.1.318.1.1.1.2.2.1.0"
+      }
+    },
+    {
+      "id": "apc_rack_pdu",
+      "vendor": "APC / Schneider",
+      "label": "APC Rack PDU (rPDU load status)",
+      "notes": "PowerNet rPDU phase/bank load. Index .1 is often phase 1; amps may be in tenths on some firmware (try amps_x10 if values look 10× high). Verify model (AP88xx / AP79xx differ).",
+      "oid_map": {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "amps": "1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.1",
+        "watts": "1.3.6.1.4.1.318.1.1.12.1.16.1.1.1.3.1",
+        "near_overload": "1.3.6.1.4.1.318.1.1.12.2.3.1.1.4.1"
+      }
+    },
+    {
+      "id": "cyberpower_ups",
+      "vendor": "CyberPower",
+      "label": "CyberPower UPS (typical)",
+      "notes": "Common CPS-MIB style OIDs for many CyberPower UPS units. Output load is often percent; power OID may be Watts or deci-Watts by model — verify with one poll.",
+      "oid_map": {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "load_pct": "1.3.6.1.4.1.3808.1.1.1.4.2.3.0",
+        "watts": "1.3.6.1.4.1.3808.1.1.1.4.2.5.0",
+        "output_voltage": "1.3.6.1.4.1.3808.1.1.1.4.2.1.0",
+        "battery_capacity": "1.3.6.1.4.1.3808.1.1.1.2.2.1.0"
+      }
+    },
+    {
+      "id": "cyberpower_pdu",
+      "vendor": "CyberPower",
+      "label": "CyberPower PDU (ePDU typical)",
+      "notes": "Representative ePDU load OIDs. Table indexes vary by bank/phase — adjust last sub-id after snmpwalk if needed.",
+      "oid_map": {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "amps": "1.3.6.1.4.1.3808.1.1.3.2.2.1.5.1",
+        "watts": "1.3.6.1.4.1.3808.1.1.3.2.2.1.9.1",
+        "voltage": "1.3.6.1.4.1.3808.1.1.3.2.2.1.3.1"
+      }
+    },
+    {
+      "id": "vertiv_geist_pdu",
+      "vendor": "Vertiv / Geist",
+      "label": "Vertiv / Geist PDU (typical)",
+      "notes": "Geist/Vertiv enterprise tree is model-heavy. These OIDs are starting points for many rPDU / IMD units — confirm with vendor MIB for your SKU.",
+      "oid_map": {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "watts": "1.3.6.1.4.1.21239.5.2.3.1.1.7.1",
+        "amps": "1.3.6.1.4.1.21239.5.2.3.1.1.5.1",
+        "temperature": "1.3.6.1.4.1.21239.5.2.2.1.1.5.1"
+      }
+    },
+    {
+      "id": "raritan_px",
+      "vendor": "Raritan",
+      "label": "Raritan PX / PX2 / PX3 (typical inlet)",
+      "notes": "PDU2-MIB style inlet active power / current. Index .1 is usually inlet 1. Units are typically Watts and 0.001 A or Amps depending on object — verify after first poll.",
+      "oid_map": {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "watts": "1.3.6.1.4.1.13742.6.5.2.3.1.4.1.1.1",
+        "amps": "1.3.6.1.4.1.13742.6.5.2.3.1.6.1.1.1",
+        "voltage": "1.3.6.1.4.1.13742.6.5.2.3.1.5.1.1.1"
+      }
+    },
+    {
+      "id": "servertech_pro2",
+      "vendor": "Server Technology",
+      "label": "ServerTech PRO2 / Sentry (typical)",
+      "notes": "Common Sentry3/PRO2 inlet load OIDs. Confirm against your Sentry MIB revision; indexes differ for multi-inlet units.",
+      "oid_map": {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "watts": "1.3.6.1.4.1.1718.3.2.2.1.12.1.1",
+        "amps": "1.3.6.1.4.1.1718.3.2.2.1.7.1.1",
+        "voltage": "1.3.6.1.4.1.1718.3.2.2.1.11.1.1"
+      }
+    }
+  ]
+}
