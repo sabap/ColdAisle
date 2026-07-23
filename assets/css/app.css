@@ -1170,6 +1170,48 @@ body.modal-open { overflow: hidden; }
   height: auto;
   min-height: 1.9rem;
 }
+
+/* Searchable timezone combobox (Settings → General) */
+.tz-combobox {
+  position: relative;
+  max-width: 28rem;
+}
+.tz-combobox-list {
+  position: absolute;
+  z-index: 40;
+  left: 0;
+  right: 0;
+  top: calc(100% + 2px);
+  margin: 0;
+  padding: .25rem 0;
+  list-style: none;
+  max-height: 16rem;
+  overflow-y: auto;
+  background: var(--surface, #111827);
+  border: 1px solid var(--border, #2a3648);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .45);
+}
+.tz-combobox-list li {
+  padding: .45rem .75rem;
+  cursor: pointer;
+  font-size: .9rem;
+  color: var(--text, #e5eef7);
+}
+.tz-combobox-list li:hover,
+.tz-combobox-list li[aria-selected="true"] {
+  background: rgba(59, 130, 246, .2);
+  color: #fff;
+}
+.tz-combobox-list li.tz-empty {
+  cursor: default;
+  color: var(--muted, #94a3b8);
+  font-size: .85rem;
+}
+.tz-combobox-list li.tz-empty:hover {
+  background: transparent;
+  color: var(--muted, #94a3b8);
+}
 .btn-danger {
   background: #b91c1c;
   border-color: #b91c1c;

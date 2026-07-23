@@ -20,7 +20,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             SettingsService::set('disposal_notify_days', (string)(int)($_POST['disposal_notify_days'] ?? 7), 'lifecycle');
             $config['app_name'] = App::APP_NAME;
             $config['org_name'] = $_POST['org_name'] ?? $config['org_name'] ?? '';
-            $config['timezone'] = $_POST['timezone'] ?? $config['timezone'] ?? 'UTC';
+            $tzIn = trim((string)($_POST['timezone'] ?? 'UTC'));
+            if ($tzIn === '') {
+                $tzIn = 'UTC';
+            }
+            try {
+                new DateTimeZone($tzIn);
+                $config['timezone'] = $tzIn;
+            } catch (Throwable $e) {
+                throw new RuntimeException(
+                    'Invalid timezone “' . $tzIn . '”. Choose a value from the list (e.g. America/New_York).'
+                );
+            }
             $config['base_url'] = rtrim($_POST['base_url'] ?? '', '/');
         }
 
@@ -227,8 +238,35 @@ layout_header('Settings', $user, 'settings');
             <input type="hidden" name="section" value="general">
             <div class="form-row"><label>Organization</label>
                 <input class="form-control" name="org_name" value="<?= App::e($config['org_name'] ?? SettingsService::get('org_name', '')) ?>"></div>
-            <div class="form-row"><label>Timezone</label>
-                <input class="form-control" name="timezone" value="<?= App::e($config['timezone'] ?? 'UTC') ?>"></div>
+            <?php
+            $tzList = timezone_identifiers_list();
+            $currentTz = (string)($config['timezone'] ?? 'UTC');
+            if ($currentTz === '') {
+                $currentTz = 'UTC';
+            }
+            // Keep a custom/legacy value selectable if it is not in the PHP list
+            if (!in_array($currentTz, $tzList, true)) {
+                array_unshift($tzList, $currentTz);
+            }
+            ?>
+            <div class="form-row full"><label for="timezone_input">Timezone</label>
+                <div class="tz-combobox" id="tz_combobox">
+                    <input class="form-control" type="text" name="timezone" id="timezone_input"
+                           value="<?= App::e($currentTz) ?>"
+                           autocomplete="off"
+                           spellcheck="false"
+                           role="combobox"
+                           aria-autocomplete="list"
+                           aria-expanded="false"
+                           aria-controls="timezone_list"
+                           placeholder="Search timezones (e.g. New, Chicago, UTC)…">
+                    <ul class="tz-combobox-list" id="timezone_list" role="listbox" hidden></ul>
+                </div>
+                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                    Type to filter (e.g. <code>New</code> → <code>America/New_York</code>). Click a match or press Enter to choose the first result.
+                </p>
+                <script type="application/json" id="tz_data"><?= json_encode(array_values($tzList), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?></script>
+            </div>
             <div class="form-row full"><label>Public site URL (optional)</label>
                 <input class="form-control" name="base_url" id="settings_base_url"
                        value="<?= App::e($config['base_url'] ?? '') ?>"
@@ -592,4 +630,136 @@ layout_header('Settings', $user, 'settings');
         </table>
     </div>
 </div>
+<script>
+(function () {
+    var dataEl = document.getElementById('tz_data');
+    var input = document.getElementById('timezone_input');
+    var list = document.getElementById('timezone_list');
+    var box = document.getElementById('tz_combobox');
+    if (!dataEl || !input || !list || !box) return;
+
+    var all = [];
+    try { all = JSON.parse(dataEl.textContent || '[]'); } catch (e) { all = []; }
+    if (!Array.isArray(all) || !all.length) return;
+
+    var active = -1;
+    var maxShow = 80;
+
+    function norm(s) {
+        return String(s || '').toLowerCase().replace(/_/g, ' ');
+    }
+
+    function filter(q) {
+        q = norm(q).trim();
+        if (!q) return all.slice(0, maxShow);
+        var out = [];
+        for (var i = 0; i < all.length && out.length < maxShow; i++) {
+            var id = all[i];
+            var n = norm(id);
+            if (n.indexOf(q) !== -1 || id.toLowerCase().indexOf(q) !== -1) {
+                out.push(id);
+            }
+        }
+        return out;
+    }
+
+    function render(items) {
+        list.innerHTML = '';
+        active = -1;
+        if (!items.length) {
+            var empty = document.createElement('li');
+            empty.className = 'tz-empty';
+            empty.textContent = 'No matching timezones';
+            list.appendChild(empty);
+            return;
+        }
+        items.forEach(function (id, idx) {
+            var li = document.createElement('li');
+            li.setAttribute('role', 'option');
+            li.setAttribute('data-value', id);
+            // Friendlier display: America/New_York → America/New York
+            li.textContent = id.replace(/_/g, ' ');
+            li.title = id;
+            li.addEventListener('mousedown', function (e) {
+                e.preventDefault(); // keep focus; avoid blur closing before select
+                pick(id);
+            });
+            li.addEventListener('mouseenter', function () {
+                setActive(idx);
+            });
+            list.appendChild(li);
+        });
+    }
+
+    function openList() {
+        list.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+    }
+
+    function closeList() {
+        list.hidden = true;
+        input.setAttribute('aria-expanded', 'false');
+        active = -1;
+    }
+
+    function setActive(idx) {
+        var items = list.querySelectorAll('li[role="option"]');
+        items.forEach(function (el, i) {
+            el.setAttribute('aria-selected', i === idx ? 'true' : 'false');
+        });
+        active = idx;
+        if (items[idx]) {
+            items[idx].scrollIntoView({ block: 'nearest' });
+        }
+    }
+
+    function pick(id) {
+        input.value = id;
+        closeList();
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    function refresh() {
+        render(filter(input.value));
+        openList();
+        if (list.querySelector('li[role="option"]')) {
+            setActive(0);
+        }
+    }
+
+    input.addEventListener('focus', function () {
+        refresh();
+    });
+    input.addEventListener('input', function () {
+        refresh();
+    });
+    input.addEventListener('keydown', function (e) {
+        var items = list.querySelectorAll('li[role="option"]');
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (list.hidden) refresh();
+            setActive(Math.min(active + 1, items.length - 1));
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setActive(Math.max(active - 1, 0));
+        } else if (e.key === 'Enter') {
+            if (!list.hidden && active >= 0 && items[active]) {
+                e.preventDefault();
+                pick(items[active].getAttribute('data-value'));
+            }
+        } else if (e.key === 'Escape') {
+            closeList();
+        }
+    });
+    input.addEventListener('blur', function () {
+        // Delay so mousedown on option can fire
+        setTimeout(closeList, 150);
+    });
+
+    // Click outside
+    document.addEventListener('click', function (e) {
+        if (!box.contains(e.target)) closeList();
+    });
+})();
+</script>
 <?php layout_footer(); ?>
