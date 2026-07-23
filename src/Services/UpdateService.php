@@ -12,6 +12,12 @@ class UpdateService
     public const CACHE_KEY_JSON = 'update_check_json';
     public const CACHE_KEY_AT = 'update_check_at';
 
+    /** Suffix for deferred replacements when the live file is locked (Windows/IIS). */
+    public const PENDING_SUFFIX = '.coldaisle-new';
+
+    /** @var list<string> pending .coldaisle-new paths created this request */
+    private static array $pendingCreated = [];
+
     /** @return array<string,mixed> */
     public static function config(): array
     {
@@ -263,14 +269,31 @@ class UpdateService
                 throw new RuntimeException('Could not locate application root inside the release archive.');
             }
 
+            self::$pendingCreated = [];
             $stats = self::applyTree($sourceRoot, App::ROOT);
 
             // Ensure VERSION file matches applied tag
-            if (@file_put_contents(App::ROOT . '/VERSION', $version . "\n") === false) {
+            if (!self::copyFileRobust(
+                // write via temp string file
+                self::writeTempString($tmpDir, $version . "\n"),
+                App::ROOT . '/VERSION'
+            ) && @file_put_contents(App::ROOT . '/VERSION', $version . "\n") === false) {
                 throw new RuntimeException(
                     'Files may have partially updated, but VERSION could not be written. '
-                    . 'Grant Modify on the site folder to the IIS app pool identity, then retry.'
+                    . self::aclHelpMessage()
                 );
+            }
+
+            // Promote any deferred replacements now; remainder on shutdown / next request
+            $pendingLeft = self::applyPendingReplacements();
+            if ($pendingLeft > 0) {
+                register_shutdown_function(static function (): void {
+                    try {
+                        self::applyPendingReplacements();
+                    } catch (Throwable $e) {
+                        // next request boot will retry
+                    }
+                });
             }
 
             // Schema upgrades for existing installs
@@ -304,6 +327,9 @@ class UpdateService
             if (($stats['skipped'] ?? 0) > 0) {
                 $msg .= ", {$stats['skipped']} optional skipped";
             }
+            if (($stats['deferred'] ?? 0) > 0 || $pendingLeft > 0) {
+                $msg .= ', some files deferred until next page load (Windows file lock)';
+            }
             $msg .= ').';
 
             return [
@@ -315,6 +341,109 @@ class UpdateService
         } finally {
             self::rrmdir($tmpDir);
         }
+    }
+
+    private static function writeTempString(string $dir, string $contents): string
+    {
+        $path = rtrim($dir, "\\/") . DIRECTORY_SEPARATOR . 'ver_' . bin2hex(random_bytes(3)) . '.txt';
+        file_put_contents($path, $contents);
+        return $path;
+    }
+
+    /**
+     * Apply any *.coldaisle-new files left when a live file was locked mid-update.
+     * Safe to call on every request (boot).
+     * @return int number of pending files still remaining
+     */
+    public static function applyPendingReplacements(): int
+    {
+        $root = realpath(App::ROOT);
+        if ($root === false || !is_dir($root)) {
+            return 0;
+        }
+        $remaining = 0;
+        try {
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::LEAVES_ONLY
+            );
+            foreach ($iterator as $file) {
+                /** @var SplFileInfo $file */
+                if (!$file->isFile()) {
+                    continue;
+                }
+                $path = $file->getPathname();
+                if (!str_ends_with($path, self::PENDING_SUFFIX)) {
+                    continue;
+                }
+                // Skip runtime dirs
+                $rel = str_replace('\\', '/', substr($path, strlen($root) + 1));
+                if (str_starts_with($rel, 'storage/')) {
+                    continue;
+                }
+                $dest = substr($path, 0, -strlen(self::PENDING_SUFFIX));
+                if (self::promotePendingFile($path, $dest)) {
+                    App::log('Update applied deferred file: ' . $rel, 'info');
+                } else {
+                    $remaining++;
+                }
+            }
+        } catch (Throwable $e) {
+            App::log('applyPendingReplacements: ' . $e->getMessage(), 'warning');
+        }
+        return $remaining;
+    }
+
+    private static function promotePendingFile(string $pending, string $dest): bool
+    {
+        if (!is_file($pending)) {
+            return true;
+        }
+        if (is_file($dest)) {
+            @chmod($dest, 0666);
+            if (PHP_OS_FAMILY === 'Windows') {
+                @exec('attrib -R ' . escapeshellarg($dest) . ' 2>NUL');
+            }
+            // Prefer overwrite without deleting first
+            if (@copy($pending, $dest)) {
+                @unlink($pending);
+                return true;
+            }
+            // Try replace: only unlink if we can restore from pending
+            $bak = $dest . '.coldaisle-bak';
+            @unlink($bak);
+            if (@rename($dest, $bak)) {
+                if (@rename($pending, $dest) || @copy($pending, $dest)) {
+                    @unlink($pending);
+                    @unlink($bak);
+                    return true;
+                }
+                // Restore original
+                @rename($bak, $dest);
+                return false;
+            }
+            return false;
+        }
+        // Dest missing (previous bad update deleted it) — restore from pending
+        $parent = dirname($dest);
+        if (!is_dir($parent)) {
+            @mkdir($parent, 0755, true);
+        }
+        if (@rename($pending, $dest) || @copy($pending, $dest)) {
+            @unlink($pending);
+            return true;
+        }
+        return false;
+    }
+
+    public static function aclHelpMessage(): string
+    {
+        $pool = (string)($_SERVER['APP_POOL_ID'] ?? 'DefaultAppPool');
+        $root = str_replace('/', '\\', App::ROOT);
+        return 'Grant Modify on the site folder to the app pool identity. Elevated PowerShell: '
+            . 'icacls "' . $root . '" /grant "IIS AppPool\\' . $pool . ':(OI)(CI)M" /T'
+            . ' ; icacls "' . $root . '" /grant "IUSR:(OI)(CI)M" /T'
+            . ' (APP_POOL_ID=' . $pool . ')';
     }
 
     /** App-local work dir under storage/tmp (IIS-writable). */
@@ -544,7 +673,7 @@ class UpdateService
 
     /**
      * Overlay release files onto the live site.
-     * @return array{copied:int,skipped:int}
+     * @return array{copied:int,skipped:int,deferred:int}
      */
     private static function applyTree(string $sourceRoot, string $destRoot): array
     {
@@ -554,6 +683,7 @@ class UpdateService
         }
         $copied = 0;
         $skipped = 0;
+        $deferred = 0;
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($sourceRoot, FilesystemIterator::SKIP_DOTS),
             RecursiveIteratorIterator::SELF_FIRST
@@ -587,65 +717,138 @@ class UpdateService
                 }
                 throw new RuntimeException('Cannot create directory for: ' . $relNorm);
             }
-            if (self::copyFileRobust($full, $target)) {
+
+            // Always stage the active request script as pending (cannot safely replace mid-request)
+            if (self::isCurrentlyExecuting($target)) {
+                if (self::stagePending($full, $target)) {
+                    $deferred++;
+                    $copied++;
+                } elseif (self::isOptionalUpdatePath($relNorm)) {
+                    $skipped++;
+                } else {
+                    throw new RuntimeException(
+                        'Failed to stage update for active file: ' . $relNorm . '. ' . self::aclHelpMessage()
+                    );
+                }
+                continue;
+            }
+
+            $result = self::copyFileRobust($full, $target);
+            if ($result === 'ok') {
                 $copied++;
+            } elseif ($result === 'deferred') {
+                $copied++;
+                $deferred++;
             } elseif (self::isOptionalUpdatePath($relNorm)) {
                 $skipped++;
                 App::log("Update skipped optional file (not writable): {$relNorm}", 'warning');
             } else {
                 throw new RuntimeException(
-                    'Failed to copy: ' . $relNorm
-                    . '. The IIS app pool needs Modify permission on the site folder '
-                    . '(not only storage\\ and config\\). In an elevated PowerShell on the web server: '
-                    . 'icacls "C:\\inetpub\\wwwroot\\ColdAisle" /grant "IIS AppPool\\DefaultAppPool:(OI)(CI)M" /T'
+                    'Failed to copy: ' . $relNorm . '. ' . self::aclHelpMessage()
                 );
             }
         }
-        return ['copied' => $copied, 'skipped' => $skipped];
+        return ['copied' => $copied, 'skipped' => $skipped, 'deferred' => $deferred];
+    }
+
+    private static function isCurrentlyExecuting(string $dest): bool
+    {
+        $script = (string)($_SERVER['SCRIPT_FILENAME'] ?? '');
+        if ($script === '') {
+            return false;
+        }
+        $a = realpath($dest);
+        $b = realpath($script);
+        if ($a && $b) {
+            return strcasecmp($a, $b) === 0;
+        }
+        // Dest may not exist yet
+        return strcasecmp(
+            str_replace('\\', '/', $dest),
+            str_replace('\\', '/', $script)
+        ) === 0;
     }
 
     /**
-     * Copy with Windows-friendly handling of read-only / ACL-limited targets.
+     * Copy with Windows-friendly handling. NEVER deletes dest before a successful write
+     * (that caused 404s when settings.php was unlinked mid-update).
+     *
+     * @return 'ok'|'deferred'|false
      */
-    private static function copyFileRobust(string $src, string $dest): bool
+    private static function copyFileRobust(string $src, string $dest): string|false
     {
         if (!is_file($src) || !is_readable($src)) {
             return false;
         }
-        // Make existing destination replaceable when possible
         if (is_file($dest)) {
             @chmod($dest, 0666);
             if (PHP_OS_FAMILY === 'Windows') {
                 @exec('attrib -R ' . escapeshellarg($dest) . ' 2>NUL');
             }
         }
-        // Prefer write-to-temp then replace (avoids partial truncates)
+
+        // 1) In-place overwrite (no delete)
+        if (@copy($src, $dest)) {
+            return 'ok';
+        }
+
+        // 2) Stream overwrite (no delete)
+        $data = @file_get_contents($src);
+        if ($data !== false && @file_put_contents($dest, $data) !== false) {
+            return 'ok';
+        }
+
+        // 3) Write sibling temp then atomic-ish replace without leaving dest missing
         $tmp = $dest . '.upd.' . bin2hex(random_bytes(3));
-        if (@copy($src, $tmp)) {
-            if (is_file($dest)) {
-                @unlink($dest);
-            }
-            if (@rename($tmp, $dest)) {
-                return true;
-            }
-            // rename across volumes rare; fall through
-            @unlink($tmp);
+        if ($data !== false) {
+            $wroteTmp = @file_put_contents($tmp, $data) !== false;
         } else {
+            $wroteTmp = @copy($src, $tmp);
+        }
+        if ($wroteTmp) {
+            // Try replace via rename of dest aside, then tmp → dest; rollback if needed
+            if (!is_file($dest)) {
+                if (@rename($tmp, $dest) || @copy($tmp, $dest)) {
+                    @unlink($tmp);
+                    return 'ok';
+                }
+            } else {
+                $bak = $dest . '.coldaisle-bak';
+                @unlink($bak);
+                if (@rename($dest, $bak)) {
+                    if (@rename($tmp, $dest) || @copy($tmp, $dest)) {
+                        @unlink($tmp);
+                        @unlink($bak);
+                        return 'ok';
+                    }
+                    // Restore original — never leave dest missing
+                    @rename($bak, $dest);
+                }
+            }
             @unlink($tmp);
         }
-        // Direct overwrite
-        if (@copy($src, $dest)) {
+
+        // 4) File locked or ACL: stage for next request (keeps live file intact)
+        if (self::stagePending($src, $dest)) {
+            return 'deferred';
+        }
+        return false;
+    }
+
+    private static function stagePending(string $src, string $dest): bool
+    {
+        $pending = $dest . self::PENDING_SUFFIX;
+        @chmod($pending, 0666);
+        if (@copy($src, $pending)) {
+            self::$pendingCreated[] = $pending;
             return true;
         }
-        // Stream rewrite
         $data = @file_get_contents($src);
-        if ($data === false) {
-            return false;
+        if ($data !== false && @file_put_contents($pending, $data) !== false) {
+            self::$pendingCreated[] = $pending;
+            return true;
         }
-        if (is_file($dest)) {
-            @unlink($dest);
-        }
-        return @file_put_contents($dest, $data) !== false;
+        return false;
     }
 
     /** Docs / VCS noise — never abort an update if these cannot be written. */

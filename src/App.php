@@ -16,11 +16,12 @@ require_once __DIR__ . '/Services/SettingsService.php';
 require_once __DIR__ . '/Services/Cabinet3dData.php';
 require_once __DIR__ . '/Services/Crypto.php';
 require_once __DIR__ . '/Services/SiteBackupService.php';
+require_once __DIR__ . '/Services/UpdateService.php';
 
 class App
 {
     /** App semver — keep in sync with /VERSION */
-    public const VERSION = '0.2.8';
+    public const VERSION = '0.2.9';
     /** Product name is fixed (not user-configurable). */
     public const APP_NAME = 'ColdAisle';
     public const ROOT = __DIR__ . '/..';
@@ -99,6 +100,14 @@ class App
             }
         } catch (Throwable $e) {
             self::log('Crypto bootstrap: ' . $e->getMessage(), 'warning');
+        }
+
+        // Finish any deferred file replacements from a previous self-update
+        // (Windows/IIS often locks the script that started the update).
+        try {
+            UpdateService::applyPendingReplacements();
+        } catch (Throwable $e) {
+            self::log('Pending update apply: ' . $e->getMessage(), 'warning');
         }
 
         // Phase B: transport + session hardening (web only)
