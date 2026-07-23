@@ -20,7 +20,7 @@ require_once __DIR__ . '/Services/SiteBackupService.php';
 class App
 {
     /** App semver — keep in sync with /VERSION */
-    public const VERSION = '0.2.7';
+    public const VERSION = '0.2.8';
     /** Product name is fixed (not user-configurable). */
     public const APP_NAME = 'ColdAisle';
     public const ROOT = __DIR__ . '/..';

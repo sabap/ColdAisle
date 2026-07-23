@@ -246,10 +246,7 @@ class UpdateService
         $token = trim((string)$cfg['github_token']);
 
         $backupPath = self::createBackup();
-        $tmpDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'coldaisle_upd_' . bin2hex(random_bytes(4));
-        if (!mkdir($tmpDir, 0700, true) && !is_dir($tmpDir)) {
-            throw new RuntimeException('Could not create temp directory for update.');
-        }
+        $tmpDir = self::makeWorkDir('upd');
 
         try {
             $zipFile = $tmpDir . DIRECTORY_SEPARATOR . 'release.zip';
@@ -266,10 +263,15 @@ class UpdateService
                 throw new RuntimeException('Could not locate application root inside the release archive.');
             }
 
-            self::applyTree($sourceRoot, App::ROOT);
+            $stats = self::applyTree($sourceRoot, App::ROOT);
 
             // Ensure VERSION file matches applied tag
-            file_put_contents(App::ROOT . '/VERSION', $version . "\n");
+            if (@file_put_contents(App::ROOT . '/VERSION', $version . "\n") === false) {
+                throw new RuntimeException(
+                    'Files may have partially updated, but VERSION could not be written. '
+                    . 'Grant Modify on the site folder to the IIS app pool identity, then retry.'
+                );
+            }
 
             // Schema upgrades for existing installs
             try {
@@ -297,15 +299,40 @@ class UpdateService
             ];
             self::storeCache($fresh);
 
+            $msg = "Updated from {$current} to {$version}. Backup: " . basename($backupPath)
+                . " ({$stats['copied']} files";
+            if (($stats['skipped'] ?? 0) > 0) {
+                $msg .= ", {$stats['skipped']} optional skipped";
+            }
+            $msg .= ').';
+
             return [
                 'ok' => true,
-                'message' => "Updated from {$current} to {$version}. Backup: " . basename($backupPath),
+                'message' => $msg,
                 'backup' => $backupPath,
                 'version' => $version,
             ];
         } finally {
             self::rrmdir($tmpDir);
         }
+    }
+
+    /** App-local work dir under storage/tmp (IIS-writable). */
+    private static function makeWorkDir(string $prefix): string
+    {
+        $base = App::ROOT . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'tmp';
+        if (!is_dir($base) && !@mkdir($base, 0775, true) && !is_dir($base)) {
+            $base = rtrim(sys_get_temp_dir(), "\\/");
+        }
+        $work = $base . DIRECTORY_SEPARATOR . 'coldaisle-' . preg_replace('/[^a-z0-9_-]/i', '', $prefix)
+            . '-' . bin2hex(random_bytes(4));
+        if (!@mkdir($work, 0700, true) && !is_dir($work)) {
+            throw new RuntimeException(
+                'Could not create temp directory for update under storage/tmp. '
+                . 'Grant Modify on storage\\ to the IIS app pool.'
+            );
+        }
+        return $work;
     }
 
     public static function createBackup(): string
@@ -515,12 +542,18 @@ class UpdateService
         return null;
     }
 
-    private static function applyTree(string $sourceRoot, string $destRoot): void
+    /**
+     * Overlay release files onto the live site.
+     * @return array{copied:int,skipped:int}
+     */
+    private static function applyTree(string $sourceRoot, string $destRoot): array
     {
         $sourceRoot = realpath($sourceRoot);
         if ($sourceRoot === false) {
             throw new RuntimeException('Invalid source root after extract.');
         }
+        $copied = 0;
+        $skipped = 0;
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($sourceRoot, FilesystemIterator::SKIP_DOTS),
             RecursiveIteratorIterator::SELF_FIRST
@@ -535,21 +568,110 @@ class UpdateService
                 continue;
             }
 
-            $target = $destRoot . DIRECTORY_SEPARATOR . $rel;
+            $target = $destRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
             if ($file->isDir()) {
-                if (!is_dir($target) && !mkdir($target, 0755, true) && !is_dir($target)) {
+                if (!is_dir($target) && !@mkdir($target, 0755, true) && !is_dir($target)) {
+                    if (self::isOptionalUpdatePath($relNorm)) {
+                        $skipped++;
+                        continue;
+                    }
                     throw new RuntimeException('Cannot create directory: ' . $relNorm);
                 }
                 continue;
             }
             $parent = dirname($target);
-            if (!is_dir($parent) && !mkdir($parent, 0755, true) && !is_dir($parent)) {
+            if (!is_dir($parent) && !@mkdir($parent, 0755, true) && !is_dir($parent)) {
+                if (self::isOptionalUpdatePath($relNorm)) {
+                    $skipped++;
+                    continue;
+                }
                 throw new RuntimeException('Cannot create directory for: ' . $relNorm);
             }
-            if (!copy($full, $target)) {
-                throw new RuntimeException('Failed to copy: ' . $relNorm);
+            if (self::copyFileRobust($full, $target)) {
+                $copied++;
+            } elseif (self::isOptionalUpdatePath($relNorm)) {
+                $skipped++;
+                App::log("Update skipped optional file (not writable): {$relNorm}", 'warning');
+            } else {
+                throw new RuntimeException(
+                    'Failed to copy: ' . $relNorm
+                    . '. The IIS app pool needs Modify permission on the site folder '
+                    . '(not only storage\\ and config\\). In an elevated PowerShell on the web server: '
+                    . 'icacls "C:\\inetpub\\wwwroot\\ColdAisle" /grant "IIS AppPool\\DefaultAppPool:(OI)(CI)M" /T'
+                );
             }
         }
+        return ['copied' => $copied, 'skipped' => $skipped];
+    }
+
+    /**
+     * Copy with Windows-friendly handling of read-only / ACL-limited targets.
+     */
+    private static function copyFileRobust(string $src, string $dest): bool
+    {
+        if (!is_file($src) || !is_readable($src)) {
+            return false;
+        }
+        // Make existing destination replaceable when possible
+        if (is_file($dest)) {
+            @chmod($dest, 0666);
+            if (PHP_OS_FAMILY === 'Windows') {
+                @exec('attrib -R ' . escapeshellarg($dest) . ' 2>NUL');
+            }
+        }
+        // Prefer write-to-temp then replace (avoids partial truncates)
+        $tmp = $dest . '.upd.' . bin2hex(random_bytes(3));
+        if (@copy($src, $tmp)) {
+            if (is_file($dest)) {
+                @unlink($dest);
+            }
+            if (@rename($tmp, $dest)) {
+                return true;
+            }
+            // rename across volumes rare; fall through
+            @unlink($tmp);
+        } else {
+            @unlink($tmp);
+        }
+        // Direct overwrite
+        if (@copy($src, $dest)) {
+            return true;
+        }
+        // Stream rewrite
+        $data = @file_get_contents($src);
+        if ($data === false) {
+            return false;
+        }
+        if (is_file($dest)) {
+            @unlink($dest);
+        }
+        return @file_put_contents($dest, $data) !== false;
+    }
+
+    /** Docs / VCS noise — never abort an update if these cannot be written. */
+    private static function isOptionalUpdatePath(string $relNorm): bool
+    {
+        $relNorm = ltrim($relNorm, '/');
+        $base = basename($relNorm);
+        if (in_array($base, [
+            '.gitignore', '.gitattributes', '.editorconfig', '.gitkeep',
+            '.DS_Store', 'Thumbs.db', 'Desktop.ini',
+        ], true)) {
+            return true;
+        }
+        if (in_array($relNorm, [
+            'README.md', 'LICENSE', 'CHANGELOG.md', 'CONTRIBUTING.md',
+        ], true)) {
+            return true;
+        }
+        // Installer scripts are for greenfield servers; optional on live site
+        if (str_starts_with($relNorm, 'scripts/') && str_ends_with(strtolower($base), '.ps1')) {
+            return true;
+        }
+        if ($relNorm === 'Install-ColdAisle.ps1') {
+            return true;
+        }
+        return false;
     }
 
     private static function shouldPreserve(string $relNorm): bool
@@ -565,6 +687,9 @@ class UpdateService
             return true;
         }
         if (str_starts_with($relNorm, 'storage/backups/')) {
+            return true;
+        }
+        if (str_starts_with($relNorm, 'storage/tmp/')) {
             return true;
         }
         if (str_starts_with($relNorm, '.git/')) {
