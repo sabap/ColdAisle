@@ -220,8 +220,22 @@ layout_header('Settings', $user, 'settings');
                 <input class="form-control" name="org_name" value="<?= App::e($config['org_name'] ?? SettingsService::get('org_name', '')) ?>"></div>
             <div class="form-row"><label>Timezone</label>
                 <input class="form-control" name="timezone" value="<?= App::e($config['timezone'] ?? 'UTC') ?>"></div>
-            <div class="form-row"><label>Base URL</label>
-                <input class="form-control" name="base_url" value="<?= App::e($config['base_url'] ?? '') ?>" placeholder="https://dcim.contoso.com"></div>
+            <div class="form-row full"><label>Public site URL (optional)</label>
+                <input class="form-control" name="base_url" id="settings_base_url"
+                       value="<?= App::e($config['base_url'] ?? '') ?>"
+                       placeholder="Leave blank to auto-detect from the browser">
+                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                    Leave blank unless you use a reverse proxy or a public name that differs from this server.
+                    If you set <code>https://…</code>, IIS must already have an HTTPS binding and TLS certificate
+                    for that hostname. Enable <strong>Force HTTPS</strong> under Security only after HTTPS works in the browser.
+                </p>
+                <?php if (App::httpsConfigMismatch()): ?>
+                    <div class="alert alert-error" style="margin-top:.5rem">
+                        Configured URL is HTTPS but this page was loaded over HTTP (certificate/binding may still be missing).
+                        ColdAisle is using the current HTTP address for links until HTTPS works or Force HTTPS is enabled.
+                    </div>
+                <?php endif; ?>
+            </div>
             <div class="form-row"><label>Disposal notify (days)</label>
                 <input class="form-control" type="number" name="disposal_notify_days" value="<?= App::e(SettingsService::get('disposal_notify_days', '7')) ?>"></div>
             <div class="form-row"><button class="btn btn-primary" type="submit">Save General</button></div>
