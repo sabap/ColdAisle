@@ -566,8 +566,13 @@ class UpdateService
     /**
      * @return string|null null when $allowNotFound and HTTP 404
      */
-    private static function httpRequest(string $url, string $token, bool $binary, bool $allowNotFound = false): ?string
-    {
+    private static function httpRequest(
+        string $url,
+        string $token,
+        bool $binary,
+        bool $allowNotFound = false,
+        bool $caRetried = false
+    ): ?string {
         if (!function_exists('curl_init')) {
             throw new RuntimeException('PHP cURL extension is required for updates.');
         }
@@ -594,7 +599,7 @@ class UpdateService
             CURLOPT_SSL_VERIFYHOST => $sslVerify ? 2 : 0,
         ];
         if ($sslVerify) {
-            $ca = self::ensureCaBundle();
+            $ca = self::ensureCaBundle($caRetried);
             if ($ca !== null) {
                 $opts[CURLOPT_CAINFO] = $ca;
             }
@@ -607,12 +612,12 @@ class UpdateService
         if ($body === false) {
             $hint = '';
             if (stripos($err, 'certificate') !== false || stripos($err, 'SSL') !== false) {
-                // One retry: force-refresh CA bundle then try again once
-                if ($sslVerify && self::ensureCaBundle(true) !== null) {
-                    return self::httpRequest($url, $token, $binary, $allowNotFound);
+                // One retry after (re)installing CA bundle
+                if ($sslVerify && !$caRetried && self::ensureCaBundle(true) !== null) {
+                    return self::httpRequest($url, $token, $binary, $allowNotFound, true);
                 }
-                $hint = ' PHP has no trusted CA list. ColdAisle tried config/cacert.pem; '
-                    . 'use Settings → Updates → “Install CA certificates”, or set curl.cainfo in php.ini. '
+                $hint = ' PHP has no trusted CA list. Use Settings → Updates → “Install CA certificates”, '
+                    . 'or set curl.cainfo in php.ini to a cacert.pem path. '
                     . 'Uncheck “Verify TLS certificates” only for lab/dev.';
             }
             throw new RuntimeException('HTTP request failed: ' . $err . $hint);
