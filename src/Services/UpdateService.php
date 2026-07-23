@@ -85,8 +85,12 @@ class UpdateService
         $token = trim((string)$cfg['github_token']);
 
         try {
-            // Prefer formal Releases; fall back to tags for repos that only push tags
-            $release = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/releases/latest", $token);
+            // Prefer formal Releases; 404 is normal when only git tags exist (no GitHub "Release" objects)
+            $release = self::githubGetJson(
+                "https://api.github.com/repos/{$owner}/{$repo}/releases/latest",
+                $token,
+                true // allow 404 → fall back to tags
+            );
             $tag = null;
             $name = null;
             $html = null;
@@ -100,13 +104,23 @@ class UpdateService
                 $notes = (string)($release['body'] ?? '');
                 $published = (string)($release['published_at'] ?? $release['created_at'] ?? '');
             } else {
-                $tags = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/tags?per_page=20", $token);
+                $tags = self::githubGetJson(
+                    "https://api.github.com/repos/{$owner}/{$repo}/tags?per_page=30",
+                    $token,
+                    false
+                );
                 if (!is_array($tags) || isset($tags['message'])) {
                     $msg = is_array($tags) ? (string)($tags['message'] ?? 'GitHub API error') : 'GitHub API error';
-                    if (stripos($msg, 'Not Found') !== false && $token === '') {
-                        $msg = 'Repository not found or private — add a GitHub token with repo read access in Settings → Updates.';
+                    if (stripos($msg, 'Not Found') !== false) {
+                        $msg = $token === ''
+                            ? 'Repository not found or private — add a GitHub token with Contents: Read in Settings → Updates.'
+                            : 'Repository not found (HTTP 404). Confirm owner/repo is sabap/ColdAisle and the token includes this repository with Contents: Read.';
                     }
                     throw new RuntimeException($msg);
+                }
+                // Ensure we got a list of tags, not a single error object
+                if ($tags !== [] && !array_is_list($tags)) {
+                    throw new RuntimeException('Unexpected tags response from GitHub.');
                 }
                 $best = null;
                 foreach ($tags as $t) {
@@ -123,10 +137,11 @@ class UpdateService
                     }
                 }
                 if ($best === null) {
-                    throw new RuntimeException('No version tags found on the repository.');
+                    throw new RuntimeException('No version tags found on the repository. Push a tag like v0.2.0 first.');
                 }
                 $tag = $best;
-                $html = "https://github.com/{$cfg['github_owner']}/{$cfg['github_repo']}/releases/tag/v{$tag}";
+                $html = 'https://github.com/' . rawurlencode((string)$cfg['github_owner'])
+                    . '/' . rawurlencode((string)$cfg['github_repo']) . '/releases/tag/v' . $tag;
                 $notes = '';
                 $published = null;
             }
@@ -352,11 +367,14 @@ class UpdateService
     }
 
     /**
-     * @return array<string,mixed>|list<mixed>
+     * @return array<string,mixed>|list<mixed>|null null when $allowNotFound and HTTP 404
      */
-    private static function githubGetJson(string $url, string $token)
+    private static function githubGetJson(string $url, string $token, bool $allowNotFound = false)
     {
-        $raw = self::httpRequest($url, $token, false);
+        $raw = self::httpRequest($url, $token, false, $allowNotFound);
+        if ($raw === null) {
+            return null;
+        }
         $data = json_decode($raw, true);
         if (!is_array($data)) {
             throw new RuntimeException('Invalid JSON from GitHub API.');
@@ -366,8 +384,8 @@ class UpdateService
 
     private static function githubDownload(string $url, string $dest, string $token): void
     {
-        $body = self::httpRequest($url, $token, true);
-        if ($body === '' || strlen($body) < 100) {
+        $body = self::httpRequest($url, $token, true, false);
+        if ($body === null || $body === '' || strlen($body) < 100) {
             throw new RuntimeException('Downloaded release archive is empty or too small.');
         }
         if (file_put_contents($dest, $body) === false) {
@@ -375,7 +393,10 @@ class UpdateService
         }
     }
 
-    private static function httpRequest(string $url, string $token, bool $binary): string
+    /**
+     * @return string|null null when $allowNotFound and HTTP 404
+     */
+    private static function httpRequest(string $url, string $token, bool $binary, bool $allowNotFound = false): ?string
     {
         if (!function_exists('curl_init')) {
             throw new RuntimeException('PHP cURL extension is required for updates.');
@@ -385,11 +406,12 @@ class UpdateService
             throw new RuntimeException('curl_init failed.');
         }
         $headers = [
-            'Accept: ' . ($binary ? 'application/vnd.github+json' : 'application/vnd.github+json'),
+            'Accept: application/vnd.github+json',
             'User-Agent: ColdAisle-Updater',
             'X-GitHub-Api-Version: 2022-11-28',
         ];
         if ($token !== '') {
+            // Support both classic (ghp_) and fine-grained (github_pat_) tokens
             $headers[] = 'Authorization: Bearer ' . $token;
         }
         $sslVerify = !empty(self::config()['ssl_verify']);
@@ -415,15 +437,24 @@ class UpdateService
         if ($body === false) {
             $hint = '';
             if (stripos($err, 'certificate') !== false || stripos($err, 'SSL') !== false) {
-                $hint = ' Tip: place a CA bundle at config/cacert.pem, set curl.cainfo in php.ini, or set updates.ssl_verify=false in config (lab only).';
+                $hint = ' Tip: place a CA bundle at config/cacert.pem, set curl.cainfo in php.ini, or uncheck “Verify TLS certificates” under Settings → Updates (lab only).';
             }
             throw new RuntimeException('HTTP request failed: ' . $err . $hint);
         }
         if ($code === 401 || $code === 403) {
-            throw new RuntimeException('GitHub authentication failed (HTTP ' . $code . '). Check the personal access token.');
+            throw new RuntimeException(
+                'GitHub authentication failed (HTTP ' . $code . '). '
+                . 'Regenerate the PAT with Contents: Read on sabap/ColdAisle, paste it again, and Save update settings.'
+            );
         }
         if ($code === 404) {
-            throw new RuntimeException('GitHub resource not found (HTTP 404). Confirm owner/repo and token repo access for private repositories.');
+            if ($allowNotFound) {
+                return null;
+            }
+            throw new RuntimeException(
+                'GitHub resource not found (HTTP 404). Confirm owner/repo is sabap/ColdAisle '
+                . 'and the token is allowed for this private repository (Contents: Read).'
+            );
         }
         if ($code < 200 || $code >= 300) {
             $snippet = substr((string)$body, 0, 200);
