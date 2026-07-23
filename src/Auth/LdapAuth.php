@@ -335,10 +335,219 @@ class LdapAuth
         return ['detail' => implode(' · ', $parts)];
     }
 
+    /** Path where enterprise LDAPS CA chain is stored (uploaded from Settings). */
+    public static function enterpriseCaPath(): string
+    {
+        return App::ROOT . '/config/ldap-ca.pem';
+    }
+
+    /**
+     * @return array{installed:bool,path:?string,bytes:int,cert_count:int,subjects:list<string>}
+     */
+    public static function enterpriseCaStatus(): array
+    {
+        $path = self::enterpriseCaPath();
+        if (!is_file($path) || filesize($path) < 50) {
+            return [
+                'installed' => false,
+                'path' => null,
+                'bytes' => 0,
+                'cert_count' => 0,
+                'subjects' => [],
+            ];
+        }
+        $pem = (string)file_get_contents($path);
+        $subjects = self::pemSubjects($pem);
+        return [
+            'installed' => true,
+            'path' => $path,
+            'bytes' => (int)filesize($path),
+            'cert_count' => count($subjects),
+            'subjects' => $subjects,
+        ];
+    }
+
+    /**
+     * Install uploaded enterprise CA (PEM or DER/.cer) for LDAPS trust.
+     *
+     * @param array{name?:string,tmp_name?:string,error?:int,size?:int} $file $_FILES entry
+     * @return array{ok:bool,message:string,path:string,cert_count:int,subjects:list<string>}
+     */
+    public static function installEnterpriseCaUpload(array $file, bool $append = false): array
+    {
+        $err = (int)($file['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($err !== UPLOAD_ERR_OK) {
+            throw new RuntimeException(self::uploadErrorMessage($err));
+        }
+        $tmp = (string)($file['tmp_name'] ?? '');
+        if ($tmp === '' || !is_uploaded_file($tmp)) {
+            throw new RuntimeException('Invalid upload.');
+        }
+        $raw = (string)file_get_contents($tmp);
+        if ($raw === '') {
+            throw new RuntimeException('Uploaded file is empty.');
+        }
+        $name = (string)($file['name'] ?? 'ca.cer');
+        $pem = self::normalizeToPem($raw, $name);
+        $subjects = self::pemSubjects($pem);
+        if ($subjects === []) {
+            throw new RuntimeException(
+                'No X.509 certificates found. Upload a .pem / .crt / .cer file '
+                . '(Base-64 or DER). For AD CS, export the root CA certificate.'
+            );
+        }
+
+        $path = self::enterpriseCaPath();
+        $dir = dirname($path);
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new RuntimeException('config/ is not writable — cannot save ldap-ca.pem.');
+        }
+
+        $out = $pem;
+        if ($append && is_file($path) && filesize($path) > 50) {
+            $existing = rtrim((string)file_get_contents($path));
+            $out = $existing . "\n\n" . $pem;
+        }
+        if (!str_ends_with($out, "\n")) {
+            $out .= "\n";
+        }
+        if (file_put_contents($path, $out) === false) {
+            throw new RuntimeException('Could not write ' . $path);
+        }
+        @chmod($path, 0640);
+
+        $finalSubjects = self::pemSubjects((string)file_get_contents($path));
+        return [
+            'ok' => true,
+            'message' => 'Enterprise CA installed for LDAPS trust ('
+                . count($finalSubjects) . ' certificate(s) in config/ldap-ca.pem). '
+                . 'Uncheck “Skip LDAPS certificate verify” and re-test.',
+            'path' => $path,
+            'cert_count' => count($finalSubjects),
+            'subjects' => $finalSubjects,
+        ];
+    }
+
+    public static function removeEnterpriseCa(): bool
+    {
+        $path = self::enterpriseCaPath();
+        if (!is_file($path)) {
+            return false;
+        }
+        return @unlink($path);
+    }
+
+    /** Convert PEM or DER bytes into one or more PEM certificates. */
+    private static function normalizeToPem(string $raw, string $filename): string
+    {
+        $trim = trim($raw);
+        if (str_contains($trim, 'BEGIN CERTIFICATE')) {
+            // Already PEM (possibly multiple)
+            if (!preg_match_all(
+                '/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/s',
+                $trim,
+                $m
+            )) {
+                throw new RuntimeException('PEM file did not contain a CERTIFICATE block.');
+            }
+            return implode("\n", $m[0]) . "\n";
+        }
+
+        // Base64 body without headers (common Windows "Base-64 X.509 (.CER)")
+        $compact = preg_replace('/\s+/', '', $trim) ?? '';
+        if ($compact !== '' && preg_match('/^[A-Za-z0-9+\/=]+$/', $compact) && strlen($compact) > 100) {
+            $der = base64_decode($compact, true);
+            if ($der !== false && $der !== '') {
+                $raw = $der;
+            }
+        }
+
+        // DER binary
+        if (function_exists('openssl_x509_read')) {
+            $x509 = @openssl_x509_read($raw);
+            if ($x509 === false) {
+                // Try as file-style PEM reconstruction failed; last try base64 wrap
+                $x509 = @openssl_x509_read(
+                    "-----BEGIN CERTIFICATE-----\n"
+                    . chunk_split(base64_encode($raw), 64, "\n")
+                    . "-----END CERTIFICATE-----\n"
+                );
+            }
+            if ($x509 !== false) {
+                $out = '';
+                if (!@openssl_x509_export($x509, $out) || $out === '') {
+                    throw new RuntimeException('Could not export certificate to PEM.');
+                }
+                return $out;
+            }
+        }
+
+        throw new RuntimeException(
+            'Could not parse certificate from “' . $filename . '”. '
+            . 'Export as Base-64 X.509 (.CER) or PEM from AD Certificate Services.'
+        );
+    }
+
+    /** @return list<string> */
+    private static function pemSubjects(string $pem): array
+    {
+        $subjects = [];
+        if (!function_exists('openssl_x509_parse')) {
+            if (preg_match_all('/BEGIN CERTIFICATE/', $pem, $m)) {
+                return array_fill(0, count($m[0]), '(certificate)');
+            }
+            return [];
+        }
+        if (!preg_match_all(
+            '/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/s',
+            $pem,
+            $blocks
+        )) {
+            return [];
+        }
+        foreach ($blocks[0] as $block) {
+            $x509 = @openssl_x509_read($block);
+            if ($x509 === false) {
+                continue;
+            }
+            $info = @openssl_x509_parse($x509);
+            if (is_array($info)) {
+                $name = $info['subject']['CN']
+                    ?? $info['subject']['OU']
+                    ?? $info['name']
+                    ?? 'certificate';
+                if (is_array($name)) {
+                    $name = implode(', ', $name);
+                }
+                $subjects[] = (string)$name;
+            } else {
+                $subjects[] = 'certificate';
+            }
+        }
+        return $subjects;
+    }
+
+    private static function uploadErrorMessage(int $code): string
+    {
+        return match ($code) {
+            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'Upload exceeds PHP size limit (upload_max_filesize / post_max_size).',
+            UPLOAD_ERR_PARTIAL => 'Upload was incomplete — try again.',
+            UPLOAD_ERR_NO_FILE => 'No file selected.',
+            UPLOAD_ERR_NO_TMP_DIR => 'PHP temporary upload directory is missing.',
+            UPLOAD_ERR_CANT_WRITE => 'PHP could not write the upload to disk.',
+            default => 'Upload failed (error code ' . $code . ').',
+        };
+    }
+
     private static function resolveLdapCaFile(): ?string
     {
+        // Prefer enterprise CA uploaded for LDAPS
+        $enterprise = self::enterpriseCaPath();
+        if (is_file($enterprise) && filesize($enterprise) > 50) {
+            return $enterprise;
+        }
+
         $candidates = [
-            App::ROOT . '/config/ldap-ca.pem',
             App::ROOT . '/config/cacert.pem',
         ];
         // Reuse GitHub CA bundle helper if present

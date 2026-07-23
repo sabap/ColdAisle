@@ -331,7 +331,7 @@ function self_generate_config(array $dbCfg, array $form, string $baseUrl): strin
 {
     $export = var_export([
         'app_name' => 'ColdAisle',
-        'version' => '0.2.14',
+        'version' => '0.2.15',
         // 32-byte key, base64 — used to encrypt SNMP/API secrets at rest in the DB
         'app_key' => base64_encode(random_bytes(32)),
         'timezone' => $form['timezone'],

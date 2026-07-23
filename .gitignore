@@ -35,3 +35,7 @@ package-lock.json
 # TLS CA bundle (downloaded locally; not required in git)
 /config/cacert.pem
 
+
+# Enterprise LDAPS CA (uploaded via Settings)
+/config/ldap-ca.pem
+
