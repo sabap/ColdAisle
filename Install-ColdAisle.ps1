@@ -37,8 +37,8 @@
       .\Install-ColdAisle.ps1
 
 .PARAMETER Version
-    Release tag without or with leading v (e.g. 0.2.0 or v0.2.0).
-    Default: latest version tag from GitHub.
+    Release tag without or with leading v (e.g. 0.2.2 or v0.2.2), or branch name main.
+    Default: latest GitHub Release, else highest version tag; falls back to main if tag is too old.
 
 .PARAMETER SitePhysicalPath
     IIS site physical path for ColdAisle. Default: C:\inetpub\wwwroot\ColdAisle
@@ -370,7 +370,11 @@ function Resolve-LatestVersion {
     param([string]$Owner, [string]$Repo, [string]$Requested)
 
     if ($Requested) {
-        return ($Requested.Trim() -replace '^[vV]', '')
+        $r = $Requested.Trim()
+        if ($r -match '^(?i)(main|master)$') {
+            return $r.ToLower()
+        }
+        return ($r -replace '^[vV]', '')
     }
 
     Write-Step "Resolving latest version from GitHub ($Owner/$Repo)"
@@ -434,13 +438,23 @@ function Download-ColdAisleRelease {
         [string]$WorkRoot
     )
 
-    $tag = "v$Version"
-    # Public zipball (no auth)
-    $zipUrl = "https://github.com/$Owner/$Repo/archive/refs/tags/$tag.zip"
-    $zipPath = Join-Path $WorkRoot "ColdAisle-$tag.zip"
+    # Version may be "0.2.2", "v0.2.2", "main", or "master"
+    $ref = $Version.Trim()
+    if ($ref -match '^(?i)(main|master)$') {
+        $zipUrl = "https://github.com/$Owner/$Repo/archive/refs/heads/$($ref.ToLower()).zip"
+        $label = $ref.ToLower()
+    } else {
+        $ref = $ref -replace '^[vV]', ''
+        $tag = "v$ref"
+        $zipUrl = "https://github.com/$Owner/$Repo/archive/refs/tags/$tag.zip"
+        $label = $tag
+    }
+
+    $safeName = ($label -replace '[^\w\.\-]+', '_')
+    $zipPath = Join-Path $WorkRoot "ColdAisle-$safeName.zip"
     $extractRoot = Join-Path $WorkRoot 'extract'
 
-    Write-Step "Downloading $Owner/$Repo $tag"
+    Write-Step "Downloading $Owner/$Repo $label"
     Write-Host "    URL: $zipUrl" -ForegroundColor DarkGray
     Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
     if (-not (Test-Path $zipPath) -or ((Get-Item $zipPath).Length -lt 1000)) {
@@ -463,6 +477,17 @@ function Download-ColdAisleRelease {
     return $appRoot
 }
 
+function Resolve-PrereqScript([string]$AppRoot) {
+    $candidates = @(
+        (Join-Path $AppRoot 'scripts\Install-ColdAisle-Prereqs.ps1'),
+        (Join-Path $AppRoot 'scripts\Install-WinDCIM-Prereqs.ps1')
+    )
+    foreach ($p in $candidates) {
+        if (Test-Path -LiteralPath $p) { return $p }
+    }
+    return $null
+}
+
 # -------------------- main --------------------
 Assert-Admin
 Ensure-Tls12
@@ -483,9 +508,16 @@ try {
     $ver = Resolve-LatestVersion -Owner $GitHubOwner -Repo $GitHubRepo -Requested $Version
     $appRoot = Download-ColdAisleRelease -Owner $GitHubOwner -Repo $GitHubRepo -Version $ver -WorkRoot $work
 
-    $prereq = Join-Path $appRoot 'scripts\Install-ColdAisle-Prereqs.ps1'
-    if (-not (Test-Path $prereq)) {
-        throw "Missing prereq script in release: $prereq"
+    $prereq = Resolve-PrereqScript $appRoot
+    # Old tags (e.g. v0.2.0) predate Install-ColdAisle-Prereqs.ps1 - fall back to main
+    if (-not $prereq -and $ver -notmatch '^(?i)(main|master)$') {
+        Write-Warn "Release v$ver is missing the platform installer script. Falling back to branch main."
+        $ver = 'main'
+        $appRoot = Download-ColdAisleRelease -Owner $GitHubOwner -Repo $GitHubRepo -Version $ver -WorkRoot $work
+        $prereq = Resolve-PrereqScript $appRoot
+    }
+    if (-not $prereq) {
+        throw "Missing prereq script under $appRoot\scripts (expected Install-ColdAisle-Prereqs.ps1)."
     }
 
     Write-Step 'Running platform + deploy script (IIS, PHP, ODBC, copy files)'
