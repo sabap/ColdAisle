@@ -208,11 +208,8 @@ layout_header('Settings', $user, 'settings');
 ?>
 
 <div class="card" id="support">
-    <div class="card-header flex-between">
+    <div class="card-header">
         <h2>Support ColdAisle</h2>
-        <a class="btn btn-primary" href="<?= App::e($paypalUrl) ?>" target="_blank" rel="noopener noreferrer">
-            Donate with PayPal
-        </a>
     </div>
     <div class="card-body">
         <p class="text-muted" style="margin-top:0;font-size:.9rem">
