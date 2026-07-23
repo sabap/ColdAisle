@@ -11,6 +11,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     $display = $user['display_name'] ?: $user['username'];
     $csrf = App::csrfToken();
     $flashes = App::getFlashes();
+    $httpsMismatch = App::httpsConfigMismatch();
     $unread = 0;
     try {
         $unread = (int) Database::fetchValue(
@@ -36,6 +37,15 @@ function layout_header(string $title, array $user, string $active = ''): void
 </head>
 <body>
 <div class="app-shell">
+    <?php if ($httpsMismatch && AuthManager::can($user, 'manage_settings')): ?>
+    <div class="alert alert-error" style="margin:0;border-radius:0;border-left:0;border-right:0;border-top:0">
+        <strong>HTTPS not active yet.</strong>
+        Settings list a public URL starting with <code>https://</code>, but this session is HTTP.
+        Install a TLS certificate and HTTPS binding in IIS for that hostname, then enable
+        <a href="<?= App::e(App::url('pages/settings.php#security')) ?>">Force HTTPS</a> when ready.
+        Links currently use HTTP so the UI keeps working.
+    </div>
+    <?php endif; ?>
     <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand">
             <span class="brand-icon">⚡</span>

@@ -126,7 +126,8 @@ The package includes database rows, `storage/uploads`, config overlay (auth/secu
 
 - `web.config` blocks direct web access to `config/`, `src/`, `sql/`, `storage/`, `scripts/`.
 - Install the [IIS URL Rewrite](https://www.iis.net/downloads/microsoft/url-rewrite) module for those rewrite rules (optional but recommended).
-- For HTTPS (required for Entra SSO in production), bind a certificate on the site, then enable **Settings → Security → Force HTTPS** (and optionally HSTS).
+- For HTTPS (required for Entra SSO in production): obtain a certificate (org PKI / public CA), add an **IIS site binding** for `https` on 443 with that cert, open the site with `https://…` in a browser, then enable **Settings → Security → Force HTTPS** (and optionally HSTS).
+- **Public site URL** in setup/Settings is optional. Prefer leaving it blank until HTTPS works. If you set `https://hostname` before the cert binding exists, the UI can break; ColdAisle will fall back to the live HTTP origin for links until HTTPS is actually used.
 - `web.config` includes a disabled HTTP→HTTPS rewrite rule if you prefer enforcing TLS at IIS instead of in the app.
 
 ## Authentication

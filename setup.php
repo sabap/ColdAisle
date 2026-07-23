@@ -331,7 +331,7 @@ function self_generate_config(array $dbCfg, array $form, string $baseUrl): strin
 {
     $export = var_export([
         'app_name' => 'ColdAisle',
-        'version' => '0.2.4',
+        'version' => '0.2.7',
         // 32-byte key, base64 — used to encrypt SNMP/API secrets at rest in the DB
         'app_key' => base64_encode(random_bytes(32)),
         'timezone' => $form['timezone'],
@@ -544,9 +544,23 @@ function req_badge(bool $ok): string
                         <label>Timezone (optional override)</label>
                         <input type="text" name="timezone" value="<?= htmlspecialchars($form['timezone']) ?>">
                     </div>
-                    <div class="form-row">
-                        <label>Base URL (optional)</label>
-                        <input type="text" name="base_url" value="<?= htmlspecialchars($form['base_url']) ?>" placeholder="https://dcim.contoso.com">
+                    <div class="form-row" style="grid-column:1/-1">
+                        <label>Public site URL (optional)</label>
+                        <input type="text" name="base_url" value="<?= htmlspecialchars($form['base_url']) ?>"
+                               placeholder="Leave blank unless you use a reverse proxy"
+                               id="restore_base_url">
+                        <p class="hint">
+                            <strong>Recommended: leave blank</strong> so ColdAisle detects the address from the browser.
+                            Only set this if you use a reverse proxy or a different public hostname.
+                        </p>
+                        <div class="alert alert-error" id="restore_https_warn" style="display:none;margin-top:.5rem">
+                            <strong>HTTPS certificate required first.</strong>
+                            If you enter an <code>https://…</code> URL, IIS must already have an HTTPS binding and a
+                            trusted TLS certificate for that name (from your internal PKI, commercial CA, or
+                            Windows/Let’s Encrypt tooling). Without that, the site can look “broken” (no CSS/login)
+                            until the certificate is installed. You can leave this blank now and set the URL later
+                            under <strong>Settings</strong> after HTTPS works.
+                        </div>
                     </div>
                 </div>
                 <div class="form-row">
@@ -682,9 +696,20 @@ function req_badge(bool $ok): string
                         <input type="text" name="dc_name" value="<?= htmlspecialchars($form['dc_name']) ?>">
                     </div>
                     <div class="form-row" style="grid-column:1/-1">
-                        <label>Base URL (optional)</label>
-                        <input type="text" name="base_url" value="<?= htmlspecialchars($form['base_url']) ?>" placeholder="https://dcim.contoso.com">
-                        <p class="hint">Leave blank to auto-detect. Set if behind reverse proxy.</p>
+                        <label>Public site URL (optional)</label>
+                        <input type="text" name="base_url" value="<?= htmlspecialchars($form['base_url']) ?>"
+                               placeholder="Leave blank unless you use a reverse proxy"
+                               id="install_base_url">
+                        <p class="hint">
+                            <strong>Recommended: leave blank</strong> (auto-detect). Set only for reverse proxies
+                            or a different public hostname than the one in the browser address bar.
+                        </p>
+                        <div class="alert alert-error" id="install_https_warn" style="display:none;margin-top:.5rem">
+                            <strong>HTTPS certificate required first.</strong>
+                            An <code>https://…</code> URL needs an IIS HTTPS binding and TLS certificate for that
+                            hostname before users open the site. Leave blank until HTTPS is working, then set it
+                            under Settings → General and optionally enable Force HTTPS under Settings → Security.
+                        </div>
                     </div>
                 </div>
 
@@ -726,19 +751,35 @@ function req_badge(bool $ok): string
             <?php else: ?>
                 <p>ColdAisle is ready. Sign in with the administrator account you created.</p>
             <?php endif; ?>
+            <?php
+            $savedUrl = strtolower(trim((string)($form['base_url'] ?? '')));
+            if ($savedUrl === '' && App::isInstalled()) {
+                $savedUrl = strtolower((string)(App::config('base_url') ?? ''));
+            }
+            if (str_starts_with($savedUrl, 'https://')): ?>
+                <div class="alert alert-error">
+                    <strong>Before using the HTTPS address</strong>
+                    <ul style="margin:.5rem 0 0;padding-left:1.25rem">
+                        <li>In IIS Manager → your site → <strong>Bindings</strong> → add <strong>https</strong> on port 443 with a certificate for that hostname.</li>
+                        <li>Certificate can come from your org PKI, a public CA, or IT-managed tooling — ColdAisle does not install certificates.</li>
+                        <li>Until HTTPS works in the browser, open the site with <code>http://…</code> (links still work; Force HTTPS should stay off).</li>
+                        <li>When the padlock works, use <strong>Settings → Security → Force HTTPS</strong> if you want to require TLS.</li>
+                    </ul>
+                </div>
+            <?php endif; ?>
             <div class="alert alert-success">
                 <strong>Next steps</strong>
                 <ul style="margin:.5rem 0 0;padding-left:1.25rem">
                     <?php if ($mode === 'restore'): ?>
-                        <li>Confirm <strong>Settings → Security</strong> (HTTPS) and base URL for this host</li>
-                        <li>Verify SNMP credentials still poll (same <code>app_key</code> was restored for sealed secrets)</li>
+                        <li>Confirm <strong>Settings → Security</strong> and public URL for this host</li>
+                        <li>Verify SNMP still polls (restored <code>app_key</code> decrypts sealed secrets)</li>
                     <?php else: ?>
                         <li>Log in and open <strong>Settings</strong> to configure LDAPS or Microsoft Entra SSO</li>
                         <li>Use the <strong>Floor Planner</strong> to drag cabinets onto the room canvas</li>
                         <li>Add devices to U-slots, configure power zones and PDUs</li>
                     <?php endif; ?>
                     <li>Schedule the SNMP poll script via Task Scheduler (see README)</li>
-                    <li>Use <strong>Settings → Site backup</strong> to export migration packages from this site</li>
+                    <li>Use <strong>Settings → Site backup</strong> to export migration packages</li>
                 </ul>
             </div>
             <div class="btn-row">
@@ -748,5 +789,23 @@ function req_badge(bool $ok): string
     </div>
     <p style="text-align:center;color:#64748b;margin-top:1.5rem;font-size:.85rem">ColdAisle v<?= App::VERSION ?> · IIS + SQL Server</p>
 </div>
+<script>
+(function () {
+    function wireHttpsWarn(inputId, warnId) {
+        var input = document.getElementById(inputId);
+        var warn = document.getElementById(warnId);
+        if (!input || !warn) return;
+        function sync() {
+            var v = (input.value || '').trim().toLowerCase();
+            warn.style.display = v.indexOf('https://') === 0 ? 'block' : 'none';
+        }
+        input.addEventListener('input', sync);
+        input.addEventListener('change', sync);
+        sync();
+    }
+    wireHttpsWarn('restore_base_url', 'restore_https_warn');
+    wireHttpsWarn('install_base_url', 'install_https_warn');
+})();
+</script>
 </body>
 </html>

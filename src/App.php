@@ -20,7 +20,7 @@ require_once __DIR__ . '/Services/SiteBackupService.php';
 class App
 {
     /** App semver — keep in sync with /VERSION */
-    public const VERSION = '0.2.6';
+    public const VERSION = '0.2.7';
     /** Product name is fixed (not user-configurable). */
     public const APP_NAME = 'ColdAisle';
     public const ROOT = __DIR__ . '/..';
@@ -353,12 +353,45 @@ class App
     public static function baseUrl(): string
     {
         if (!empty(self::$config['base_url'])) {
-            return rtrim((string)self::$config['base_url'], '/');
+            $configured = rtrim((string)self::$config['base_url'], '/');
+            // Config may say https://… before IIS has a certificate binding.
+            // Until the request is actually HTTPS (or force_https is on), prefer the
+            // live request origin so CSS/login links keep working over HTTP.
+            if (PHP_SAPI !== 'cli'
+                && !self::isHttps()
+                && str_starts_with(strtolower($configured), 'https://')
+                && empty(self::securityConfig()['force_https'])
+            ) {
+                return self::requestOriginBase();
+            }
+            return $configured;
         }
+        return self::requestOriginBase();
+    }
+
+    /**
+     * Current request origin + app base path (no trailing slash).
+     * Used when base_url is empty or HTTPS is configured but not yet live.
+     */
+    public static function requestOriginBase(): string
+    {
         $scheme = self::isHttps() ? 'https' : 'http';
         $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
         $path = self::basePath();
         return rtrim("{$scheme}://{$host}{$path}", '/');
+    }
+
+    /**
+     * True when config base_url is https:// but this request is plain HTTP
+     * (common right after setup, before the IIS certificate binding).
+     */
+    public static function httpsConfigMismatch(): bool
+    {
+        $configured = (string)(self::$config['base_url'] ?? '');
+        if ($configured === '' || PHP_SAPI === 'cli') {
+            return false;
+        }
+        return str_starts_with(strtolower($configured), 'https://') && !self::isHttps();
     }
 
     /**
