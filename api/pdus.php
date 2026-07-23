@@ -287,6 +287,9 @@ try {
             'notes' => pdu_null($d['notes'] ?? null),
             'is_active' => 1,
         ], $elec);
+        $row = Crypto::sealFields($row, [
+            'snmp_community', 'snmp_auth_passphrase', 'snmp_priv_passphrase',
+        ]);
         if ($row['name'] === '') {
             App::json(['error' => 'Name is required'], 400);
         }
@@ -428,6 +431,15 @@ try {
             $sc = strtolower((string)$fields['pdu_scope']);
             $fields['pdu_scope'] = in_array($sc, ['rack', 'row', 'room'], true) ? $sc : 'rack';
         }
+        // Blank secrets on update = keep existing
+        foreach (['snmp_community', 'snmp_auth_passphrase', 'snmp_priv_passphrase'] as $sk) {
+            if (array_key_exists($sk, $fields) && ($fields[$sk] === null || $fields[$sk] === '')) {
+                unset($fields[$sk]);
+            }
+        }
+        $fields = Crypto::sealFields($fields, [
+            'snmp_community', 'snmp_auth_passphrase', 'snmp_priv_passphrase',
+        ]);
         if ($fields) {
             Database::update('pdus', $fields, 'pdu_id = :id', [':id' => $id]);
         }

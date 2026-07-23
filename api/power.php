@@ -49,7 +49,7 @@ try {
         if ($method === 'POST') {
             api_require_csrf();
             $d = api_read_json();
-            $id = Database::insert('pdus', [
+            $pduRow = Crypto::sealFields([
                 'device_id' => $d['device_id'] ?? null,
                 'cabinet_id' => $d['cabinet_id'] ?? null,
                 'row_id' => $d['row_id'] ?? null,
@@ -74,7 +74,8 @@ try {
                 'snmp_priv_passphrase' => $d['snmp_priv_passphrase'] ?? null,
                 'snmp_context' => $d['snmp_context'] ?? null,
                 'is_active' => 1,
-            ]);
+            ], ['snmp_auth_passphrase', 'snmp_priv_passphrase', 'snmp_community']);
+            $id = Database::insert('pdus', $pduRow);
             $outlets = (int)($d['num_outlets'] ?? 24);
             for ($i = 1; $i <= $outlets; $i++) {
                 Database::insert('pdu_outlets', [
@@ -97,7 +98,7 @@ try {
                 'manufacturer', 'model', 'ip_address', 'num_outlets', 'rated_amps', 'rated_volts',
                 'input_type', 'snmp_enabled', 'snmp_version', 'snmp_port', 'snmp_security_name',
                 'snmp_auth_protocol', 'snmp_auth_passphrase', 'snmp_priv_protocol',
-                'snmp_priv_passphrase', 'snmp_context', 'notes',
+                'snmp_priv_passphrase', 'snmp_context', 'notes', 'snmp_community',
             ] as $k) {
                 if (array_key_exists($k, $d)) {
                     $fields[$k] = $d[$k];
@@ -106,6 +107,14 @@ try {
             if (isset($fields['snmp_enabled'])) {
                 $fields['snmp_enabled'] = $fields['snmp_enabled'] ? 1 : 0;
             }
+            foreach (['snmp_community', 'snmp_auth_passphrase', 'snmp_priv_passphrase'] as $sk) {
+                if (array_key_exists($sk, $fields) && ($fields[$sk] === null || $fields[$sk] === '')) {
+                    unset($fields[$sk]); // keep existing
+                }
+            }
+            $fields = Crypto::sealFields($fields, [
+                'snmp_community', 'snmp_auth_passphrase', 'snmp_priv_passphrase',
+            ]);
             if ($fields) {
                 Database::update('pdus', $fields, 'pdu_id = :id', [':id' => $id]);
             }

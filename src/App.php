@@ -14,11 +14,12 @@ require_once __DIR__ . '/Auth/EntraAuth.php';
 require_once __DIR__ . '/Services/AuditService.php';
 require_once __DIR__ . '/Services/SettingsService.php';
 require_once __DIR__ . '/Services/Cabinet3dData.php';
+require_once __DIR__ . '/Services/Crypto.php';
 
 class App
 {
     /** App semver — keep in sync with /VERSION */
-    public const VERSION = '0.2.0';
+    public const VERSION = '0.2.1';
     public const ROOT = __DIR__ . '/..';
 
     private static bool $booted = false;
@@ -63,7 +64,45 @@ class App
             // Non-fatal: features depending on new columns degrade gracefully
             self::log('Schema ensure: ' . $e->getMessage(), 'warning');
         }
+
+        // App-level secret encryption (SNMP passphrases, etc.)
+        try {
+            if (Crypto::ensureAppKey()) {
+                Crypto::reset();
+                // Reload config into memory if key was just written
+                if (is_file(self::configPath())) {
+                    self::$config = require self::configPath();
+                    Crypto::reset();
+                }
+            }
+            if (Crypto::isAvailable()) {
+                $migrated = SettingsService::get('secrets_migration_v1', '');
+                if ($migrated !== '1') {
+                    $stats = Crypto::migratePlaintextSecrets();
+                    SettingsService::set('secrets_migration_v1', '1', 'security');
+                    if (($stats['sealed'] ?? 0) > 0) {
+                        self::log(
+                            'Encrypted ' . (int)$stats['sealed'] . ' secret field(s) at rest (skipped '
+                            . (int)$stats['skipped'] . ', errors ' . (int)$stats['errors'] . ')',
+                            'info'
+                        );
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            self::log('Crypto bootstrap: ' . $e->getMessage(), 'warning');
+        }
+
         self::$booted = true;
+    }
+
+    /** Reload config.php into memory (e.g. after writing app_key). */
+    public static function reloadConfig(): void
+    {
+        if (is_file(self::configPath())) {
+            self::$config = require self::configPath();
+        }
+        Crypto::reset();
     }
 
     public static function config(?string $key = null, $default = null)

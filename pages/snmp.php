@@ -137,6 +137,7 @@ function snmp_target_creds_from_post(array $post, ?array $existing = null): arra
             $privProto = $prof['priv_protocol'] ?? $privProto;
             $context = $prof['context_name'] ?? $context;
             if (!empty($prof['auth_passphrase'])) {
+                // Keep sealed form for storage; poll path decrypts
                 $authPass = $prof['auth_passphrase'];
             }
             if (!empty($prof['priv_passphrase'])) {
@@ -156,12 +157,13 @@ function snmp_target_creds_from_post(array $post, ?array $existing = null): arra
             $secName = $existing['security_name'];
         }
     }
+    // Seal any new plaintext secrets (already-encrypted values unchanged)
     return [
         'security_name' => $secName,
         'auth_protocol' => $authProto,
-        'auth_passphrase' => $authPass,
+        'auth_passphrase' => $authPass !== null && $authPass !== '' ? Crypto::encrypt((string)$authPass) : $authPass,
         'priv_protocol' => $privProto,
-        'priv_passphrase' => $privPass,
+        'priv_passphrase' => $privPass !== null && $privPass !== '' ? Crypto::encrypt((string)$privPass) : $privPass,
         'context_name' => $context,
     ];
 }
@@ -199,14 +201,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             ];
             // Only overwrite passphrases when non-empty (edit can leave blank to keep)
             if (trim((string)($_POST['auth_passphrase'] ?? '')) !== '') {
-                $row['auth_passphrase'] = (string)$_POST['auth_passphrase'];
+                $row['auth_passphrase'] = Crypto::encrypt((string)$_POST['auth_passphrase']);
             } elseif ($action === 'add_profile') {
-                $row['auth_passphrase'] = snmp_null($_POST['auth_passphrase'] ?? null);
+                $row['auth_passphrase'] = Crypto::encrypt(snmp_null($_POST['auth_passphrase'] ?? null));
             }
             if (trim((string)($_POST['priv_passphrase'] ?? '')) !== '') {
-                $row['priv_passphrase'] = (string)$_POST['priv_passphrase'];
+                $row['priv_passphrase'] = Crypto::encrypt((string)$_POST['priv_passphrase']);
             } elseif ($action === 'add_profile') {
-                $row['priv_passphrase'] = snmp_null($_POST['priv_passphrase'] ?? null);
+                $row['priv_passphrase'] = Crypto::encrypt(snmp_null($_POST['priv_passphrase'] ?? null));
             }
 
             if ($action === 'update_profile') {
@@ -221,10 +223,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
 
             $row['is_active'] = 1;
             unset($row['updated_at']);
-            Database::insert('snmp_v3_profiles', array_merge($row, [
-                'auth_passphrase' => $row['auth_passphrase'] ?? snmp_null($_POST['auth_passphrase'] ?? null),
-                'priv_passphrase' => $row['priv_passphrase'] ?? snmp_null($_POST['priv_passphrase'] ?? null),
-            ]));
+            if (!array_key_exists('auth_passphrase', $row)) {
+                $row['auth_passphrase'] = null;
+            }
+            if (!array_key_exists('priv_passphrase', $row)) {
+                $row['priv_passphrase'] = null;
+            }
+            Database::insert('snmp_v3_profiles', $row);
             App::flash('success', 'SNMPv3 profile created.');
             App::redirect('pages/snmp.php#profiles');
         }

@@ -197,7 +197,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 $data['snmp_v3_priv_proto'] = $prof['priv_protocol'] ?? $data['snmp_v3_priv_proto'];
                 $data['snmp_v3_context'] = $prof['context_name'] ?? $data['snmp_v3_context'];
                 if (!empty($prof['auth_passphrase'])) {
-                    $data['snmp_v3_auth_pass'] = $prof['auth_passphrase'];
+                    $data['snmp_v3_auth_pass'] = $prof['auth_passphrase']; // already sealed in profile
                 }
                 if (!empty($prof['priv_passphrase'])) {
                     $data['snmp_v3_priv_pass'] = $prof['priv_passphrase'];
@@ -207,6 +207,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             // table may not exist yet on first request after deploy
         }
     }
+
+    // On edit: blank secret fields mean "keep existing"
+    if (!empty($_POST['device_id'])) {
+        $prevDev = Database::fetchOne(
+            'SELECT snmp_community, snmp_v3_auth_pass, snmp_v3_priv_pass FROM devices WHERE device_id = ?',
+            [(int)$_POST['device_id']]
+        );
+        if ($prevDev) {
+            if (($data['snmp_community'] === null || $data['snmp_community'] === '')
+                && !empty($prevDev['snmp_community'])) {
+                $data['snmp_community'] = $prevDev['snmp_community'];
+            }
+            if (($data['snmp_v3_auth_pass'] === null || $data['snmp_v3_auth_pass'] === '')
+                && !empty($prevDev['snmp_v3_auth_pass'])) {
+                $data['snmp_v3_auth_pass'] = $prevDev['snmp_v3_auth_pass'];
+            }
+            if (($data['snmp_v3_priv_pass'] === null || $data['snmp_v3_priv_pass'] === '')
+                && !empty($prevDev['snmp_v3_priv_pass'])) {
+                $data['snmp_v3_priv_pass'] = $prevDev['snmp_v3_priv_pass'];
+            }
+        }
+    }
+
+    // Seal SNMP secrets at rest (already-encrypted values unchanged)
+    $data = Crypto::sealFields($data, ['snmp_community', 'snmp_v3_auth_pass', 'snmp_v3_priv_pass']);
 
     // Resolve primary contact: plain contact_id, or "user:123" → ensure contacts row
     $contactRaw = trim((string)($_POST['owner_contact_id'] ?? ''));
@@ -1750,7 +1775,8 @@ if ($action === 'new' || $id) {
                 </div>
                 <div class="form-row"><label>SNMP Read-Only Community</label>
                     <input class="form-control" name="snmp_community" id="snmp_community"
-                           value="<?= App::e($device['snmp_community'] ?? '') ?>"
+                           value=""
+                           placeholder="<?= !empty($device['snmp_community']) ? '•••• saved (leave blank to keep)' : '' ?>"
                            autocomplete="off"></div>
                 <div class="form-row"><label>SNMP Consecutive Failures</label>
                     <input class="form-control" type="number" min="0" name="snmp_fail_count"
@@ -1806,7 +1832,8 @@ if ($action === 'new' || $id) {
                 </div>
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 Auth Passphrase</label>
                     <input class="form-control" type="password" name="snmp_v3_auth_pass" id="snmp_v3_auth_pass"
-                           value="<?= App::e($device['snmp_v3_auth_pass'] ?? '') ?>"
+                           value=""
+                           placeholder="<?= !empty($device['snmp_v3_auth_pass']) ? '•••• saved (leave blank to keep)' : '' ?>"
                            autocomplete="new-password"></div>
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 Priv Protocol (encryption)</label>
                     <select class="form-control" name="snmp_v3_priv_proto" id="snmp_v3_priv_proto">
@@ -1821,7 +1848,8 @@ if ($action === 'new' || $id) {
                 </div>
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 Priv Passphrase</label>
                     <input class="form-control" type="password" name="snmp_v3_priv_pass" id="snmp_v3_priv_pass"
-                           value="<?= App::e($device['snmp_v3_priv_pass'] ?? '') ?>"
+                           value=""
+                           placeholder="<?= !empty($device['snmp_v3_priv_pass']) ? '•••• saved (leave blank to keep)' : '' ?>"
                            autocomplete="new-password"></div>
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 Context</label>
                     <input class="form-control" name="snmp_v3_context" id="snmp_v3_context"
