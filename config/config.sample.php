@@ -8,7 +8,7 @@ declare(strict_types=1);
 return [
     // Brand is fixed in code (App::APP_NAME); kept here for reference only
     'app_name' => 'ColdAisle',
-    'version' => '0.2.13',
+    'version' => '0.2.14',
     // Generate: base64_encode(random_bytes(32)) — used to encrypt secrets in the DB
     // Never commit a real production key.
     'app_key' => '',
@@ -48,6 +48,8 @@ return [
             'bind_password' => '',
             'use_ssl' => true,
             'start_tls' => false,
+            // true = do not verify LDAPS server cert (internal CA without ldap-ca.pem)
+            'tls_insecure' => false,
             'default_role_id' => null,
         ],
         'entra' => [

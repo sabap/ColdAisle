@@ -26,87 +26,95 @@ class LdapAuth
         $add('PHP LDAP extension', true, 'ldap extension is loaded.');
 
         $cfg = is_array($cfg) ? $cfg : (App::config('auth.ldaps', []) ?: []);
-        $host = trim((string)($cfg['host'] ?? ''));
-        $port = (int)($cfg['port'] ?? 636);
-        if ($port <= 0) {
-            $port = 636;
-        }
-        $baseDn = trim((string)($cfg['base_dn'] ?? ''));
-        $userFilter = trim((string)($cfg['user_filter'] ?? '(sAMAccountName={username})'));
-        if ($userFilter === '') {
-            $userFilter = '(sAMAccountName={username})';
-        }
-        $bindDn = trim((string)($cfg['bind_dn'] ?? ''));
-        $bindPassword = (string)($cfg['bind_password'] ?? '');
-        $useStartTls = !empty($cfg['start_tls']);
-        $useSsl = ($cfg['use_ssl'] ?? true) || $port === 636;
+        $parsed = self::parseConfig($cfg);
 
-        if ($host === '') {
+        if ($parsed['host'] === '') {
             $add('Configuration', false, 'Host is required.');
             return self::testResult(false, 'Host is required.', $steps);
         }
-        if ($baseDn === '') {
+        if ($parsed['base_dn'] === '') {
             $add('Configuration', false, 'Base DN is required.');
             return self::testResult(false, 'Base DN is required.', $steps);
         }
+
+        $tlsNote = $parsed['tls_insecure']
+            ? ' · TLS cert verify OFF (internal CA / lab)'
+            : ' · TLS cert verify ON';
         $add(
             'Configuration',
             true,
-            ($useSsl && !$useStartTls ? 'ldaps://' : 'ldap://') . $host . ':' . $port
-            . ' · Base DN: ' . $baseDn
-            . ($useStartTls ? ' · STARTTLS' : '')
-            . ($useSsl && !$useStartTls ? ' · SSL' : '')
+            $parsed['uri']
+            . ' · Base DN: ' . $parsed['base_dn']
+            . ($parsed['start_tls'] ? ' · STARTTLS' : '')
+            . ($parsed['use_ssl'] && !$parsed['start_tls'] ? ' · SSL' : '')
+            . $tlsNote
         );
 
-        $uri = ($useSsl && !$useStartTls ? 'ldaps://' : 'ldap://') . $host . ':' . $port;
-        $conn = @ldap_connect($uri);
-        if (!$conn) {
-            $add('Connect', false, 'ldap_connect failed for ' . $uri);
-            return self::testResult(false, 'Could not open LDAP connection.', $steps);
-        }
-        ldap_set_option($conn, LDAP_OPT_PROTOCOL_VERSION, 3);
-        ldap_set_option($conn, LDAP_OPT_REFERRALS, 0);
-        ldap_set_option($conn, LDAP_OPT_NETWORK_TIMEOUT, 8);
-        if (defined('LDAP_OPT_TIMELIMIT')) {
-            @ldap_set_option($conn, LDAP_OPT_TIMELIMIT, 10);
-        }
-        $add('Connect', true, 'Connected to ' . $uri);
+        $tlsPrep = self::prepareTlsEnvironment($parsed['tls_insecure']);
+        $add('TLS setup', true, $tlsPrep['detail']);
 
-        if ($useStartTls) {
+        // ldap_connect is lazy — real TCP/TLS happens on first bind/search
+        $conn = @ldap_connect($parsed['uri']);
+        if (!$conn) {
+            $add('LDAP handle', false, 'ldap_connect failed for ' . $parsed['uri']);
+            return self::testResult(false, 'Could not create LDAP handle.', $steps);
+        }
+        self::applyConnectionOptions($conn, $cfg);
+        $add(
+            'LDAP handle',
+            true,
+            'Handle created for ' . $parsed['uri']
+            . ' (TCP/TLS is not confirmed until bind — that is normal for PHP LDAP).'
+        );
+
+        if ($parsed['start_tls']) {
             if (!@ldap_start_tls($conn)) {
                 $err = ldap_error($conn);
+                $errno = ldap_errno($conn);
                 @ldap_unbind($conn);
-                $add('STARTTLS', false, $err);
-                return self::testResult(false, 'STARTTLS failed: ' . $err, $steps);
+                $add('STARTTLS', false, self::explainLdapError($err, $errno, $parsed));
+                return self::testResult(false, 'STARTTLS failed.', $steps);
             }
             $add('STARTTLS', true, 'TLS negotiated.');
         }
 
-        if ($bindDn !== '') {
-            if (!@ldap_bind($conn, $bindDn, $bindPassword)) {
-                $err = ldap_error($conn);
+        if ($parsed['bind_dn'] !== '') {
+            if ($parsed['bind_password'] === '') {
+                $add(
+                    'Service bind',
+                    false,
+                    'Bind password is empty. Enter it on the form (or Save LDAPS first). '
+                    . '“Leave blank to keep” only works after a password has been saved.'
+                );
                 @ldap_unbind($conn);
-                $add('Service bind', false, $err . ' (check Bind DN and password — leave password blank on the form to use the saved value).');
+                return self::testResult(false, 'Service bind password is empty.', $steps);
+            }
+            if (!@ldap_bind($conn, $parsed['bind_dn'], $parsed['bind_password'])) {
+                $err = ldap_error($conn);
+                $errno = ldap_errno($conn);
+                @ldap_unbind($conn);
+                $add('Service bind', false, self::explainLdapError($err, $errno, $parsed));
                 return self::testResult(false, 'Service account bind failed.', $steps);
             }
             $add('Service bind', true, 'Bound as service account.');
         } else {
-            // Anonymous bind attempt (many ADs disallow this)
             if (!@ldap_bind($conn)) {
                 $err = ldap_error($conn);
+                $errno = ldap_errno($conn);
                 @ldap_unbind($conn);
-                $add('Service bind', false, 'No Bind DN configured and anonymous bind failed: ' . $err);
+                $add('Service bind', false, 'No Bind DN configured and anonymous bind failed: '
+                    . self::explainLdapError($err, $errno, $parsed));
                 return self::testResult(false, 'Provide a Bind DN / password for directory search.', $steps);
             }
             $add('Service bind', true, 'Anonymous bind succeeded (no Bind DN configured).');
         }
 
-        // Lightweight search to prove base DN is reachable
-        $probe = @ldap_search($conn, $baseDn, '(objectClass=*)', ['dn'], 0, 1, 5);
+        $probe = @ldap_search($conn, $parsed['base_dn'], '(objectClass=*)', ['dn'], 0, 1, 5);
         if ($probe === false) {
             $err = ldap_error($conn);
+            $errno = ldap_errno($conn);
             @ldap_unbind($conn);
-            $add('Base DN search', false, $err);
+            $add('Base DN search', false, self::explainLdapError($err, $errno, $parsed));
             return self::testResult(false, 'Could not search Base DN.', $steps);
         }
         $add('Base DN search', true, 'Directory search against Base DN succeeded.');
@@ -118,11 +126,11 @@ class LdapAuth
             $filter = str_replace(
                 ['{username}', '{user}'],
                 [$escapedUser, $escapedUser],
-                $userFilter
+                $parsed['user_filter']
             );
             $search = @ldap_search(
                 $conn,
-                $baseDn,
+                $parsed['base_dn'],
                 $filter,
                 ['dn', 'mail', 'displayName', 'cn', 'sAMAccountName', 'userPrincipalName'],
                 0,
@@ -131,8 +139,9 @@ class LdapAuth
             );
             if ($search === false) {
                 $err = ldap_error($conn);
+                $errno = ldap_errno($conn);
                 @ldap_unbind($conn);
-                $add('User lookup', false, $err . ' · filter: ' . $filter);
+                $add('User lookup', false, self::explainLdapError($err, $errno, $parsed) . ' · filter: ' . $filter);
                 return self::testResult(false, 'User search failed.', $steps);
             }
             $entries = ldap_get_entries($conn, $search);
@@ -149,8 +158,9 @@ class LdapAuth
             if ($testPassword !== '') {
                 if (!@ldap_bind($conn, $userDn, $testPassword)) {
                     $err = ldap_error($conn);
+                    $errno = ldap_errno($conn);
                     @ldap_unbind($conn);
-                    $add('User password bind', false, $err);
+                    $add('User password bind', false, self::explainLdapError($err, $errno, $parsed));
                     return self::testResult(false, 'Test user password bind failed.', $steps);
                 }
                 $add('User password bind', true, 'Test user credentials accepted.');
@@ -181,44 +191,32 @@ class LdapAuth
             return null;
         }
 
-        $cfg = App::config('auth.ldaps', []);
-        $host = $cfg['host'] ?? '';
-        $port = (int)($cfg['port'] ?? 636);
-        $baseDn = $cfg['base_dn'] ?? '';
-        $userFilter = $cfg['user_filter'] ?? '(sAMAccountName={username})';
-        $bindDn = $cfg['bind_dn'] ?? '';
-        $bindPassword = $cfg['bind_password'] ?? '';
-        $useStartTls = !empty($cfg['start_tls']);
-        $useSsl = ($cfg['use_ssl'] ?? true) || $port === 636;
-
-        if ($host === '' || $baseDn === '') {
+        $cfg = App::config('auth.ldaps', []) ?: [];
+        $parsed = self::parseConfig($cfg);
+        if ($parsed['host'] === '' || $parsed['base_dn'] === '') {
             return null;
         }
 
-        $uri = ($useSsl && !$useStartTls ? 'ldaps://' : 'ldap://') . $host . ':' . $port;
-        $conn = @ldap_connect($uri);
+        self::prepareTlsEnvironment($parsed['tls_insecure']);
+
+        $conn = @ldap_connect($parsed['uri']);
         if (!$conn) {
-            App::log("LDAP connect failed to {$uri}", 'error');
+            App::log("LDAP connect failed to {$parsed['uri']}", 'error');
             return null;
         }
 
-        ldap_set_option($conn, LDAP_OPT_PROTOCOL_VERSION, 3);
-        ldap_set_option($conn, LDAP_OPT_REFERRALS, 0);
-        if (!empty($cfg['network_timeout'])) {
-            ldap_set_option($conn, LDAP_OPT_NETWORK_TIMEOUT, (int)$cfg['network_timeout']);
-        }
+        self::applyConnectionOptions($conn, $cfg);
 
-        if ($useStartTls) {
+        if ($parsed['start_tls']) {
             if (!@ldap_start_tls($conn)) {
                 App::log('LDAP STARTTLS failed: ' . ldap_error($conn), 'error');
                 return null;
             }
         }
 
-        // Service bind for search
-        if ($bindDn !== '') {
-            if (!@ldap_bind($conn, $bindDn, $bindPassword)) {
-                App::log('LDAP service bind failed: ' . ldap_error($conn), 'error');
+        if ($parsed['bind_dn'] !== '') {
+            if (!@ldap_bind($conn, $parsed['bind_dn'], $parsed['bind_password'])) {
+                App::log('LDAP service bind failed: ' . ldap_error($conn) . ' errno=' . ldap_errno($conn), 'error');
                 return null;
             }
         }
@@ -227,10 +225,10 @@ class LdapAuth
         $filter = str_replace(
             ['{username}', '{user}'],
             [$escapedUser, $escapedUser],
-            $userFilter
+            $parsed['user_filter']
         );
 
-        $search = @ldap_search($conn, $baseDn, $filter, ['dn', 'mail', 'displayName', 'cn', 'sAMAccountName', 'userPrincipalName']);
+        $search = @ldap_search($conn, $parsed['base_dn'], $filter, ['dn', 'mail', 'displayName', 'cn', 'sAMAccountName', 'userPrincipalName']);
         if (!$search) {
             App::log('LDAP search failed: ' . ldap_error($conn), 'error');
             return null;
@@ -244,7 +242,6 @@ class LdapAuth
         $entry = $entries[0];
         $userDn = $entry['dn'];
 
-        // Bind as user to verify password
         if (!@ldap_bind($conn, $userDn, $password)) {
             return null;
         }
@@ -256,6 +253,160 @@ class LdapAuth
         @ldap_unbind($conn);
 
         return self::upsertUser($sam, $email, $display, $userDn);
+    }
+
+    /**
+     * @param array<string,mixed> $cfg
+     * @return array{
+     *   host:string,port:int,base_dn:string,user_filter:string,bind_dn:string,bind_password:string,
+     *   use_ssl:bool,start_tls:bool,tls_insecure:bool,uri:string
+     * }
+     */
+    private static function parseConfig(array $cfg): array
+    {
+        $host = trim((string)($cfg['host'] ?? ''));
+        $port = (int)($cfg['port'] ?? 636);
+        if ($port <= 0) {
+            $port = 636;
+        }
+        $baseDn = trim((string)($cfg['base_dn'] ?? ''));
+        $userFilter = trim((string)($cfg['user_filter'] ?? '(sAMAccountName={username})'));
+        if ($userFilter === '') {
+            $userFilter = '(sAMAccountName={username})';
+        }
+        $useStartTls = !empty($cfg['start_tls']);
+        $useSsl = !empty($cfg['use_ssl']) || $port === 636;
+        // Default use_ssl true when key missing
+        if (!array_key_exists('use_ssl', $cfg)) {
+            $useSsl = true || $port === 636;
+        }
+        $uri = ($useSsl && !$useStartTls ? 'ldaps://' : 'ldap://') . $host . ':' . $port;
+
+        return [
+            'host' => $host,
+            'port' => $port,
+            'base_dn' => $baseDn,
+            'user_filter' => $userFilter,
+            'bind_dn' => trim((string)($cfg['bind_dn'] ?? '')),
+            'bind_password' => (string)($cfg['bind_password'] ?? ''),
+            'use_ssl' => $useSsl,
+            'start_tls' => $useStartTls,
+            'tls_insecure' => !empty($cfg['tls_insecure']),
+            'uri' => $uri,
+        ];
+    }
+
+    /**
+     * Must run BEFORE ldap_connect for global TLS options to take effect.
+     * @return array{detail:string}
+     */
+    private static function prepareTlsEnvironment(bool $insecure): array
+    {
+        $parts = [];
+
+        if ($insecure) {
+            // Internal enterprise CAs often are not in PHP/OpenLDAP trust store
+            if (defined('LDAP_OPT_X_TLS_REQUIRE_CERT') && defined('LDAP_OPT_X_TLS_NEVER')) {
+                @ldap_set_option(null, LDAP_OPT_X_TLS_REQUIRE_CERT, LDAP_OPT_X_TLS_NEVER);
+                $parts[] = 'LDAP_OPT_X_TLS_REQUIRE_CERT=never';
+            }
+            @putenv('LDAPTLS_REQCERT=never');
+            $parts[] = 'LDAPTLS_REQCERT=never';
+            return ['detail' => 'Insecure TLS mode: ' . implode(', ', $parts)];
+        }
+
+        if (defined('LDAP_OPT_X_TLS_REQUIRE_CERT') && defined('LDAP_OPT_X_TLS_DEMAND')) {
+            @ldap_set_option(null, LDAP_OPT_X_TLS_REQUIRE_CERT, LDAP_OPT_X_TLS_DEMAND);
+            $parts[] = 'require cert=demand';
+        }
+        @putenv('LDAPTLS_REQCERT=demand');
+
+        $ca = self::resolveLdapCaFile();
+        if ($ca !== null) {
+            if (defined('LDAP_OPT_X_TLS_CACERTFILE')) {
+                @ldap_set_option(null, LDAP_OPT_X_TLS_CACERTFILE, $ca);
+            }
+            @putenv('LDAPTLS_CACERT=' . $ca);
+            $parts[] = 'CA file: ' . $ca;
+        } else {
+            $parts[] = 'no app CA file found (using system defaults only)'; if bind fails with “Can\'t contact LDAP server”, trust your internal CA or enable “Skip LDAPS certificate verify”)';
+        }
+
+        return ['detail' => implode(' · ', $parts)];
+    }
+
+    private static function resolveLdapCaFile(): ?string
+    {
+        $candidates = [
+            App::ROOT . '/config/ldap-ca.pem',
+            App::ROOT . '/config/cacert.pem',
+        ];
+        // Reuse GitHub CA bundle helper if present
+        if (class_exists('UpdateService')) {
+            try {
+                $status = UpdateService::caBundleStatus();
+                if (!empty($status['path']) && is_file((string)$status['path'])) {
+                    $candidates[] = (string)$status['path'];
+                }
+            } catch (Throwable $e) {
+                // ignore
+            }
+        }
+        $iniCa = trim((string)ini_get('openssl.cafile'));
+        if ($iniCa !== '') {
+            $candidates[] = $iniCa;
+        }
+        foreach ($candidates as $p) {
+            $p = trim($p);
+            if ($p !== '' && is_file($p) && filesize($p) > 500) {
+                return $p;
+            }
+        }
+        return null;
+    }
+
+    /** @param resource|\LDAP\Connection $conn */
+    private static function applyConnectionOptions($conn, array $cfg): void
+    {
+        ldap_set_option($conn, LDAP_OPT_PROTOCOL_VERSION, 3);
+        ldap_set_option($conn, LDAP_OPT_REFERRALS, 0);
+        $timeout = (int)($cfg['network_timeout'] ?? 10);
+        if ($timeout < 3) {
+            $timeout = 10;
+        }
+        ldap_set_option($conn, LDAP_OPT_NETWORK_TIMEOUT, $timeout);
+        if (defined('LDAP_OPT_TIMELIMIT')) {
+            @ldap_set_option($conn, LDAP_OPT_TIMELIMIT, $timeout);
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $parsed from parseConfig
+     */
+    private static function explainLdapError(string $err, int $errno, array $parsed): string
+    {
+        $msg = $err !== '' ? $err : 'unknown error';
+        $msg .= ' (ldap_errno=' . $errno . ')';
+
+        $lower = strtolower($err);
+        if (
+            str_contains($lower, "can't contact")
+            || str_contains($lower, 'server is unavailable')
+            || $errno === -1
+            || $errno === 81
+        ) {
+            $msg .= '. This often means the TCP/TLS handshake failed (not a wrong Bind DN). '
+                . 'Check: (1) web server can reach ' . ($parsed['host'] ?? '') . ':' . ($parsed['port'] ?? 636)
+                . ' (firewall), (2) LDAPS certificate is trusted by PHP/OpenLDAP, '
+                . '(3) try enabling “Skip LDAPS certificate verify” for internal PKI, '
+                . '(4) optional: place your enterprise root CA PEM in config/ldap-ca.pem.';
+        } elseif (str_contains($lower, 'invalid credentials') || $errno === 49) {
+            $msg .= '. Bind DN or password is wrong, account locked/disabled, or password expired.';
+        } elseif (str_contains($lower, 'stronger auth') || $errno === 8) {
+            $msg .= '. Server requires LDAPS/STARTTLS — enable Use LDAPS (SSL) or STARTTLS.';
+        }
+
+        return $msg;
     }
 
     private static function escapeFilter(string $value): string

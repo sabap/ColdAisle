@@ -48,6 +48,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                     : ($config['auth']['ldaps']['bind_password'] ?? ''),
                 'use_ssl' => !empty($_POST['ldaps_use_ssl']),
                 'start_tls' => !empty($_POST['ldaps_start_tls']),
+                'tls_insecure' => !empty($_POST['ldaps_tls_insecure']),
                 'default_role_id' => $_POST['ldaps_default_role_id'] !== '' ? (int)$_POST['ldaps_default_role_id'] : null,
             ];
             SettingsService::set('auth_ldaps_enabled', !empty($_POST['ldaps_enabled']) ? '1' : '0', 'auth');
@@ -178,6 +179,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                     'bind_password' => $bindPass,
                     'use_ssl' => !empty($_POST['ldaps_use_ssl']),
                     'start_tls' => !empty($_POST['ldaps_start_tls']),
+                    'tls_insecure' => !empty($_POST['ldaps_tls_insecure']),
                 ];
                 $result = LdapAuth::testConnection(
                     $testCfg,
@@ -419,6 +421,15 @@ layout_header('Settings', $user, 'settings');
             </div>
             <div class="form-row"><label><input type="checkbox" name="ldaps_use_ssl" value="1" <?= ($ldaps['use_ssl'] ?? true) ? 'checked' : '' ?>> Use LDAPS (SSL)</label></div>
             <div class="form-row"><label><input type="checkbox" name="ldaps_start_tls" value="1" <?= !empty($ldaps['start_tls']) ? 'checked' : '' ?>> STARTTLS</label></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="ldaps_tls_insecure" value="1" <?= !empty($ldaps['tls_insecure']) ? 'checked' : '' ?>>
+                Skip LDAPS certificate verify (internal PKI / lab)
+            </label>
+                <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                    If the test fails with <code>Can't contact LDAP server</code> after Connect succeeds, PHP often cannot trust your domain controller certificate.
+                    Prefer installing your enterprise root CA as <code>config/ldap-ca.pem</code>; use this checkbox only when that is not practical.
+                </p>
+            </div>
             <div class="form-row full" style="margin-top:.5rem;padding-top:.75rem;border-top:1px solid var(--border,#2a3648)">
                 <label style="font-weight:600">Connection test</label>
                 <p class="text-muted" style="font-size:.75rem;margin:.2rem 0 .5rem">
