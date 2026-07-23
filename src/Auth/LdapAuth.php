@@ -329,7 +329,7 @@ class LdapAuth
             @putenv('LDAPTLS_CACERT=' . $ca);
             $parts[] = 'CA file: ' . $ca;
         } else {
-            $parts[] = 'no app CA file found (using system defaults only)'; if bind fails with “Can\'t contact LDAP server”, trust your internal CA or enable “Skip LDAPS certificate verify”)';
+            $parts[] = 'no app CA file found (using system defaults only — if bind fails with Can\'t contact LDAP server, trust your internal CA or enable Skip LDAPS certificate verify)';
         }
 
         return ['detail' => implode(' · ', $parts)];
