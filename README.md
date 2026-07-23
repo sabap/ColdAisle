@@ -50,7 +50,29 @@ Dashboard shows a banner when an update is available (if auto-check is enabled).
   - Optional: `ldap` (LDAPS), `snmp` (polling), `curl` (Entra SSO)
 - **Microsoft SQL Server** 2016+ (Express is fine)
 
-### Suggested PHP (Windows) packages
+## Install (Windows — recommended)
+
+Scripts are plain PowerShell so you can read them before running. **Administrator** PowerShell:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/sabap/ColdAisle/main/Install-ColdAisle.ps1" `
+  -OutFile .\Install-ColdAisle.ps1
+# Optional: review
+notepad .\Install-ColdAisle.ps1
+.\Install-ColdAisle.ps1
+```
+
+This downloads the **latest release tag** from this public repo, installs IIS/PHP/ODBC as needed, deploys to  
+`C:\inetpub\wwwroot\ColdAisle` (default), then you finish in the browser:
+
+1. Install/configure **SQL Server** if you do not already have an instance  
+2. Browse **`http://localhost/setup.php`** — SQL connection + first admin  
+3. Delete `phpinfo-test.php` if present  
+
+Details and parameters: [`scripts/README-Prereqs.md`](scripts/README-Prereqs.md).
+
+### Suggested PHP (Windows) packages (manual)
 
 1. Install [PHP for Windows](https://windows.php.net/download/)
 2. Install [Microsoft Drivers for PHP for SQL Server](https://learn.microsoft.com/en-us/sql/connect/php/download-drivers-php-sql-server) (`php_pdo_sqlsrv.dll`)

@@ -1,8 +1,31 @@
-# ColdAisle prerequisite installer (PowerShell)
+# ColdAisle Windows installers (PowerShell)
 
-Script: **`Install-ColdAisle-Prereqs.ps1`**
+All scripts are plain text — download, open in Notepad, then run elevated. Nothing is hidden.
 
-Automates:
+| Script | Role |
+|--------|------|
+| **[`Install-ColdAisle.ps1`](../Install-ColdAisle.ps1)** (repo root) | **Recommended for new servers:** download latest public release from GitHub, then install IIS/PHP/ODBC and deploy |
+| **`Install-ColdAisle-Prereqs.ps1`** (this folder) | Platform stack only (or deploy from a local tree / `-FromGitHub`) |
+| `Install-WinDCIM-Prereqs.ps1` | Legacy wrapper → calls `Install-ColdAisle-Prereqs.ps1` |
+
+## Quick install (new machine, public GitHub)
+
+**PowerShell as Administrator:**
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/sabap/ColdAisle/main/Install-ColdAisle.ps1" `
+  -OutFile .\Install-ColdAisle.ps1
+# Optional: review the script
+notepad .\Install-ColdAisle.ps1
+.\Install-ColdAisle.ps1
+```
+
+Then open `http://localhost/setup.php` for SQL + admin account.
+
+Does **not** install SQL Server. Use Express/Standard or an existing instance.
+
+## What `Install-ColdAisle-Prereqs.ps1` automates
 
 | Step | Action |
 |------|--------|
@@ -13,30 +36,23 @@ Automates:
 | ODBC | ODBC Driver 18 for SQL Server (for `pdo_odbc`) |
 | URL Rewrite | IIS URL Rewrite 2 (for `web.config` rules) |
 | sqlsrv | Best-effort install of Microsoft PHP SQL drivers (optional; ODBC is enough) |
-| Deploy | Copies ColdAisle from the project folder into the site path (default `C:\inetpub\wwwroot\ColdAisle`) |
+| Deploy | Copies ColdAisle into the site path (default `C:\inetpub\wwwroot\ColdAisle`) |
 | NTFS | Grants app pool Modify on `config\` and `storage\` |
 
-Does **not** install SQL Server. Use an existing instance (Express/Standard/etc.) and complete DB setup in the browser wizard.
-
-## Run (elevated)
-
-Copy the whole ColdAisle project onto the server (any temp path is fine), open **PowerShell as Administrator**:
+## Run prereqs only (local source tree)
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
 cd C:\path\to\ColdAisle\scripts
-
-# Production defaults: site -> C:\inetpub\wwwroot\ColdAisle, PHP -> C:\PHP
 .\Install-ColdAisle-Prereqs.ps1
 ```
 
-The script will:
+Or pull the app from GitHub while using the prereq script:
 
-1. Install IIS + PHP + ODBC + URL Rewrite  
-2. Copy app files into `C:\inetpub\wwwroot\ColdAisle` (if not already there)  
-3. Point **Default Web Site** at that folder  
-4. Grant the app pool write access to `config\` and `storage\`
-
+```powershell
+.\Install-ColdAisle-Prereqs.ps1 -FromGitHub
+.\Install-ColdAisle-Prereqs.ps1 -FromGitHub -Version 0.2.0
+```
 ### Common parameters
 
 ```powershell

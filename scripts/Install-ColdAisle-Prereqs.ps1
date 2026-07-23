@@ -35,6 +35,20 @@
 .PARAMETER DeploySource
     Folder containing ColdAisle source (setup.php, index.php, ...).
     Default: parent of this script (...\scripts -> project root). Used to copy into SitePhysicalPath.
+    Ignored when -FromGitHub is set (unless you also pass an explicit path after download — prefer Install-ColdAisle.ps1).
+
+.PARAMETER FromGitHub
+    Download the application from the public GitHub repo (latest tag, or -Version) instead of copying a local tree.
+    Prefer the root Install-ColdAisle.ps1 for a one-shot public install.
+
+.PARAMETER Version
+    When using -FromGitHub: tag without/with v (e.g. 0.2.0). Default: latest tag.
+
+.PARAMETER GitHubOwner
+    GitHub owner for -FromGitHub. Default: sabap
+
+.PARAMETER GitHubRepo
+    GitHub repo for -FromGitHub. Default: ColdAisle
 
 .PARAMETER SkipDeploy
     Do not copy application files (only install IIS/PHP and set the site path if present).
@@ -61,6 +75,10 @@
 
 .EXAMPLE
     .\Install-ColdAisle-Prereqs.ps1 -PhpVersion 8.2.28 -PhpInstallPath C:\PHP82 -Force
+
+.EXAMPLE
+    # Install stack + pull app from public GitHub (or use root Install-ColdAisle.ps1)
+    .\Install-ColdAisle-Prereqs.ps1 -FromGitHub
 #>
 [CmdletBinding()]
 param(
@@ -69,6 +87,10 @@ param(
     [string]$SiteName = 'Default Web Site',
     [string]$SitePhysicalPath = 'C:\inetpub\wwwroot\ColdAisle',
     [string]$DeploySource = '',
+    [switch]$FromGitHub,
+    [string]$Version = '',
+    [string]$GitHubOwner = 'sabap',
+    [string]$GitHubRepo = 'ColdAisle',
     [switch]$SkipDeploy,
     [switch]$SkipOdbc,
     [switch]$SkipUrlRewrite,
@@ -808,7 +830,69 @@ function Install-PhpSqlsrvDrivers {
     }
 }
 
+function Get-GitHubJson([string]$Url) {
+    $headers = @{
+        'Accept'     = 'application/vnd.github+json'
+        'User-Agent' = 'ColdAisle-Installer'
+    }
+    return Invoke-RestMethod -Uri $Url -Headers $headers -UseBasicParsing
+}
+
+function Resolve-GitHubAppVersion {
+    if ($Version) {
+        return ($Version.Trim() -replace '^[vV]', '')
+    }
+    try {
+        $rel = Get-GitHubJson "https://api.github.com/repos/$GitHubOwner/$GitHubRepo/releases/latest"
+        if ($rel.tag_name) {
+            return ([string]$rel.tag_name -replace '^[vV]', '')
+        }
+    } catch {
+        Write-Warn "No formal release; using tags API"
+    }
+    $tags = Get-GitHubJson "https://api.github.com/repos/$GitHubOwner/$GitHubRepo/tags?per_page=30"
+    $best = $null
+    foreach ($t in $tags) {
+        $tv = ([string]$t.name) -replace '^[vV]', ''
+        if ($tv -notmatch '^\d+\.\d+') { continue }
+        if ($null -eq $best) { $best = $tv; continue }
+        try {
+            if ([version]$tv -gt [version]$best) { $best = $tv }
+        } catch {
+            if ($tv -gt $best) { $best = $tv }
+        }
+    }
+    if (-not $best) {
+        throw "No version tags on $GitHubOwner/$GitHubRepo"
+    }
+    return $best
+}
+
+function Get-ColdAisleFromGitHub {
+    $ver = Resolve-GitHubAppVersion
+    $tag = "v$ver"
+    $work = Join-Path $env:TEMP ("ColdAisle-gh-{0}" -f [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $work -Force | Out-Null
+    $zipUrl = "https://github.com/$GitHubOwner/$GitHubRepo/archive/refs/tags/$tag.zip"
+    $zipPath = Join-Path $work 'release.zip'
+    Write-Step "Downloading $GitHubOwner/$GitHubRepo $tag from GitHub"
+    Write-Host "    $zipUrl" -ForegroundColor DarkGray
+    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+    Expand-Archive -LiteralPath $zipPath -DestinationPath $work -Force
+    $dirs = Get-ChildItem -Path $work -Directory
+    foreach ($d in $dirs) {
+        if ((Test-Path (Join-Path $d.FullName 'setup.php')) -and (Test-Path (Join-Path $d.FullName 'index.php'))) {
+            Write-Ok "GitHub source: $($d.FullName)"
+            return $d.FullName
+        }
+    }
+    throw "Could not find app root in GitHub zip for $tag"
+}
+
 function Get-ColdAisleDeploySource {
+    if ($FromGitHub) {
+        return Get-ColdAisleFromGitHub
+    }
     if ($DeploySource) {
         return (Resolve-Path -LiteralPath $DeploySource).Path
     }
@@ -878,8 +962,16 @@ Pass -DeploySource path\to\ColdAisle or run this script from the project scripts
     }
 
     # Exclude VCS, local secrets, and runtime storage contents (dirs recreated later)
-    $excludeDirs = @('.git', '.vs', '.idea', 'node_modules')
-    $excludeFiles = @('phpinfo-test.php')
+    $excludeDirs = @('.git', '.vs', '.idea', 'node_modules', 'storage')
+    $excludeFiles = @('phpinfo-test.php', 'config.php')
+
+    # Ensure runtime dirs exist on target
+    foreach ($sub in @('storage\logs', 'storage\uploads', 'storage\backups', 'config')) {
+        $p = Join-Path $SitePhysicalPath $sub
+        if (-not (Test-Path $p)) {
+            New-Item -ItemType Directory -Path $p -Force | Out-Null
+        }
+    }
 
     if (Test-CommandExists 'robocopy.exe') {
         $xd = @()
