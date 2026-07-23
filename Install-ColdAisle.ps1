@@ -273,7 +273,7 @@ function Invoke-PostInstallChecks {
         Write-Ok 'index.php present'
     }
 
-    foreach ($dir in @('config', 'storage\logs', 'storage\uploads', 'storage\backups')) {
+    foreach ($dir in @('config', 'storage\logs', 'storage\uploads', 'storage\backups', 'storage\tmp')) {
         $p = Join-Path $SitePath $dir
         if (-not (Test-Path $p)) {
             $issues += "Missing directory: $p"
