@@ -594,7 +594,7 @@ class UpdateService
             CURLOPT_SSL_VERIFYHOST => $sslVerify ? 2 : 0,
         ];
         if ($sslVerify) {
-            $ca = self::resolveCaBundle();
+            $ca = self::ensureCaBundle();
             if ($ca !== null) {
                 $opts[CURLOPT_CAINFO] = $ca;
             }
@@ -607,14 +607,19 @@ class UpdateService
         if ($body === false) {
             $hint = '';
             if (stripos($err, 'certificate') !== false || stripos($err, 'SSL') !== false) {
-                $hint = ' Tip: place a CA bundle at config/cacert.pem, set curl.cainfo in php.ini, or uncheck “Verify TLS certificates” under Settings → Updates (lab only).';
+                // One retry: force-refresh CA bundle then try again once
+                if ($sslVerify && self::ensureCaBundle(true) !== null) {
+                    return self::httpRequest($url, $token, $binary, $allowNotFound);
+                }
+                $hint = ' PHP has no trusted CA list. ColdAisle tried config/cacert.pem; '
+                    . 'use Settings → Updates → “Install CA certificates”, or set curl.cainfo in php.ini. '
+                    . 'Uncheck “Verify TLS certificates” only for lab/dev.';
             }
             throw new RuntimeException('HTTP request failed: ' . $err . $hint);
         }
         if ($code === 401 || $code === 403) {
             throw new RuntimeException(
-                'GitHub authentication failed (HTTP ' . $code . '). '
-                . 'Regenerate the PAT with Contents: Read on sabap/ColdAisle, paste it again, and Save update settings.'
+                'GitHub refused the request (HTTP ' . $code . '). The public API may be rate-limited; wait and retry.'
             );
         }
         if ($code === 404) {
@@ -622,8 +627,7 @@ class UpdateService
                 return null;
             }
             throw new RuntimeException(
-                'GitHub resource not found (HTTP 404). Confirm owner/repo is sabap/ColdAisle '
-                . 'and the token is allowed for this private repository (Contents: Read).'
+                'GitHub resource not found (HTTP 404). The release tag may not exist yet on sabap/ColdAisle.'
             );
         }
         if ($code < 200 || $code >= 300) {
@@ -974,6 +978,81 @@ class UpdateService
     }
 
     /** @return string|null Absolute path to a CA bundle if found */
+    /**
+     * Locate a CA bundle, or download Mozilla's bundle into config/cacert.pem once.
+     * @param bool $forceDownload re-download even if a local file exists
+     */
+    public static function ensureCaBundle(bool $forceDownload = false): ?string
+    {
+        static $triedAuto = false;
+        $local = App::ROOT . '/config/cacert.pem';
+
+        if (!$forceDownload) {
+            $existing = self::resolveCaBundle();
+            if ($existing !== null) {
+                return $existing;
+            }
+        }
+
+        if ($triedAuto && !$forceDownload) {
+            return is_file($local) ? $local : null;
+        }
+        $triedAuto = true;
+
+        $dir = dirname($local);
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            App::log('Cannot create config/ for cacert.pem', 'warning');
+            return self::resolveCaBundle();
+        }
+
+        try {
+            self::downloadCaBundleTo($local);
+            if (is_file($local) && filesize($local) > 50_000) {
+                App::log('Installed CA bundle at config/cacert.pem', 'info');
+                return $local;
+            }
+        } catch (Throwable $e) {
+            App::log('CA bundle download: ' . $e->getMessage(), 'warning');
+        }
+        return self::resolveCaBundle();
+    }
+
+    /**
+     * Download Mozilla CA certificates (curl.se) into config/cacert.pem.
+     * Bootstrap uses peer verification off only for this known CA pack URL.
+     */
+    public static function installCaBundle(): array
+    {
+        $local = App::ROOT . '/config/cacert.pem';
+        $dir = dirname($local);
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new RuntimeException('config/ is not writable — cannot install cacert.pem.');
+        }
+        self::downloadCaBundleTo($local);
+        if (!is_file($local) || filesize($local) < 50_000) {
+            throw new RuntimeException('Downloaded CA bundle looks invalid or incomplete.');
+        }
+        return [
+            'ok' => true,
+            'path' => $local,
+            'bytes' => filesize($local),
+            'message' => 'CA certificates installed at config/cacert.pem ('
+                . number_format((int)filesize($local)) . ' bytes). Keep “Verify TLS certificates” enabled.',
+        ];
+    }
+
+    public static function caBundleStatus(): array
+    {
+        $path = self::resolveCaBundle();
+        return [
+            'found' => $path !== null,
+            'path' => $path,
+            'app_local' => is_file(App::ROOT . '/config/cacert.pem'),
+            'php_curl_cainfo' => trim((string)ini_get('curl.cainfo')),
+            'php_openssl_cafile' => trim((string)ini_get('openssl.cafile')),
+        ];
+    }
+
     private static function resolveCaBundle(): ?string
     {
         $candidates = [
@@ -982,13 +1061,53 @@ class UpdateService
             (string)ini_get('openssl.cafile'),
             'C:/PHP/extras/ssl/cacert.pem',
             'C:/php/extras/ssl/cacert.pem',
+            'C:/Windows/System32/curl-ca-bundle.crt',
         ];
         foreach ($candidates as $p) {
             $p = trim($p);
-            if ($p !== '' && is_file($p)) {
+            if ($p !== '' && is_file($p) && filesize($p) > 1000) {
                 return $p;
             }
         }
         return null;
+    }
+
+    private static function downloadCaBundleTo(string $dest): void
+    {
+        if (!function_exists('curl_init')) {
+            throw new RuntimeException('PHP cURL is required to download the CA bundle.');
+        }
+        // Official Mozilla CA extract published by the curl project
+        $url = 'https://curl.se/ca/cacert.pem';
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new RuntimeException('curl_init failed for CA download.');
+        }
+        // Bootstrap only: verify off so broken PHP CA config can still fetch the bundle once
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT => 60,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_USERAGENT => 'ColdAisle-CA-Installer',
+        ]);
+        $body = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        if ($body === false || $code < 200 || $code >= 300) {
+            throw new RuntimeException(
+                'Could not download CA bundle from curl.se'
+                . ($err !== '' ? ': ' . $err : " (HTTP {$code})")
+                . '. Allow outbound HTTPS to curl.se or copy cacert.pem manually into config/.'
+            );
+        }
+        if (!str_contains((string)$body, 'BEGIN CERTIFICATE')) {
+            throw new RuntimeException('CA download did not look like a PEM certificate bundle.');
+        }
+        if (file_put_contents($dest, $body) === false) {
+            throw new RuntimeException('Could not write ' . $dest);
+        }
     }
 }
