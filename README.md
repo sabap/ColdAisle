@@ -50,6 +50,14 @@ Dashboard shows a banner when an update is available (if auto-check is enabled).
   - Optional: `ldap` (LDAPS), `snmp` (polling), `curl` (Entra SSO)
 - **Microsoft SQL Server** 2016+ (Express is fine)
 
+### Tested platforms (as of this writing)
+
+| Component | Tested |
+|-----------|--------|
+| OS | **Windows Server 2025** (also intended for Server 2019/2022 and Windows 10/11) |
+| Database | **SQL Server 2022 Enterprise** (Express / Standard expected to work the same for app use) |
+| Web | IIS + PHP 8.x NTS (FastCGI) via the public installer scripts |
+
 ## Install (Windows — recommended)
 
 Scripts are plain PowerShell so you can read them before running. **Administrator** PowerShell:
@@ -60,14 +68,16 @@ Invoke-WebRequest -Uri "https://raw.githubusercontent.com/sabap/ColdAisle/main/I
   -OutFile .\Install-ColdAisle.ps1
 # Optional: review
 notepad .\Install-ColdAisle.ps1
-.\Install-ColdAisle.ps1
+.\Install-ColdAisle.ps1 -OpenSetup
 ```
+
+`-OpenSetup` launches the browser to `setup.php` when post-install checks look good.
 
 This downloads the **latest release tag** from this public repo, installs IIS/PHP/ODBC as needed, deploys to  
 `C:\inetpub\wwwroot\ColdAisle` (default), then you finish in the browser:
 
 1. Install/configure **SQL Server** if you do not already have an instance  
-2. Browse **`http://localhost/setup.php`** — SQL connection + first admin  
+2. Complete **`setup.php`** — SQL connection + first admin  
 3. Delete `phpinfo-test.php` if present  
 
 Details and parameters: [`scripts/README-Prereqs.md`](scripts/README-Prereqs.md).

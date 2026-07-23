@@ -18,12 +18,19 @@ Invoke-WebRequest -Uri "https://raw.githubusercontent.com/sabap/ColdAisle/main/I
   -OutFile .\Install-ColdAisle.ps1
 # Optional: review the script
 notepad .\Install-ColdAisle.ps1
-.\Install-ColdAisle.ps1
+.\Install-ColdAisle.ps1 -OpenSetup
 ```
 
-Then open `http://localhost/setup.php` for SQL + admin account.
+`-OpenSetup` opens the setup wizard in your browser after checks pass.
 
-Does **not** install SQL Server. Use Express/Standard or an existing instance.
+Then complete `setup.php` for SQL + admin account.
+
+Does **not** install SQL Server. Use Express/Standard/Enterprise or an existing instance.
+
+### Tested platforms
+
+- **Windows Server 2025** (also aimed at Server 2019/2022 and Windows 10/11)
+- **SQL Server 2022 Enterprise** (Express/Standard fine for typical installs)
 
 ## What `Install-ColdAisle-Prereqs.ps1` automates
 
@@ -77,6 +84,9 @@ Or pull the app from GitHub while using the prereq script:
 
 # Skip optional components
 .\Install-ColdAisle-Prereqs.ps1 -SkipSqlsrv -SkipUrlRewrite
+
+# Pull from GitHub and open setup when finished
+.\Install-ColdAisle-Prereqs.ps1 -FromGitHub -OpenSetup
 ```
 
 ### Parameters that matter on a real server
@@ -86,9 +96,27 @@ Or pull the app from GitHub while using the prereq script:
 | `-SitePhysicalPath` | `C:\inetpub\wwwroot\ColdAisle` | IIS site root. Pass `""` to leave the site path alone. |
 | `-SiteName` | `Default Web Site` | Site that receives the PHP handler and physical path. |
 | `-DeploySource` | Parent of `scripts\` | Where to copy app files from. |
+| `-FromGitHub` | off | Download app from public GitHub instead of local tree. |
+| `-OpenSetup` | off | Open `http://localhost/setup.php` after install. |
+| `-RunVerification` | on | PHP/IIS/site post-checks. |
 | `-SkipDeploy` | off | Use when files are already under inetpub and you only need the stack. |
 | `-PhpVersion` | `8.3.32` | Change if the zip 404s on windows.php.net. |
 | `-PhpInstallPath` | `C:\PHP` | FastCGI points here. |
+
+### Installer checks (gotchas covered)
+
+Preflight / postflight try to catch common failures:
+
+- Not elevated (Administrator required)
+- PowerShell too old / non-x64
+- Low disk space, very long install paths
+- No outbound HTTPS to GitHub / windows.php.net
+- Missing `php.exe` / `php-cgi.exe`
+- Missing PHP modules (`curl`, `mbstring`, `openssl`, PDO, SQL drivers)
+- Missing `setup.php` / `config` / `storage` dirs
+- IIS site physical path mismatch
+- Optional HTTP smoke test to `setup.php`
+- Existing `config\config.php` preserved (called out in logs)
 
 ## After the script
 

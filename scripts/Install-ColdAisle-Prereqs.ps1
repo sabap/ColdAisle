@@ -66,6 +66,12 @@
     Re-download and re-apply configuration even if components exist.
     Also re-copies application files over SitePhysicalPath (preserves config\config.php).
 
+.PARAMETER RunVerification
+    After install, run PHP/IIS/site post-checks (default: on for direct runs; Install-ColdAisle.ps1 also verifies).
+
+.PARAMETER OpenSetup
+    After success, open http://localhost/setup.php in the default browser.
+
 .EXAMPLE
     # Production server - Default Web Site -> C:\inetpub\wwwroot\ColdAisle
     .\Install-ColdAisle-Prereqs.ps1
@@ -78,7 +84,7 @@
 
 .EXAMPLE
     # Install stack + pull app from public GitHub (or use root Install-ColdAisle.ps1)
-    .\Install-ColdAisle-Prereqs.ps1 -FromGitHub
+    .\Install-ColdAisle-Prereqs.ps1 -FromGitHub -OpenSetup
 #>
 [CmdletBinding()]
 param(
@@ -95,7 +101,9 @@ param(
     [switch]$SkipOdbc,
     [switch]$SkipUrlRewrite,
     [switch]$SkipSqlsrv,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$RunVerification,
+    [switch]$OpenSetup
 )
 
 $ErrorActionPreference = 'Stop'
@@ -1026,6 +1034,104 @@ function Write-PhpInfoTest {
     }
 }
 
+function Invoke-PrereqPreflight {
+    Write-Step 'Preflight (prereqs)'
+    $psVer = $PSVersionTable.PSVersion
+    Write-Ok "PowerShell $psVer"
+    if ($psVer.Major -lt 5) {
+        throw 'PowerShell 5.1+ required.'
+    }
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+    if ($os) {
+        Write-Ok ("OS: {0}" -f $os.Caption)
+    }
+    if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
+        Write-Warn "Non-AMD64 architecture ($env:PROCESSOR_ARCHITECTURE) is not a tested target."
+    }
+    Ensure-Tls12
+    # Long path warning
+    if ($SitePhysicalPath -and $SitePhysicalPath.Length -gt 180) {
+        Write-Warn 'SitePhysicalPath is very long; Windows path limits may break deploys.'
+    }
+    if ($SitePhysicalPath -and (Test-Path (Join-Path $SitePhysicalPath 'config\config.php'))) {
+        Write-Warn 'Existing config\config.php will be preserved across deploy.'
+    }
+    # W3SVC
+    $w3 = Get-Service W3SVC -ErrorAction SilentlyContinue
+    if ($w3) {
+        Write-Ok "W3SVC service present (status=$($w3.Status))"
+        if ($w3.Status -ne 'Running') {
+            try {
+                Start-Service W3SVC -ErrorAction Stop
+                Write-Ok 'Started W3SVC'
+            } catch {
+                Write-Warn "Could not start W3SVC: $($_.Exception.Message)"
+            }
+        }
+    } else {
+        Write-Ok 'W3SVC not installed yet (IIS role will add it)'
+    }
+}
+
+function Invoke-PrereqVerification {
+    Write-Step 'Post-install verification (prereqs)'
+    $phpExe = Join-Path $PhpInstallPath 'php.exe'
+    $phpCgi = Join-Path $PhpInstallPath 'php-cgi.exe'
+    if (Test-Path $phpExe) {
+        Write-Ok "php.exe: $phpExe"
+        $mods = & $phpExe -m 2>&1 | Out-String
+        foreach ($m in @('curl', 'mbstring', 'openssl', 'PDO')) {
+            if ($mods -match $m) { Write-Ok "PHP: $m" }
+            else { Write-Warn "PHP module not listed: $m" }
+        }
+        if ($mods -match 'pdo_odbc' -or $mods -match 'pdo_sqlsrv') {
+            Write-Ok 'PHP: SQL PDO driver (odbc and/or sqlsrv)'
+        } else {
+            Write-Warn 'PHP: no pdo_odbc/pdo_sqlsrv — fix before setup.php SQL step'
+        }
+    } else {
+        Write-Warn "php.exe missing at $phpExe"
+    }
+    if (-not (Test-Path $phpCgi)) {
+        Write-Warn "php-cgi.exe missing — IIS FastCGI will fail"
+    } else {
+        Write-Ok 'php-cgi.exe present'
+    }
+    if ($SitePhysicalPath) {
+        if (Test-Path (Join-Path $SitePhysicalPath 'setup.php')) {
+            Write-Ok 'setup.php deployed'
+        } else {
+            Write-Warn "setup.php not found under $SitePhysicalPath"
+        }
+        foreach ($d in @('config', 'storage\logs', 'storage\uploads')) {
+            if (Test-Path (Join-Path $SitePhysicalPath $d)) {
+                Write-Ok "Dir: $d"
+            } else {
+                Write-Warn "Missing dir: $d"
+            }
+        }
+    }
+    # FastCGI registration
+    try {
+        Import-Module WebAdministration -ErrorAction SilentlyContinue
+        $fcgi = Get-WebConfiguration -Filter /system.webServer/fastCgi -ErrorAction SilentlyContinue
+        if ($fcgi) { Write-Ok 'IIS FastCGI configuration readable' }
+    } catch {
+        Write-Warn "IIS FastCGI check skipped: $($_.Exception.Message)"
+    }
+}
+
+function Open-SetupBrowser {
+    $url = 'http://localhost/setup.php'
+    Write-Step "Opening setup wizard: $url"
+    try {
+        Start-Process $url
+        Write-Ok 'Browser launched'
+    } catch {
+        Write-Warn "Open browser failed: $($_.Exception.Message). Visit $url manually."
+    }
+}
+
 function Show-Summary {
     Write-Step 'Summary'
     $phpCgi = Join-Path $PhpInstallPath 'php-cgi.exe'
@@ -1049,11 +1155,13 @@ function Show-Summary {
     4.  Delete phpinfo-test.php when done
 
   SQL Server:
-    - Not installed by this script (you already have the engine).
+    - Not installed by this script (install engine separately).
+    - Tested with SQL Server 2022 Enterprise; Express/Standard also fine.
     - In setup.php use host . or localhost (or HOST\INSTANCE),
       SQL auth with sa (or a dedicated login), and a new DB name e.g. ColdAisle.
 
-  Notes:
+  Platform notes:
+    - Tested on Windows Server 2025 (also intended for Server 2019/2022 and Win 10/11).
     - Use HTTPS + certificate before enabling Entra SSO.
     - Firewall: allow 80/443 inbound; SQL 1433 if remote; LDAPS 636 outbound.
     - If PHP version download 404s, set -PhpVersion to a build listed on
@@ -1069,10 +1177,17 @@ function Show-Summary {
 Assert-Admin
 Write-Host 'ColdAisle prerequisite installer' -ForegroundColor White
 Write-Host "PHP $PhpVersion NTS x64 -> $PhpInstallPath" -ForegroundColor DarkGray
+Write-Host 'Tested: Windows Server 2025 · SQL Server 2022 Enterprise' -ForegroundColor DarkGray
 if ($SitePhysicalPath) {
     Write-Host "Site path: $SitePhysicalPath (IIS: $SiteName)" -ForegroundColor DarkGray
 }
 
+# Default verification on when run interactively without explicit switch from parent
+if (-not $PSBoundParameters.ContainsKey('RunVerification')) {
+    $RunVerification = $true
+}
+
+Invoke-PrereqPreflight
 Install-IisFeatures
 Install-VcRedist
 Install-Php
@@ -1082,8 +1197,13 @@ Install-PhpSqlsrvDrivers
 Deploy-ColdAisleApp
 Install-IisPhpHandler
 Write-PhpInfoTest
+if ($RunVerification) {
+    Invoke-PrereqVerification
+}
 Show-Summary
+if ($OpenSetup) {
+    Open-SetupBrowser
+}
 
 Write-Host 'Done.' -ForegroundColor Green
-
 
