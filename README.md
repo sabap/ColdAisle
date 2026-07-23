@@ -1,19 +1,26 @@
 # ColdAisle
 
-**Data Center Infrastructure Management** — primary platform **IIS + PHP + Microsoft SQL Server** on Windows  
-(with a clean path toward other stacks later).
+**Data Center Infrastructure Management** — free & open source.  
+Primary platform: **IIS + PHP + Microsoft SQL Server** on Windows (with a clean path toward other stacks later).
 
 Formerly known as **WinDCIM**. Built as a modern replacement path for environments that outgrew or cannot maintain Linux-based [openDCIM](https://github.com/opendcim/openDCIM), with first-class support for local accounts, **LDAPS**, and **Microsoft Entra ID (Azure AD) SSO**.
 
 **Current version:** see [`VERSION`](VERSION).
 
+## Support / donate
+
+ColdAisle is free to use. If it helps your datacenter and you want to support development, optional donations via PayPal are welcome (no paywall, no accounts):
+
+**[Donate with PayPal](https://paypal.me/)** ← replace with your PayPal.me link in the repo About / this README once you create one.
+
+In a running install: **Settings → Support ColdAisle** (configure your PayPal URL under **General**).
+
 ## Updates (GitHub)
 
-Admins can check for new versions and apply them from **Settings → Updates**:
+Admins can check for new versions and apply them from **Settings → Updates** against this public repo — **no GitHub token required**.
 
-1. Create a GitHub personal access token with **Contents: Read** on `sabap/ColdAisle` (private).
-2. Paste it under Settings → Updates (stored only in `config/config.php`).
-3. **Check for updates** · when a newer tag exists, **Update to vX.Y.Z** backs up to `storage/backups/`, downloads the release zipball, preserves config & storage runtime data, and runs schema ensure.
+1. **Check for updates** · when a newer tag exists, **Update to vX.Y.Z** backs up to `storage/backups/`, downloads the release zipball, preserves config & storage runtime data, and runs schema ensure.
+2. Optional PAT only if you hit API rate limits or point updates at a private fork.
 
 Dashboard shows a banner when an update is available (if auto-check is enabled).
 

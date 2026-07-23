@@ -45,12 +45,12 @@ return [
             'default_role_id' => null,
         ],
     ],
-    // One-click updates from GitHub (private repos need a fine-grained or classic PAT with Contents: Read)
+    // One-click updates from public GitHub (token optional; useful for rate limits or private forks)
     'updates' => [
         'enabled' => true,
         'github_owner' => 'sabap',
         'github_repo' => 'ColdAisle',
-        'github_token' => '', // e.g. github_pat_... — never commit a real token
+        'github_token' => '', // optional — never commit a real token
         'auto_check' => true,
         'check_interval_hours' => 24,
         'ssl_verify' => true, // set false only if Windows PHP lacks CA certs (lab)

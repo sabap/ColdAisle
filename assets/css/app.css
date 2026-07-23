@@ -1361,3 +1361,7 @@ tr.row-empty td { color: var(--muted); font-style: italic; }
 .flex-between { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
 .gap-1 { gap: .5rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+
+.app-footer a { color: var(--accent, #38bdf8); text-decoration: none; }
+.app-footer a:hover { text-decoration: underline; }
+
