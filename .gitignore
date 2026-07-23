@@ -31,3 +31,7 @@ package-lock.json
 
 # Local smoke / temp scripts
 /scripts/_*.php
+
+# TLS CA bundle (downloaded locally; not required in git)
+/config/cacert.pem
+

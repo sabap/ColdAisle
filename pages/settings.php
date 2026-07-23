@@ -123,6 +123,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             App::redirect('pages/settings.php#updates');
         }
 
+        if ($section === 'install_ca_bundle') {
+            $result = UpdateService::installCaBundle();
+            AuditService::log((int)$user['user_id'], $user['username'], 'install_ca_bundle', 'system', null, [
+                'bytes' => $result['bytes'] ?? null,
+            ]);
+            App::flash('success', $result['message'] ?? 'CA certificates installed.');
+            App::redirect('pages/settings.php#updates');
+        }
+
         if ($section === 'export_site_backup') {
             @set_time_limit(600);
             $path = SiteBackupService::export([
@@ -143,7 +152,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         }
 
         // Write config.php (for general / auth / updates / security)
-        if (!in_array($section, ['update_check', 'update_apply', 'export_site_backup'], true)) {
+        if (!in_array($section, ['update_check', 'update_apply', 'install_ca_bundle', 'export_site_backup'], true)) {
             $export = var_export($config, true);
             $php = "<?php\n/** ColdAisle configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
             if (file_put_contents($configPath, $php) === false) {
@@ -156,7 +165,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
     }
     $redirHash = '';
     $secPost = (string)($_POST['section'] ?? '');
-    if (str_starts_with($secPost, 'update')) {
+    if (str_starts_with($secPost, 'update') || $secPost === 'install_ca_bundle') {
         $redirHash = '#updates';
     } elseif ($secPost === 'security') {
         $redirHash = '#security';
@@ -173,6 +182,7 @@ $ldaps = $config['auth']['ldaps'] ?? [];
 $entra = $config['auth']['entra'] ?? [];
 $secCfg = App::securityConfig();
 $updCfg = UpdateService::config();
+$caStatus = UpdateService::caBundleStatus();
 $updStatus = null;
 try {
     // Non-forced: use cache when fresh
@@ -435,12 +445,30 @@ layout_header('Settings', $user, 'settings');
                        value="<?= (int)($updCfg['check_interval_hours'] ?? 24) ?>"></div>
             <div class="form-row full"><label>
                 <input type="checkbox" name="updates_ssl_verify" value="1" <?= ($updCfg['ssl_verify'] ?? true) ? 'checked' : '' ?>>
-                Verify TLS certificates (uncheck only if PHP has no CA bundle — lab/dev)
-            </label></div>
+                Verify TLS certificates when contacting GitHub (recommended)
+            </label>
+                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                    Requires a CA certificate list. Status:
+                    <?php if (!empty($caStatus['found'])): ?>
+                        <span class="badge ok">OK</span>
+                        <code><?= App::e((string)$caStatus['path']) ?></code>
+                    <?php else: ?>
+                        <span class="badge fail">Missing</span>
+                        — click <strong>Install CA certificates</strong> below (keeps verify enabled).
+                    <?php endif; ?>
+                </p>
+            </div>
             <div class="form-row"><button class="btn btn-primary" type="submit">Save update settings</button></div>
         </form>
 
-        <div class="flex gap-1" style="flex-wrap:wrap" id="update-actions">
+        <div class="flex gap-1" style="flex-wrap:wrap;margin:.75rem 0" id="update-actions">
+            <form method="post" style="display:inline">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="section" value="install_ca_bundle">
+                <button class="btn btn-secondary" type="submit" title="Download Mozilla CA list into config/cacert.pem">
+                    Install CA certificates
+                </button>
+            </form>
             <form method="post" style="display:inline">
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                 <input type="hidden" name="section" value="update_check">
