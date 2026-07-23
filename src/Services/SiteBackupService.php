@@ -448,12 +448,21 @@ class SiteBackupService
 
         $n = 0;
         $useIdentity = $identityCol !== null;
+        $pdo = Database::connection();
+        $qualified = '[dbo].[' . $table . ']';
 
+        // Only one table may have IDENTITY_INSERT ON at a time (session scope).
+        // Prefer PDO::exec — pdo_odbc often does not honor SET via prepare/execute.
         if ($useIdentity) {
             try {
-                Database::query("SET IDENTITY_INSERT [{$table}] ON");
+                $pdo->exec('SET IDENTITY_INSERT ' . $qualified . ' ON');
             } catch (Throwable $e) {
-                $useIdentity = false;
+                throw new RuntimeException(
+                    "Could not enable IDENTITY_INSERT for {$table}: " . $e->getMessage()
+                    . ' Restore needs this to preserve primary keys / foreign keys.',
+                    0,
+                    $e
+                );
             }
         }
 
@@ -467,12 +476,10 @@ class SiteBackupService
                     if (!array_key_exists($col, $row)) {
                         continue;
                     }
-                    // Skip identity if INSERT is off
                     if (!$useIdentity && $identityCol !== null && $col === $identityCol) {
                         continue;
                     }
                     $val = $row[$col];
-                    // Normalize booleans from JSON
                     if (is_bool($val)) {
                         $val = $val ? 1 : 0;
                     }
@@ -481,13 +488,26 @@ class SiteBackupService
                 if ($data === []) {
                     continue;
                 }
-                self::insertRow($table, $data);
+                try {
+                    if ($useIdentity) {
+                        // ODBC-safe path: SET + INSERT as one batch with literals
+                        self::insertRowIdentityBatch($table, $data);
+                    } else {
+                        self::insertRowPrepared($table, $data);
+                    }
+                } catch (Throwable $e) {
+                    throw new RuntimeException(
+                        "Insert into {$table} failed: " . $e->getMessage(),
+                        0,
+                        $e
+                    );
+                }
                 $n++;
             }
         } finally {
             if ($useIdentity) {
                 try {
-                    Database::query("SET IDENTITY_INSERT [{$table}] OFF");
+                    $pdo->exec('SET IDENTITY_INSERT ' . $qualified . ' OFF');
                 } catch (Throwable $e) {
                     // ignore
                 }
@@ -496,8 +516,44 @@ class SiteBackupService
         return $n;
     }
 
-    /** @param array<string,mixed> $data */
-    private static function insertRow(string $table, array $data): void
+    /**
+     * Insert including identity values. Uses a single T-SQL batch so ODBC applies
+     * IDENTITY_INSERT for the INSERT that follows (session SET can be flaky with prepare).
+     *
+     * @param array<string,mixed> $data
+     */
+    private static function insertRowIdentityBatch(string $table, array $data): void
+    {
+        $normalized = [];
+        foreach ($data as $k => $v) {
+            $normalized[$k] = Database::normalizeValue((string)$k, $v);
+        }
+        $cols = array_keys($normalized);
+        $colList = implode(', ', array_map(static fn ($c) => '[' . $c . ']', $cols));
+        $values = [];
+        foreach ($normalized as $v) {
+            $values[] = self::sqlLiteral($v);
+        }
+        $qualified = '[dbo].[' . $table . ']';
+        // Re-assert ON each row — still only one table ON at a time
+        $sql = 'SET IDENTITY_INSERT ' . $qualified . ' ON; '
+            . 'INSERT INTO ' . $qualified . ' (' . $colList . ') VALUES (' . implode(', ', $values) . ');';
+        $pdo = Database::connection();
+        try {
+            $pdo->exec($sql);
+        } catch (Throwable $e) {
+            // Some ODBC configs only run the first statement — try separate exec then insert
+            $pdo->exec('SET IDENTITY_INSERT ' . $qualified . ' ON');
+            $pdo->exec(
+                'INSERT INTO ' . $qualified . ' (' . $colList . ') VALUES (' . implode(', ', $values) . ')'
+            );
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     */
+    private static function insertRowPrepared(string $table, array $data): void
     {
         $normalized = [];
         foreach ($data as $k => $v) {
@@ -506,8 +562,34 @@ class SiteBackupService
         $cols = array_keys($normalized);
         $placeholders = implode(', ', array_fill(0, count($cols), '?'));
         $colList = implode(', ', array_map(static fn ($c) => '[' . $c . ']', $cols));
-        $sql = "INSERT INTO [{$table}] ({$colList}) VALUES ({$placeholders})";
+        $sql = 'INSERT INTO [dbo].[' . $table . '] (' . $colList . ') VALUES (' . $placeholders . ')';
         Database::query($sql, array_values($normalized));
+    }
+
+    /** @param mixed $value */
+    private static function sqlLiteral($value): string
+    {
+        if ($value === null) {
+            return 'NULL';
+        }
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+        if (is_int($value)) {
+            return (string)$value;
+        }
+        if (is_float($value)) {
+            return rtrim(rtrim(sprintf('%.10F', $value), '0'), '.') ?: '0';
+        }
+        // Numeric strings that are pure integers (identity keys, etc.)
+        if (is_string($value) && preg_match('/^-?\d+$/', $value)) {
+            return $value;
+        }
+        if (is_string($value) && is_numeric($value) && !preg_match('/[eE]/', $value)) {
+            // Keep decimals as numeric literals
+            return $value;
+        }
+        return Database::quoteString((string)$value);
     }
 
     private static function identityColumn(string $table): ?string
