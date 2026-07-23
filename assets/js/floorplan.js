@@ -1,5 +1,5 @@
 /**
- * WinDCIM - 2D floor planner
+ * ColdAisle - 2D floor planner
  * - Metric / imperial display
  * - Configurable grid (default 1 ft) + snap-to-grid
  * - Cabinet front/rear + compass facing
@@ -15,10 +15,10 @@
   const ORIGIN = 28; // room origin padding (px)
   const M_PER_FT = 0.3048;
   const MM_PER_IN = 25.4;
-  const DRAG_MIME = 'application/x-windcim-cabinet';
-  const DRAG_TEXT_PREFIX = 'WINDCIM_CAB:';
-  const DRAG_MIME_PDU = 'application/x-windcim-pdu';
-  const DRAG_TEXT_PREFIX_PDU = 'WINDCIM_PDU:';
+  const DRAG_MIME = 'application/x-coldaisle-cabinet';
+  const DRAG_TEXT_PREFIX = 'COLDAISLE_CAB:';
+  const DRAG_MIME_PDU = 'application/x-coldaisle-pdu';
+  const DRAG_TEXT_PREFIX_PDU = 'COLDAISLE_PDU:';
 
   /** Thin footprint presets for row/room power (not cabinet SKUs). */
   const PDU_FOOTPRINT_PRESETS = [
@@ -52,7 +52,7 @@
     let drag = null;
     let show3d = false;
     let view3dInstance = null;
-    let units = (window.WINDCIM && window.WINDCIM.lengthUnits) || 'metric';
+    let units = (window.ColdAisle && window.ColdAisle.lengthUnits) || 'metric';
     let pendingTemplate = null; // cabinet template
     let pendingPdu = null; // { kind: 'preset'|'existing', ... }
     let zoom = 1;
@@ -813,7 +813,7 @@
     function nudgeSelected(dirX, dirY) {
       const step = nudgeStepMeters();
       if (!(step > 0)) {
-        WinDCIM.toast('Set a nudge distance greater than zero', 'error');
+        ColdAisle.toast('Set a nudge distance greater than zero', 'error');
         return;
       }
       const dx = (dirX || 0) * step;
@@ -824,11 +824,11 @@
       if (selectedPduId) {
         const p = floorPdus.find(function (x) { return Number(x.pdu_id) === Number(selectedPduId); });
         if (!p) {
-          WinDCIM.toast('Select a PDU or cabinet first', 'error');
+          ColdAisle.toast('Select a PDU or cabinet first', 'error');
           return;
         }
         if (isPduPositionLocked(p)) {
-          WinDCIM.toast('PDU is locked — Unlock position first', 'error');
+          ColdAisle.toast('PDU is locked — Unlock position first', 'error');
           return;
         }
         const cl = clampCabinetPosition(
@@ -843,18 +843,18 @@
         if (xEl) xEl.value = fmtLen(p.pos_x);
         if (yEl) yEl.value = fmtLen(p.pos_y);
         draw();
-        WinDCIM.toast('Nudged PDU by ' + unitLabel + ' — Save to keep', 'info');
+        ColdAisle.toast('Nudged PDU by ' + unitLabel + ' — Save to keep', 'info');
         return;
       }
 
       const sel = getSelectedCabinets();
       if (!sel.length) {
-        WinDCIM.toast('Select a cabinet or floor PDU first', 'error');
+        ColdAisle.toast('Select a cabinet or floor PDU first', 'error');
         return;
       }
       const unlocked = sel.filter(function (c) { return !isPositionLocked(c); });
       if (!unlocked.length) {
-        WinDCIM.toast('Selected cabinet(s) are locked — Unlock position first', 'error');
+        ColdAisle.toast('Selected cabinet(s) are locked — Unlock position first', 'error');
         return;
       }
       unlocked.forEach(function (c) {
@@ -872,7 +872,7 @@
       if (sel.length > 1) {
         renderMultiProps(sel);
       }
-      WinDCIM.toast(
+      ColdAisle.toast(
         'Nudged ' + unlocked.length + ' cabinet(s) by ' + unitLabel +
           (sel.length > unlocked.length ? ' (' + (sel.length - unlocked.length) + ' locked skipped)' : '') +
           ' — click Save & lock positions to keep',
@@ -882,8 +882,8 @@
 
     function loadNudgePrefs() {
       try {
-        const a = localStorage.getItem('windcim_nudge_amount');
-        const u = localStorage.getItem('windcim_nudge_unit');
+        const a = localStorage.getItem('coldaisle_nudge_amount') || localStorage.getItem('windcim_nudge_amount');
+        const u = localStorage.getItem('coldaisle_nudge_unit') || localStorage.getItem('windcim_nudge_unit');
         if (a != null && a !== '' && !isNaN(Number(a))) nudgeAmount = Number(a);
         if (u && ['in', 'ft', 'mm', 'cm', 'm'].indexOf(u) >= 0) nudgeUnit = u;
       } catch (e) { /* ignore */ }
@@ -895,8 +895,8 @@
 
     function saveNudgePrefs() {
       try {
-        localStorage.setItem('windcim_nudge_amount', String(nudgeAmount));
-        localStorage.setItem('windcim_nudge_unit', String(nudgeUnit));
+        localStorage.setItem('coldaisle_nudge_amount', String(nudgeAmount));
+        localStorage.setItem('coldaisle_nudge_unit', String(nudgeUnit));
       } catch (e) { /* ignore */ }
     }
 
@@ -917,7 +917,7 @@
     function requireUnlocked(c, actionLabel) {
       if (!c) return false;
       if (!isPositionLocked(c)) return true;
-      WinDCIM.toast(
+      ColdAisle.toast(
         'Position is locked. Click “Unlock position” before ' + (actionLabel || 'moving') + '.',
         'error'
       );
@@ -968,9 +968,9 @@
       setPositionLocked(c, nowLocked);
       if (nowLocked) {
         drag = null;
-        WinDCIM.toast('Position locked', 'info');
+        ColdAisle.toast('Position locked', 'info');
       } else {
-        WinDCIM.toast('Position unlocked — drag or use snap tools, then Save', 'success');
+        ColdAisle.toast('Position unlocked — drag or use snap tools, then Save', 'success');
       }
       renderProps();
       updateCanvasCursor();
@@ -1022,7 +1022,7 @@
         pendingPdu = null;
         pendingTemplate = templateFromPaletteItem(item);
         draw();
-        WinDCIM.toast('Click on the floor plan to place: ' + (payloadName(pendingTemplate) || 'cabinet'), 'info');
+        ColdAisle.toast('Click on the floor plan to place: ' + (payloadName(pendingTemplate) || 'cabinet'), 'info');
       });
     }
 
@@ -1031,7 +1031,7 @@
     }
 
     function renderVendorPalette() {
-      const cat = window.WinDCIMRackCatalog;
+      const cat = window.ColdAisleRackCatalog;
       const vendorSelect = root.querySelector('#vendorSelect');
       const list = root.querySelector('#paletteList');
       if (!list) return;
@@ -1177,7 +1177,7 @@
       }
 
       const facing = (c.front_facing || rotationToFacing(c.rotation_deg) || 'north').toLowerCase();
-      const rackUrl = (window.WinDCIM && window.WinDCIM.baseUrl ? window.WinDCIM.baseUrl.replace(/\/$/, '') : '') +
+      const rackUrl = (window.ColdAisle && window.ColdAisle.baseUrl ? window.ColdAisle.baseUrl.replace(/\/$/, '') : '') +
         '/pages/cabinets.php?id=' + encodeURIComponent(c.cabinet_id);
       const isAnchor = Number(anchorId) === Number(c.cabinet_id);
       const locked = isPositionLocked(c);
@@ -1316,7 +1316,7 @@
       const locked = isPduPositionLocked(p);
       const posRo = locked ? ' readonly' : '';
       const posStyle = locked ? ' style="opacity:.75;background:var(--surface-2)"' : '';
-      const base = (window.WinDCIM && window.WinDCIM.baseUrl ? window.WinDCIM.baseUrl.replace(/\/$/, '') : '');
+      const base = (window.ColdAisle && window.ColdAisle.baseUrl ? window.ColdAisle.baseUrl.replace(/\/$/, '') : '');
       const pduUrl = base + '/pages/power_pdus.php?id=' + encodeURIComponent(p.pdu_id);
 
       propsEl.innerHTML =
@@ -1370,7 +1370,7 @@
       propsEl.querySelector('#fp_lock').onclick = function () {
         const nowLocked = !isPduPositionLocked(p);
         setPduPositionLocked(p, nowLocked);
-        WinDCIM.toast(nowLocked ? 'PDU position locked' : 'PDU unlocked — move then Save', nowLocked ? 'info' : 'success');
+        ColdAisle.toast(nowLocked ? 'PDU position locked' : 'PDU unlocked — move then Save', nowLocked ? 'info' : 'success');
         renderProps();
         draw();
         updateCanvasCursor();
@@ -1489,7 +1489,7 @@
       }
       if (payload.height_mm != null) p.height_mm = payload.height_mm;
       try {
-        const res = await WinDCIM.api('api/floorplan.php?action=update_floor_pdu', {
+        const res = await ColdAisle.api('api/floorplan.php?action=update_floor_pdu', {
           method: 'POST',
           body: payload,
         });
@@ -1527,24 +1527,24 @@
           propsEl.querySelector('#fp_y').dataset.userEdited = '0';
         }
         if (!silent) {
-          WinDCIM.toast(
+          ColdAisle.toast(
             locked ? 'PDU saved (position unchanged, locked)' : 'PDU saved (position locked)',
             'success'
           );
         } else {
-          WinDCIM.toast('Snapped to grid and saved', 'success');
+          ColdAisle.toast('Snapped to grid and saved', 'success');
         }
         renderProps();
         draw();
         refresh3d();
       } catch (e) {
-        WinDCIM.toast(e.message || 'Save failed', 'error');
+        ColdAisle.toast(e.message || 'Save failed', 'error');
       }
     }
 
     async function rotateFloorPdu(p, delta) {
       if (!p || isPduPositionLocked(p)) {
-        WinDCIM.toast('Unlock PDU position first', 'error');
+        ColdAisle.toast('Unlock PDU position first', 'error');
         return;
       }
       let deg = (pduRotation(p) + delta) % 360;
@@ -1558,7 +1558,7 @@
       }
       draw();
       try {
-        await WinDCIM.api('api/floorplan.php?action=update_floor_pdu', {
+        await ColdAisle.api('api/floorplan.php?action=update_floor_pdu', {
           method: 'POST',
           body: {
             pdu_id: Number(p.pdu_id),
@@ -1570,17 +1570,17 @@
             depth_mm: p.depth_mm,
           },
         });
-        WinDCIM.toast('Facing → ' + String(p.front_facing).toUpperCase(), 'success');
+        ColdAisle.toast('Facing → ' + String(p.front_facing).toUpperCase(), 'success');
         renderProps();
       } catch (e) {
-        WinDCIM.toast(e.message || 'Rotate failed', 'error');
+        ColdAisle.toast(e.message || 'Rotate failed', 'error');
       }
     }
 
     async function unplaceFloorPdu(p) {
       if (!p || !confirm('Remove this PDU from the floor plan? The PDU record is kept (breakers, zone, etc.).')) return;
       try {
-        await WinDCIM.api('api/floorplan.php?action=unplace_pdu', {
+        await ColdAisle.api('api/floorplan.php?action=unplace_pdu', {
           method: 'POST',
           body: { pdu_id: Number(p.pdu_id) },
         });
@@ -1599,9 +1599,9 @@
         renderUnplacedPduPalette();
         renderProps();
         draw();
-        WinDCIM.toast('PDU removed from plan (still in Power → PDUs)', 'success');
+        ColdAisle.toast('PDU removed from plan (still in Power → PDUs)', 'success');
       } catch (e) {
-        WinDCIM.toast(e.message || 'Unplace failed', 'error');
+        ColdAisle.toast(e.message || 'Unplace failed', 'error');
       }
     }
 
@@ -1653,14 +1653,14 @@
       };
       propsEl.querySelector('#m_unlock').onclick = function () {
         list.forEach(function (c) { setPositionLocked(c, false); });
-        WinDCIM.toast('Unlocked ' + list.length + ' cabinet(s)', 'success');
+        ColdAisle.toast('Unlocked ' + list.length + ' cabinet(s)', 'success');
         renderProps();
         draw();
         updateCanvasCursor();
       };
       propsEl.querySelector('#m_lock').onclick = function () {
         list.forEach(function (c) { setPositionLocked(c, true); });
-        WinDCIM.toast(
+        ColdAisle.toast(
           'UI-locked ' + list.length + ' cabinet(s). Positions are NOT saved until you use Save & lock.',
           'warning'
         );
@@ -1680,7 +1680,7 @@
     async function saveSelectedCabinetPositions(list) {
       const targets = (list || getSelectedCabinets()).slice();
       if (!targets.length) {
-        WinDCIM.toast('No cabinets selected', 'error');
+        ColdAisle.toast('No cabinets selected', 'error');
         return;
       }
       // Prefer unlocked ones; if all locked, still allow saving current in-memory positions
@@ -1698,7 +1698,7 @@
         const facing = (c.front_facing || rotationToFacing(c.rotation_deg) || 'north').toLowerCase();
         const rot = cabRotation(c);
         try {
-          const res = await WinDCIM.api('api/cabinets.php', {
+          const res = await ColdAisle.api('api/cabinets.php', {
             method: 'PUT',
             forcePostOverride: true,
             body: {
@@ -1731,11 +1731,11 @@
       updateCanvasCursor();
       refresh3d();
       if (fail && !ok) {
-        WinDCIM.toast('Failed to save positions (' + fail + ' error(s))', 'error');
+        ColdAisle.toast('Failed to save positions (' + fail + ' error(s))', 'error');
       } else if (fail) {
-        WinDCIM.toast('Saved ' + ok + ' cabinet(s); ' + fail + ' failed', 'warning');
+        ColdAisle.toast('Saved ' + ok + ' cabinet(s); ' + fail + ' failed', 'warning');
       } else {
-        WinDCIM.toast('Saved & locked ' + ok + ' cabinet position(s)', 'success');
+        ColdAisle.toast('Saved & locked ' + ok + ' cabinet position(s)', 'success');
       }
     }
 
@@ -1765,7 +1765,7 @@
       syncPosFieldsFromCabinet(c);
       draw();
       try {
-        await WinDCIM.api('api/cabinets.php', {
+        await ColdAisle.api('api/cabinets.php', {
           method: 'PUT',
           forcePostOverride: true,
           body: {
@@ -1776,9 +1776,9 @@
             pos_y: c.pos_y,
           },
         });
-        WinDCIM.toast('Facing → ' + c.front_facing.toUpperCase(), 'success');
+        ColdAisle.toast('Facing → ' + c.front_facing.toUpperCase(), 'success');
       } catch (e) {
-        WinDCIM.toast(e.message || 'Rotate failed', 'error');
+        ColdAisle.toast(e.message || 'Rotate failed', 'error');
       }
     }
 
@@ -1885,7 +1885,7 @@
 
       const hit = findAdjacentCabinet(c, dir);
       if (!hit) {
-        WinDCIM.toast('No rack found to the ' + dir + ' (with overlapping row/column)', 'error');
+        ColdAisle.toast('No rack found to the ' + dir + ' (with overlapping row/column)', 'error');
         return;
       }
 
@@ -1923,7 +1923,7 @@
       syncPosFieldsFromCabinet(c);
       draw();
       try {
-        await WinDCIM.api('api/cabinets.php', {
+        await ColdAisle.api('api/cabinets.php', {
           method: 'PUT',
           forcePostOverride: true,
           body: {
@@ -1932,10 +1932,10 @@
             pos_y: c.pos_y,
           },
         });
-        if (successMsg) WinDCIM.toast(successMsg, 'success');
+        if (successMsg) ColdAisle.toast(successMsg, 'success');
         refresh3d();
       } catch (e) {
-        WinDCIM.toast(e.message || 'Failed to save position', 'error');
+        ColdAisle.toast(e.message || 'Failed to save position', 'error');
       }
     }
 
@@ -1986,7 +1986,7 @@
       if (!requireUnlocked(c, 'aligning front')) return;
       const neighbors = getTouchingCabinets(c, true);
       if (!neighbors.length) {
-        WinDCIM.toast('No touching rack with the same front facing', 'error');
+        ColdAisle.toast('No touching rack with the same front facing', 'error');
         return;
       }
       // Prefer neighbor with largest contact length (side-by-side in a row)
@@ -2006,7 +2006,7 @@
       const target = frontGeometry(best);
       const pos = alignFrontToTarget(c, target);
       if (!pos) {
-        WinDCIM.toast('Could not align fronts (facing mismatch)', 'error');
+        ColdAisle.toast('Could not align fronts (facing mismatch)', 'error');
         return;
       }
       c.pos_x = pos.x;
@@ -2019,10 +2019,10 @@
       if (!c) return;
       if (Number(anchorId) === Number(c.cabinet_id)) {
         anchorId = null;
-        WinDCIM.toast('Anchor cleared', 'info');
+        ColdAisle.toast('Anchor cleared', 'info');
       } else {
         anchorId = Number(c.cabinet_id);
-        WinDCIM.toast('Anchor set: ' + (c.name || ('#' + c.cabinet_id)) + ' — use Align Cluster Fronts', 'success');
+        ColdAisle.toast('Anchor set: ' + (c.name || ('#' + c.cabinet_id)) + ' — use Align Cluster Fronts', 'success');
       }
       renderProps();
       draw();
@@ -2038,14 +2038,14 @@
         // Fall back to selected as anchor
         anchor = cabinets.find(function (x) { return Number(x.cabinet_id) === Number(selectedId); });
         if (!anchor) {
-          WinDCIM.toast('Select a rack and Set Anchor first', 'error');
+          ColdAisle.toast('Select a rack and Set Anchor first', 'error');
           return;
         }
         anchorId = Number(anchor.cabinet_id);
       }
       const cluster = touchingCluster(anchor);
       if (cluster.length < 2) {
-        WinDCIM.toast('No touching racks with the same front facing around the anchor', 'error');
+        ColdAisle.toast('No touching racks with the same front facing around the anchor', 'error');
         return;
       }
       // Only move unlocked cabinets in the cluster (anchor may stay locked as reference)
@@ -2070,7 +2070,7 @@
         }
       });
       if (!moved && skippedLocked) {
-        WinDCIM.toast(
+        ColdAisle.toast(
           'Cluster neighbors are locked. Unlock each rack (or Unlock + Align Front) before cluster align.',
           'error'
         );
@@ -2080,7 +2080,7 @@
       for (let i = 0; i < updates.length; i++) {
         const cab = updates[i];
         try {
-          await WinDCIM.api('api/cabinets.php', {
+          await ColdAisle.api('api/cabinets.php', {
             method: 'PUT',
             forcePostOverride: true,
             body: {
@@ -2090,7 +2090,7 @@
             },
           });
         } catch (e) {
-          WinDCIM.toast(e.message || 'Failed saving ' + cab.name, 'error');
+          ColdAisle.toast(e.message || 'Failed saving ' + cab.name, 'error');
         }
       }
       const sel = cabinets.find(function (x) { return Number(x.cabinet_id) === Number(selectedId); });
@@ -2101,7 +2101,7 @@
       if (skippedLocked && moved) {
         msg += ' (' + skippedLocked + ' locked skipped)';
       }
-      WinDCIM.toast(msg, moved ? 'success' : 'info');
+      ColdAisle.toast(msg, moved ? 'success' : 'info');
       refresh3d();
     }
 
@@ -2110,7 +2110,7 @@
       const name = window.prompt('New row name', 'Row ' + String.fromCharCode(65 + Math.min(roomRows.length, 25)));
       if (name === null) return;
       try {
-        const res = await WinDCIM.api('api/rows.php', {
+        const res = await ColdAisle.api('api/rows.php', {
           method: 'POST',
           body: { room_id: roomId(), name: name.trim() || undefined },
         });
@@ -2128,11 +2128,11 @@
               }
             }
           }
-          WinDCIM.toast('Row created: ' + res.row.name, 'success');
+          ColdAisle.toast('Row created: ' + res.row.name, 'success');
           draw();
         }
       } catch (e) {
-        WinDCIM.toast(e.message || 'Failed to create row', 'error');
+        ColdAisle.toast(e.message || 'Failed to create row', 'error');
       }
     }
 
@@ -2144,11 +2144,11 @@
       const edge = propsEl.querySelector('#r_north').value;
       const gft = parseFloat(propsEl.querySelector('#r_grid_ft').value) || 1;
       if (!(width_m > 0) || !(depth_m > 0)) {
-        WinDCIM.toast('Width and depth must be greater than zero', 'error');
+        ColdAisle.toast('Width and depth must be greater than zero', 'error');
         return;
       }
       try {
-        const res = await WinDCIM.api('api/floorplan.php?action=update_room', {
+        const res = await ColdAisle.api('api/floorplan.php?action=update_room', {
           method: 'POST',
           body: {
             room_id: roomId(),
@@ -2180,15 +2180,15 @@
         resizeCanvas();
         refresh3d();
         renderProps();
-        WinDCIM.toast('Room & layout saved', 'success');
+        ColdAisle.toast('Room & layout saved', 'success');
       } catch (e) {
-        WinDCIM.toast(e.message || 'Failed to save room', 'error');
+        ColdAisle.toast(e.message || 'Failed to save room', 'error');
       }
     }
 
     async function persistPlannerPrefs() {
       try {
-        await WinDCIM.api('api/floorplan.php?action=set_planner_prefs', {
+        await ColdAisle.api('api/floorplan.php?action=set_planner_prefs', {
           method: 'POST',
           body: {
             show_grid: showGrid,
@@ -2253,7 +2253,7 @@
       // When locked: omit pos_x, pos_y, rotation_deg from payload entirely
 
       try {
-        const res = await WinDCIM.api('api/cabinets.php', {
+        const res = await ColdAisle.api('api/cabinets.php', {
           method: 'PUT',
           forcePostOverride: true,
           body: payload,
@@ -2284,19 +2284,19 @@
         updateCanvasCursor();
         draw();
         refresh3d();
-        WinDCIM.toast(
+        ColdAisle.toast(
           locked ? 'Cabinet saved (position unchanged, locked)' : 'Cabinet saved (position locked)',
           'success'
         );
       } catch (e) {
-        WinDCIM.toast(e.message || 'Save failed', 'error');
+        ColdAisle.toast(e.message || 'Save failed', 'error');
       }
     }
 
     async function deleteSelected() {
       if (!selectedId || !confirm('Delete this cabinet?')) return;
       try {
-        await WinDCIM.api('api/cabinets.php?id=' + encodeURIComponent(selectedId), {
+        await ColdAisle.api('api/cabinets.php?id=' + encodeURIComponent(selectedId), {
           method: 'DELETE',
           forcePostOverride: true,
         });
@@ -2305,9 +2305,9 @@
         renderProps();
         draw();
         refresh3d();
-        WinDCIM.toast('Cabinet deleted', 'success');
+        ColdAisle.toast('Cabinet deleted', 'success');
       } catch (e) {
-        WinDCIM.toast(e.message || 'Delete failed', 'error');
+        ColdAisle.toast(e.message || 'Delete failed', 'error');
       }
     }
 
@@ -2323,7 +2323,7 @@
         return;
       }
       try {
-        const data = await WinDCIM.api('api/floorplan.php?room_id=' + encodeURIComponent(id));
+        const data = await ColdAisle.api('api/floorplan.php?room_id=' + encodeURIComponent(id));
         room = data.room;
         cabinets = data.cabinets || [];
         floorPdus = data.placed_pdus || [];
@@ -2338,7 +2338,7 @@
         northEdge = String((room && room.north_edge) || 'top').toLowerCase();
         if (data.units === 'imperial' || data.units === 'metric') {
           units = data.units;
-          if (window.WINDCIM) window.WINDCIM.lengthUnits = units;
+          if (window.ColdAisle) window.ColdAisle.lengthUnits = units;
         }
         if (data.planner) {
           showGrid = data.planner.show_grid !== false;
@@ -2376,7 +2376,7 @@
         resizeCanvas();
         refresh3d();
       } catch (e) {
-        WinDCIM.toast(e.message || 'Failed to load room', 'error');
+        ColdAisle.toast(e.message || 'Failed to load room', 'error');
       }
     }
 
@@ -2482,13 +2482,13 @@
         pendingTemplate = null;
         pendingPdu = pduPayloadFromItem(item);
         draw();
-        WinDCIM.toast('Click on the floor plan to place: ' + (pendingPdu.name || 'PDU'), 'info');
+        ColdAisle.toast('Click on the floor plan to place: ' + (pendingPdu.name || 'PDU'), 'info');
       });
     }
 
     async function placePduAt(posX, posY, payload) {
       if (!room || !roomId()) {
-        WinDCIM.toast('Select a room first', 'error');
+        ColdAisle.toast('Select a room first', 'error');
         return;
       }
       const defs = payload || {};
@@ -2504,7 +2504,7 @@
       try {
         let res;
         if (defs.kind === 'existing' && defs.pdu_id) {
-          res = await WinDCIM.api('api/floorplan.php?action=place_pdu', {
+          res = await ColdAisle.api('api/floorplan.php?action=place_pdu', {
             method: 'POST',
             body: {
               pdu_id: Number(defs.pdu_id),
@@ -2524,7 +2524,7 @@
           unplacedPdus = unplacedPdus.filter(function (x) { return Number(x.pdu_id) !== Number(defs.pdu_id); });
           renderUnplacedPduPalette();
         } else {
-          res = await WinDCIM.api('api/floorplan.php?action=create_floor_pdu', {
+          res = await ColdAisle.api('api/floorplan.php?action=create_floor_pdu', {
             method: 'POST',
             body: {
               room_id: roomId(),
@@ -2559,18 +2559,18 @@
         selectPdu(p);
         draw();
         refresh3d();
-        WinDCIM.toast(
+        ColdAisle.toast(
           (defs.kind === 'existing' ? 'PDU placed' : 'Row PDU created') + ' (unlocked — adjust then Save)',
           'success'
         );
       } catch (e) {
-        WinDCIM.toast(e.message || 'Failed to place PDU', 'error');
+        ColdAisle.toast(e.message || 'Failed to place PDU', 'error');
       }
     }
 
     async function createCabinetAt(posX, posY, defaults) {
       if (!room || !roomId()) {
-        WinDCIM.toast('Select a room first', 'error');
+        ColdAisle.toast('Select a room first', 'error');
         return;
       }
       const defs = defaults || {};
@@ -2608,7 +2608,7 @@
       // vendor_name / sku_summary / model_key accepted by API
 
       try {
-        const res = await WinDCIM.api('api/cabinets.php', { method: 'POST', body: payload });
+        const res = await ColdAisle.api('api/cabinets.php', { method: 'POST', body: payload });
         if (!res || !res.cabinet) {
           throw new Error('Server did not return the new cabinet');
         }
@@ -2618,13 +2618,13 @@
         selectCabinet(res.cabinet);
         draw();
         refresh3d();
-        WinDCIM.toast(
+        ColdAisle.toast(
           'Cabinet placed (unlocked — adjust then Save to lock). Front → ' +
             (res.cabinet.front_facing || facing).toUpperCase(),
           'success'
         );
       } catch (e) {
-        WinDCIM.toast(e.message || 'Failed to place cabinet', 'error');
+        ColdAisle.toast(e.message || 'Failed to place cabinet', 'error');
       }
     }
 
@@ -2669,9 +2669,9 @@
     }
 
     function refresh3d() {
-      if (!show3d || !view3d || !window.WinDCIM3D) return;
+      if (!show3d || !view3d || !window.ColdAisle3D) return;
       if (view3dInstance && view3dInstance.dispose) view3dInstance.dispose();
-      view3dInstance = WinDCIM3D.mount(view3d, {
+      view3dInstance = ColdAisle3D.mount(view3d, {
         cabinets: cabinets,
         pdus: floorPdus,
         rooms: room ? [room] : [],
@@ -2897,7 +2897,7 @@
         }
         draw();
         updateCanvasCursor();
-        WinDCIM.toast('PDU position updated — click Save to keep & lock', 'info');
+        ColdAisle.toast('PDU position updated — click Save to keep & lock', 'info');
         return;
       }
       const c = cabinets.find(function (x) { return Number(x.cabinet_id) === Number(dragId); });
@@ -2912,9 +2912,9 @@
       const multi = getSelectedCabinets();
       if (multi.length > 1) {
         renderMultiProps(multi);
-        WinDCIM.toast('Moved ' + multi.length + ' cabinet(s) — click Save & lock positions to keep', 'info');
+        ColdAisle.toast('Moved ' + multi.length + ' cabinet(s) — click Save & lock positions to keep', 'info');
       } else {
-        WinDCIM.toast('Position updated (unlocked) — click Save to keep & lock', 'info');
+        ColdAisle.toast('Position updated (unlocked) — click Save to keep & lock', 'info');
       }
     }
 
@@ -2998,7 +2998,7 @@
       e.preventDefault();
       e.stopPropagation();
       if (!handlePlannerDrop(e)) {
-        WinDCIM.toast('Drop failed — click a template, then click the floor instead', 'error');
+        ColdAisle.toast('Drop failed — click a template, then click the floor instead', 'error');
       }
     });
 
@@ -3012,7 +3012,7 @@
         if (e.target === canvas) return;
         e.preventDefault();
         if (!handlePlannerDrop(e)) {
-          WinDCIM.toast('Drop failed — click a template, then click the floor instead', 'error');
+          ColdAisle.toast('Drop failed — click a template, then click the floor instead', 'error');
         }
       });
       // Zoom when wheel over wrap (not only canvas)
@@ -3049,12 +3049,12 @@
     if (unitsBtn) {
       unitsBtn.addEventListener('click', async function () {
         units = isImperial() ? 'metric' : 'imperial';
-        if (window.WINDCIM) window.WINDCIM.lengthUnits = units;
+        if (window.ColdAisle) window.ColdAisle.lengthUnits = units;
         updateToolbarButtons();
         renderProps();
         draw();
         try {
-          await WinDCIM.api('api/floorplan.php?action=set_units', {
+          await ColdAisle.api('api/floorplan.php?action=set_units', {
             method: 'POST',
             body: { units: units },
           });

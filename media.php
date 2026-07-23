@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - Authenticated media server for storage/uploads
+ * ColdAisle - Authenticated media server for storage/uploads
  * Usage: media.php?f=templates/12/front.jpg
  */
 declare(strict_types=1);

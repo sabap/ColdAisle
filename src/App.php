@@ -41,7 +41,7 @@ class App
         }
 
         if (session_status() === PHP_SESSION_NONE) {
-            session_name('WINDCIMSESSID');
+            session_name('COLDAISLESESSID');
             session_start([
                 'cookie_httponly' => true,
                 'cookie_samesite' => 'Lax',
@@ -97,7 +97,7 @@ class App
     }
 
     /**
-     * URL path to the application root (no trailing slash), e.g. '' or '/WinDCIM'.
+     * URL path to the application root (no trailing slash), e.g. '' or '/ColdAisle'.
      * Must NOT include /pages, /api, etc. — those are inside the app.
      */
     public static function basePath(): string

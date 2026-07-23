@@ -182,8 +182,8 @@ class SnmpOidTemplates
                 ],
             ],
             [
-                'id' => 'windcim_lab_agent',
-                'vendor' => 'WinDCIM',
+                'id' => 'coldaisle_lab_agent',
+                'vendor' => 'ColdAisle',
                 'label' => 'PowerShell lab agent',
                 'notes' => 'Enterprise test OIDs under 1.3.6.1.4.1.99999',
                 'oid_map' => [

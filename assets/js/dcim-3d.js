@@ -1,5 +1,5 @@
 /**
- * WinDCIM — Three.js rectangular rack / floor visualization
+ * ColdAisle — Three.js rectangular rack / floor visualization
  * Textures front/rear faces with device template images stacked by U position.
  */
 (function (global) {
@@ -8,7 +8,9 @@
   function mmToM(mm) { return (Number(mm) || 0) / 1000; }
 
   function mediaBase() {
-    var b = (global.WINDCIM && global.WINDCIM.baseUrl) || (global.WinDCIM && global.WinDCIM.baseUrl) || '';
+    var b = (global.ColdAisle && global.ColdAisle.baseUrl)
+      || (global.WINDCIM && global.WINDCIM.baseUrl)
+      || '';
     return String(b).replace(/\/$/, '');
   }
 
@@ -473,5 +475,7 @@
     };
   }
 
-  global.WinDCIM3D = { mount: mount };
+  global.ColdAisle3D = { mount: mount };
+  // Legacy alias (WinDCIM)
+  global.WinDCIM3D = global.ColdAisle3D;
 })(typeof window !== 'undefined' ? window : this);

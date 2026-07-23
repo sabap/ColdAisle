@@ -248,11 +248,11 @@ layout_header('Dashboard', $user, 'dashboard');
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const el = document.getElementById('dashboard-3d');
-    if (el && window.WinDCIM3D) {
+    if (el && window.ColdAisle3D) {
         const cabinets = JSON.parse(el.dataset.cabinets || '[]');
         const pdus = JSON.parse(el.dataset.pdus || '[]');
         const rooms = JSON.parse(el.dataset.rooms || '[]');
-        WinDCIM3D.mount(el, { cabinets: cabinets, pdus: pdus, rooms: rooms, interactive: true });
+        ColdAisle3D.mount(el, { cabinets: cabinets, pdus: pdus, rooms: rooms, interactive: true });
     }
 });
 </script>

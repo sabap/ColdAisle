@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM — Cabinet rows API (room-scoped rows; optional zone link)
+ * ColdAisle — Cabinet rows API (room-scoped rows; optional zone link)
  */
 declare(strict_types=1);
 

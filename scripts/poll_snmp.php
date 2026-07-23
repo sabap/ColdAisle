@@ -1,9 +1,9 @@
 <?php
 /**
- * WinDCIM SNMP poll worker — run via Windows Task Scheduler
+ * ColdAisle SNMP poll worker — run via Windows Task Scheduler
  *
  * Example (every 5 minutes):
- *   php C:\inetpub\wwwroot\WinDCIM\scripts\poll_snmp.php
+ *   php C:\inetpub\wwwroot\ColdAisle\scripts\poll_snmp.php
  */
 declare(strict_types=1);
 
@@ -16,7 +16,7 @@ require_once dirname(__DIR__) . '/src/App.php';
 App::boot();
 
 if (!App::isInstalled()) {
-    fwrite(STDERR, "WinDCIM is not installed.\n");
+    fwrite(STDERR, "ColdAisle is not installed.\n");
     exit(1);
 }
 

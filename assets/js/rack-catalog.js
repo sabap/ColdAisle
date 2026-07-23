@@ -1,5 +1,5 @@
 /**
- * WinDCIM — Vendor rack / cabinet catalog for floor planning.
+ * ColdAisle — Vendor rack / cabinet catalog for floor planning.
  *
  * External footprint dimensions (width × depth) used for placement on the plan.
  * Heights are rack units (U). Same vendor + U + width + depth + color are grouped.
@@ -185,11 +185,12 @@
     return models.find(function (m) { return m.id === id; }) || null;
   }
 
-  global.WinDCIMRackCatalog = {
+  global.ColdAisleRackCatalog = {
     vendors: vendors,
     models: models,
     getVendors: getVendors,
     getModels: getModels,
     getModelById: getModelById,
   };
+  global.WinDCIMRackCatalog = global.ColdAisleRackCatalog; // legacy
 })(typeof window !== 'undefined' ? window : globalThis);

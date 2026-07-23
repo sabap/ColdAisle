@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - Key/value settings
+ * ColdAisle - Key/value settings
  */
 declare(strict_types=1);
 

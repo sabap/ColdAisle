@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - PDU + outlets API
+ * ColdAisle - PDU + outlets API
  */
 declare(strict_types=1);
 

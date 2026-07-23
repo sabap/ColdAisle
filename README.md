@@ -3,9 +3,9 @@
 **Data Center Infrastructure Management** — primary platform **IIS + PHP + Microsoft SQL Server** on Windows  
 (with a clean path toward other stacks later).
 
-Formerly developed as *WinDCIM*. Built as a modern replacement path for environments that outgrew or cannot maintain Linux-based [openDCIM](https://github.com/opendcim/openDCIM), with first-class support for local accounts, **LDAPS**, and **Microsoft Entra ID (Azure AD) SSO**.
+Formerly known as **WinDCIM**. Built as a modern replacement path for environments that outgrew or cannot maintain Linux-based [openDCIM](https://github.com/opendcim/openDCIM), with first-class support for local accounts, **LDAPS**, and **Microsoft Entra ID (Azure AD) SSO**.
 
-**Current version:** see [`VERSION`](VERSION) (`0.1.0` baseline).
+**Current version:** see [`VERSION`](VERSION).
 
 ## Updates (GitHub)
 
@@ -53,10 +53,10 @@ Dashboard shows a banner when an update is available (if auto-check is enabled).
 
 1. On the IIS/SQL server, open elevated PowerShell in this repo’s `scripts\` folder and run:
    ```powershell
-   .\Install-WinDCIM-Prereqs.ps1
+   .\Install-ColdAisle-Prereqs.ps1
    ```
-   Defaults: deploys to `C:\inetpub\wwwroot\WinDCIM`, points **Default Web Site** there, installs PHP/IIS/ODBC, and grants app-pool write on `config\` / `storage\`.
-2. (Manual alternative) Copy this folder to `C:\inetpub\wwwroot\WinDCIM`, install PHP FastCGI yourself, grant **IIS AppPool identity** Modify on `config\` and `storage\`.
+   Defaults: deploys to `C:\inetpub\wwwroot\ColdAisle`, points **Default Web Site** there, installs PHP/IIS/ODBC, and grants app-pool write on `config\` / `storage\`.
+2. (Manual alternative) Copy this folder to `C:\inetpub\wwwroot\ColdAisle`, install PHP FastCGI yourself, grant **IIS AppPool identity** Modify on `config\` and `storage\`.
 3. Browse to `http://your-host/setup.php`
 4. Complete the wizard:
    - SQL host (e.g. `.` / `localhost`), credentials (`sa` or dedicated login), database name
@@ -109,7 +109,7 @@ Always available after install. Managed under **Users**.
 
 ```text
 Program:  C:\php\php.exe
-Arguments: C:\inetpub\wwwroot\WinDCIM\scripts\poll_snmp.php
+Arguments: C:\inetpub\wwwroot\ColdAisle\scripts\poll_snmp.php
 Trigger:  Every 5 minutes
 ```
 
@@ -118,7 +118,7 @@ Run whether user is logged on; use an account that can read `config\config.php`.
 ## Directory layout
 
 ```text
-WinDCIM/
+ColdAisle/
 ├── setup.php              Web installer
 ├── index.php              Dashboard
 ├── login.php / logout.php
@@ -138,17 +138,17 @@ WinDCIM/
 ## Security checklist
 
 - [ ] Use HTTPS in production  
-- [ ] Restrict SQL login to least privilege (db_owner on WinDCIM DB is enough for setup; later `db_datareader`/`db_datawriter` + execute if you tighten)  
+- [ ] Restrict SQL login to least privilege (db_owner on ColdAisle DB is enough for setup; later `db_datareader`/`db_datawriter` + execute if you tighten)  
 - [ ] Protect `config/config.php` (not web-accessible; contains secrets)  
 - [ ] Rotate the admin password after first login  
 - [ ] Prefer Entra/LDAPS over shared local accounts  
 
 ## Migrating from openDCIM
 
-WinDCIM is a **new** codebase optimized for IIS/SQL Server rather than a line-by-line port. Typical migration approach:
+ColdAisle is a **new** codebase optimized for IIS/SQL Server rather than a line-by-line port. Typical migration approach:
 
 1. Export openDCIM inventory (devices, cabinets, departments) via SQL or CSV.
-2. Recreate site → DC → room hierarchy in WinDCIM.
+2. Recreate site → DC → room hierarchy in ColdAisle.
 3. Place cabinets on the floor plan (or insert via API `api/cabinets.php`).
 4. Import devices with cabinet + `position_u` + port counts.
 5. Rebuild power and cable maps as needed.

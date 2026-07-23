@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - Local username/password authentication
+ * ColdAisle - Local username/password authentication
  */
 declare(strict_types=1);
 

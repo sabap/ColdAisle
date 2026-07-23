@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Curated numeric OID packs for WinDCIM SNMP targets. Prefer numeric OIDs (Windows PHP SNMP). Always verify against your model/firmware.",
+  "description": "Curated numeric OID packs for ColdAisle SNMP targets. Prefer numeric OIDs (Windows PHP SNMP). Always verify against your model/firmware.",
   "templates": [
     {
       "id": "custom",
@@ -26,10 +26,10 @@
       }
     },
     {
-      "id": "windcim_lab_agent",
-      "vendor": "WinDCIM",
+      "id": "coldaisle_lab_agent",
+      "vendor": "ColdAisle",
       "label": "PowerShell lab agent (enterprise 99999)",
-      "notes": "Matches the WinDCIM PowerShell SNMPv3 test agent. simulatedAmps is Gauge ×10 (stored as amps_x10 → ÷10).",
+      "notes": "Matches the ColdAisle PowerShell SNMPv3 test agent. simulatedAmps is Gauge ×10 (stored as amps_x10 → ÷10).",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
         "sysUpTime": "1.3.6.1.2.1.1.3.0",

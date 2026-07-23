@@ -876,7 +876,7 @@ if ($id) {
             body.innerHTML = '<p class="text-muted">Loading…</p>';
             btnDelete.hidden = true;
             try {
-                var res = await WinDCIM.api('api/pdus.php?id=' + id);
+                var res = await ColdAisle.api('api/pdus.php?id=' + id);
                 cabinetDevices = res.cabinet_devices || [];
                 renderForm(res.pdu, false);
             } catch (err) {
@@ -911,28 +911,28 @@ if ($id) {
         btnSave.addEventListener('click', async function () {
             var data = collectForm();
             if (!data || !data.name) {
-                WinDCIM.toast('Name is required', 'danger');
+                ColdAisle.toast('Name is required', 'danger');
                 return;
             }
             btnSave.disabled = true;
             try {
                 if (currentPduId) {
-                    await WinDCIM.api('api/pdus.php', {
+                    await ColdAisle.api('api/pdus.php', {
                         method: 'PUT',
                         forcePostOverride: true,
                         body: data
                     });
-                    WinDCIM.toast('PDU saved', 'success');
+                    ColdAisle.toast('PDU saved', 'success');
                 } else {
-                    await WinDCIM.api('api/pdus.php', {
+                    await ColdAisle.api('api/pdus.php', {
                         method: 'POST',
                         body: data
                     });
-                    WinDCIM.toast('PDU created', 'success');
+                    ColdAisle.toast('PDU created', 'success');
                 }
                 location.reload();
             } catch (err) {
-                WinDCIM.toast(err.message || 'Save failed', 'danger');
+                ColdAisle.toast(err.message || 'Save failed', 'danger');
                 btnSave.disabled = false;
             }
         });
@@ -942,22 +942,22 @@ if ($id) {
             if (!confirm('Deactivate this PDU?')) return;
             btnDelete.disabled = true;
             try {
-                await WinDCIM.api('api/pdus.php?id=' + currentPduId, {
+                await ColdAisle.api('api/pdus.php?id=' + currentPduId, {
                     method: 'DELETE',
                     forcePostOverride: true
                 });
-                WinDCIM.toast('PDU removed', 'success');
+                ColdAisle.toast('PDU removed', 'success');
                 location.reload();
             } catch (err) {
-                WinDCIM.toast(err.message || 'Delete failed', 'danger');
+                ColdAisle.toast(err.message || 'Delete failed', 'danger');
                 btnDelete.disabled = false;
             }
         });
     })();
     </script>
     <script>
-    window.WinDCIM = window.WinDCIM || {};
-    window.WinDCIM.refreshCabinetAuditHistory = function (cabinetId, audit) {
+    window.ColdAisle = window.ColdAisle || {};
+    window.ColdAisle.refreshCabinetAuditHistory = function (cabinetId, audit) {
         var tbody = document.querySelector('#cabinetAuditHistory tbody');
         if (!tbody || !audit) return;
         var empty = tbody.querySelector('.cab-audit-empty');

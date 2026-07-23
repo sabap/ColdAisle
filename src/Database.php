@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - SQL Server PDO wrapper
+ * ColdAisle - SQL Server PDO wrapper
  *
  * Supports pdo_sqlsrv and pdo_odbc (ODBC Driver 17/18).
  * ODBC does not implement PDO::quote() and often rejects named parameters,
@@ -65,7 +65,7 @@ class Database
     {
         $host = $config['host'] ?? 'localhost';
         $port = (int)($config['port'] ?? 1433);
-        $db   = $config['database'] ?? 'WinDCIM';
+        $db   = $config['database'] ?? 'ColdAisle';
         $encryptOn = !empty($config['encrypt']);
         $trustOn = !empty($config['trust_server_certificate']);
 

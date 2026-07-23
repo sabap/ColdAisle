@@ -1,14 +1,14 @@
 /**
- * WinDCIM — shared front-end helpers
+ * ColdAisle — shared front-end helpers
  */
 (function () {
   'use strict';
 
-  const csrf = (window.WINDCIM && window.WINDCIM.csrf) ||
+  const csrf = (window.ColdAisle && window.ColdAisle.csrf) ||
     (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
-  const baseUrl = (window.WINDCIM && window.WINDCIM.baseUrl) || '';
+  const baseUrl = (window.ColdAisle && window.ColdAisle.baseUrl) || '';
 
-  window.WinDCIM = Object.assign(window.WINDCIM || {}, {
+  const api = Object.assign(window.ColdAisle || {}, {
     csrf,
     baseUrl,
 
@@ -68,6 +68,11 @@
       setTimeout(() => el.remove(), 3500);
     },
   });
+
+  window.ColdAisle = api;
+  // Legacy aliases during rebrand from WinDCIM
+  window.WINDCIM = api;
+  window.WinDCIM = api;
 
   // Sidebar toggle
   document.addEventListener('DOMContentLoaded', function () {

@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - Microsoft Entra ID (Azure AD) OIDC / OAuth2 SSO
+ * ColdAisle - Microsoft Entra ID (Azure AD) OIDC / OAuth2 SSO
  */
 declare(strict_types=1);
 

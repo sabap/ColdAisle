@@ -16,7 +16,7 @@ class SnmpDiscover
         '1.3.6.1.4.1.13742',       // Raritan
         '1.3.6.1.4.1.21239',       // Vertiv / Geist
         '1.3.6.1.4.1.1718',        // Server Technology
-        '1.3.6.1.4.1.99999',       // WinDCIM lab agent
+        '1.3.6.1.4.1.99999',       // ColdAisle lab agent
     ];
 
     private const MAX_OIDS = 400;

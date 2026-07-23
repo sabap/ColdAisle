@@ -1,4 +1,4 @@
--- WinDCIM - SQL Server Schema
+-- ColdAisle - SQL Server Schema
 -- Data Center Infrastructure Management for IIS / SQL Server
 -- Version 1.0.0
 
@@ -924,7 +924,7 @@ GO
 
 IF NOT EXISTS (SELECT 1 FROM settings WHERE setting_key = 'app_name')
 INSERT INTO settings (setting_key, setting_value, category) VALUES
-('app_name', 'WinDCIM', 'general'),
+('app_name', 'ColdAisle', 'general'),
 ('app_version', '1.0.0', 'general'),
 ('default_u_height', '42', 'cabinets'),
 ('default_cabinet_width_mm', '600', 'cabinets'),

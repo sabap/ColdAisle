@@ -1085,7 +1085,7 @@ layout_header('SNMP Polling', $user, 'snmp');
             </div>
         </form>
         <script>
-        window.WINDCIM_OID_TEMPLATES = <?= json_encode(
+        window.ColdAisle_OID_TEMPLATES = <?= json_encode(
             array_values(array_map(static function ($t) {
                 $map = json_decode((string)($t['oid_map'] ?? '{}'), true);
                 if (!is_array($map)) {
@@ -1104,7 +1104,7 @@ layout_header('SNMP Polling', $user, 'snmp');
         (function () {
             var sel = document.getElementById('oid_template_select');
             var notes = document.getElementById('oid_template_notes');
-            var catalog = window.WINDCIM_OID_TEMPLATES || [];
+            var catalog = window.ColdAisle_OID_TEMPLATES || [];
             var editing = <?= $editTarget ? 'true' : 'false' ?>;
             var notesDefault = notes ? notes.textContent : '';
             if (!sel) return;

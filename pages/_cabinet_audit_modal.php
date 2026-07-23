@@ -85,8 +85,8 @@ if (!isset($cabinetAuditCanLog)) {
         if (submitBtn) submitBtn.disabled = !(certEl && certEl.checked);
     }
 
-    window.WinDCIM = window.WinDCIM || {};
-    window.WinDCIM.openCabinetAudit = openAuditModal;
+    window.ColdAisle = window.ColdAisle || {};
+    window.ColdAisle.openCabinetAudit = openAuditModal;
 
     if (certEl) certEl.addEventListener('change', syncSubmit);
     document.getElementById('cabAuditClose').addEventListener('click', closeAuditModal);
@@ -103,7 +103,7 @@ if (!isset($cabinetAuditCanLog)) {
         submitBtn.disabled = true;
         if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
         try {
-            var res = await WinDCIM.api('api/cabinet_audits.php', {
+            var res = await ColdAisle.api('api/cabinet_audits.php', {
                 method: 'POST',
                 body: {
                     cabinet_id: currentId,
@@ -111,11 +111,11 @@ if (!isset($cabinetAuditCanLog)) {
                     comments: commentsEl ? commentsEl.value : ''
                 }
             });
-            WinDCIM.toast('Audit logged for ' + currentName, 'success');
+            ColdAisle.toast('Audit logged for ' + currentName, 'success');
             closeAuditModal();
             // Refresh history list if present on page
-            if (typeof window.WinDCIM.refreshCabinetAuditHistory === 'function') {
-                window.WinDCIM.refreshCabinetAuditHistory(currentId, res && res.audit);
+            if (typeof window.ColdAisle.refreshCabinetAuditHistory === 'function') {
+                window.ColdAisle.refreshCabinetAuditHistory(currentId, res && res.audit);
             } else {
                 // Soft-update last-audit badges in row view
                 document.querySelectorAll('[data-cab-last-audit="' + currentId + '"]').forEach(function (el) {

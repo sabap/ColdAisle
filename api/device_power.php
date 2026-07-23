@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - Device power supply line items API
+ * ColdAisle - Device power supply line items API
  */
 declare(strict_types=1);
 

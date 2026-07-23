@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - SNMPv3 / v2c poller
+ * ColdAisle - SNMPv3 / v2c poller
  */
 declare(strict_types=1);
 

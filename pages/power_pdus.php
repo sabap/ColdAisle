@@ -747,11 +747,11 @@ if ($pduId) {
         var lastDiscover = null;
 
         function toast(msg, type) {
-            if (window.WinDCIM && WinDCIM.toast) WinDCIM.toast(msg, type || 'info');
+            if (window.ColdAisle && ColdAisle.toast) ColdAisle.toast(msg, type || 'info');
             else alert(msg);
         }
         function api(body) {
-            return WinDCIM.api('api/snmp_pdu.php', { method: 'POST', body: body });
+            return ColdAisle.api('api/snmp_pdu.php', { method: 'POST', body: body });
         }
         function openModal() {
             modal.hidden = false;

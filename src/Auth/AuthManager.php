@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - Authentication orchestrator & RBAC
+ * ColdAisle - Authentication orchestrator & RBAC
  *
  * Roles (system):
  *  - Viewer             — general view-only

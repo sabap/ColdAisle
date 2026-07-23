@@ -1112,11 +1112,11 @@ if ($action === 'new' || $id) {
                     var lastDiscover = null;
 
                     function toast(msg, type) {
-                        if (window.WinDCIM && WinDCIM.toast) WinDCIM.toast(msg, type || 'info');
+                        if (window.ColdAisle && ColdAisle.toast) ColdAisle.toast(msg, type || 'info');
                         else alert(msg);
                     }
                     function api(body) {
-                        return WinDCIM.api('api/snmp_device.php', { method: 'POST', body: body });
+                        return ColdAisle.api('api/snmp_device.php', { method: 'POST', body: body });
                     }
                     function openModal() {
                         modal.hidden = false;
@@ -2200,14 +2200,14 @@ if ($action === 'new' || $id) {
                     try {
                         if (id && id !== 'new') {
                             payload.power_supply_id = parseInt(id, 10);
-                            await WinDCIM.api('api/device_power.php', {
+                            await ColdAisle.api('api/device_power.php', {
                                 method: 'PUT',
                                 forcePostOverride: true,
                                 body: payload
                             });
                         } else {
                             payload.device_id = deviceId;
-                            var res = await WinDCIM.api('api/device_power.php', {
+                            var res = await ColdAisle.api('api/device_power.php', {
                                 method: 'POST',
                                 body: payload
                             });
@@ -2215,9 +2215,9 @@ if ($action === 'new' || $id) {
                                 row.setAttribute('data-psu-id', res.power_supply.power_supply_id);
                             }
                         }
-                        WinDCIM.toast('Power supply saved', 'success');
+                        ColdAisle.toast('Power supply saved', 'success');
                     } catch (err) {
-                        WinDCIM.toast(err.message || 'Save failed', 'danger');
+                        ColdAisle.toast(err.message || 'Save failed', 'danger');
                     }
                     saveBtn.disabled = false;
                 });
@@ -2228,12 +2228,12 @@ if ($action === 'new' || $id) {
                     if (!confirm('Remove this power supply?')) return;
                     if (id && id !== 'new') {
                         try {
-                            await WinDCIM.api('api/device_power.php?id=' + id, {
+                            await ColdAisle.api('api/device_power.php?id=' + id, {
                                 method: 'DELETE',
                                 forcePostOverride: true
                             });
                         } catch (err) {
-                            WinDCIM.toast(err.message || 'Delete failed', 'danger');
+                            ColdAisle.toast(err.message || 'Delete failed', 'danger');
                             return;
                         }
                     }
@@ -2242,7 +2242,7 @@ if ($action === 'new' || $id) {
                     if (tbody && !tbody.querySelector('tr[data-psu-id]')) {
                         tbody.innerHTML = '<tr class="psu-empty"><td colspan="6" class="text-muted">No power supplies defined.</td></tr>';
                     }
-                    WinDCIM.toast('Power supply removed', 'success');
+                    ColdAisle.toast('Power supply removed', 'success');
                 });
             }
         }

@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - Audit trail helper
+ * ColdAisle - Audit trail helper
  */
 declare(strict_types=1);
 

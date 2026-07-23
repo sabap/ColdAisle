@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - Device Templates catalog
+ * ColdAisle - Device Templates catalog
  */
 declare(strict_types=1);
 

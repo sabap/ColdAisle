@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - Lightweight schema upgrades for existing installs
+ * ColdAisle - Lightweight schema upgrades for existing installs
  */
 declare(strict_types=1);
 

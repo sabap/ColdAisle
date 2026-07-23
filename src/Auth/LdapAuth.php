@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - LDAPS authentication against Active Directory / LDAP
+ * ColdAisle - LDAPS authentication against Active Directory / LDAP
  */
 declare(strict_types=1);
 

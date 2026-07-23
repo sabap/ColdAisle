@@ -1,6 +1,6 @@
 <?php
 /**
- * WinDCIM - Image upload + resize (GD), preserve aspect ratio (never stretch).
+ * ColdAisle - Image upload + resize (GD), preserve aspect ratio (never stretch).
  */
 declare(strict_types=1);
 

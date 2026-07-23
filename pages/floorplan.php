@@ -105,8 +105,8 @@ layout_header('Floor Planner', $user, 'floorplan');
 </div>
 
 <script>
-  window.WINDCIM = window.WINDCIM || {};
-  window.WINDCIM.lengthUnits = <?= json_encode($units) ?>;
+  window.ColdAisle = window.ColdAisle || {};
+  window.ColdAisle.lengthUnits = <?= json_encode($units) ?>;
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=3"></script>
