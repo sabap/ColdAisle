@@ -6,7 +6,7 @@ declare(strict_types=1);
 
 function layout_header(string $title, array $user, string $active = ''): void
 {
-    $appName = SettingsService::get('app_name', 'ColdAisle');
+    $appName = App::appName();
     $org = App::config('org_name', '');
     $display = $user['display_name'] ?: $user['username'];
     $csrf = App::csrfToken();

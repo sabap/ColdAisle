@@ -15,9 +15,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $section = $_POST['section'] ?? 'general';
 
         if ($section === 'general') {
-            SettingsService::set('app_name', trim($_POST['app_name'] ?? 'ColdAisle'));
+            // Application name is fixed to ColdAisle (not user-configurable)
             SettingsService::set('org_name', trim($_POST['org_name'] ?? ''), 'general');
             SettingsService::set('disposal_notify_days', (string)(int)($_POST['disposal_notify_days'] ?? 7), 'lifecycle');
+            $config['app_name'] = App::APP_NAME;
             $config['org_name'] = $_POST['org_name'] ?? $config['org_name'] ?? '';
             $config['timezone'] = $_POST['timezone'] ?? $config['timezone'] ?? 'UTC';
             $config['base_url'] = rtrim($_POST['base_url'] ?? '', '/');
@@ -194,8 +195,6 @@ layout_header('Settings', $user, 'settings');
         <form method="post" class="form-grid">
             <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
             <input type="hidden" name="section" value="general">
-            <div class="form-row"><label>Application Name</label>
-                <input class="form-control" name="app_name" value="<?= App::e(SettingsService::get('app_name', 'ColdAisle')) ?>"></div>
             <div class="form-row"><label>Organization</label>
                 <input class="form-control" name="org_name" value="<?= App::e($config['org_name'] ?? SettingsService::get('org_name', '')) ?>"></div>
             <div class="form-row"><label>Timezone</label>

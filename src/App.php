@@ -20,6 +20,8 @@ class App
 {
     /** App semver — keep in sync with /VERSION */
     public const VERSION = '0.2.2';
+    /** Product name is fixed (not user-configurable). */
+    public const APP_NAME = 'ColdAisle';
     public const ROOT = __DIR__ . '/..';
 
     private static bool $booted = false;
@@ -326,6 +328,10 @@ class App
         if ($key === null) {
             return self::$config;
         }
+        // Brand is not configurable — ignore any legacy config/settings value
+        if ($key === 'app_name') {
+            return self::APP_NAME;
+        }
         $parts = explode('.', $key);
         $val = self::$config;
         foreach ($parts as $p) {
@@ -335,6 +341,12 @@ class App
             $val = $val[$p];
         }
         return $val;
+    }
+
+    /** Always "ColdAisle" — not user-configurable. */
+    public static function appName(): string
+    {
+        return self::APP_NAME;
     }
 
     public static function baseUrl(): string

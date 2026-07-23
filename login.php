@@ -41,7 +41,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$appName = App::config('app_name', 'ColdAisle');
+$appName = App::appName();
 ?>
 <!DOCTYPE html>
 <html lang="en">
