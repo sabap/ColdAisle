@@ -18,7 +18,7 @@ require_once __DIR__ . '/Services/Cabinet3dData.php';
 class App
 {
     /** App semver — keep in sync with /VERSION */
-    public const VERSION = '0.1.0';
+    public const VERSION = '0.2.0';
     public const ROOT = __DIR__ . '/..';
 
     private static bool $booted = false;
