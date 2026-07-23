@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
+require_once dirname(__DIR__) . '/src/Services/UpdateService.php';
 App::boot();
 $user = App::requirePermission('manage_settings');
 
@@ -14,7 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $section = $_POST['section'] ?? 'general';
 
         if ($section === 'general') {
-            SettingsService::set('app_name', trim($_POST['app_name'] ?? 'WinDCIM'));
+            SettingsService::set('app_name', trim($_POST['app_name'] ?? 'ColdAisle'));
             SettingsService::set('org_name', trim($_POST['org_name'] ?? ''), 'general');
             SettingsService::set('disposal_notify_days', (string)(int)($_POST['disposal_notify_days'] ?? 7), 'lifecycle');
             $config['org_name'] = $_POST['org_name'] ?? $config['org_name'] ?? '';
@@ -55,18 +56,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             SettingsService::set('auth_entra_enabled', !empty($_POST['entra_enabled']) ? '1' : '0', 'auth');
         }
 
-        // Write config.php
-        $export = var_export($config, true);
-        $php = "<?php\n/** WinDCIM configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
-        if (file_put_contents($configPath, $php) === false) {
-            throw new RuntimeException('Could not write config/config.php');
+        if ($section === 'updates') {
+            $prev = is_array($config['updates'] ?? null) ? $config['updates'] : [];
+            $token = trim((string)($_POST['github_token'] ?? ''));
+            if ($token === '') {
+                $token = (string)($prev['github_token'] ?? '');
+            }
+            $config['updates'] = [
+                'enabled' => !empty($_POST['updates_enabled']),
+                'github_owner' => trim((string)($_POST['github_owner'] ?? 'sabap')) ?: 'sabap',
+                'github_repo' => trim((string)($_POST['github_repo'] ?? 'ColdAisle')) ?: 'ColdAisle',
+                'github_token' => $token,
+                'auto_check' => !empty($_POST['updates_auto_check']),
+                'check_interval_hours' => max(1, min(168, (int)($_POST['check_interval_hours'] ?? 24))),
+                'ssl_verify' => !empty($_POST['updates_ssl_verify']),
+            ];
         }
 
-        App::flash('success', 'Settings saved. Reload may be required for auth changes.');
+        if ($section === 'update_check') {
+            $status = UpdateService::checkForUpdate(true);
+            if (!empty($status['ok'])) {
+                if (!empty($status['update_available'])) {
+                    App::flash('success', 'Update available: v' . ($status['latest'] ?? '?')
+                        . ' (you have v' . ($status['current'] ?? '?') . ').');
+                } else {
+                    App::flash('success', 'You are on the latest version (v' . ($status['current'] ?? '?') . ').');
+                }
+            } else {
+                App::flash('error', $status['error'] ?? 'Update check failed.');
+            }
+            App::redirect('pages/settings.php#updates');
+        }
+
+        if ($section === 'update_apply') {
+            $result = UpdateService::applyUpdate(null);
+            AuditService::log((int)$user['user_id'], $user['username'], 'update_apply', 'system', null, [
+                'version' => $result['version'] ?? null,
+            ]);
+            App::flash('success', $result['message'] ?? 'Update applied.');
+            App::redirect('pages/settings.php#updates');
+        }
+
+        // Write config.php (for general / auth / updates)
+        if (!in_array($section, ['update_check', 'update_apply'], true)) {
+            $export = var_export($config, true);
+            $php = "<?php\n/** ColdAisle configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
+            if (file_put_contents($configPath, $php) === false) {
+                throw new RuntimeException('Could not write config/config.php');
+            }
+            App::flash('success', 'Settings saved. Reload may be required for auth changes.');
+        }
     } catch (Throwable $e) {
         App::flash('error', $e->getMessage());
     }
-    App::redirect('pages/settings.php');
+    App::redirect('pages/settings.php' . (isset($_POST['section']) && str_starts_with((string)$_POST['section'], 'update') ? '#updates' : ''));
 }
 
 // Reload config after potential changes on GET
@@ -74,6 +117,14 @@ $config = is_file($configPath) ? require $configPath : $config;
 $roles = Database::fetchAll('SELECT role_id, name FROM roles ORDER BY role_id');
 $ldaps = $config['auth']['ldaps'] ?? [];
 $entra = $config['auth']['entra'] ?? [];
+$updCfg = UpdateService::config();
+$updStatus = null;
+try {
+    // Non-forced: use cache when fresh
+    $updStatus = UpdateService::checkForUpdate(false);
+} catch (Throwable $e) {
+    $updStatus = null;
+}
 
 layout_header('Settings', $user, 'settings');
 ?>
@@ -85,7 +136,7 @@ layout_header('Settings', $user, 'settings');
             <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
             <input type="hidden" name="section" value="general">
             <div class="form-row"><label>Application Name</label>
-                <input class="form-control" name="app_name" value="<?= App::e(SettingsService::get('app_name', 'WinDCIM')) ?>"></div>
+                <input class="form-control" name="app_name" value="<?= App::e(SettingsService::get('app_name', 'ColdAisle')) ?>"></div>
             <div class="form-row"><label>Organization</label>
                 <input class="form-control" name="org_name" value="<?= App::e($config['org_name'] ?? SettingsService::get('org_name', '')) ?>"></div>
             <div class="form-row"><label>Timezone</label>
@@ -170,18 +221,120 @@ layout_header('Settings', $user, 'settings');
     </div>
 </div>
 
+<div class="card" id="updates">
+    <div class="card-header flex-between">
+        <h2>Updates</h2>
+        <span class="text-muted" style="font-size:.85rem">
+            Installed v<?= App::e(UpdateService::installedVersion()) ?>
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size:.9rem;margin-top:0">
+            ColdAisle can check <strong>GitHub</strong> for newer tags/releases, back up this install,
+            download the package, and apply it (preserving <code>config/config.php</code> and
+            <code>storage/</code> uploads &amp; logs). Private repos require a personal access token
+            with <strong>Contents: Read</strong>.
+        </p>
+
+        <?php if ($updStatus): ?>
+            <?php if (!empty($updStatus['update_available'])): ?>
+                <div class="alert alert-info" style="margin-bottom:1rem">
+                    <strong>Update available:</strong>
+                    v<?= App::e((string)$updStatus['latest']) ?>
+                    (you have v<?= App::e((string)$updStatus['current']) ?>)
+                    <?php if (!empty($updStatus['html_url'])): ?>
+                        · <a href="<?= App::e((string)$updStatus['html_url']) ?>" target="_blank" rel="noopener">Release notes</a>
+                    <?php endif; ?>
+                </div>
+            <?php elseif (!empty($updStatus['ok'])): ?>
+                <div class="alert alert-success" style="margin-bottom:1rem">
+                    Up to date (v<?= App::e((string)$updStatus['current']) ?>).
+                    <?php if (!empty($updStatus['checked_at'])): ?>
+                        <span class="text-muted">Last check: <?= App::e((string)$updStatus['checked_at']) ?>
+                            <?= !empty($updStatus['cached']) ? '(cached)' : '' ?></span>
+                    <?php endif; ?>
+                </div>
+            <?php else: ?>
+                <div class="alert alert-warning" style="margin-bottom:1rem">
+                    <?= App::e((string)($updStatus['error'] ?? 'Could not check for updates.')) ?>
+                </div>
+            <?php endif; ?>
+        <?php endif; ?>
+
+        <form method="post" class="form-grid" style="margin-bottom:1.25rem">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="updates">
+            <div class="form-row full"><label>
+                <input type="checkbox" name="updates_enabled" value="1" <?= !empty($updCfg['enabled']) ? 'checked' : '' ?>>
+                Enable update checks
+            </label></div>
+            <div class="form-row"><label>GitHub owner</label>
+                <input class="form-control" name="github_owner" value="<?= App::e((string)$updCfg['github_owner']) ?>"></div>
+            <div class="form-row"><label>Repository</label>
+                <input class="form-control" name="github_repo" value="<?= App::e((string)$updCfg['github_repo']) ?>"></div>
+            <div class="form-row full"><label>GitHub personal access token</label>
+                <input class="form-control" type="password" name="github_token" autocomplete="new-password"
+                       placeholder="<?= trim((string)$updCfg['github_token']) !== '' ? '•••••••• (leave blank to keep)' : 'Required for private repos' ?>">
+                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                    Classic: <code>repo</code> scope · Fine-grained: repository Contents (read). Stored only in
+                    <code>config/config.php</code> (not in git).
+                </p>
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="updates_auto_check" value="1" <?= !empty($updCfg['auto_check']) ? 'checked' : '' ?>>
+                Auto-check on dashboard (uses cache interval below)
+            </label></div>
+            <div class="form-row"><label>Check interval (hours)</label>
+                <input class="form-control" type="number" min="1" max="168" name="check_interval_hours"
+                       value="<?= (int)($updCfg['check_interval_hours'] ?? 24) ?>"></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="updates_ssl_verify" value="1" <?= ($updCfg['ssl_verify'] ?? true) ? 'checked' : '' ?>>
+                Verify TLS certificates (uncheck only if PHP has no CA bundle — lab/dev)
+            </label></div>
+            <div class="form-row"><button class="btn btn-primary" type="submit">Save update settings</button></div>
+        </form>
+
+        <div class="flex gap-1" style="flex-wrap:wrap">
+            <form method="post" style="display:inline">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="section" value="update_check">
+                <button class="btn btn-secondary" type="submit">Check for updates</button>
+            </form>
+            <?php if ($updStatus && !empty($updStatus['update_available'])): ?>
+            <form method="post" style="display:inline"
+                  onsubmit="return confirm('Backup this install and update to v<?= App::e((string)$updStatus['latest']) ?>? The site may be briefly unavailable.');">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="section" value="update_apply">
+                <button class="btn btn-primary" type="submit">
+                    Update to v<?= App::e((string)$updStatus['latest']) ?>
+                </button>
+            </form>
+            <?php endif; ?>
+        </div>
+        <p class="text-muted" style="font-size:.75rem;margin:.75rem 0 0">
+            Backups are written to <code>storage/backups/</code>. Requires PHP <code>curl</code>
+            <?= extension_loaded('zip') ? ' and <code>zip</code>' : ' (and PowerShell Expand-Archive if <code>zip</code> is missing)' ?>.
+        </p>
+    </div>
+</div>
+
 <div class="card">
     <div class="card-header"><h2>Environment</h2></div>
     <div class="card-body">
         <table class="data">
-            <tr><td>WinDCIM Version</td><td><?= App::VERSION ?></td></tr>
+            <tr><td>ColdAisle Version</td><td><?= App::e(UpdateService::installedVersion()) ?> <span class="text-muted">(App::VERSION <?= App::e(App::VERSION) ?>)</span></td></tr>
             <tr><td>PHP</td><td><?= App::e(PHP_VERSION) ?></td></tr>
             <tr><td>PDO Drivers</td><td><?= App::e(implode(', ', PDO::getAvailableDrivers())) ?></td></tr>
             <tr><td>LDAP</td><td><?= extension_loaded('ldap') ? 'Yes' : 'No' ?></td></tr>
             <tr><td>SNMP</td><td><?= extension_loaded('snmp') ? 'Yes' : 'No' ?></td></tr>
             <tr><td>cURL</td><td><?= extension_loaded('curl') ? 'Yes' : 'No' ?></td></tr>
+            <tr><td>Zip</td><td><?= extension_loaded('zip') ? 'Yes' : 'No (PowerShell fallback)' ?></td></tr>
             <tr><td>Config File</td><td><code><?= App::e($configPath) ?></code></td></tr>
             <tr><td>SQL Host</td><td><?= App::e(($config['database']['host'] ?? '') . '/' . ($config['database']['database'] ?? '')) ?></td></tr>
+            <tr><td>Update source</td><td>
+                <?= App::e((string)$updCfg['github_owner'] . '/' . (string)$updCfg['github_repo']) ?>
+                · token <?= trim((string)$updCfg['github_token']) !== '' ? 'configured' : 'missing' ?>
+            </td></tr>
         </table>
     </div>
 </div>

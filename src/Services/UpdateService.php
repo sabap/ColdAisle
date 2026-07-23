@@ -1,0 +1,621 @@
+<?php
+/**
+ * ColdAisle — GitHub release check & one-click application update.
+ *
+ * Flow: check API → (optional) backup → download zipball → extract over app
+ * root while preserving config/config.php and storage runtime data → Schema::ensure().
+ */
+declare(strict_types=1);
+
+class UpdateService
+{
+    public const CACHE_KEY_JSON = 'update_check_json';
+    public const CACHE_KEY_AT = 'update_check_at';
+
+    /** @return array<string,mixed> */
+    public static function config(): array
+    {
+        $c = App::config('updates', []);
+        if (!is_array($c)) {
+            $c = [];
+        }
+        return array_merge([
+            'enabled' => true,
+            'github_owner' => 'sabap',
+            'github_repo' => 'ColdAisle',
+            'github_token' => '',
+            'auto_check' => true,
+            'check_interval_hours' => 24,
+            // Windows PHP often lacks a CA bundle; set false only if verify fails in your lab
+            'ssl_verify' => true,
+        ], $c);
+    }
+
+    public static function installedVersion(): string
+    {
+        $path = App::ROOT . '/VERSION';
+        if (is_file($path)) {
+            $v = trim((string)file_get_contents($path));
+            if ($v !== '' && preg_match('/^\d+\.\d+/', $v)) {
+                return ltrim($v, 'vV');
+            }
+        }
+        return ltrim((string)App::VERSION, 'vV');
+    }
+
+    /**
+     * @return array{
+     *   ok:bool,current:string,latest:?string,update_available:bool,
+     *   release_name:?string,html_url:?string,notes:?string,
+     *   published_at:?string,checked_at:string,cached:bool,error?:string
+     * }
+     */
+    public static function checkForUpdate(bool $force = false): array
+    {
+        $cfg = self::config();
+        $current = self::installedVersion();
+        $now = date('c');
+
+        if (empty($cfg['enabled'])) {
+            return [
+                'ok' => true,
+                'current' => $current,
+                'latest' => null,
+                'update_available' => false,
+                'release_name' => null,
+                'html_url' => null,
+                'notes' => null,
+                'published_at' => null,
+                'checked_at' => $now,
+                'cached' => false,
+                'error' => 'Updates are disabled in configuration.',
+            ];
+        }
+
+        if (!$force) {
+            $cached = self::cachedStatus();
+            if ($cached !== null) {
+                $cached['cached'] = true;
+                return $cached;
+            }
+        }
+
+        $owner = rawurlencode((string)$cfg['github_owner']);
+        $repo = rawurlencode((string)$cfg['github_repo']);
+        $token = trim((string)$cfg['github_token']);
+
+        try {
+            // Prefer formal Releases; fall back to tags for repos that only push tags
+            $release = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/releases/latest", $token);
+            $tag = null;
+            $name = null;
+            $html = null;
+            $notes = null;
+            $published = null;
+
+            if (is_array($release) && !empty($release['tag_name']) && empty($release['message'])) {
+                $tag = ltrim((string)$release['tag_name'], 'vV');
+                $name = (string)($release['name'] ?? $release['tag_name']);
+                $html = (string)($release['html_url'] ?? '');
+                $notes = (string)($release['body'] ?? '');
+                $published = (string)($release['published_at'] ?? $release['created_at'] ?? '');
+            } else {
+                $tags = self::githubGetJson("https://api.github.com/repos/{$owner}/{$repo}/tags?per_page=20", $token);
+                if (!is_array($tags) || isset($tags['message'])) {
+                    $msg = is_array($tags) ? (string)($tags['message'] ?? 'GitHub API error') : 'GitHub API error';
+                    if (stripos($msg, 'Not Found') !== false && $token === '') {
+                        $msg = 'Repository not found or private — add a GitHub token with repo read access in Settings → Updates.';
+                    }
+                    throw new RuntimeException($msg);
+                }
+                $best = null;
+                foreach ($tags as $t) {
+                    if (!is_array($t) || empty($t['name'])) {
+                        continue;
+                    }
+                    $tv = ltrim((string)$t['name'], 'vV');
+                    if (!preg_match('/^\d+\.\d+/', $tv)) {
+                        continue;
+                    }
+                    if ($best === null || version_compare($tv, $best, '>')) {
+                        $best = $tv;
+                        $name = (string)$t['name'];
+                    }
+                }
+                if ($best === null) {
+                    throw new RuntimeException('No version tags found on the repository.');
+                }
+                $tag = $best;
+                $html = "https://github.com/{$cfg['github_owner']}/{$cfg['github_repo']}/releases/tag/v{$tag}";
+                $notes = '';
+                $published = null;
+            }
+
+            $available = version_compare($tag, $current, '>');
+            $result = [
+                'ok' => true,
+                'current' => $current,
+                'latest' => $tag,
+                'update_available' => $available,
+                'release_name' => $name,
+                'html_url' => $html,
+                'notes' => $notes,
+                'published_at' => $published,
+                'checked_at' => $now,
+                'cached' => false,
+            ];
+            self::storeCache($result);
+            return $result;
+        } catch (Throwable $e) {
+            $result = [
+                'ok' => false,
+                'current' => $current,
+                'latest' => null,
+                'update_available' => false,
+                'release_name' => null,
+                'html_url' => null,
+                'notes' => null,
+                'published_at' => null,
+                'checked_at' => $now,
+                'cached' => false,
+                'error' => $e->getMessage(),
+            ];
+            // Cache failures briefly so the dashboard does not hammer GitHub
+            self::storeCache($result);
+            return $result;
+        }
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    public static function cachedStatus(): ?array
+    {
+        try {
+            $raw = SettingsService::get(self::CACHE_KEY_JSON, '');
+            $at = SettingsService::get(self::CACHE_KEY_AT, '');
+            if ($raw === '' || $raw === null || $at === '' || $at === null) {
+                return null;
+            }
+            $data = json_decode((string)$raw, true);
+            if (!is_array($data)) {
+                return null;
+            }
+            $cfg = self::config();
+            $hours = max(1, (int)($cfg['check_interval_hours'] ?? 24));
+            $ts = strtotime((string)$at);
+            if ($ts === false || (time() - $ts) > ($hours * 3600)) {
+                return null;
+            }
+            $data['checked_at'] = (string)$at;
+            return $data;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Apply update to $targetVersion (semver without leading v). Backs up first.
+     *
+     * @return array{ok:bool,message:string,backup:?string,version:?string}
+     */
+    public static function applyUpdate(?string $targetVersion = null): array
+    {
+        @ini_set('max_execution_time', '600');
+        @set_time_limit(600);
+
+        $cfg = self::config();
+        if (empty($cfg['enabled'])) {
+            throw new RuntimeException('Updates are disabled.');
+        }
+
+        $status = self::checkForUpdate(true);
+        if (!$status['ok']) {
+            throw new RuntimeException($status['error'] ?? 'Update check failed.');
+        }
+        $latest = $status['latest'] ?? null;
+        if ($latest === null) {
+            throw new RuntimeException('No remote version found.');
+        }
+        $version = $targetVersion !== null && $targetVersion !== ''
+            ? ltrim($targetVersion, 'vV')
+            : $latest;
+
+        $current = self::installedVersion();
+        if (version_compare($version, $current, '<=')) {
+            throw new RuntimeException("Already on {$current}; remote {$version} is not newer.");
+        }
+
+        $owner = (string)$cfg['github_owner'];
+        $repo = (string)$cfg['github_repo'];
+        $token = trim((string)$cfg['github_token']);
+
+        $backupPath = self::createBackup();
+        $tmpDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'coldaisle_upd_' . bin2hex(random_bytes(4));
+        if (!mkdir($tmpDir, 0700, true) && !is_dir($tmpDir)) {
+            throw new RuntimeException('Could not create temp directory for update.');
+        }
+
+        try {
+            $zipFile = $tmpDir . DIRECTORY_SEPARATOR . 'release.zip';
+            // GitHub zipball accepts tag with or without v
+            $url = "https://api.github.com/repos/" . rawurlencode($owner) . '/' . rawurlencode($repo)
+                . '/zipball/v' . rawurlencode($version);
+            self::githubDownload($url, $zipFile, $token);
+
+            $extractDir = $tmpDir . DIRECTORY_SEPARATOR . 'extract';
+            self::extractZip($zipFile, $extractDir);
+
+            $sourceRoot = self::findExtractedRoot($extractDir);
+            if ($sourceRoot === null) {
+                throw new RuntimeException('Could not locate application root inside the release archive.');
+            }
+
+            self::applyTree($sourceRoot, App::ROOT);
+
+            // Ensure VERSION file matches applied tag
+            file_put_contents(App::ROOT . '/VERSION', $version . "\n");
+
+            // Schema upgrades for existing installs
+            try {
+                Schema::ensure();
+            } catch (Throwable $e) {
+                App::log('Update schema ensure: ' . $e->getMessage(), 'warning');
+            }
+
+            if (function_exists('opcache_reset')) {
+                @opcache_reset();
+            }
+
+            // Refresh cache to "up to date"
+            $fresh = [
+                'ok' => true,
+                'current' => $version,
+                'latest' => $version,
+                'update_available' => false,
+                'release_name' => 'v' . $version,
+                'html_url' => $status['html_url'] ?? null,
+                'notes' => null,
+                'published_at' => null,
+                'checked_at' => date('c'),
+                'cached' => false,
+            ];
+            self::storeCache($fresh);
+
+            return [
+                'ok' => true,
+                'message' => "Updated from {$current} to {$version}. Backup: " . basename($backupPath),
+                'backup' => $backupPath,
+                'version' => $version,
+            ];
+        } finally {
+            self::rrmdir($tmpDir);
+        }
+    }
+
+    public static function createBackup(): string
+    {
+        $dir = App::ROOT . '/storage/backups';
+        if (!is_dir($dir) && !mkdir($dir, 0755, true) && !is_dir($dir)) {
+            throw new RuntimeException('Cannot create storage/backups for pre-update backup.');
+        }
+        $name = 'backup_' . date('Ymd_His') . '_v' . self::installedVersion() . '.zip';
+        $path = $dir . DIRECTORY_SEPARATOR . $name;
+
+        if (!class_exists('ZipArchive')) {
+            // Fallback: copy tree to a folder (no zip)
+            $folder = $dir . DIRECTORY_SEPARATOR . pathinfo($name, PATHINFO_FILENAME);
+            self::copyTreeLimited(App::ROOT, $folder, true);
+            return $folder;
+        }
+
+        $zip = new ZipArchive();
+        if ($zip->open($path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+            throw new RuntimeException('Could not create backup zip.');
+        }
+        $root = realpath(App::ROOT);
+        if ($root === false) {
+            throw new RuntimeException('Invalid application root.');
+        }
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::SELF_FIRST
+        );
+        foreach ($iterator as $file) {
+            /** @var SplFileInfo $file */
+            $full = $file->getPathname();
+            $rel = substr($full, strlen($root) + 1);
+            $relNorm = str_replace('\\', '/', $rel);
+            // Skip previous backups and huge upload blobs in backup of backup
+            if (str_starts_with($relNorm, 'storage/backups/')) {
+                continue;
+            }
+            if ($file->isDir()) {
+                $zip->addEmptyDir($relNorm);
+            } else {
+                $zip->addFile($full, $relNorm);
+            }
+        }
+        $zip->close();
+        return $path;
+    }
+
+    /** @param array<string,mixed> $result */
+    private static function storeCache(array $result): void
+    {
+        try {
+            SettingsService::set(self::CACHE_KEY_JSON, json_encode($result, JSON_UNESCAPED_SLASHES), 'updates');
+            SettingsService::set(self::CACHE_KEY_AT, date('c'), 'updates');
+        } catch (Throwable $e) {
+            // settings table may be unavailable
+        }
+    }
+
+    /**
+     * @return array<string,mixed>|list<mixed>
+     */
+    private static function githubGetJson(string $url, string $token)
+    {
+        $raw = self::httpRequest($url, $token, false);
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            throw new RuntimeException('Invalid JSON from GitHub API.');
+        }
+        return $data;
+    }
+
+    private static function githubDownload(string $url, string $dest, string $token): void
+    {
+        $body = self::httpRequest($url, $token, true);
+        if ($body === '' || strlen($body) < 100) {
+            throw new RuntimeException('Downloaded release archive is empty or too small.');
+        }
+        if (file_put_contents($dest, $body) === false) {
+            throw new RuntimeException('Could not write release archive to temp path.');
+        }
+    }
+
+    private static function httpRequest(string $url, string $token, bool $binary): string
+    {
+        if (!function_exists('curl_init')) {
+            throw new RuntimeException('PHP cURL extension is required for updates.');
+        }
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new RuntimeException('curl_init failed.');
+        }
+        $headers = [
+            'Accept: ' . ($binary ? 'application/vnd.github+json' : 'application/vnd.github+json'),
+            'User-Agent: ColdAisle-Updater',
+            'X-GitHub-Api-Version: 2022-11-28',
+        ];
+        if ($token !== '') {
+            $headers[] = 'Authorization: Bearer ' . $token;
+        }
+        $sslVerify = !empty(self::config()['ssl_verify']);
+        $opts = [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT => $binary ? 300 : 45,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_SSL_VERIFYPEER => $sslVerify,
+            CURLOPT_SSL_VERIFYHOST => $sslVerify ? 2 : 0,
+        ];
+        if ($sslVerify) {
+            $ca = self::resolveCaBundle();
+            if ($ca !== null) {
+                $opts[CURLOPT_CAINFO] = $ca;
+            }
+        }
+        curl_setopt_array($ch, $opts);
+        $body = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+        if ($body === false) {
+            $hint = '';
+            if (stripos($err, 'certificate') !== false || stripos($err, 'SSL') !== false) {
+                $hint = ' Tip: place a CA bundle at config/cacert.pem, set curl.cainfo in php.ini, or set updates.ssl_verify=false in config (lab only).';
+            }
+            throw new RuntimeException('HTTP request failed: ' . $err . $hint);
+        }
+        if ($code === 401 || $code === 403) {
+            throw new RuntimeException('GitHub authentication failed (HTTP ' . $code . '). Check the personal access token.');
+        }
+        if ($code === 404) {
+            throw new RuntimeException('GitHub resource not found (HTTP 404). Confirm owner/repo and token repo access for private repositories.');
+        }
+        if ($code < 200 || $code >= 300) {
+            $snippet = substr((string)$body, 0, 200);
+            throw new RuntimeException("GitHub HTTP {$code}: {$snippet}");
+        }
+        return (string)$body;
+    }
+
+    private static function extractZip(string $zipFile, string $destDir): void
+    {
+        if (!is_dir($destDir) && !mkdir($destDir, 0700, true)) {
+            throw new RuntimeException('Cannot create extract directory.');
+        }
+        if (class_exists('ZipArchive')) {
+            $zip = new ZipArchive();
+            if ($zip->open($zipFile) !== true) {
+                throw new RuntimeException('Could not open release zip.');
+            }
+            if (!$zip->extractTo($destDir)) {
+                $zip->close();
+                throw new RuntimeException('Could not extract release zip.');
+            }
+            $zip->close();
+            return;
+        }
+        // Windows PowerShell fallback
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+            $ps = 'powershell -NoProfile -Command "Expand-Archive -LiteralPath '
+                . escapeshellarg($zipFile) . ' -DestinationPath ' . escapeshellarg($destDir) . ' -Force"';
+            exec($ps, $out, $code);
+            if ($code !== 0) {
+                throw new RuntimeException('Expand-Archive failed (install PHP zip extension for better support).');
+            }
+            return;
+        }
+        throw new RuntimeException('PHP ZipArchive extension is required to apply updates.');
+    }
+
+    private static function findExtractedRoot(string $extractDir): ?string
+    {
+        // GitHub zipball: single top-level folder owner-repo-sha/
+        $entries = @scandir($extractDir);
+        if (!is_array($entries)) {
+            return null;
+        }
+        foreach ($entries as $e) {
+            if ($e === '.' || $e === '..') {
+                continue;
+            }
+            $path = $extractDir . DIRECTORY_SEPARATOR . $e;
+            if (is_dir($path) && (is_file($path . '/src/App.php') || is_file($path . '/VERSION') || is_file($path . '/index.php'))) {
+                return $path;
+            }
+        }
+        if (is_file($extractDir . '/src/App.php')) {
+            return $extractDir;
+        }
+        return null;
+    }
+
+    private static function applyTree(string $sourceRoot, string $destRoot): void
+    {
+        $sourceRoot = realpath($sourceRoot);
+        if ($sourceRoot === false) {
+            throw new RuntimeException('Invalid source root after extract.');
+        }
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($sourceRoot, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::SELF_FIRST
+        );
+        foreach ($iterator as $file) {
+            /** @var SplFileInfo $file */
+            $full = $file->getPathname();
+            $rel = substr($full, strlen($sourceRoot) + 1);
+            $relNorm = str_replace('\\', '/', $rel);
+
+            if (self::shouldPreserve($relNorm)) {
+                continue;
+            }
+
+            $target = $destRoot . DIRECTORY_SEPARATOR . $rel;
+            if ($file->isDir()) {
+                if (!is_dir($target) && !mkdir($target, 0755, true) && !is_dir($target)) {
+                    throw new RuntimeException('Cannot create directory: ' . $relNorm);
+                }
+                continue;
+            }
+            $parent = dirname($target);
+            if (!is_dir($parent) && !mkdir($parent, 0755, true) && !is_dir($parent)) {
+                throw new RuntimeException('Cannot create directory for: ' . $relNorm);
+            }
+            if (!copy($full, $target)) {
+                throw new RuntimeException('Failed to copy: ' . $relNorm);
+            }
+        }
+    }
+
+    private static function shouldPreserve(string $relNorm): bool
+    {
+        $relNorm = ltrim($relNorm, '/');
+        if ($relNorm === 'config/config.php') {
+            return true;
+        }
+        if (str_starts_with($relNorm, 'storage/logs/')) {
+            return true;
+        }
+        if (str_starts_with($relNorm, 'storage/uploads/')) {
+            return true;
+        }
+        if (str_starts_with($relNorm, 'storage/backups/')) {
+            return true;
+        }
+        if (str_starts_with($relNorm, '.git/')) {
+            return true;
+        }
+        return false;
+    }
+
+    private static function copyTreeLimited(string $src, string $dst, bool $forBackup): void
+    {
+        $src = realpath($src);
+        if ($src === false) {
+            throw new RuntimeException('Invalid path for backup.');
+        }
+        if (!is_dir($dst) && !mkdir($dst, 0755, true)) {
+            throw new RuntimeException('Cannot create backup folder.');
+        }
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($src, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::SELF_FIRST
+        );
+        foreach ($iterator as $file) {
+            $full = $file->getPathname();
+            $rel = substr($full, strlen($src) + 1);
+            $relNorm = str_replace('\\', '/', $rel);
+            if ($forBackup && str_starts_with($relNorm, 'storage/backups/')) {
+                continue;
+            }
+            $target = $dst . DIRECTORY_SEPARATOR . $rel;
+            if ($file->isDir()) {
+                if (!is_dir($target)) {
+                    mkdir($target, 0755, true);
+                }
+            } else {
+                $parent = dirname($target);
+                if (!is_dir($parent)) {
+                    mkdir($parent, 0755, true);
+                }
+                @copy($full, $target);
+            }
+        }
+    }
+
+    private static function rrmdir(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        try {
+            $it = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::CHILD_FIRST
+            );
+            foreach ($it as $f) {
+                if ($f->isDir()) {
+                    @rmdir($f->getPathname());
+                } else {
+                    @unlink($f->getPathname());
+                }
+            }
+            @rmdir($dir);
+        } catch (Throwable $e) {
+            // best-effort cleanup
+        }
+    }
+
+    /** @return string|null Absolute path to a CA bundle if found */
+    private static function resolveCaBundle(): ?string
+    {
+        $candidates = [
+            App::ROOT . '/config/cacert.pem',
+            (string)ini_get('curl.cainfo'),
+            (string)ini_get('openssl.cafile'),
+            'C:/PHP/extras/ssl/cacert.pem',
+            'C:/php/extras/ssl/cacert.pem',
+        ];
+        foreach ($candidates as $p) {
+            $p = trim($p);
+            if ($p !== '' && is_file($p)) {
+                return $p;
+            }
+        }
+        return null;
+    }
+}

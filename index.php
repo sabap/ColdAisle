@@ -92,8 +92,43 @@ $rooms = Database::fetchAll(
      ORDER BY dc.name, r.name'
 );
 
+// Update banner for admins (cached check when auto_check enabled)
+$dashUpdate = null;
+if (AuthManager::can($user, 'manage_settings')) {
+    try {
+        require_once __DIR__ . '/src/Services/UpdateService.php';
+        $updCfg = UpdateService::config();
+        if (!empty($updCfg['enabled']) && !empty($updCfg['auto_check'])) {
+            $dashUpdate = UpdateService::checkForUpdate(false);
+        } else {
+            $dashUpdate = UpdateService::cachedStatus();
+        }
+    } catch (Throwable $e) {
+        $dashUpdate = null;
+    }
+}
+
 layout_header('Dashboard', $user, 'dashboard');
 ?>
+
+<?php if ($dashUpdate && !empty($dashUpdate['update_available'])): ?>
+<div class="alert alert-info" style="margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+    <div>
+        <strong>ColdAisle update available:</strong>
+        v<?= App::e((string)$dashUpdate['latest']) ?>
+        <span class="text-muted">(running v<?= App::e((string)$dashUpdate['current']) ?>)</span>
+    </div>
+    <a class="btn btn-sm btn-primary" href="<?= App::e(App::url('pages/settings.php#updates')) ?>">Review &amp; update</a>
+</div>
+<?php elseif ($dashUpdate && empty($dashUpdate['ok']) && !empty($dashUpdate['error']) && AuthManager::can($user, 'manage_settings')): ?>
+<div class="alert alert-warning" style="margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+    <div>
+        <strong>Update check:</strong>
+        <?= App::e((string)$dashUpdate['error']) ?>
+    </div>
+    <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/settings.php#updates')) ?>">Update settings</a>
+</div>
+<?php endif; ?>
 
 <div class="metrics">
     <div class="metric-card accent">

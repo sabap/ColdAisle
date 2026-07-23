@@ -7,6 +7,16 @@ Formerly developed as *WinDCIM*. Built as a modern replacement path for environm
 
 **Current version:** see [`VERSION`](VERSION) (`0.1.0` baseline).
 
+## Updates (GitHub)
+
+Admins can check for new versions and apply them from **Settings → Updates**:
+
+1. Create a GitHub personal access token with **Contents: Read** on `sabap/ColdAisle` (private).
+2. Paste it under Settings → Updates (stored only in `config/config.php`).
+3. **Check for updates** · when a newer tag exists, **Update to vX.Y.Z** backs up to `storage/backups/`, downloads the release zipball, preserves config & storage runtime data, and runs schema ensure.
+
+Dashboard shows a banner when an update is available (if auto-check is enabled).
+
 ## Features
 
 | Area | Capabilities |

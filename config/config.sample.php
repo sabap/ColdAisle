@@ -1,20 +1,20 @@
 <?php
 /**
- * WinDCIM sample configuration
+ * ColdAisle sample configuration
  * Copy to config.php or use the web setup wizard (setup.php).
  */
 declare(strict_types=1);
 
 return [
-    'app_name' => 'WinDCIM',
-    'version' => '1.0.0',
+    'app_name' => 'ColdAisle',
+    'version' => '0.1.0',
     'timezone' => 'UTC',
     'base_url' => '', // e.g. https://dcim.contoso.com
     'org_name' => 'My Organization',
     'database' => [
         'host' => 'localhost',
         'port' => 1433,
-        'database' => 'WinDCIM',
+        'database' => 'ColdAisle',
         'username' => 'dcim_app',
         'password' => 'CHANGE_ME',
         'encrypt' => false,
@@ -44,5 +44,15 @@ return [
             'scopes' => 'openid profile email offline_access',
             'default_role_id' => null,
         ],
+    ],
+    // One-click updates from GitHub (private repos need a fine-grained or classic PAT with Contents: Read)
+    'updates' => [
+        'enabled' => true,
+        'github_owner' => 'sabap',
+        'github_repo' => 'ColdAisle',
+        'github_token' => '', // e.g. github_pat_... — never commit a real token
+        'auto_check' => true,
+        'check_interval_hours' => 24,
+        'ssl_verify' => true, // set false only if Windows PHP lacks CA certs (lab)
     ],
 ];
