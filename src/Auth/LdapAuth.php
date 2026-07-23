@@ -53,6 +53,23 @@ class LdapAuth
         $tlsPrep = self::prepareTlsEnvironment($parsed['tls_insecure']);
         $add('TLS setup', true, $tlsPrep['detail']);
 
+        // Independent OpenSSL probe (same host/port/CA) — helps separate "CA trust" vs "LDAP library" issues
+        if ($parsed['use_ssl'] || $parsed['start_tls']) {
+            $sslProbe = self::diagnoseSslPeer(
+                $parsed['host'],
+                $parsed['port'],
+                $parsed['tls_insecure'] ? null : ($tlsPrep['ca_file'] ?? null)
+            );
+            $add('TLS probe (OpenSSL)', $sslProbe['ok'], $sslProbe['detail']);
+            if (!$sslProbe['ok'] && !$parsed['tls_insecure']) {
+                return self::testResult(
+                    false,
+                    'TLS probe failed — fix CA trust or hostname match before LDAP bind will work.',
+                    $steps
+                );
+            }
+        }
+
         // ldap_connect is lazy — real TCP/TLS happens on first bind/search
         $conn = @ldap_connect($parsed['uri']);
         if (!$conn) {
@@ -93,7 +110,7 @@ class LdapAuth
                 $err = ldap_error($conn);
                 $errno = ldap_errno($conn);
                 @ldap_unbind($conn);
-                $add('Service bind', false, self::explainLdapError($err, $errno, $parsed));
+                $add('Service bind', false, self::explainLdapError($err, $errno, $parsed, $tlsPrep['ca_file'] ?? null));
                 return self::testResult(false, 'Service account bind failed.', $steps);
             }
             $add('Service bind', true, 'Bound as service account.');
@@ -298,11 +315,12 @@ class LdapAuth
 
     /**
      * Must run BEFORE ldap_connect for global TLS options to take effect.
-     * @return array{detail:string}
+     * @return array{detail:string,ca_file:?string}
      */
     private static function prepareTlsEnvironment(bool $insecure): array
     {
         $parts = [];
+        $caFile = null;
 
         if ($insecure) {
             // Internal enterprise CAs often are not in PHP/OpenLDAP trust store
@@ -312,7 +330,12 @@ class LdapAuth
             }
             @putenv('LDAPTLS_REQCERT=never');
             $parts[] = 'LDAPTLS_REQCERT=never';
-            return ['detail' => 'Insecure TLS mode: ' . implode(', ', $parts)];
+            // Force OpenLDAP to rebuild TLS context after option changes (Windows PHP)
+            if (defined('LDAP_OPT_X_TLS_NEWCTX')) {
+                @ldap_set_option(null, LDAP_OPT_X_TLS_NEWCTX, 0);
+                $parts[] = 'NEWCTX';
+            }
+            return ['detail' => 'Insecure TLS mode: ' . implode(', ', $parts), 'ca_file' => null];
         }
 
         if (defined('LDAP_OPT_X_TLS_REQUIRE_CERT') && defined('LDAP_OPT_X_TLS_DEMAND')) {
@@ -321,18 +344,159 @@ class LdapAuth
         }
         @putenv('LDAPTLS_REQCERT=demand');
 
-        $ca = self::resolveLdapCaFile();
-        if ($ca !== null) {
+        // Prefer a combined trust store: enterprise PKI + public CAs (when available)
+        $caFile = self::buildLdapTrustBundle();
+        if ($caFile !== null) {
+            $caNorm = str_replace('\\', '/', $caFile);
             if (defined('LDAP_OPT_X_TLS_CACERTFILE')) {
-                @ldap_set_option(null, LDAP_OPT_X_TLS_CACERTFILE, $ca);
+                @ldap_set_option(null, LDAP_OPT_X_TLS_CACERTFILE, $caNorm);
             }
-            @putenv('LDAPTLS_CACERT=' . $ca);
-            $parts[] = 'CA file: ' . $ca;
+            // Directory containing the CA (some OpenLDAP builds want both)
+            $caDir = str_replace('\\', '/', dirname($caFile));
+            if (defined('LDAP_OPT_X_TLS_CACERTDIR')) {
+                @ldap_set_option(null, LDAP_OPT_X_TLS_CACERTDIR, $caDir);
+            }
+            @putenv('LDAPTLS_CACERT=' . $caNorm);
+            @putenv('LDAPTLS_CACERTDIR=' . $caDir);
+            // ldap.conf style (helps some Windows OpenLDAP builds)
+            $conf = self::writeLdapConf($caNorm);
+            if ($conf !== null) {
+                @putenv('LDAPCONF=' . str_replace('\\', '/', $conf));
+                $parts[] = 'ldap.conf';
+            }
+            $parts[] = 'CA file: ' . $caNorm;
         } else {
-            $parts[] = 'no app CA file found (using system defaults only — if bind fails with Can\'t contact LDAP server, trust your internal CA or enable Skip LDAPS certificate verify)';
+            $parts[] = 'no app CA file found (upload enterprise CA under LDAPS settings, or enable skip-verify)';
         }
 
-        return ['detail' => implode(' · ', $parts)];
+        // Critical: apply TLS options to a fresh context (required on many Windows PHP builds)
+        if (defined('LDAP_OPT_X_TLS_NEWCTX')) {
+            @ldap_set_option(null, LDAP_OPT_X_TLS_NEWCTX, 0);
+            $parts[] = 'NEWCTX refreshed';
+        }
+
+        return ['detail' => implode(' · ', $parts), 'ca_file' => $caFile];
+    }
+
+    /**
+     * Build config/ldap-trust.pem = enterprise CA (+ public cacert.pem if present).
+     */
+    private static function buildLdapTrustBundle(): ?string
+    {
+        $chunks = [];
+        $enterprise = self::enterpriseCaPath();
+        if (is_file($enterprise) && filesize($enterprise) > 50) {
+            $chunks[] = trim((string)file_get_contents($enterprise));
+        }
+        $public = App::ROOT . '/config/cacert.pem';
+        if (is_file($public) && filesize($public) > 1000) {
+            $chunks[] = trim((string)file_get_contents($public));
+        }
+        // Fallback to whatever resolve finds (may be php.ini cafile)
+        if ($chunks === []) {
+            return self::resolveLdapCaFile();
+        }
+
+        $combined = implode("\n\n", $chunks) . "\n";
+        $out = App::ROOT . '/config/ldap-trust.pem';
+        $dir = dirname($out);
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            return is_file($enterprise) ? $enterprise : null;
+        }
+        if (@file_put_contents($out, $combined) === false) {
+            return is_file($enterprise) ? $enterprise : null;
+        }
+        @chmod($out, 0640);
+        return $out;
+    }
+
+    private static function writeLdapConf(string $caFileForwardSlashes): ?string
+    {
+        $path = App::ROOT . '/config/ldap.conf';
+        $body = "TLS_CACERT {$caFileForwardSlashes}\nTLS_REQCERT demand\n";
+        if (@file_put_contents($path, $body) === false) {
+            return null;
+        }
+        return $path;
+    }
+
+    /**
+     * Probe LDAPS with PHP streams/OpenSSL using the same CA file.
+     * @return array{ok:bool,detail:string}
+     */
+    private static function diagnoseSslPeer(string $host, int $port, ?string $caFile): array
+    {
+        if (!function_exists('stream_socket_client')) {
+            return ['ok' => true, 'detail' => 'Skipped (streams unavailable).'];
+        }
+        $ssl = [
+            'verify_peer' => $caFile !== null,
+            'verify_peer_name' => $caFile !== null,
+            'peer_name' => $host,
+            'capture_peer_cert' => true,
+            'capture_peer_cert_chain' => true,
+            'allow_self_signed' => false,
+        ];
+        if ($caFile !== null && is_file($caFile)) {
+            $ssl['cafile'] = $caFile;
+        }
+        if ($caFile === null) {
+            $ssl['verify_peer'] = false;
+            $ssl['verify_peer_name'] = false;
+        }
+        $ctx = stream_context_create(['ssl' => $ssl]);
+        $errno = 0;
+        $errstr = '';
+        $fp = @stream_socket_client(
+            'ssl://' . $host . ':' . $port,
+            $errno,
+            $errstr,
+            12,
+            STREAM_CLIENT_CONNECT,
+            $ctx
+        );
+        if ($fp === false) {
+            $detail = "OpenSSL could not complete TLS to {$host}:{$port} — {$errstr} (errno {$errno}).";
+            if ($caFile !== null) {
+                $detail .= ' Using CA file ' . $caFile . '.';
+            }
+            $detail .= ' Common causes: (1) uploaded CA is not the issuer of the DC certificate, '
+                . '(2) certificate hostname does not match “' . $host . '” (check SAN/CN on the DC cert), '
+                . '(3) intermediate missing (upload with Append).';
+            return ['ok' => false, 'detail' => $detail];
+        }
+
+        $params = stream_context_get_params($fp);
+        $peer = $params['options']['ssl']['peer_certificate'] ?? null;
+        $cn = '';
+        $sans = '';
+        $issuer = '';
+        if ($peer && function_exists('openssl_x509_parse')) {
+            $info = @openssl_x509_parse($peer);
+            if (is_array($info)) {
+                $cn = (string)($info['subject']['CN'] ?? '');
+                $issuer = (string)($info['issuer']['CN'] ?? '');
+                if (!empty($info['extensions']['subjectAltName'])) {
+                    $sans = (string)$info['extensions']['subjectAltName'];
+                }
+            }
+        }
+        fclose($fp);
+
+        $detail = 'TLS handshake OK with OpenSSL';
+        if ($cn !== '') {
+            $detail .= ' · peer CN=' . $cn;
+        }
+        if ($issuer !== '') {
+            $detail .= ' · issuer=' . $issuer;
+        }
+        if ($sans !== '') {
+            $detail .= ' · SAN=' . $sans;
+        }
+        if ($cn !== '' && strcasecmp($cn, $host) !== 0 && $sans !== '' && stripos($sans, $host) === false) {
+            $detail .= ' · WARNING: hostname “' . $host . '” may not match cert name — LDAP can still fail name checks.';
+        }
+        return ['ok' => true, 'detail' => $detail];
     }
 
     /** Path where enterprise LDAPS CA chain is stored (uploaded from Settings). */
@@ -592,7 +756,7 @@ class LdapAuth
     /**
      * @param array<string,mixed> $parsed from parseConfig
      */
-    private static function explainLdapError(string $err, int $errno, array $parsed): string
+    private static function explainLdapError(string $err, int $errno, array $parsed, ?string $caFile = null): string
     {
         $msg = $err !== '' ? $err : 'unknown error';
         $msg .= ' (ldap_errno=' . $errno . ')';
@@ -606,9 +770,12 @@ class LdapAuth
         ) {
             $msg .= '. This often means the TCP/TLS handshake failed (not a wrong Bind DN). '
                 . 'Check: (1) web server can reach ' . ($parsed['host'] ?? '') . ':' . ($parsed['port'] ?? 636)
-                . ' (firewall), (2) LDAPS certificate is trusted by PHP/OpenLDAP, '
-                . '(3) try enabling “Skip LDAPS certificate verify” for internal PKI, '
-                . '(4) optional: place your enterprise root CA PEM in config/ldap-ca.pem.';
+                . ', (2) enterprise CA in Settings is the issuer of the DC cert (see TLS probe step), '
+                . '(3) host name ldaps… matches the certificate SAN/CN, '
+                . '(4) temporary: enable “Skip LDAPS certificate verify”.';
+            if ($caFile) {
+                $msg .= ' Current CA file: ' . $caFile . '.';
+            }
         } elseif (str_contains($lower, 'invalid credentials') || $errno === 49) {
             $msg .= '. Bind DN or password is wrong, account locked/disabled, or password expired.';
         } elseif (str_contains($lower, 'stronger auth') || $errno === 8) {
