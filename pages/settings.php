@@ -162,8 +162,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             exit;
         }
 
+        if ($section === 'test_ldaps') {
+            try {
+                $saved = is_array($config['auth']['ldaps'] ?? null) ? $config['auth']['ldaps'] : [];
+                $bindPass = (string)($_POST['ldaps_bind_password'] ?? '');
+                if ($bindPass === '') {
+                    $bindPass = (string)($saved['bind_password'] ?? '');
+                }
+                $testCfg = [
+                    'host' => trim((string)($_POST['ldaps_host'] ?? '')),
+                    'port' => (int)($_POST['ldaps_port'] ?? 636),
+                    'base_dn' => trim((string)($_POST['ldaps_base_dn'] ?? '')),
+                    'user_filter' => trim((string)($_POST['ldaps_user_filter'] ?? '(sAMAccountName={username})')),
+                    'bind_dn' => trim((string)($_POST['ldaps_bind_dn'] ?? '')),
+                    'bind_password' => $bindPass,
+                    'use_ssl' => !empty($_POST['ldaps_use_ssl']),
+                    'start_tls' => !empty($_POST['ldaps_start_tls']),
+                ];
+                $result = LdapAuth::testConnection(
+                    $testCfg,
+                    trim((string)($_POST['ldaps_test_username'] ?? '')),
+                    (string)($_POST['ldaps_test_password'] ?? '')
+                );
+            } catch (Throwable $e) {
+                $result = [
+                    'ok' => false,
+                    'summary' => 'Test error: ' . $e->getMessage(),
+                    'steps' => [],
+                ];
+            }
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            exit;
+        }
+
         // Write config.php (for general / auth / updates / security)
-        if (!in_array($section, ['update_check', 'update_apply', 'install_ca_bundle', 'export_site_backup'], true)) {
+        if (!in_array($section, [
+            'update_check', 'update_apply', 'install_ca_bundle', 'export_site_backup', 'test_ldaps',
+        ], true)) {
             $export = var_export($config, true);
             $php = "<?php\n/** ColdAisle configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
             if (file_put_contents($configPath, $php) === false) {
@@ -383,9 +419,40 @@ layout_header('Settings', $user, 'settings');
             </div>
             <div class="form-row"><label><input type="checkbox" name="ldaps_use_ssl" value="1" <?= ($ldaps['use_ssl'] ?? true) ? 'checked' : '' ?>> Use LDAPS (SSL)</label></div>
             <div class="form-row"><label><input type="checkbox" name="ldaps_start_tls" value="1" <?= !empty($ldaps['start_tls']) ? 'checked' : '' ?>> STARTTLS</label></div>
-            <div class="form-row"><button class="btn btn-primary" type="submit">Save LDAPS</button></div>
+            <div class="form-row full" style="margin-top:.5rem;padding-top:.75rem;border-top:1px solid var(--border,#2a3648)">
+                <label style="font-weight:600">Connection test</label>
+                <p class="text-muted" style="font-size:.75rem;margin:.2rem 0 .5rem">
+                    Uses the values in this form (save not required). Leave bind password blank to use the saved password.
+                    Optional test user verifies the filter (and password if provided). Does not create ColdAisle users.
+                </p>
+            </div>
+            <div class="form-row"><label>Test username (optional)</label>
+                <input class="form-control" type="text" name="ldaps_test_username" id="ldaps_test_username"
+                       autocomplete="off" placeholder="domain user (sAMAccountName)"></div>
+            <div class="form-row"><label>Test password (optional)</label>
+                <input class="form-control" type="password" name="ldaps_test_password" id="ldaps_test_password"
+                       autocomplete="new-password" placeholder="Only if testing user bind"></div>
+            <div class="form-row full" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+                <button class="btn btn-primary" type="submit">Save LDAPS</button>
+                <button class="btn btn-secondary" type="button" id="ldaps_test_btn">Test connection</button>
+            </div>
         </form>
         <p class="hint text-muted">Requires PHP LDAP extension. Use a read-only service account for searches.</p>
+    </div>
+</div>
+
+<!-- LDAPS test result modal -->
+<div id="ldaps_test_modal" class="ldaps-modal" hidden aria-hidden="true">
+    <div class="ldaps-modal-backdrop" data-ldaps-close></div>
+    <div class="ldaps-modal-panel" role="dialog" aria-modal="true" aria-labelledby="ldaps_test_title">
+        <div class="ldaps-modal-head">
+            <h3 id="ldaps_test_title">LDAPS test</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-ldaps-close aria-label="Close">✕</button>
+        </div>
+        <div id="ldaps_test_body" class="ldaps-modal-body"></div>
+        <div class="ldaps-modal-foot">
+            <button type="button" class="btn btn-secondary" data-ldaps-close>Close</button>
+        </div>
     </div>
 </div>
 
@@ -756,6 +823,109 @@ layout_header('Settings', $user, 'settings');
     // Click outside
     document.addEventListener('click', function (e) {
         if (!box.contains(e.target)) closeList();
+    });
+})();
+
+// LDAPS connection test modal
+(function () {
+    var btn = document.getElementById('ldaps_test_btn');
+    var modal = document.getElementById('ldaps_test_modal');
+    var body = document.getElementById('ldaps_test_body');
+    var title = document.getElementById('ldaps_test_title');
+    if (!btn || !modal || !body) return;
+
+    var form = btn.closest('form');
+    var panel = modal.querySelector('.ldaps-modal-panel');
+
+    function openModal() {
+        modal.hidden = false;
+        modal.setAttribute('aria-hidden', 'false');
+    }
+    function closeModal() {
+        modal.hidden = true;
+        modal.setAttribute('aria-hidden', 'true');
+    }
+    modal.querySelectorAll('[data-ldaps-close]').forEach(function (el) {
+        el.addEventListener('click', closeModal);
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !modal.hidden) closeModal();
+    });
+
+    function esc(s) {
+        var d = document.createElement('div');
+        d.textContent = s == null ? '' : String(s);
+        return d.innerHTML;
+    }
+
+    function showResult(data) {
+        var ok = !!(data && data.ok);
+        panel.classList.remove('ldaps-pass', 'ldaps-fail', 'ldaps-pending');
+        panel.classList.add(ok ? 'ldaps-pass' : 'ldaps-fail');
+        title.textContent = ok ? 'LDAPS test passed' : 'LDAPS test failed';
+        var html = '<p class="ldaps-summary">' + esc(data.summary || (ok ? 'OK' : 'Failed')) + '</p>';
+        html += '<ul class="ldaps-steps">';
+        (data.steps || []).forEach(function (step) {
+            var stepOk = !!step.ok;
+            html += '<li class="' + (stepOk ? 'ldaps-ok' : 'ldaps-bad') + '">';
+            html += '<span class="ldaps-ico" aria-hidden="true">' + (stepOk ? '✓' : '✗') + '</span>';
+            html += '<span class="ldaps-name">' + esc(step.name || '') + '</span>';
+            html += '<span class="ldaps-detail">' + esc(step.detail || '') + '</span>';
+            html += '</li>';
+        });
+        html += '</ul>';
+        body.innerHTML = html;
+    }
+
+    btn.addEventListener('click', function () {
+        if (!form) return;
+        panel.classList.remove('ldaps-pass', 'ldaps-fail');
+        panel.classList.add('ldaps-pending');
+        title.textContent = 'Testing LDAPS…';
+        body.innerHTML = '<p class="ldaps-summary">Contacting directory — please wait.</p>';
+        openModal();
+        btn.disabled = true;
+
+        var fd = new FormData(form);
+        fd.set('section', 'test_ldaps');
+        fd.set('_csrf', (window.ColdAisle && window.ColdAisle.csrf) || form.querySelector('[name=_csrf]').value);
+
+        // Ensure optional test fields are included even if outside name quirks
+        var tu = document.getElementById('ldaps_test_username');
+        var tp = document.getElementById('ldaps_test_password');
+        if (tu) fd.set('ldaps_test_username', tu.value || '');
+        if (tp) fd.set('ldaps_test_password', tp.value || '');
+
+        fetch(window.location.pathname + (window.location.search || ''), {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+        }).then(function (r) {
+            return r.json().then(function (j) {
+                return { okHttp: r.ok, json: j };
+            }).catch(function () {
+                return { okHttp: false, json: { ok: false, summary: 'Invalid response from server.', steps: [] } };
+            });
+        }).then(function (res) {
+            if (res.json && typeof res.json.ok !== 'undefined') {
+                showResult(res.json);
+            } else {
+                showResult({
+                    ok: false,
+                    summary: (res.json && res.json.error) || 'Test request failed.',
+                    steps: []
+                });
+            }
+        }).catch(function (err) {
+            showResult({
+                ok: false,
+                summary: 'Network error: ' + (err && err.message ? err.message : 'request failed'),
+                steps: []
+            });
+        }).finally(function () {
+            btn.disabled = false;
+        });
     });
 })();
 </script>
