@@ -110,7 +110,8 @@ Details and parameters: [`scripts/README-Prereqs.md`](scripts/README-Prereqs.md)
 
 - `web.config` blocks direct web access to `config/`, `src/`, `sql/`, `storage/`, `scripts/`.
 - Install the [IIS URL Rewrite](https://www.iis.net/downloads/microsoft/url-rewrite) module for those rewrite rules (optional but recommended).
-- For HTTPS (required for Entra SSO in production), bind a certificate on the site.
+- For HTTPS (required for Entra SSO in production), bind a certificate on the site, then enable **Settings → Security → Force HTTPS** (and optionally HSTS).
+- `web.config` includes a disabled HTTP→HTTPS rewrite rule if you prefer enforcing TLS at IIS instead of in the app.
 
 ## Authentication
 
@@ -176,7 +177,10 @@ ColdAisle/
 
 ## Security checklist
 
-- [ ] Use HTTPS in production  
+- [ ] Use HTTPS in production; enable **Settings → Security → Force HTTPS** after the cert is bound  
+- [ ] Optionally enable HSTS once HTTPS is stable  
+- [ ] Confirm session cookie is HttpOnly + Secure (when on HTTPS); idle/absolute timeouts under Settings → Security  
+- [ ] Keep `app_key` in `config/config.php` backed up (encrypts SNMP secrets at rest)  
 - [ ] Restrict SQL login to least privilege (db_owner on ColdAisle DB is enough for setup; later `db_datareader`/`db_datawriter` + execute if you tighten)  
 - [ ] Protect `config/config.php` (not web-accessible; contains secrets)  
 - [ ] Rotate the admin password after first login  

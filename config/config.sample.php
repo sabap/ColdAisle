@@ -7,13 +7,24 @@ declare(strict_types=1);
 
 return [
     'app_name' => 'ColdAisle',
-    'version' => '0.2.1',
+    'version' => '0.2.2',
     // Generate: base64_encode(random_bytes(32)) — used to encrypt secrets in the DB
     // Never commit a real production key.
     'app_key' => '',
     'timezone' => 'UTC',
     'base_url' => '', // e.g. https://dcim.contoso.com
     'org_name' => 'My Organization',
+    // Phase B — transport & session hardening (see Settings → Security)
+    'security' => [
+        'force_https' => false,          // 301 redirect HTTP → HTTPS
+        'hsts' => false,                 // Strict-Transport-Security (only when already HTTPS)
+        'hsts_max_age' => 31536000,      // 1 year
+        'cookie_secure' => 'auto',       // auto | always | never
+        'cookie_samesite' => 'Lax',      // Lax | Strict | None
+        'session_idle_minutes' => 480,   // 0 = disabled (8h default)
+        'session_absolute_minutes' => 1440, // 0 = disabled (24h default)
+        'bind_user_agent' => true,       // invalidate session if UA changes
+    ],
     'database' => [
         'host' => 'localhost',
         'port' => 1433,

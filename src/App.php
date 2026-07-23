@@ -19,11 +19,12 @@ require_once __DIR__ . '/Services/Crypto.php';
 class App
 {
     /** App semver — keep in sync with /VERSION */
-    public const VERSION = '0.2.1';
+    public const VERSION = '0.2.2';
     public const ROOT = __DIR__ . '/..';
 
     private static bool $booted = false;
     private static array $config = [];
+    private static bool $securityHeadersSent = false;
 
     public static function configPath(): string
     {
@@ -41,21 +42,25 @@ class App
             return;
         }
 
-        if (session_status() === PHP_SESSION_NONE) {
-            session_name('COLDAISLESESSID');
-            session_start([
-                'cookie_httponly' => true,
-                'cookie_samesite' => 'Lax',
-                'use_strict_mode' => true,
-            ]);
+        $isCli = PHP_SAPI === 'cli';
+
+        // Load config before session so security.cookie_* can apply
+        if (self::isInstalled()) {
+            self::$config = require self::configPath();
+        }
+
+        if (!$isCli && session_status() === PHP_SESSION_NONE) {
+            self::startSecureSession();
         }
 
         if (!self::isInstalled()) {
+            if (!$isCli) {
+                self::sendSecurityHeaders();
+            }
             self::$booted = true;
             return;
         }
 
-        self::$config = require self::configPath();
         Database::configure(self::$config['database'] ?? []);
         date_default_timezone_set(self::$config['timezone'] ?? 'UTC');
         try {
@@ -93,7 +98,218 @@ class App
             self::log('Crypto bootstrap: ' . $e->getMessage(), 'warning');
         }
 
+        // Phase B: transport + session hardening (web only)
+        if (!$isCli) {
+            self::enforceTransportSecurity();
+            self::sendSecurityHeaders();
+            AuthManager::touchSession();
+        }
+
         self::$booted = true;
+    }
+
+    /**
+     * Whether the current request is over HTTPS (incl. reverse-proxy headers).
+     */
+    public static function isHttps(): bool
+    {
+        if (!empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off') {
+            return true;
+        }
+        if (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443) {
+            return true;
+        }
+        $fwd = strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''));
+        if ($fwd === 'https') {
+            return true;
+        }
+        // Cloudflare / some proxies
+        if (!empty($_SERVER['HTTP_X_FORWARDED_SSL'])
+            && strtolower((string)$_SERVER['HTTP_X_FORWARDED_SSL']) === 'on') {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Security config with defaults (safe for lab: force_https off).
+     * @return array{
+     *   force_https:bool,hsts:bool,hsts_max_age:int,
+     *   cookie_secure:string,cookie_samesite:string,
+     *   session_idle_minutes:int,session_absolute_minutes:int,
+     *   bind_user_agent:bool
+     * }
+     */
+    public static function securityConfig(): array
+    {
+        $s = is_array(self::$config['security'] ?? null) ? self::$config['security'] : [];
+        $sameSite = strtoupper((string)($s['cookie_samesite'] ?? 'Lax'));
+        if (!in_array($sameSite, ['LAX', 'STRICT', 'NONE'], true)) {
+            $sameSite = 'LAX';
+        }
+        // PHP expects first-letter capital for session_start cookie_samesite
+        $sameSiteLabel = match ($sameSite) {
+            'STRICT' => 'Strict',
+            'NONE' => 'None',
+            default => 'Lax',
+        };
+        $cookieSecure = strtolower((string)($s['cookie_secure'] ?? 'auto'));
+        if (!in_array($cookieSecure, ['auto', 'always', 'never'], true)) {
+            $cookieSecure = 'auto';
+        }
+        return [
+            'force_https' => !empty($s['force_https']),
+            'hsts' => !empty($s['hsts']),
+            'hsts_max_age' => max(0, (int)($s['hsts_max_age'] ?? 31536000)),
+            'cookie_secure' => $cookieSecure,
+            'cookie_samesite' => $sameSiteLabel,
+            'session_idle_minutes' => max(0, (int)($s['session_idle_minutes'] ?? 480)),
+            'session_absolute_minutes' => max(0, (int)($s['session_absolute_minutes'] ?? 1440)),
+            'bind_user_agent' => array_key_exists('bind_user_agent', $s)
+                ? !empty($s['bind_user_agent'])
+                : true,
+        ];
+    }
+
+    private static function startSecureSession(): void
+    {
+        $sec = self::isInstalled() ? self::securityConfig() : [
+            'cookie_secure' => 'auto',
+            'cookie_samesite' => 'Lax',
+            'session_idle_minutes' => 480,
+        ];
+
+        $https = self::isHttps();
+        $secure = match ($sec['cookie_secure'] ?? 'auto') {
+            'always' => true,
+            'never' => false,
+            default => $https,
+        };
+        // SameSite=None requires Secure
+        $sameSite = $sec['cookie_samesite'] ?? 'Lax';
+        if ($sameSite === 'None' && !$secure) {
+            $sameSite = 'Lax';
+        }
+
+        // Prefer cookies only; never put session id in URLs
+        ini_set('session.use_only_cookies', '1');
+        ini_set('session.use_strict_mode', '1');
+        ini_set('session.use_trans_sid', '0');
+        ini_set('session.cookie_httponly', '1');
+        ini_set('session.cookie_secure', $secure ? '1' : '0');
+        ini_set('session.cookie_samesite', $sameSite);
+
+        $lifetime = 0; // browser session cookie; idle timeout enforced server-side
+        $path = self::sessionCookiePath();
+
+        session_name('COLDAISLESESSID');
+        session_set_cookie_params([
+            'lifetime' => $lifetime,
+            'path' => $path,
+            'domain' => '',
+            'secure' => $secure,
+            'httponly' => true,
+            'samesite' => $sameSite,
+        ]);
+        session_start([
+            'cookie_lifetime' => $lifetime,
+            'cookie_path' => $path,
+            'cookie_secure' => $secure,
+            'cookie_httponly' => true,
+            'cookie_samesite' => $sameSite,
+            'use_strict_mode' => true,
+            'use_only_cookies' => true,
+            'use_trans_sid' => false,
+        ]);
+    }
+
+    /** Cookie path = app base path or '/'. */
+    private static function sessionCookiePath(): string
+    {
+        // basePath needs SCRIPT/DOCUMENT_ROOT; works before full boot
+        try {
+            $bp = self::basePath();
+            if ($bp === '' || $bp === '/') {
+                return '/';
+            }
+            return rtrim($bp, '/') . '/';
+        } catch (Throwable $e) {
+            return '/';
+        }
+    }
+
+    /**
+     * Redirect HTTP→HTTPS when force_https is on.
+     */
+    public static function enforceTransportSecurity(): void
+    {
+        $sec = self::securityConfig();
+        if (empty($sec['force_https']) || self::isHttps()) {
+            return;
+        }
+        // Avoid redirect loops on CLI / incomplete host
+        $host = $_SERVER['HTTP_HOST'] ?? '';
+        if ($host === '') {
+            return;
+        }
+        $uri = (string)($_SERVER['REQUEST_URI'] ?? '/');
+        $target = 'https://' . $host . $uri;
+        header('Location: ' . $target, true, 301);
+        exit;
+    }
+
+    /**
+     * Browser security headers (idempotent per request).
+     */
+    public static function sendSecurityHeaders(): void
+    {
+        if (self::$securityHeadersSent || headers_sent()) {
+            return;
+        }
+        self::$securityHeadersSent = true;
+
+        header('X-Content-Type-Options: nosniff');
+        header('X-Frame-Options: SAMEORIGIN');
+        header('Referrer-Policy: strict-origin-when-cross-origin');
+        header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
+        // Frame ancestors only — full CSP would break existing inline scripts
+        header("Content-Security-Policy: frame-ancestors 'self'");
+
+        $sec = self::isInstalled() ? self::securityConfig() : [];
+        if (self::isHttps() && !empty($sec['hsts'])) {
+            $maxAge = (int)($sec['hsts_max_age'] ?? 31536000);
+            header('Strict-Transport-Security: max-age=' . $maxAge . '; includeSubDomains');
+        }
+    }
+
+    /**
+     * Allow only same-app relative return paths (blocks open redirects).
+     */
+    public static function safeReturnPath(?string $path, string $fallback = 'index.php'): string
+    {
+        if ($path === null || $path === '') {
+            return $fallback;
+        }
+        $path = trim($path);
+        // Absolute URLs / protocol-relative
+        if (preg_match('#^(?:[a-z][a-z0-9+.-]*:)?//#i', $path)) {
+            return $fallback;
+        }
+        if (str_contains($path, "\n") || str_contains($path, "\r") || str_contains($path, "\0")) {
+            return $fallback;
+        }
+        // Strip app base path prefix if present
+        $base = self::basePath();
+        if ($base !== '' && str_starts_with($path, $base . '/')) {
+            $path = substr($path, strlen($base) + 1);
+        } elseif ($base !== '' && $path === $base) {
+            return $fallback;
+        }
+        $path = ltrim($path, '/');
+        if ($path === '' || str_starts_with($path, '.')) {
+            return $fallback;
+        }
+        return $path;
     }
 
     /** Reload config.php into memory (e.g. after writing app_key). */
@@ -126,10 +342,7 @@ class App
         if (!empty(self::$config['base_url'])) {
             return rtrim((string)self::$config['base_url'], '/');
         }
-        $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-            || (isset($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443)
-            || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
-        $scheme = $https ? 'https' : 'http';
+        $scheme = self::isHttps() ? 'https' : 'http';
         $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
         $path = self::basePath();
         return rtrim("{$scheme}://{$host}{$path}", '/');
@@ -213,6 +426,14 @@ class App
         if (!$user) {
             if (self::isApiRequest()) {
                 self::json(['error' => 'Unauthorized'], 401);
+            }
+            // Remember where they were (same-app path only)
+            $uri = (string)($_SERVER['REQUEST_URI'] ?? '');
+            $pathOnly = parse_url($uri, PHP_URL_PATH) ?: '';
+            $query = parse_url($uri, PHP_URL_QUERY);
+            $rel = self::safeReturnPath($pathOnly, '');
+            if ($rel !== '') {
+                $_SESSION['return_url'] = $query ? ($rel . '?' . $query) : $rel;
             }
             self::redirect('login.php');
         }
