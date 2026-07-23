@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Enable the PHP SNMP extension for ColdAisle (Windows IIS + PHP FastCGI).
@@ -15,7 +15,7 @@
       6. Verifies with: php -m | findstr snmp
 
     Review this file before running. It only changes PHP SNMP-related settings and
-    recycles IIS/PHP — it does not open firewall ports or install Net-SNMP.
+    recycles IIS/PHP - it does not open firewall ports or install Net-SNMP.
 
 .PARAMETER PhpInstallPath
     PHP root folder (default: C:\PHP).
@@ -55,7 +55,7 @@ function Assert-Admin {
 }
 
 Assert-Admin
-Write-Host 'ColdAisle — enable PHP SNMP extension' -ForegroundColor White
+Write-Host 'ColdAisle - enable PHP SNMP extension' -ForegroundColor White
 
 $phpIni = Join-Path $PhpInstallPath 'php.ini'
 $phpExe = Join-Path $PhpInstallPath 'php.exe'
@@ -93,7 +93,7 @@ if ($raw -match '(?m)^\s*extension\s*=\s*"?snmp"?\s*$') {
     Write-Ok 'Uncommented extension=snmp'
     $enabled = $true
 } else {
-    $raw = $raw.TrimEnd() + "`r`n`r`n; ColdAisle — PHP SNMP`r`nextension=snmp`r`n"
+    $raw = $raw.TrimEnd() + "`r`n`r`n; ColdAisle - PHP SNMP`r`nextension=snmp`r`n"
     Write-Ok 'Appended extension=snmp'
     $enabled = $true
 }
@@ -165,7 +165,7 @@ Write-Host @"
 
 ================================================================
   Done. Next in ColdAisle:
-    1. Refresh the SNMP page (Ctrl+F5) — warning should clear.
+    1. Refresh the SNMP page (Ctrl+F5) - warning should clear.
     2. Configure SNMPv3 profiles / Discover OIDs / Poll now.
     3. For scheduled polling, Task Scheduler:
          Program:  $phpExe

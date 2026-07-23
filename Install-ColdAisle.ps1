@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Install ColdAisle on Windows (IIS + PHP + ODBC) and deploy the latest release from GitHub.
@@ -28,7 +28,7 @@
       - Create the database or admin user (use the web wizard: setup.php)
       - Install TLS certificates
 
-    Recommended usage (download, review, then run — do not pipe to iex if you want to audit first):
+    Recommended usage (download, review, then run - do not pipe to iex if you want to audit first):
 
       Invoke-WebRequest -Uri "https://raw.githubusercontent.com/sabap/ColdAisle/main/Install-ColdAisle.ps1" `
         -OutFile .\Install-ColdAisle.ps1
@@ -120,7 +120,7 @@ function Assert-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     $p = New-Object Security.Principal.WindowsPrincipal($id)
     if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw 'This installer must run as Administrator (elevated PowerShell). Right-click PowerShell → Run as administrator.'
+        throw 'This installer must run as Administrator (elevated PowerShell). Right-click PowerShell -> Run as administrator.'
     }
 }
 
@@ -145,13 +145,13 @@ function Invoke-PreflightChecks {
         Write-Ok ("OS: {0} (build {1})" -f $os.Caption, $os.BuildNumber)
         # Client vs Server: both OK; warn on very old builds
         if ($os.BuildNumber -and [int]$os.BuildNumber -lt 10240) {
-            Write-Warn 'OS build looks older than Windows 10 / Server 2016 — not a tested platform.'
+            Write-Warn 'OS build looks older than Windows 10 / Server 2016 - not a tested platform.'
         }
     }
 
     $arch = $env:PROCESSOR_ARCHITECTURE
     if ($arch -ne 'AMD64') {
-        Write-Warn "Architecture is $arch — installer targets 64-bit (AMD64). 32-bit is not supported."
+        Write-Warn "Architecture is $arch - installer targets 64-bit (AMD64). 32-bit is not supported."
     } else {
         Write-Ok 'Architecture: AMD64 (x64)'
     }
@@ -183,7 +183,7 @@ function Invoke-PreflightChecks {
 
     # Path length gotcha
     if ($SitePhysicalPath.Length -gt 180) {
-        Write-Warn "Site path is very long ($($SitePhysicalPath.Length) chars). Windows MAX_PATH can break PHP/IIS deploys — prefer a shorter path."
+        Write-Warn "Site path is very long ($($SitePhysicalPath.Length) chars). Windows MAX_PATH can break PHP/IIS deploys - prefer a shorter path."
     }
 
     # Network: GitHub
@@ -205,7 +205,7 @@ function Invoke-PreflightChecks {
         $null = Invoke-WebRequest -Uri 'https://windows.php.net' -Method Head -UseBasicParsing -TimeoutSec 20
         Write-Ok 'windows.php.net reachable (PHP packages)'
     } catch {
-        Write-Warn "windows.php.net not reachable — PHP download may fail: $($_.Exception.Message)"
+        Write-Warn "windows.php.net not reachable - PHP download may fail: $($_.Exception.Message)"
     }
 
     # Execution policy note (Bypass -Scope Process is enough)
@@ -218,13 +218,13 @@ function Invoke-PreflightChecks {
         if ($listeners) {
             Write-Ok 'Port 80 is in use (expected if IIS already installed)'
         } else {
-            Write-Warn 'Nothing listening on port 80 yet — IIS will own this after install'
+            Write-Warn 'Nothing listening on port 80 yet - IIS will own this after install'
         }
     } catch { }
 
     # Existing install
     if ((Test-Path (Join-Path $SitePhysicalPath 'config\config.php')) -and -not $Force) {
-        Write-Warn "Existing config found at $SitePhysicalPath\config\config.php — re-deploy preserves it (use -Force to refresh app files)."
+        Write-Warn "Existing config found at $SitePhysicalPath\config\config.php - re-deploy preserves it (use -Force to refresh app files)."
     }
     if ((Test-Path (Join-Path $SitePhysicalPath 'setup.php')) -and -not $Force) {
         Write-Ok "Site path already has setup.php (will refresh only with -Force or empty path)"
@@ -254,12 +254,12 @@ function Invoke-PostInstallChecks {
         if ($modOut -match 'pdo_odbc' -or $modOut -match 'pdo_sqlsrv') {
             Write-Ok 'PHP SQL PDO driver present (pdo_odbc and/or pdo_sqlsrv)'
         } else {
-            $issues += 'No pdo_odbc or pdo_sqlsrv — SQL connections will fail until ODBC/sqlsrv is fixed'
+            $issues += 'No pdo_odbc or pdo_sqlsrv - SQL connections will fail until ODBC/sqlsrv is fixed'
         }
         if ($modOut -match 'ldap') { Write-Ok 'PHP module: ldap (LDAPS ready)' }
-        else { Write-Warn 'PHP ldap not loaded — enable extension=ldap in php.ini for Active Directory' }
+        else { Write-Warn 'PHP ldap not loaded - enable extension=ldap in php.ini for Active Directory' }
         if ($modOut -match 'snmp') { Write-Ok 'PHP module: snmp (polling ready)' }
-        else { Write-Warn 'PHP snmp not loaded — enable for SNMP poll worker (optional at install)' }
+        else { Write-Warn 'PHP snmp not loaded - enable for SNMP poll worker (optional at install)' }
     }
 
     if (-not (Test-Path (Join-Path $SitePath 'setup.php'))) {
@@ -294,7 +294,7 @@ function Invoke-PostInstallChecks {
                     Write-Warn "IIS physical path differs from -SitePhysicalPath. Confirm the site points at ColdAisle."
                 }
             } else {
-                Write-Warn "IIS site '$SiteName' not found by name — confirm bindings manually"
+                Write-Warn "IIS site '$SiteName' not found by name - confirm bindings manually"
             }
         }
     } catch {
@@ -470,7 +470,7 @@ Ensure-Tls12
 Write-Host ''
 Write-Host '  ColdAisle installer (public GitHub release)' -ForegroundColor White
 Write-Host '  https://github.com/sabap/ColdAisle' -ForegroundColor DarkGray
-Write-Host '  Tested: Windows Server 2025 · SQL Server 2022 Enterprise (and typical Express/Standard)' -ForegroundColor DarkGray
+Write-Host '  Tested: Windows Server 2025 - SQL Server 2022 Enterprise (and typical Express/Standard)' -ForegroundColor DarkGray
 Write-Host ''
 
 Invoke-PreflightChecks
@@ -530,14 +530,14 @@ try {
        (or http://YOUR-SERVER/setup.php)
     3. Enter SQL connection details and create the first admin account.
     4. Delete phpinfo-test.php from the site root if present.
-    5. Optional later: Settings → Updates for one-click upgrades.
+    5. Optional later: Settings -> Updates for one-click upgrades.
        Donate: https://paypal.me/mattelsberry
 
   Gotchas:
     - SQL engine is NOT installed by this script.
     - Use SQL auth or Windows auth that IIS/PHP can use (app pool identity for Windows auth).
     - For LDAPS later: open outbound TCP 636 and enable PHP ldap.
-    - For SNMP polling: Task Scheduler → php.exe scripts\poll_snmp.php
+    - For SNMP polling: Task Scheduler -> php.exe scripts\poll_snmp.php
     - Re-run with -Force to refresh app files (config\config.php is preserved).
 
 "@

@@ -35,7 +35,7 @@
 .PARAMETER DeploySource
     Folder containing ColdAisle source (setup.php, index.php, ...).
     Default: parent of this script (...\scripts -> project root). Used to copy into SitePhysicalPath.
-    Ignored when -FromGitHub is set (unless you also pass an explicit path after download — prefer Install-ColdAisle.ps1).
+    Ignored when -FromGitHub is set (unless you also pass an explicit path after download - prefer Install-ColdAisle.ps1).
 
 .PARAMETER FromGitHub
     Download the application from the public GitHub repo (latest tag, or -Version) instead of copying a local tree.
@@ -1087,13 +1087,13 @@ function Invoke-PrereqVerification {
         if ($mods -match 'pdo_odbc' -or $mods -match 'pdo_sqlsrv') {
             Write-Ok 'PHP: SQL PDO driver (odbc and/or sqlsrv)'
         } else {
-            Write-Warn 'PHP: no pdo_odbc/pdo_sqlsrv — fix before setup.php SQL step'
+            Write-Warn 'PHP: no pdo_odbc/pdo_sqlsrv - fix before setup.php SQL step'
         }
     } else {
         Write-Warn "php.exe missing at $phpExe"
     }
     if (-not (Test-Path $phpCgi)) {
-        Write-Warn "php-cgi.exe missing — IIS FastCGI will fail"
+        Write-Warn "php-cgi.exe missing - IIS FastCGI will fail"
     } else {
         Write-Ok 'php-cgi.exe present'
     }
@@ -1177,7 +1177,7 @@ function Show-Summary {
 Assert-Admin
 Write-Host 'ColdAisle prerequisite installer' -ForegroundColor White
 Write-Host "PHP $PhpVersion NTS x64 -> $PhpInstallPath" -ForegroundColor DarkGray
-Write-Host 'Tested: Windows Server 2025 · SQL Server 2022 Enterprise' -ForegroundColor DarkGray
+Write-Host 'Tested: Windows Server 2025 - SQL Server 2022 Enterprise' -ForegroundColor DarkGray
 if ($SitePhysicalPath) {
     Write-Host "Site path: $SitePhysicalPath (IIS: $SiteName)" -ForegroundColor DarkGray
 }
