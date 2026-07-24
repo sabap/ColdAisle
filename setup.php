@@ -6,6 +6,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/src/App.php';
+require_once __DIR__ . '/includes/timezone_field.php';
 App::boot();
 
 // Already installed?
@@ -331,7 +332,7 @@ function self_generate_config(array $dbCfg, array $form, string $baseUrl): strin
 {
     $export = var_export([
         'app_name' => 'ColdAisle',
-        'version' => '0.2.20',
+        'version' => '0.2.21',
         // 32-byte key, base64 — used to encrypt SNMP/API secrets at rest in the DB
         'app_key' => base64_encode(random_bytes(32)),
         'timezone' => $form['timezone'],
@@ -537,10 +538,16 @@ function req_badge(bool $ok): string
                         <label>SQL Password</label>
                         <input type="password" name="sql_password" value="<?= htmlspecialchars($form['sql_password']) ?>">
                     </div>
-                    <div class="form-row">
-                        <label>Timezone (optional override)</label>
-                        <input type="text" name="timezone" value="<?= htmlspecialchars($form['timezone']) ?>">
-                    </div>
+                    <?php
+                    coldaisle_render_timezone_field([
+                        'name' => 'timezone',
+                        'value' => $form['timezone'],
+                        'label' => 'Timezone (optional override)',
+                        'hint' => 'Type to filter (e.g. New, Chicago, UTC).',
+                        'form_row' => true,
+                        'full' => false,
+                    ]);
+                    ?>
                     <div class="form-row" style="grid-column:1/-1">
                         <label>Public site URL (optional)</label>
                         <input type="text" name="base_url" value="<?= htmlspecialchars($form['base_url']) ?>"
@@ -680,10 +687,16 @@ function req_badge(bool $ok): string
                         <label>Organization Name</label>
                         <input type="text" name="org_name" value="<?= htmlspecialchars($form['org_name']) ?>" required>
                     </div>
-                    <div class="form-row">
-                        <label>Timezone</label>
-                        <input type="text" name="timezone" value="<?= htmlspecialchars($form['timezone']) ?>">
-                    </div>
+                    <?php
+                    coldaisle_render_timezone_field([
+                        'name' => 'timezone',
+                        'value' => $form['timezone'],
+                        'label' => 'Timezone',
+                        'hint' => 'Type to filter (e.g. New, Chicago, UTC).',
+                        'form_row' => true,
+                        'full' => false,
+                    ]);
+                    ?>
                     <div class="form-row">
                         <label>Site Name</label>
                         <input type="text" name="site_name" value="<?= htmlspecialchars($form['site_name']) ?>">
@@ -786,6 +799,7 @@ function req_badge(bool $ok): string
     </div>
     <p style="text-align:center;color:#64748b;margin-top:1.5rem;font-size:.85rem">ColdAisle v<?= App::VERSION ?> · IIS + SQL Server</p>
 </div>
+<script src="assets/js/app.js?v=4"></script>
 <script>
 (function () {
     function wireHttpsWarn(inputId, warnId) {
