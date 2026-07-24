@@ -16,6 +16,9 @@ class MibService
 
     private static bool $loaded = false;
     private static int $loadedCount = 0;
+    /** @var array<string,array{name:string,module:string}>|null numeric OID (no leading dot) => name info */
+    private static ?array $oidIndex = null;
+    private static int $oidIndexSize = 0;
 
     public static function mibDirectory(): string
     {
@@ -221,8 +224,7 @@ class MibService
         }
 
         // Reset load cache so next SNMP call re-reads
-        self::$loaded = false;
-        self::$loadedCount = 0;
+        self::resetCaches();
 
         $module = self::parseModuleName($dest);
         return [
@@ -250,15 +252,25 @@ class MibService
         if (!@unlink($path)) {
             throw new RuntimeException('Could not delete ' . $filename . ' (check permissions).');
         }
+        self::resetCaches();
+    }
+
+    private static function resetCaches(): void
+    {
         self::$loaded = false;
         self::$loadedCount = 0;
+        self::$oidIndex = null;
+        self::$oidIndexSize = 0;
     }
 
     /**
      * Load all local MIB files into the Net-SNMP library for this process.
-     * Safe to call repeatedly (loads once per request).
+     * Also prepares the offline OID→name index used when Net-SNMP still
+     * returns numeric OIDs (common on Windows).
      *
-     * @return int Number of files successfully passed to snmp_read_mib
+     * Safe to call repeatedly (loads once per request unless $force).
+     *
+     * @return int Number of MIB files successfully passed to snmp_read_mib
      */
     public static function loadAll(bool $force = false): int
     {
@@ -268,20 +280,162 @@ class MibService
         self::$loaded = true;
         self::$loadedCount = 0;
 
-        if (!self::snmpExtensionLoaded() || !self::canReadMib()) {
-            return 0;
-        }
-
         try {
             $dir = self::ensureDirectory();
         } catch (Throwable $e) {
             return 0;
         }
 
-        // Prefer app MIB dir for Net-SNMP lookups when ini is empty
+        $dirFwd = str_replace('\\', '/', $dir);
+        $extraDirs = [
+            $dirFwd,
+            'C:/usr/share/snmp/mibs',
+            'C:/PHP/snmp/mibs',
+            'C:/php/snmp/mibs',
+        ];
         $phpDir = trim((string)ini_get('snmp.mib_directory'));
-        if ($phpDir === '' && function_exists('ini_set')) {
-            @ini_set('snmp.mib_directory', str_replace('\\', '/', $dir));
+        if ($phpDir !== '') {
+            $extraDirs[] = str_replace('\\', '/', $phpDir);
+        }
+        $extraDirs = array_values(array_unique(array_filter($extraDirs, static fn($d) => $d !== '')));
+
+        // Net-SNMP env (helps Windows PHP builds more than snmp_read_mib alone)
+        @putenv('MIBDIRS=' . implode(';', $extraDirs));
+        @putenv('MIBS=ALL');
+        if (function_exists('ini_set')) {
+            @ini_set('snmp.mib_directory', $dirFwd);
+        }
+
+        if (self::snmpExtensionLoaded() && self::canReadMib()) {
+            $files = self::listMibs();
+            // Prefer base / RFC-ish names first so vendor IMPORTs can resolve
+            usort($files, static function ($a, $b) {
+                $rank = static function (string $fn): int {
+                    $l = strtolower($fn);
+                    if (str_contains($l, 'rfc') || str_contains($l, 'snmpv2') || str_contains($l, 'smi')
+                        || str_contains($l, 'ianai') || str_contains($l, 'if-mib') || str_contains($l, 'mib-2')
+                    ) {
+                        return 0;
+                    }
+                    return 1;
+                };
+                return $rank($a['filename']) <=> $rank($b['filename'])
+                    ?: strcasecmp($a['filename'], $b['filename']);
+            });
+            foreach ($files as $f) {
+                $path = $dir . DIRECTORY_SEPARATOR . $f['filename'];
+                if (!is_readable($path)) {
+                    continue;
+                }
+                $ok = @snmp_read_mib($path);
+                if ($ok) {
+                    self::$loadedCount++;
+                }
+            }
+        }
+
+        // Always build offline index for Discover name enrichment
+        self::buildOidNameIndex(true);
+
+        return self::$loadedCount;
+    }
+
+    /**
+     * Number of OBJECT nodes resolved to numeric OIDs from uploaded MIBs.
+     */
+    public static function oidIndexSize(): int
+    {
+        if (self::$oidIndex === null) {
+            self::buildOidNameIndex();
+        }
+        return self::$oidIndexSize;
+    }
+
+    /**
+     * Resolve a numeric OID (with optional instance suffix) to Module::name[.inst…].
+     *
+     * @return array{name:string,module:string}|null
+     */
+    public static function resolveOidName(string $numericOid): ?array
+    {
+        $oid = ltrim(trim($numericOid), '.');
+        if ($oid === '' || !preg_match('/^\d+(?:\.\d+)*$/', $oid)) {
+            return null;
+        }
+        $index = self::buildOidNameIndex();
+        if (!$index) {
+            return null;
+        }
+
+        $parts = explode('.', $oid);
+        for ($len = count($parts); $len >= 1; $len--) {
+            $prefix = implode('.', array_slice($parts, 0, $len));
+            if (!isset($index[$prefix])) {
+                continue;
+            }
+            $info = $index[$prefix];
+            $suffix = array_slice($parts, $len);
+            $name = $info['module'] . '::' . $info['name'];
+            if ($suffix) {
+                $name .= '.' . implode('.', $suffix);
+            }
+            return [
+                'name' => $name,
+                'module' => $info['module'],
+            ];
+        }
+        return null;
+    }
+
+    /**
+     * Build numeric OID → {name,module} from uploaded MIB text.
+     * Does not depend on Net-SNMP translation (works on Windows IIS).
+     *
+     * @return array<string,array{name:string,module:string}>
+     */
+    public static function buildOidNameIndex(bool $force = false): array
+    {
+        if (self::$oidIndex !== null && !$force) {
+            return self::$oidIndex;
+        }
+
+        /** @var array<string,array{parent:string,subs:list<int>,module:string}> $nodes */
+        $nodes = [];
+        // Well-known SMI roots (so vendor trees can resolve without base MIB files)
+        $roots = [
+            'iso' => '1',
+            'org' => '1.3',
+            'dod' => '1.3.6',
+            'internet' => '1.3.6.1',
+            'directory' => '1.3.6.1.1',
+            'mgmt' => '1.3.6.1.2',
+            'mib-2' => '1.3.6.1.2.1',
+            'mib_2' => '1.3.6.1.2.1',
+            'transmission' => '1.3.6.1.2.1.10',
+            'experimental' => '1.3.6.1.3',
+            'private' => '1.3.6.1.4',
+            'enterprises' => '1.3.6.1.4.1',
+            'security' => '1.3.6.1.5',
+            'snmpv2' => '1.3.6.1.6',
+            'snmpmodules' => '1.3.6.1.6.3',
+            'ccitt' => '0',
+            'joint-iso-ccitt' => '2',
+        ];
+        foreach ($roots as $n => $oid) {
+            $nodes[strtolower($n)] = [
+                'parent' => '',
+                'subs' => array_map('intval', explode('.', $oid)),
+                'module' => 'SNMPv2-SMI',
+                'absolute' => $oid,
+            ];
+        }
+
+        try {
+            $dir = self::ensureDirectory();
+        } catch (Throwable $e) {
+            self::$oidIndex = [];
+            self::$oidIndexSize = 0;
+            return self::$oidIndex;
         }
 
         $files = self::listMibs();
@@ -290,13 +444,183 @@ class MibService
             if (!is_readable($path)) {
                 continue;
             }
-            // snmp_read_mib returns true on success (PHP 8)
-            $ok = @snmp_read_mib($path);
-            if ($ok) {
-                self::$loadedCount++;
-            }
+            $module = $f['module'] ?: (pathinfo($f['filename'], PATHINFO_FILENAME) ?: 'UNKNOWN');
+            self::parseMibAssignments($path, (string)$module, $nodes);
         }
-        return self::$loadedCount;
+
+        // Resolve all named nodes to absolute OIDs
+        $resolved = [];
+        $resolve = null;
+        $resolve = static function (string $name) use (&$resolve, &$nodes, &$resolved): ?string {
+            $key = strtolower($name);
+            if (array_key_exists($key, $resolved)) {
+                $v = $resolved[$key];
+                return $v === '' ? null : $v;
+            }
+            if (!isset($nodes[$key])) {
+                return null;
+            }
+            $node = $nodes[$key];
+            if (!empty($node['absolute'])) {
+                $resolved[$key] = (string)$node['absolute'];
+                return $resolved[$key];
+            }
+            // Guard cycles
+            $resolved[$key] = '';
+            $parent = (string)($node['parent'] ?? '');
+            $subs = $node['subs'] ?? [];
+            if (!is_array($subs)) {
+                $subs = [];
+            }
+            if ($parent === '') {
+                $oid = $subs ? implode('.', $subs) : '';
+                $resolved[$key] = $oid;
+                return $oid !== '' ? $oid : null;
+            }
+            $parentOid = $resolve($parent);
+            if ($parentOid === null || $parentOid === '') {
+                $resolved[$key] = '';
+                return null;
+            }
+            $oid = $parentOid . ($subs ? ('.' . implode('.', $subs)) : '');
+            $resolved[$key] = $oid;
+            return $oid;
+        };
+
+        $index = [];
+        foreach ($nodes as $key => $node) {
+            if (isset($roots[$key])) {
+                continue; // skip pure SMI roots from candidate names
+            }
+            $oid = $resolve($key);
+            if ($oid === null || $oid === '') {
+                continue;
+            }
+            $dispName = (string)($node['label'] ?? $node['name'] ?? $key);
+            $mod = (string)($node['module'] ?? 'MIB');
+            $index[$oid] = [
+                'name' => $dispName,
+                'module' => $mod,
+            ];
+        }
+
+        self::$oidIndex = $index;
+        self::$oidIndexSize = count($index);
+        return self::$oidIndex;
+    }
+
+    /**
+     * Parse OBJECT-TYPE / OBJECT IDENTIFIER assignments from one MIB file into $nodes.
+     *
+     * @param array<string,array<string,mixed>> $nodes
+     */
+    private static function parseMibAssignments(string $path, string $module, array &$nodes): void
+    {
+        $text = @file_get_contents($path);
+        if (!is_string($text) || $text === '') {
+            return;
+        }
+        if (str_starts_with($text, "\xEF\xBB\xBF")) {
+            $text = substr($text, 3);
+        }
+        // Strip ASN.1 comments
+        $text = preg_replace('/--[^\r\n]*/', '', $text) ?? $text;
+
+        // Module name from DEFINITIONS if present
+        if (preg_match('/^\s*([A-Za-z][A-Za-z0-9_-]*)\s+DEFINITIONS\s*::=\s*BEGIN/mi', $text, $mm)) {
+            $module = $mm[1];
+        }
+
+        // name OBJECT-TYPE ... ::= { parent n n }
+        // name OBJECT IDENTIFIER ::= { parent n }
+        // Limit body length to avoid runaway on huge files
+        if (!preg_match_all(
+            '/\b([A-Za-z][A-Za-z0-9_-]*)\s+'
+            . '(?:OBJECT-TYPE|OBJECT-IDENTITY|MODULE-IDENTITY|NOTIFICATION-TYPE|OBJECT\s+IDENTIFIER)\b'
+            . '([\s\S]{0,8000}?)'
+            . '::=\s*\{([^}]+)\}/i',
+            $text,
+            $matches,
+            PREG_SET_ORDER
+        )) {
+            return;
+        }
+
+        foreach ($matches as $m) {
+            $label = $m[1];
+            $body = $m[2] ?? '';
+            $brace = trim($m[3] ?? '');
+            if ($label === '' || $brace === '') {
+                continue;
+            }
+            // Skip obvious non-OID textual conventions in rare false positives
+            if (preg_match('/\bTEXTUAL-CONVENTION\b/i', $body) && !preg_match('/::=/', $body)) {
+                // still OK if we matched ::= {
+            }
+
+            $parsed = self::parseOidBrace($brace);
+            if ($parsed === null) {
+                continue;
+            }
+            $key = strtolower($label);
+            $nodes[$key] = [
+                'label' => $label,
+                'parent' => $parsed['parent'],
+                'subs' => $parsed['subs'],
+                'module' => $module,
+                'name' => $label,
+            ];
+        }
+    }
+
+    /**
+     * Parse `{ parent 1 2 }` or `{ enterprises 318 }` or `{ 1 3 6 1 4 1 318 }`.
+     *
+     * @return array{parent:string,subs:list<int>}|null
+     */
+    private static function parseOidBrace(string $brace): ?array
+    {
+        $brace = trim(preg_replace('/\s+/', ' ', $brace) ?? $brace);
+        if ($brace === '') {
+            return null;
+        }
+        // Strip (name) annotations: iso(1) org(3) → keep numbers via separate path
+        // Tokenize: identifiers or integers; ignore parenthetical comments
+        $brace = preg_replace('/\([^\)]*\)/', '', $brace) ?? $brace;
+        $brace = trim(preg_replace('/\s+/', ' ', $brace) ?? $brace);
+        $tokens = preg_split('/\s+/', $brace) ?: [];
+        $tokens = array_values(array_filter($tokens, static fn($t) => $t !== ''));
+        if (!$tokens) {
+            return null;
+        }
+
+        // All integers → absolute from iso
+        $allInt = true;
+        $ints = [];
+        foreach ($tokens as $t) {
+            if (!preg_match('/^\d+$/', $t)) {
+                $allInt = false;
+                break;
+            }
+            $ints[] = (int)$t;
+        }
+        if ($allInt) {
+            return ['parent' => '', 'subs' => $ints];
+        }
+
+        $parent = $tokens[0];
+        if (!preg_match('/^[A-Za-z][A-Za-z0-9_-]*$/', $parent)) {
+            return null;
+        }
+        $subs = [];
+        for ($i = 1; $i < count($tokens); $i++) {
+            if (!preg_match('/^\d+$/', $tokens[$i])) {
+                // e.g. { foo bar 1 } unsupported — stop
+                return null;
+            }
+            $subs[] = (int)$tokens[$i];
+        }
+        return ['parent' => $parent, 'subs' => $subs];
     }
 
     private static function uploadErrorMessage(int $code): string
