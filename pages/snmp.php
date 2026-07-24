@@ -726,9 +726,14 @@ layout_header('SNMP Polling', $user, 'snmp');
 
 <!-- SNMPv3 Profiles -->
 <div class="card" id="profiles">
-    <div class="card-header">
+    <div class="card-header flex-between">
         <h2>SNMPv3 credential profiles</h2>
-        <span class="text-muted" style="font-size:.8rem"><?= count($profiles) ?> active</span>
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+            <span class="text-muted" style="font-size:.8rem"><?= count($profiles) ?> active</span>
+            <?php if ($canEdit): ?>
+                <button type="button" class="btn btn-sm btn-primary" data-open-modal="modal-profile">Add profile</button>
+            <?php endif; ?>
+        </div>
     </div>
     <div class="card-body flush">
         <table class="data">
@@ -748,7 +753,7 @@ layout_header('SNMP Polling', $user, 'snmp');
                     <td><?= App::e($p['context_name'] ?? '—') ?></td>
                     <td class="actions" style="white-space:nowrap">
                         <?php if ($canEdit): ?>
-                            <a class="btn btn-sm btn-secondary" href="?edit_profile=<?= (int)$p['profile_id'] ?>#profiles">Edit</a>
+                            <a class="btn btn-sm btn-secondary" href="?edit_profile=<?= (int)$p['profile_id'] ?>">Edit</a>
                             <form method="post" style="display:inline" onsubmit="return confirm('Deactivate this profile?');">
                                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                                 <input type="hidden" name="action" value="deactivate_profile">
@@ -760,104 +765,24 @@ layout_header('SNMP Polling', $user, 'snmp');
                 </tr>
             <?php endforeach; ?>
             <?php if (!$profiles): ?>
-                <tr><td colspan="7" class="text-muted">No profiles yet. Create one below, then select it on device SNMP settings.</td></tr>
+                <tr><td colspan="7" class="text-muted">No profiles yet. Use <strong>Add profile</strong>, then select it on device SNMP settings.</td></tr>
             <?php endif; ?>
             </tbody>
         </table>
     </div>
-    <?php if ($canEdit): ?>
-    <div class="card-body">
-        <h3 class="mt-0"><?= $editProfile ? 'Edit profile' : 'Create SNMPv3 profile' ?></h3>
-        <form method="post" class="form-grid" id="snmpProfileForm">
-            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
-            <input type="hidden" name="action" value="<?= $editProfile ? 'update_profile' : 'add_profile' ?>">
-            <?php if ($editProfile): ?>
-                <input type="hidden" name="profile_id" value="<?= (int)$editProfile['profile_id'] ?>">
-            <?php endif; ?>
-            <div class="form-row"><label>Profile name *</label>
-                <input class="form-control" name="name" required
-                       value="<?= App::e($editProfile['name'] ?? '') ?>"
-                       placeholder="DC-Core-ReadOnly, PDU-AuthPriv…"></div>
-            <div class="form-row"><label>SNMPv3 user (security name) *</label>
-                <input class="form-control" name="security_name" required
-                       value="<?= App::e($editProfile['security_name'] ?? '') ?>"
-                       autocomplete="off"></div>
-            <div class="form-row"><label>Security level</label>
-                <select class="form-control" name="security_level" id="prof_sec_level">
-                    <?php foreach ($secLevels as $lvl): ?>
-                        <option value="<?= $lvl ?>"
-                            <?= ($editProfile['security_level'] ?? 'authPriv') === $lvl ? 'selected' : '' ?>>
-                            <?= $lvl ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div class="form-row prof-auth"><label>Auth protocol</label>
-                <select class="form-control" name="auth_protocol">
-                    <option value="">—</option>
-                    <?php foreach ($authProtos as $ap): ?>
-                        <option value="<?= $ap ?>"
-                            <?= strtoupper((string)($editProfile['auth_protocol'] ?? '')) === $ap ? 'selected' : '' ?>>
-                            <?= $ap ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div class="form-row prof-auth"><label>Auth passphrase</label>
-                <input class="form-control" type="password" name="auth_passphrase" autocomplete="new-password"
-                       placeholder="<?= $editProfile ? 'Leave blank to keep existing' : '' ?>"></div>
-            <div class="form-row prof-priv"><label>Priv protocol (encryption)</label>
-                <select class="form-control" name="priv_protocol">
-                    <option value="">—</option>
-                    <?php foreach ($privProtos as $pp): ?>
-                        <option value="<?= $pp ?>"
-                            <?= strtoupper((string)($editProfile['priv_protocol'] ?? '')) === $pp ? 'selected' : '' ?>>
-                            <?= $pp ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div class="form-row prof-priv"><label>Priv passphrase</label>
-                <input class="form-control" type="password" name="priv_passphrase" autocomplete="new-password"
-                       placeholder="<?= $editProfile ? 'Leave blank to keep existing' : '' ?>"></div>
-            <div class="form-row"><label>Context name</label>
-                <input class="form-control" name="context_name" value="<?= App::e($editProfile['context_name'] ?? '') ?>"></div>
-            <div class="form-row full"><label>Notes</label>
-                <input class="form-control" name="notes" value="<?= App::e($editProfile['notes'] ?? '') ?>"></div>
-            <div class="form-row">
-                <button class="btn btn-primary" type="submit"><?= $editProfile ? 'Save profile' : 'Create profile' ?></button>
-                <?php if ($editProfile): ?>
-                    <a class="btn btn-secondary" href="<?= App::e(App::url('pages/snmp.php#profiles')) ?>">Cancel</a>
-                <?php endif; ?>
-            </div>
-        </form>
-        <script>
-        (function () {
-            var lvl = document.getElementById('prof_sec_level');
-            if (!lvl) return;
-            function sync() {
-                var v = lvl.value;
-                document.querySelectorAll('.prof-auth').forEach(function (el) {
-                    el.style.display = (v === 'authNoPriv' || v === 'authPriv') ? '' : 'none';
-                });
-                document.querySelectorAll('.prof-priv').forEach(function (el) {
-                    el.style.display = (v === 'authPriv') ? '' : 'none';
-                });
-            }
-            lvl.addEventListener('change', sync);
-            sync();
-        })();
-        </script>
-    </div>
-    <?php endif; ?>
 </div>
 
 <div class="card" id="targets">
     <div class="card-header flex-between">
         <h2>Scheduled polling</h2>
-        <span class="text-muted" style="font-size:.85rem">
-            <?= count($scheduledPdus) + count($scheduledDevices) + count($targets) ?> job(s) · Task Scheduler / Poll all
-        </span>
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+            <span class="text-muted" style="font-size:.85rem">
+                <?= count($scheduledPdus) + count($scheduledDevices) + count($targets) ?> job(s) · Task Scheduler / Poll all
+            </span>
+            <?php if ($canEdit): ?>
+                <button type="button" class="btn btn-sm btn-primary" data-open-modal="modal-target">Add target</button>
+            <?php endif; ?>
+        </div>
     </div>
     <div class="card-body" style="padding-bottom:.5rem">
         <p class="text-muted mb-0" style="font-size:.85rem">
@@ -1023,7 +948,7 @@ layout_header('SNMP Polling', $user, 'snmp');
                     </td>
                     <td class="actions" style="white-space:nowrap">
                         <?php if ($canEdit): ?>
-                            <a class="btn btn-sm btn-secondary" href="?edit_target=<?= (int)$t['target_id'] ?>#targets">Edit</a>
+                            <a class="btn btn-sm btn-secondary" href="?edit_target=<?= (int)$t['target_id'] ?>">Edit</a>
                             <form method="post" style="display:inline" onsubmit="return confirm('Remove this target from scheduled polling?');">
                                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                                 <input type="hidden" name="action" value="toggle">
@@ -1045,41 +970,64 @@ layout_header('SNMP Polling', $user, 'snmp');
                 <tr>
                     <td colspan="7" class="text-muted">
                         Nothing scheduled yet. On a PDU or device, run <strong>Discover OIDs</strong>, then turn on
-                        <strong>Scheduled poll</strong>. Optional free-standing targets can still be added below.
+                        <strong>Scheduled poll</strong>. Optional free-standing targets: <strong>Add target</strong>.
                     </td>
                 </tr>
             <?php endif; ?>
             </tbody>
         </table>
     </div>
-    <?php if ($canEdit): ?>
-    <div class="card-body">
-        <h3 class="mt-0"><?= $editTarget ? 'Edit free-standing SNMP target' : 'Add free-standing SNMP target' ?></h3>
-        <p class="text-muted" style="font-size:.85rem;margin-top:0">
-            Prefer <strong>Scheduled poll</strong> on the PDU/device for normal gear.
-            Use a free-standing target only for sensors or hosts that are not inventory PDUs/devices.
-        </p>
-        <?php if ($preselectPduId && !$editTarget): ?>
-            <p class="text-muted" style="font-size:.85rem;margin-top:0">
-                Prefilling for existing PDU
-                <a href="<?= App::e(App::url('pages/power_pdus.php?id=' . $preselectPduId)) ?>">#<?= $preselectPduId ?></a>.
-            </p>
-        <?php endif; ?>
-        <form method="post" class="form-grid" id="snmpTargetForm">
-            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
-            <input type="hidden" name="action" value="<?= $editTarget ? 'update_target' : 'add_target' ?>">
-            <?php if ($editTarget): ?>
-                <input type="hidden" name="target_id" value="<?= (int)$editTarget['target_id'] ?>">
-            <?php endif; ?>
-            <?php if ($preselectPduId && !$editTarget): ?>
-                <input type="hidden" name="return_to_pdu" value="1">
-            <?php endif; ?>
+</div>
+
+<?php
+// Shared JSON catalog for OID templates (used by target modals)
+$oidTemplatesJson = json_encode(
+    array_values(array_map(static function ($t) {
+        $map = json_decode((string)($t['oid_map'] ?? '{}'), true);
+        if (!is_array($map)) {
+            $map = [];
+        }
+        return [
+            'id' => 'site:' . (int)$t['template_id'],
+            'label' => snmp_site_template_label($t),
+            'vendor' => (string)($t['vendor'] ?? ''),
+            'notes' => (string)($t['notes'] ?? ($t['source'] ?? 'discovered')),
+            'oid_map' => $map,
+        ];
+    }, $siteOidTemplates)),
+    JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+);
+
+/**
+ * Render free-standing SNMP target form fields (add or edit).
+ * @param array $tf form values
+ * @param array $tfOids oid fields
+ * @param string $idPrefix unique prefix for element ids
+ * @param bool $isEdit
+ */
+function snmp_render_target_form_fields(
+    array $tf,
+    array $tfOids,
+    string $idPrefix,
+    bool $isEdit,
+    array $profiles,
+    array $authProtos,
+    array $privProtos,
+    array $devices,
+    array $pdus,
+    array $siteOidTemplates,
+    int $preselectPduId
+): void {
+    $p = static function (string $id) use ($idPrefix): string {
+        return $idPrefix . $id;
+    };
+    ?>
             <div class="form-row"><label>Name</label>
-                <input class="form-control" name="name" id="target_name" required value="<?= App::e($tf['name']) ?>"
-                       data-from-pdu="<?= ($preselectPduId && !$editTarget && $tf['name'] !== '') ? '1' : '0' ?>"></div>
+                <input class="form-control" name="name" id="<?= App::e($p('target_name')) ?>" required value="<?= App::e($tf['name']) ?>"
+                       data-from-pdu="<?= ($preselectPduId && !$isEdit && $tf['name'] !== '') ? '1' : '0' ?>"></div>
             <div class="form-row"><label>Host / IP</label>
-                <input class="form-control" name="host" id="target_host" required value="<?= App::e($tf['host']) ?>"
-                       data-from-pdu="<?= ($preselectPduId && !$editTarget && $tf['host'] !== '') ? '1' : '0' ?>"></div>
+                <input class="form-control" name="host" id="<?= App::e($p('target_host')) ?>" required value="<?= App::e($tf['host']) ?>"
+                       data-from-pdu="<?= ($preselectPduId && !$isEdit && $tf['host'] !== '') ? '1' : '0' ?>"></div>
             <div class="form-row"><label>Port</label>
                 <input class="form-control" type="number" name="port" value="<?= (int)$tf['port'] ?>"></div>
             <div class="form-row"><label>Version</label>
@@ -1089,58 +1037,41 @@ layout_header('SNMP Polling', $user, 'snmp');
                 </select>
             </div>
             <div class="form-row"><label>SNMPv3 profile</label>
-                <select class="form-control" name="profile_id" id="target_profile_id"
-                        data-from-pdu="<?= !empty($tf['profile_id']) && !$editTarget ? '1' : '0' ?>">
+                <select class="form-control snmp-target-profile" name="profile_id" id="<?= App::e($p('target_profile_id')) ?>"
+                        data-from-pdu="<?= !empty($tf['profile_id']) && !$isEdit ? '1' : '0' ?>">
                     <option value="">— Manual credentials —</option>
-                    <?php foreach ($profiles as $p): ?>
-                        <option value="<?= (int)$p['profile_id'] ?>"
-                            <?= (int)$tf['profile_id'] === (int)$p['profile_id'] ? 'selected' : '' ?>>
-                            <?= App::e($p['name']) ?>
+                    <?php foreach ($profiles as $pr): ?>
+                        <option value="<?= (int)$pr['profile_id'] ?>"
+                            <?= (int)$tf['profile_id'] === (int)$pr['profile_id'] ? 'selected' : '' ?>>
+                            <?= App::e($pr['name']) ?>
                         </option>
                     <?php endforeach; ?>
                 </select>
-                <p class="text-muted" style="font-size:.72rem;margin:.25rem 0 0">
-                    When you link a PDU that already has a credential profile, it is selected automatically.
-                </p>
             </div>
-            <div class="form-row target-manual"><label>Security Name (user)</label>
+            <div class="form-row snmp-target-manual"><label>Security Name (user)</label>
                 <input class="form-control" name="security_name" value="<?= App::e($tf['security_name']) ?>"></div>
-            <div class="form-row target-manual"><label>Auth Protocol</label>
+            <div class="form-row snmp-target-manual"><label>Auth Protocol</label>
                 <select class="form-control" name="auth_protocol"><option value="">—</option>
                     <?php foreach ($authProtos as $ap): ?>
                         <option value="<?= $ap ?>" <?= strtoupper((string)$tf['auth_protocol']) === $ap ? 'selected' : '' ?>><?= $ap ?></option>
                     <?php endforeach; ?>
                 </select>
             </div>
-            <div class="form-row target-manual"><label>Auth Passphrase</label>
+            <div class="form-row snmp-target-manual"><label>Auth Passphrase</label>
                 <input class="form-control" type="password" name="auth_passphrase"
-                       placeholder="<?= $editTarget ? 'Leave blank to keep' : '' ?>" autocomplete="new-password"></div>
-            <div class="form-row target-manual"><label>Priv Protocol</label>
+                       placeholder="<?= $isEdit ? 'Leave blank to keep' : '' ?>" autocomplete="new-password"></div>
+            <div class="form-row snmp-target-manual"><label>Priv Protocol</label>
                 <select class="form-control" name="priv_protocol"><option value="">—</option>
                     <?php foreach ($privProtos as $pp): ?>
                         <option value="<?= $pp ?>" <?= strtoupper((string)$tf['priv_protocol']) === $pp ? 'selected' : '' ?>><?= $pp ?></option>
                     <?php endforeach; ?>
                 </select>
             </div>
-            <div class="form-row target-manual"><label>Priv Passphrase</label>
+            <div class="form-row snmp-target-manual"><label>Priv Passphrase</label>
                 <input class="form-control" type="password" name="priv_passphrase"
-                       placeholder="<?= $editTarget ? 'Leave blank to keep' : '' ?>" autocomplete="new-password"></div>
-            <div class="form-row target-manual"><label>Context</label>
+                       placeholder="<?= $isEdit ? 'Leave blank to keep' : '' ?>" autocomplete="new-password"></div>
+            <div class="form-row snmp-target-manual"><label>Context</label>
                 <input class="form-control" name="context_name" value="<?= App::e($tf['context_name']) ?>"></div>
-            <script>
-            (function () {
-                var sel = document.getElementById('target_profile_id');
-                if (!sel) return;
-                function sync() {
-                    var manual = !sel.value;
-                    document.querySelectorAll('.target-manual').forEach(function (el) {
-                        el.style.display = manual ? '' : 'none';
-                    });
-                }
-                sel.addEventListener('change', sync);
-                sync();
-            })();
-            </script>
             <div class="form-row"><label>Poll Interval (sec)</label>
                 <input class="form-control" type="number" name="poll_interval_sec" value="<?= (int)$tf['poll_interval_sec'] ?>"></div>
             <div class="form-row"><label>Link Device</label>
@@ -1154,28 +1085,26 @@ layout_header('SNMP Polling', $user, 'snmp');
                 </select>
             </div>
             <div class="form-row"><label>Link existing PDU</label>
-                <select class="form-control" name="pdu_id" id="target_pdu_id">
+                <select class="form-control snmp-target-pdu" name="pdu_id" id="<?= App::e($p('target_pdu_id')) ?>">
                     <option value="">— None —</option>
-                    <?php foreach ($pdus as $p): ?>
-                        <option value="<?= (int)$p['pdu_id'] ?>"
-                                data-ip="<?= App::e((string)($p['ip_address'] ?? '')) ?>"
-                                data-name="<?= App::e((string)($p['name'] ?? '')) ?>"
-                                data-profile="<?= (int)($p['snmp_v3_profile_id'] ?? 0) ?>"
-                            <?= $tf['pdu_id'] === (int)$p['pdu_id'] ? 'selected' : '' ?>>
-                            <?= App::e($p['name']) ?>
-                            <?= !empty($p['ip_address']) ? ' · ' . App::e((string)$p['ip_address']) : ' · (no IP)' ?>
+                    <?php foreach ($pdus as $pu): ?>
+                        <option value="<?= (int)$pu['pdu_id'] ?>"
+                                data-ip="<?= App::e((string)($pu['ip_address'] ?? '')) ?>"
+                                data-name="<?= App::e((string)($pu['name'] ?? '')) ?>"
+                                data-profile="<?= (int)($pu['snmp_v3_profile_id'] ?? 0) ?>"
+                            <?= $tf['pdu_id'] === (int)$pu['pdu_id'] ? 'selected' : '' ?>>
+                            <?= App::e($pu['name']) ?>
+                            <?= !empty($pu['ip_address']) ? ' · ' . App::e((string)$pu['ip_address']) : ' · (no IP)' ?>
                         </option>
                     <?php endforeach; ?>
                 </select>
                 <p class="text-muted" style="font-size:.72rem;margin:.25rem 0 0">
-                    Link a PDU so watt/amp metrics update its polled load. Selecting a PDU fills
-                    <strong>Name</strong>, <strong>Host</strong>, and <strong>SNMPv3 profile</strong> when set on the PDU.
+                    Selecting a PDU can fill Name, Host, and SNMPv3 profile.
                 </p>
             </div>
-
             <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">OID / metric map</h4></div>
             <div class="form-row full"><label>OID template</label>
-                <select class="form-control" name="oid_template" id="oid_template_select">
+                <select class="form-control snmp-oid-template" name="oid_template" id="<?= App::e($p('oid_template_select')) ?>">
                     <option value="">— Manual / blank —</option>
                     <?php
                     $byVendor = [];
@@ -1200,146 +1129,383 @@ layout_header('SNMP Polling', $user, 'snmp');
                         </optgroup>
                     <?php endforeach; ?>
                 </select>
-                <p class="text-muted" id="oid_template_notes" style="font-size:.75rem;margin:.35rem 0 0">
-                    Templates are created with <strong>Discover OIDs</strong> on a PDU or device (one per vendor + model).
-                    <?php if (!$siteOidTemplates): ?>
-                        None yet — discover from a live host first.
-                    <?php endif; ?>
+                <p class="text-muted snmp-oid-template-notes" id="<?= App::e($p('oid_template_notes')) ?>" style="font-size:.75rem;margin:.35rem 0 0">
+                    Templates come from <strong>Discover OIDs</strong> on a PDU or device.
                 </p>
             </div>
             <div class="form-row"><label>OID sysUpTime</label>
-                <input class="form-control" name="oid_uptime" id="oid_uptime" value="<?= App::e($tfOids['oid_uptime']) ?>"></div>
+                <input class="form-control" name="oid_uptime" id="<?= App::e($p('oid_uptime')) ?>" value="<?= App::e($tfOids['oid_uptime']) ?>"></div>
             <div class="form-row"><label>OID Watts</label>
-                <input class="form-control" name="oid_watts" id="oid_watts" value="<?= App::e($tfOids['oid_watts']) ?>" placeholder="1.3.6.1.4.1…"></div>
+                <input class="form-control" name="oid_watts" id="<?= App::e($p('oid_watts')) ?>" value="<?= App::e($tfOids['oid_watts']) ?>" placeholder="1.3.6.1.4.1…"></div>
             <div class="form-row"><label>OID Amps</label>
-                <input class="form-control" name="oid_amps" id="oid_amps" value="<?= App::e($tfOids['oid_amps']) ?>" placeholder="1.3.6.1.4.1…"></div>
+                <input class="form-control" name="oid_amps" id="<?= App::e($p('oid_amps')) ?>" value="<?= App::e($tfOids['oid_amps']) ?>" placeholder="1.3.6.1.4.1…"></div>
             <div class="form-row"><label>Amps scale</label>
-                <select class="form-control" name="oid_amps_metric" id="oid_amps_metric">
+                <select class="form-control" name="oid_amps_metric" id="<?= App::e($p('oid_amps_metric')) ?>">
                     <option value="amps" <?= $tfOids['oid_amps_metric'] === 'amps' ? 'selected' : '' ?>>Amps (as reported)</option>
                     <option value="amps_x10" <?= $tfOids['oid_amps_metric'] === 'amps_x10' ? 'selected' : '' ?>>Tenths of amps (÷10 on poll)</option>
                 </select>
             </div>
             <div class="form-row"><label>OID Temperature</label>
-                <input class="form-control" name="oid_temp" id="oid_temp" value="<?= App::e($tfOids['oid_temp']) ?>" placeholder="optional"></div>
-            <div class="form-row full">
-                <p class="text-muted" style="font-size:.75rem;margin:0">
-                    Metric names containing <strong>watt</strong> / <strong>amp</strong> update a linked PDU’s polled load.
-                </p>
-            </div>
-            <div class="form-row">
-                <button class="btn btn-primary" type="submit"><?= $editTarget ? 'Save target' : 'Add Target' ?></button>
-                <?php if ($editTarget): ?>
-                    <a class="btn btn-secondary" href="<?= App::e(App::url('pages/snmp.php#targets')) ?>">Cancel</a>
-                <?php endif; ?>
-            </div>
-        </form>
-        <script>
-        window.ColdAisle_OID_TEMPLATES = <?= json_encode(
-            array_values(array_map(static function ($t) {
-                $map = json_decode((string)($t['oid_map'] ?? '{}'), true);
-                if (!is_array($map)) {
-                    $map = [];
-                }
-                return [
-                    'id' => 'site:' . (int)$t['template_id'],
-                    'label' => snmp_site_template_label($t),
-                    'vendor' => (string)($t['vendor'] ?? ''),
-                    'notes' => (string)($t['notes'] ?? ($t['source'] ?? 'discovered')),
-                    'oid_map' => $map,
-                ];
-            }, $siteOidTemplates)),
-            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
-        ) ?>;
-        (function () {
-            var sel = document.getElementById('oid_template_select');
-            var notes = document.getElementById('oid_template_notes');
-            var catalog = window.ColdAisle_OID_TEMPLATES || [];
-            var editing = <?= $editTarget ? 'true' : 'false' ?>;
-            var notesDefault = notes ? notes.textContent : '';
-            if (!sel) return;
-            function findTpl(id) {
-                for (var i = 0; i < catalog.length; i++) {
-                    if (catalog[i].id === id) return catalog[i];
-                }
-                return null;
-            }
-            function applyTpl() {
-                var t = findTpl(sel.value);
-                if (!t) {
-                    if (notes) notes.textContent = notesDefault;
-                    return;
-                }
-                if (notes) notes.textContent = t.notes || ('Template: ' + (t.label || ''));
-                var map = t.oid_map || {};
-                var set = function (id, v) {
-                    var el = document.getElementById(id);
-                    if (el) el.value = v != null ? v : '';
-                };
-                set('oid_uptime', map.sysUpTime || '1.3.6.1.2.1.1.3.0');
-                set('oid_watts', map.watts || '');
-                var amps = map.amps_x10 || map.amps || '';
-                set('oid_amps', amps);
-                set('oid_temp', map.temperature || map.temp || '');
-                var metric = document.getElementById('oid_amps_metric');
-                if (metric) metric.value = map.amps_x10 ? 'amps_x10' : 'amps';
-            }
-            sel.addEventListener('change', applyTpl);
-            // Only auto-apply template OIDs for new targets; edit keeps saved OIDs until template changes
-            if (!editing) applyTpl();
-            else {
-                var t0 = findTpl(sel.value);
-                if (notes && t0) notes.textContent = t0.notes || ('Template: ' + (t0.label || ''));
-            }
+                <input class="form-control" name="oid_temp" id="<?= App::e($p('oid_temp')) ?>" value="<?= App::e($tfOids['oid_temp']) ?>" placeholder="optional"></div>
+    <?php
+}
 
-            // PDU link → always fill Name, Host, and SNMPv3 profile from the selected PDU
-            var pduSel = document.getElementById('target_pdu_id');
-            var hostEl = document.getElementById('target_host');
-            var nameEl = document.getElementById('target_name');
-            var profileEl = document.getElementById('target_profile_id');
-            function applyPduLink() {
-                if (!pduSel) return;
-                var opt = pduSel.options[pduSel.selectedIndex];
-                if (!opt || !String(opt.value || '').length) return;
-                var ip = opt.getAttribute('data-ip') || '';
-                var pname = opt.getAttribute('data-name') || '';
-                // Prefer dataset (decoded) when available
-                if (opt.dataset) {
-                    if (opt.dataset.ip) ip = opt.dataset.ip;
-                    if (opt.dataset.name) pname = opt.dataset.name;
-                }
-                var profile = (opt.dataset && opt.dataset.profile != null)
-                    ? String(opt.dataset.profile)
-                    : (opt.getAttribute('data-profile') || '');
-                if (nameEl && pname) {
-                    nameEl.value = pname;
-                }
-                if (hostEl && ip) {
-                    hostEl.value = ip;
-                }
-                if (profileEl) {
-                    if (profile && profile !== '0') {
-                        profileEl.value = profile;
-                    }
-                    // Sync show/hide of manual credential fields
-                    if (typeof profileEl.onchange === 'function') {
-                        profileEl.onchange();
-                    } else {
-                        profileEl.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-                }
-            }
-            if (pduSel) {
-                pduSel.addEventListener('change', applyPduLink);
-                // If a PDU is already selected on load, fill fields (new target only)
-                if (!editing && pduSel.value) {
-                    applyPduLink();
-                }
-            }
-        })();
-        </script>
+// Build default empty form values for add modal
+$tfAdd = $editTarget ? [
+    'name' => '', 'host' => '', 'port' => 161, 'snmp_version' => '3', 'profile_id' => 0,
+    'security_name' => '', 'auth_protocol' => '', 'priv_protocol' => '', 'context_name' => '',
+    'poll_interval_sec' => 300, 'device_id' => 0, 'pdu_id' => 0,
+] : $tf;
+$tfOidsAdd = $editTarget ? [
+    'oid_template' => '', 'oid_uptime' => '1.3.6.1.2.1.1.3.0', 'oid_watts' => '',
+    'oid_amps' => '', 'oid_amps_metric' => 'amps', 'oid_temp' => '',
+] : $tfOids;
+// When not editing, $tf/$tfOids already are for add (or preselect)
+if (!$editTarget) {
+    $tfAdd = $tf;
+    $tfOidsAdd = $tfOids;
+}
+?>
+
+<?php if ($canEdit): ?>
+<!-- Add SNMPv3 profile modal -->
+<div class="app-modal" id="modal-profile" hidden aria-hidden="true">
+    <div class="app-modal-backdrop" data-modal-close></div>
+    <div class="app-modal-panel app-modal-panel-wide" role="dialog" aria-modal="true" aria-labelledby="modal-profile-title">
+        <div class="app-modal-head">
+            <h3 id="modal-profile-title">Create SNMPv3 profile</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
+        </div>
+        <div class="app-modal-body">
+            <form method="post" class="form-grid snmp-profile-form">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="add_profile">
+                <div class="form-row"><label>Profile name *</label>
+                    <input class="form-control" name="name" required placeholder="DC-Core-ReadOnly, PDU-AuthPriv…"></div>
+                <div class="form-row"><label>SNMPv3 user (security name) *</label>
+                    <input class="form-control" name="security_name" required autocomplete="off"></div>
+                <div class="form-row"><label>Security level</label>
+                    <select class="form-control" name="security_level">
+                        <?php foreach ($secLevels as $lvl): ?>
+                            <option value="<?= $lvl ?>" <?= $lvl === 'authPriv' ? 'selected' : '' ?>><?= $lvl ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row snmp-prof-auth"><label>Auth protocol</label>
+                    <select class="form-control" name="auth_protocol">
+                        <option value="">—</option>
+                        <?php foreach ($authProtos as $ap): ?>
+                            <option value="<?= $ap ?>"><?= $ap ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row snmp-prof-auth"><label>Auth passphrase</label>
+                    <input class="form-control" type="password" name="auth_passphrase" autocomplete="new-password"></div>
+                <div class="form-row snmp-prof-priv"><label>Priv protocol (encryption)</label>
+                    <select class="form-control" name="priv_protocol">
+                        <option value="">—</option>
+                        <?php foreach ($privProtos as $pp): ?>
+                            <option value="<?= $pp ?>"><?= $pp ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row snmp-prof-priv"><label>Priv passphrase</label>
+                    <input class="form-control" type="password" name="priv_passphrase" autocomplete="new-password"></div>
+                <div class="form-row"><label>Context name</label>
+                    <input class="form-control" name="context_name"></div>
+                <div class="form-row full"><label>Notes</label>
+                    <input class="form-control" name="notes"></div>
+                <div class="form-row full app-modal-actions">
+                    <button class="btn btn-primary" type="submit">Create profile</button>
+                    <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>
+                </div>
+            </form>
+        </div>
     </div>
-    <?php endif; ?>
 </div>
+
+<?php if ($editProfile): ?>
+<div class="app-modal" id="modal-profile-edit" aria-hidden="false">
+    <div class="app-modal-backdrop" data-modal-close-nav></div>
+    <div class="app-modal-panel app-modal-panel-wide" role="dialog" aria-modal="true">
+        <div class="app-modal-head">
+            <h3>Edit SNMPv3 profile</h3>
+            <a class="btn btn-ghost btn-sm" href="<?= App::e(App::url('pages/snmp.php#profiles')) ?>" aria-label="Close">✕</a>
+        </div>
+        <div class="app-modal-body">
+            <form method="post" class="form-grid snmp-profile-form">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="update_profile">
+                <input type="hidden" name="profile_id" value="<?= (int)$editProfile['profile_id'] ?>">
+                <div class="form-row"><label>Profile name *</label>
+                    <input class="form-control" name="name" required value="<?= App::e($editProfile['name'] ?? '') ?>"></div>
+                <div class="form-row"><label>SNMPv3 user (security name) *</label>
+                    <input class="form-control" name="security_name" required value="<?= App::e($editProfile['security_name'] ?? '') ?>" autocomplete="off"></div>
+                <div class="form-row"><label>Security level</label>
+                    <select class="form-control" name="security_level">
+                        <?php foreach ($secLevels as $lvl): ?>
+                            <option value="<?= $lvl ?>" <?= ($editProfile['security_level'] ?? 'authPriv') === $lvl ? 'selected' : '' ?>><?= $lvl ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row snmp-prof-auth"><label>Auth protocol</label>
+                    <select class="form-control" name="auth_protocol">
+                        <option value="">—</option>
+                        <?php foreach ($authProtos as $ap): ?>
+                            <option value="<?= $ap ?>" <?= strtoupper((string)($editProfile['auth_protocol'] ?? '')) === $ap ? 'selected' : '' ?>><?= $ap ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row snmp-prof-auth"><label>Auth passphrase</label>
+                    <input class="form-control" type="password" name="auth_passphrase" autocomplete="new-password" placeholder="Leave blank to keep existing"></div>
+                <div class="form-row snmp-prof-priv"><label>Priv protocol (encryption)</label>
+                    <select class="form-control" name="priv_protocol">
+                        <option value="">—</option>
+                        <?php foreach ($privProtos as $pp): ?>
+                            <option value="<?= $pp ?>" <?= strtoupper((string)($editProfile['priv_protocol'] ?? '')) === $pp ? 'selected' : '' ?>><?= $pp ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row snmp-prof-priv"><label>Priv passphrase</label>
+                    <input class="form-control" type="password" name="priv_passphrase" autocomplete="new-password" placeholder="Leave blank to keep existing"></div>
+                <div class="form-row"><label>Context name</label>
+                    <input class="form-control" name="context_name" value="<?= App::e($editProfile['context_name'] ?? '') ?>"></div>
+                <div class="form-row full"><label>Notes</label>
+                    <input class="form-control" name="notes" value="<?= App::e($editProfile['notes'] ?? '') ?>"></div>
+                <div class="form-row full app-modal-actions">
+                    <button class="btn btn-primary" type="submit">Save profile</button>
+                    <a class="btn btn-secondary" href="<?= App::e(App::url('pages/snmp.php#profiles')) ?>">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<!-- Add free-standing target modal -->
+<div class="app-modal" id="modal-target" <?= ($preselectPduId && !$editTarget) ? '' : 'hidden' ?>
+     aria-hidden="<?= ($preselectPduId && !$editTarget) ? 'false' : 'true' ?>">
+    <div class="app-modal-backdrop" data-modal-close></div>
+    <div class="app-modal-panel app-modal-panel-wide" role="dialog" aria-modal="true">
+        <div class="app-modal-head">
+            <h3>Add free-standing SNMP target</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
+        </div>
+        <div class="app-modal-body">
+            <p class="text-muted" style="font-size:.85rem;margin-top:0">
+                Prefer <strong>Scheduled poll</strong> on the PDU/device for normal gear.
+                Use a free-standing target for sensors or hosts outside inventory.
+            </p>
+            <form method="post" class="form-grid snmp-target-form" data-snmp-target-form="add">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="add_target">
+                <?php if ($preselectPduId && !$editTarget): ?>
+                    <input type="hidden" name="return_to_pdu" value="1">
+                <?php endif; ?>
+                <?php
+                snmp_render_target_form_fields(
+                    $tfAdd, $tfOidsAdd, 'add_', false,
+                    $profiles, $authProtos, $privProtos, $devices, $pdus, $siteOidTemplates, $preselectPduId
+                );
+                ?>
+                <div class="form-row full app-modal-actions">
+                    <button class="btn btn-primary" type="submit">Add target</button>
+                    <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<?php if ($editTarget): ?>
+<div class="app-modal" id="modal-target-edit" aria-hidden="false">
+    <div class="app-modal-backdrop" data-modal-close-nav></div>
+    <div class="app-modal-panel app-modal-panel-wide" role="dialog" aria-modal="true">
+        <div class="app-modal-head">
+            <h3>Edit free-standing SNMP target</h3>
+            <a class="btn btn-ghost btn-sm" href="<?= App::e(App::url('pages/snmp.php#targets')) ?>" aria-label="Close">✕</a>
+        </div>
+        <div class="app-modal-body">
+            <form method="post" class="form-grid snmp-target-form" data-snmp-target-form="edit">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="update_target">
+                <input type="hidden" name="target_id" value="<?= (int)$editTarget['target_id'] ?>">
+                <?php
+                snmp_render_target_form_fields(
+                    $tf, $tfOids, 'edit_', true,
+                    $profiles, $authProtos, $privProtos, $devices, $pdus, $siteOidTemplates, 0
+                );
+                ?>
+                <div class="form-row full app-modal-actions">
+                    <button class="btn btn-primary" type="submit">Save target</button>
+                    <a class="btn btn-secondary" href="<?= App::e(App::url('pages/snmp.php#targets')) ?>">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<script>
+window.ColdAisle_OID_TEMPLATES = <?= $oidTemplatesJson ?>;
+(function () {
+    // Profile security-level field visibility
+    function bindProfileForm(form) {
+        var lvl = form.querySelector('[name=security_level]');
+        if (!lvl) return;
+        function sync() {
+            var v = lvl.value;
+            form.querySelectorAll('.snmp-prof-auth').forEach(function (el) {
+                el.style.display = (v === 'authNoPriv' || v === 'authPriv') ? '' : 'none';
+            });
+            form.querySelectorAll('.snmp-prof-priv').forEach(function (el) {
+                el.style.display = (v === 'authPriv') ? '' : 'none';
+            });
+        }
+        lvl.addEventListener('change', sync);
+        sync();
+    }
+    document.querySelectorAll('.snmp-profile-form').forEach(bindProfileForm);
+
+    // Target form: profile manual fields, PDU fill, OID templates
+    function bindTargetForm(form) {
+        var catalog = window.ColdAisle_OID_TEMPLATES || [];
+        var profileEl = form.querySelector('.snmp-target-profile');
+        var pduSel = form.querySelector('.snmp-target-pdu');
+        var nameEl = form.querySelector('[name=name]');
+        var hostEl = form.querySelector('[name=host]');
+        var oidSel = form.querySelector('.snmp-oid-template');
+        var notes = form.querySelector('.snmp-oid-template-notes');
+        var notesDefault = notes ? notes.textContent : '';
+        var isEdit = form.getAttribute('data-snmp-target-form') === 'edit';
+
+        function syncManual() {
+            if (!profileEl) return;
+            var manual = !profileEl.value;
+            form.querySelectorAll('.snmp-target-manual').forEach(function (el) {
+                el.style.display = manual ? '' : 'none';
+            });
+        }
+        if (profileEl) {
+            profileEl.addEventListener('change', syncManual);
+            syncManual();
+        }
+
+        function applyPduLink() {
+            if (!pduSel || !pduSel.value || isEdit) return;
+            var opt = pduSel.options[pduSel.selectedIndex];
+            if (!opt) return;
+            var ip = opt.getAttribute('data-ip') || '';
+            var nm = opt.getAttribute('data-name') || '';
+            var profile = opt.getAttribute('data-profile') || '';
+            if (nameEl && (!nameEl.value || nameEl.getAttribute('data-from-pdu') === '1')) {
+                nameEl.value = nm;
+                nameEl.setAttribute('data-from-pdu', '1');
+            }
+            if (hostEl && (!hostEl.value || hostEl.getAttribute('data-from-pdu') === '1')) {
+                hostEl.value = ip;
+                hostEl.setAttribute('data-from-pdu', '1');
+            }
+            if (profileEl && profile && profile !== '0') {
+                if (!profileEl.value || profileEl.getAttribute('data-from-pdu') === '1') {
+                    profileEl.value = profile;
+                    profileEl.setAttribute('data-from-pdu', '1');
+                    syncManual();
+                }
+            }
+        }
+        if (pduSel) {
+            pduSel.addEventListener('change', applyPduLink);
+            if (!isEdit && pduSel.value) applyPduLink();
+        }
+
+        function findTpl(id) {
+            for (var i = 0; i < catalog.length; i++) {
+                if (catalog[i].id === id) return catalog[i];
+            }
+            return null;
+        }
+        function setId(suffix, v) {
+            // ids are like add_oid_watts or edit_oid_watts
+            var prefix = isEdit ? 'edit_' : 'add_';
+            var el = document.getElementById(prefix + suffix);
+            if (el) el.value = v != null ? v : '';
+        }
+        function applyTpl() {
+            if (!oidSel) return;
+            var t = findTpl(oidSel.value);
+            if (!t) {
+                if (notes) notes.textContent = notesDefault;
+                return;
+            }
+            if (notes) notes.textContent = t.notes || ('Template: ' + (t.label || ''));
+            var map = t.oid_map || {};
+            setId('oid_uptime', map.sysUpTime || '1.3.6.1.2.1.1.3.0');
+            setId('oid_watts', map.watts || '');
+            var amps = map.amps || map.amps_x10 || '';
+            setId('oid_amps', amps);
+            var metricEl = document.getElementById((isEdit ? 'edit_' : 'add_') + 'oid_amps_metric');
+            if (metricEl) {
+                metricEl.value = map.amps_x10 ? 'amps_x10' : 'amps';
+            }
+            setId('oid_temp', map.temperature || map.temp || '');
+        }
+        if (oidSel) {
+            oidSel.addEventListener('change', applyTpl);
+        }
+    }
+    document.querySelectorAll('.snmp-target-form').forEach(bindTargetForm);
+
+    // App modals (shared pattern with Users page)
+    function openModal(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.hidden = false;
+        el.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+        var focus = el.querySelector('input:not([type=hidden]), select, textarea, button');
+        if (focus) setTimeout(function () { focus.focus(); }, 50);
+    }
+    function closeModal(el) {
+        if (!el) return;
+        el.hidden = true;
+        el.setAttribute('aria-hidden', 'true');
+        if (!document.querySelector('.app-modal:not([hidden])')) {
+            document.body.style.overflow = '';
+        }
+    }
+    document.querySelectorAll('[data-open-modal]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            openModal(btn.getAttribute('data-open-modal'));
+        });
+    });
+    document.querySelectorAll('[data-modal-close]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            closeModal(btn.closest('.app-modal'));
+        });
+    });
+    document.querySelectorAll('[data-modal-close-nav]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            window.location.href = <?= json_encode(App::url('pages/snmp.php')) ?>;
+        });
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+        var open = document.querySelector('.app-modal:not([hidden])');
+        if (!open) return;
+        if (open.id === 'modal-profile-edit' || open.id === 'modal-target-edit') {
+            window.location.href = <?= json_encode(App::url('pages/snmp.php')) ?>;
+        } else {
+            closeModal(open);
+        }
+    });
+    if (document.getElementById('modal-profile-edit') || document.getElementById('modal-target-edit')
+        || (document.getElementById('modal-target') && !document.getElementById('modal-target').hidden)) {
+        document.body.style.overflow = 'hidden';
+    }
+})();
+</script>
+<?php endif; // $canEdit modals ?>
 
 <div class="card" id="oid-templates">
     <div class="card-header flex-between">
