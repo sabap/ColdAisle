@@ -132,8 +132,15 @@ class SnmpDiscover
                 $mapOid = $oid;
             }
 
-            if (!$name && class_exists('MibService') && preg_match('/^\d+(?:\.\d+)*$/', $oid)) {
-                $resolved = MibService::resolveOidName($oid);
+            // Prefer portable normalized numeric OID (leading iso(1))
+            if (preg_match('/^\d+(?:\.\d+)*$/', $mapOid)) {
+                $mapOid = class_exists('MibService')
+                    ? MibService::normalizeNumericOid($mapOid)
+                    : self::normalizeNumericOidLocal($mapOid);
+            }
+
+            if (!$name && class_exists('MibService') && preg_match('/^\d+(?:\.\d+)*$/', $mapOid)) {
+                $resolved = MibService::resolveOidName($mapOid);
                 if ($resolved) {
                     $name = $resolved['name'];
                     $module = $resolved['module'];
@@ -311,6 +318,9 @@ class SnmpDiscover
         // Full or trailing dotted numeric OID (at least two arcs: 1.3 …)
         if (preg_match('/(\d+(?:\.\d+)+)/', $rawKey, $m)) {
             $oid = ltrim($m[1], '.');
+            $oid = class_exists('MibService')
+                ? MibService::normalizeNumericOid($oid)
+                : self::normalizeNumericOidLocal($oid);
         }
 
         // Symbolic-only key (common with SNMP_OID_OUTPUT_MODULE)
@@ -324,6 +334,16 @@ class SnmpDiscover
             'module' => $module,
             'raw_key' => $rawKey,
         ];
+    }
+
+    /** Fallback when MibService is unavailable. */
+    private static function normalizeNumericOidLocal(string $oid): string
+    {
+        $oid = ltrim(trim($oid), '.');
+        if (preg_match('/^3\.6\.1(?:\.|$)/', $oid)) {
+            return '1.' . $oid;
+        }
+        return $oid;
     }
 
     /**
@@ -413,18 +433,77 @@ class SnmpDiscover
         return 'noAuthNoPriv';
     }
 
+    /**
+     * Coerce SNMP values to numbers. Does NOT scrape digits out of model strings
+     * like "AP8861" (that previously became 8861 and scored as "possible watts").
+     */
     private static function toNumber($raw): ?float
     {
         if ($raw === null || $raw === false) {
             return null;
         }
-        if (is_numeric($raw)) {
+        if (is_int($raw) || is_float($raw)) {
             return (float)$raw;
         }
-        if (is_string($raw) && preg_match('/[-+]?\d*\.?\d+/', $raw, $m)) {
-            return (float)$m[0];
+        if (is_bool($raw)) {
+            return null;
+        }
+        if (!is_string($raw)) {
+            if (is_numeric($raw)) {
+                return (float)$raw;
+            }
+            return null;
+        }
+        $s = trim($raw);
+        if ($s === '') {
+            return null;
+        }
+        // Pure number
+        if (is_numeric($s)) {
+            return (float)$s;
+        }
+        // SNMP type prefixes: "INTEGER: 42", "Gauge32: 100"
+        if (preg_match(
+            '/^(?:INTEGER|Integer32|Gauge32|Counter(?:32|64)|Unsigned32|Opaque|Timeticks|TimeTicks)\s*:\s*([-+]?\d+(?:\.\d+)?)\s*$/i',
+            $s,
+            $m
+        )) {
+            return (float)$m[1];
+        }
+        // Number with optional unit only: "1234", "12.5 W", "3.2 A", "45 %"
+        if (preg_match('/^([-+]?\d+(?:\.\d+)?)\s*(?:W|kW|V|A|VA|%|watts?|amps?|volts?)?\s*$/i', $s, $m)) {
+            return (float)$m[1];
+        }
+        // Timeticks: (12345) Timeticks: ...
+        if (preg_match('/^\(\s*(\d+)\s*\)/', $s, $m)) {
+            return (float)$m[1];
         }
         return null;
+    }
+
+    /** True when raw value is clearly a non-metric string (model, serial, hostname…). */
+    private static function isNonMetricString($raw): bool
+    {
+        if (!is_string($raw)) {
+            return false;
+        }
+        $s = trim($raw);
+        if ($s === '' || is_numeric($s)) {
+            return false;
+        }
+        // Type-prefixed numbers are metrics
+        if (preg_match('/^(?:INTEGER|Integer32|Gauge32|Counter(?:32|64)|Unsigned32|Timeticks|TimeTicks)\s*:/i', $s)) {
+            return false;
+        }
+        // Has letters (AP8861, "Rack PDU", hostnames) → not a power number
+        if (preg_match('/[A-Za-z]/', $s)) {
+            // Allow pure unit suffixes already handled by toNumber
+            if (preg_match('/^[-+]?\d+(?:\.\d+)?\s*(?:W|kW|V|A|VA|%|watts?|amps?|volts?)\s*$/i', $s)) {
+                return false;
+            }
+            return true;
+        }
+        return false;
     }
 
     /** Lowercase haystack of name + oid for keyword scans. */
@@ -437,6 +516,7 @@ class SnmpDiscover
     {
         $score = 0;
         $s = self::nameHaystack($oid, $name);
+        $nonMetric = self::isNonMetricString($raw);
 
         // Prefer enterprise power trees
         if (str_starts_with($oid, '1.3.6.1.4.1.')) {
@@ -450,15 +530,20 @@ class SnmpDiscover
             $score += 2;
         }
 
+        // Model / serial / hostname strings must not rank as power metrics
+        if ($nonMetric) {
+            $score -= 6;
+        }
+
         // --- MIB symbolic name scoring (Phase 1.5) ---
         if ($name) {
             $score += 3; // any resolved name is more useful than pure numeric
-            // Strong power/watt signals
-            if (preg_match('/watt|activepower|realpower|apparentpower|totalpower|phasepower|devicepower|powerwatts|power\.|power$/', $s)) {
+            // Strong power/watt signals (avoid bare "powernet" module name alone)
+            if (preg_match('/watt|activepower|realpower|apparentpower|totalpower|phasepower|devicepower|powerwatts|(?<![a-z])power(?![a-z-])/', $s)) {
                 $score += 12;
             }
-            // APC PowerNet-style
-            if (preg_match('/rpdu2?.*power|phase.*power|bank.*power|outlet.*power|powernet/', $s)) {
+            // APC PowerNet leaf patterns (not the module prefix PowerNet-MIB::)
+            if (preg_match('/rpdu2?.*power|phase.*power|bank.*power|outlet.*power|statuspower|identdevicepower/', $s)) {
                 $score += 10;
             }
             if (preg_match('/rpdu2?phasestatuspower|rpduidentdevicepower|upsadvoutput|loadstatuspower/', $s)) {
@@ -492,10 +577,10 @@ class SnmpDiscover
                 $score -= 2; // still valid, but lower priority for "device load"
             }
             // Config / string junk
-            if (preg_match('/serial|name|location|contact|descr|model|firmware|version|statusenum|trap/', $s)
+            if (preg_match('/serial|name|location|contact|descr|model|firmware|version|statusenum|trap|identmodel|partnumber|sku/', $s)
                 && !preg_match('/load|power|amp|watt|current/', $s)
             ) {
-                $score -= 4;
+                $score -= 8;
             }
         } else {
             // Numeric-only: weaker keyword hits from OID path alone
@@ -507,8 +592,8 @@ class SnmpDiscover
             }
         }
 
-        // Value-range heuristics (always)
-        if ($num !== null && $num >= 0) {
+        // Value-range heuristics — only for real numbers, never model strings
+        if (!$nonMetric && $num !== null && $num >= 0) {
             $score += 1;
             if ($num > 0 && $num < 500000) {
                 $score += 1;
@@ -519,6 +604,24 @@ class SnmpDiscover
             }
         }
 
+        // Drop pure identity strings (e.g. model AP8861) even if under enterprise tree
+        if ($nonMetric) {
+            $metricName = (bool)preg_match(
+                '/watt|activepower|realpower|apparentpower|devicepower|phasepower|powerwatts|'
+                . 'statuspower|identdevicepower|phasestatus(power|load|current)|'
+                . '(?<![a-z])(amps?|current|load|volt|temp)(?![a-z])/',
+                $s
+            );
+            $identityName = (bool)preg_match(
+                '/serial|model|identmodel|partnumber|firmware|version|location|contact|descr|'
+                . 'hostname|sku|name(?![a-z])/',
+                $s
+            );
+            if (!$metricName || $identityName) {
+                return 0;
+            }
+        }
+
         return max(0, $score);
     }
 
@@ -526,6 +629,7 @@ class SnmpDiscover
     {
         $hints = [];
         $s = self::nameHaystack($oid, $name);
+        $nonMetric = self::isNonMetricString($raw);
 
         if (str_starts_with($oid, '1.3.6.1.4.1.99999.2.1')) {
             $hints[] = 'lab watts';
@@ -535,7 +639,12 @@ class SnmpDiscover
         }
 
         if ($name) {
-            if (preg_match('/watt|activepower|realpower|apparentpower|devicepower|phasepower|powerwatts/', $s)) {
+            if (preg_match('/serial|model|identmodel|partnumber|firmware|version|location|contact|descr|name\b/', $s)
+                && !preg_match('/load|power|amp|watt|current/', $s)
+            ) {
+                $hints[] = 'identity/config string';
+            }
+            if (preg_match('/watt|activepower|realpower|apparentpower|devicepower|phasepower|powerwatts|statuspower|identdevicepower/', $s)) {
                 $hints[] = 'MIB: watts/power';
             }
             if (preg_match('/\bamp|current|phasestatuscurrent|loadstatusload/', $s)
@@ -554,7 +663,7 @@ class SnmpDiscover
             if (preg_match('/\btemp|temperature\b/', $s)) {
                 $hints[] = 'MIB: temperature';
             }
-            if (preg_match('/rpdu2|powernet|apc/', $s)) {
+            if (preg_match('/rpdu2|powernet-mib::|::apc|apc::/i', $s) || str_contains($oid, '.1.3.6.1.4.1.318.') || str_starts_with($oid, '1.3.6.1.4.1.318.')) {
                 $hints[] = 'APC PowerNet';
             }
             if (preg_match('/phase/', $s) && !preg_match('/outlet/', $s)) {
@@ -565,17 +674,20 @@ class SnmpDiscover
             }
         }
 
-        // Value fallbacks when name missing or unhelpful
-        if (!$hints) {
-            if (str_contains($oid, '.318.') && $num !== null && $num <= 100) {
+        // Value fallbacks only for real numeric samples — never for "AP8861"
+        if (!$hints && !$nonMetric && $num !== null) {
+            if (str_contains($oid, '.318.') && $num <= 100) {
                 $hints[] = 'possible load %';
             }
-            if ($num !== null && $num > 100 && $num < 20000) {
+            if ($num > 100 && $num < 20000) {
                 $hints[] = 'possible watts';
             }
-            if ($num !== null && $num > 0 && $num < 100) {
+            if ($num > 0 && $num < 100) {
                 $hints[] = 'possible amps or %';
             }
+        }
+        if ($nonMetric && !$hints) {
+            $hints[] = 'non-numeric string';
         }
 
         return $hints ? implode(', ', $hints) : 'candidate';
