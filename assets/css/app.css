@@ -1204,6 +1204,34 @@ body.modal-open { overflow: hidden; }
 .app-modal-panel-wide {
   width: min(42rem, 100%);
 }
+.app-modal-panel-xl {
+  width: min(56rem, 100%);
+  max-height: min(92vh, 52rem);
+}
+/* Compact property summary (PDU detail, etc.) */
+.pdu-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: .65rem 1.1rem;
+  margin: 0;
+}
+.pdu-summary-grid > div {
+  min-width: 0;
+}
+.pdu-summary-grid dt {
+  margin: 0;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted, #94a3b8);
+  font-weight: 600;
+}
+.pdu-summary-grid dd {
+  margin: .15rem 0 0;
+  font-size: .92rem;
+  color: inherit;
+  word-break: break-word;
+}
 .app-modal-head {
   display: flex;
   align-items: center;

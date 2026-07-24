@@ -55,10 +55,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
 
             // Enterprise CA upload (PEM/CER) for LDAPS TLS trust
             if (!empty($_POST['ldaps_remove_ca'])) {
-                if (LdapAuth::removeEnterpriseCa()) {
+                if (method_exists('LdapAuth', 'removeEnterpriseCa') && LdapAuth::removeEnterpriseCa()) {
                     App::flash('success', 'Removed config/ldap-ca.pem (enterprise CA).');
+                } elseif (!method_exists('LdapAuth', 'removeEnterpriseCa')) {
+                    throw new RuntimeException('Enterprise CA helpers not deployed (update LdapAuth.php).');
                 }
             } elseif (!empty($_FILES['ldaps_ca_file']['name'])) {
+                if (!method_exists('LdapAuth', 'installEnterpriseCaUpload')) {
+                    throw new RuntimeException('Enterprise CA helpers not deployed (update LdapAuth.php).');
+                }
                 $install = LdapAuth::installEnterpriseCaUpload(
                     $_FILES['ldaps_ca_file'],
                     !empty($_POST['ldaps_ca_append'])
@@ -120,6 +125,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'session_absolute_minutes' => max(0, min(43200, (int)($_POST['session_absolute_minutes'] ?? 1440))),
                 'bind_user_agent' => !empty($_POST['bind_user_agent']),
             ];
+        }
+
+        if ($section === 'mail') {
+            if (!class_exists('MailService')) {
+                throw new RuntimeException('MailService is not installed on this host. Deploy src/Services/MailService.php.');
+            }
+            $existingMail = is_array($config['mail'] ?? null) ? $config['mail'] : [];
+            $mailCfg = MailService::configFromPost($_POST, $existingMail);
+            $from = (string)($mailCfg['from_email'] ?? '');
+            if ($from !== '' && !filter_var($from, FILTER_VALIDATE_EMAIL)) {
+                throw new RuntimeException('From email is not a valid address.');
+            }
+            $reply = (string)($mailCfg['reply_to'] ?? '');
+            if ($reply !== '' && !filter_var($reply, FILTER_VALIDATE_EMAIL)) {
+                throw new RuntimeException('Reply-To is not a valid address.');
+            }
+            if (!empty($mailCfg['enabled']) && !MailService::isConfigured($mailCfg)) {
+                throw new RuntimeException(
+                    'Cannot enable mail until host and a valid From address are set'
+                    . (($mailCfg['auth_mode'] ?? 'none') !== 'none' ? ' (and username when authentication is on).' : '.')
+                );
+            }
+            $config['mail'] = $mailCfg;
+            SettingsService::set('mail_enabled', !empty($mailCfg['enabled']) ? '1' : '0', 'mail');
+        }
+
+        if ($section === 'test_mail') {
+            if (!class_exists('MailService')) {
+                throw new RuntimeException('MailService is not installed on this host. Deploy src/Services/MailService.php.');
+            }
+            $existingMail = is_array($config['mail'] ?? null) ? $config['mail'] : [];
+            // Prefer form values so admins can test before clicking Save
+            $override = MailService::configFromPost($_POST, $existingMail);
+            $override['enabled'] = true;
+            $to = trim((string)($_POST['mail_test_to'] ?? ''));
+            if ($to === '') {
+                $to = (string)($user['email'] ?? '');
+            }
+            $result = MailService::sendTest($to, $override);
+            AuditService::log((int)$user['user_id'], $user['username'], 'mail_test', 'system', null, [
+                'ok' => !empty($result['ok']),
+                'to' => $to,
+            ]);
+            if (!empty($result['ok'])) {
+                App::flash('success', $result['message'] ?? 'Test message sent.');
+            } else {
+                App::flash('error', $result['message'] ?? 'Test message failed.');
+            }
+            App::redirect('pages/settings.php#mail');
         }
 
         if ($section === 'update_check') {
@@ -215,9 +269,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             exit;
         }
 
-        // Write config.php (for general / auth / updates / security)
+        // Write config.php (for general / auth / updates / security / mail)
         if (!in_array($section, [
-            'update_check', 'update_apply', 'install_ca_bundle', 'export_site_backup', 'test_ldaps',
+            'update_check', 'update_apply', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
         ], true)) {
             $export = var_export($config, true);
             $php = "<?php\n/** ColdAisle configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
@@ -239,6 +293,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#backup';
     } elseif ($secPost === 'ldaps') {
         $redirHash = '#ldaps';
+    } elseif ($secPost === 'mail' || $secPost === 'test_mail') {
+        $redirHash = '#mail';
     }
     App::redirect('pages/settings.php' . $redirHash);
 }
@@ -249,9 +305,21 @@ $roles = Database::fetchAll('SELECT role_id, name FROM roles ORDER BY role_id');
 $ldaps = $config['auth']['ldaps'] ?? [];
 $entra = $config['auth']['entra'] ?? [];
 $secCfg = App::securityConfig();
+// Tolerate partial deploys (newer settings.php + older supporting classes)
+$mailCfg = class_exists('MailService') ? MailService::config() : [
+    'enabled' => false, 'host' => '', 'port' => 587, 'encryption' => 'tls',
+    'auth_mode' => 'login', 'username' => '', 'password' => '',
+    'from_email' => '', 'from_name' => App::APP_NAME, 'reply_to' => '',
+    'timeout' => 30, 'verify_peer' => true,
+];
+$mailStatus = class_exists('MailService')
+    ? MailService::status()
+    : ['ready' => false, 'enabled' => false, 'label' => 'Unavailable', 'detail' => 'MailService not deployed on this host.'];
 $updCfg = UpdateService::config();
 $caStatus = UpdateService::caBundleStatus();
-$ldapCaStatus = LdapAuth::enterpriseCaStatus();
+$ldapCaStatus = method_exists('LdapAuth', 'enterpriseCaStatus')
+    ? LdapAuth::enterpriseCaStatus()
+    : ['installed' => false, 'cert_count' => 0, 'bytes' => 0, 'subjects' => [], 'path' => null];
 $updStatus = null;
 try {
     // Non-forced: use cache when fresh
@@ -407,6 +475,159 @@ layout_header('Settings', $user, 'settings');
             <code>Referrer-Policy</code>, <code>Permissions-Policy</code>, <code>CSP frame-ancestors</code>.
             Session cookies are HttpOnly; IDs are never put in URLs.
         </p>
+    </div>
+</div>
+
+<div class="card" id="mail">
+    <div class="card-header flex-between">
+        <h2>Email (SMTP)</h2>
+        <span class="badge <?= !empty($mailStatus['ready']) ? 'badge-success' : (!empty($mailStatus['enabled']) ? 'badge-warning' : '') ?>"
+              title="<?= App::e($mailStatus['detail'] ?? '') ?>">
+            <?= App::e($mailStatus['label'] ?? '—') ?>
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size:.9rem;margin-top:0">
+            Outbound SMTP for future notifications (disposal alerts, local user activation, LDAPS welcome mail,
+            password resets, and more). Send a test message after saving to confirm the server accepts mail from this host.
+        </p>
+        <p class="text-muted" style="font-size:.8rem;margin:0 0 1rem">
+            <?= App::e($mailStatus['detail'] ?? '') ?>
+        </p>
+
+        <form method="post" class="form-grid" id="mail_settings_form">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+
+            <div class="form-row full"><label>
+                <input type="checkbox" name="mail_enabled" value="1" id="mail_enabled"
+                    <?= !empty($mailCfg['enabled']) ? 'checked' : '' ?>>
+                Enable outbound email
+            </label></div>
+
+            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">SMTP server</h4></div>
+            <div class="form-row"><label>Server host</label>
+                <input class="form-control" name="mail_host" id="mail_host"
+                       value="<?= App::e($mailCfg['host'] ?? '') ?>"
+                       placeholder="smtp.office365.com / smtp.gmail.com / mail.contoso.com"
+                       autocomplete="off"></div>
+            <div class="form-row"><label>Port</label>
+                <input class="form-control" type="number" min="1" max="65535" name="mail_port" id="mail_port"
+                       value="<?= (int)($mailCfg['port'] ?? 587) ?>"></div>
+            <div class="form-row"><label>Encryption</label>
+                <select class="form-control" name="mail_encryption" id="mail_encryption">
+                    <?php
+                    $mailEnc = (string)($mailCfg['encryption'] ?? 'tls');
+                    foreach ([
+                        'none' => 'None (typically port 25)',
+                        'tls' => 'STARTTLS (typically port 587)',
+                        'ssl' => 'SSL/TLS implicit (typically port 465)',
+                    ] as $val => $lab): ?>
+                        <option value="<?= $val ?>" <?= $mailEnc === $val ? 'selected' : '' ?>><?= App::e($lab) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row"><label>Timeout (seconds)</label>
+                <input class="form-control" type="number" min="5" max="120" name="mail_timeout"
+                       value="<?= (int)($mailCfg['timeout'] ?? 30) ?>"></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="mail_verify_peer" value="1"
+                    <?= !empty($mailCfg['verify_peer']) ? 'checked' : '' ?>>
+                Verify TLS certificate (recommended)
+            </label>
+                <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                    Uses the same CA store as Updates (<code>config/cacert.pem</code> or PHP’s CA path).
+                    Uncheck only for lab servers with self-signed SMTP certs.
+                </p>
+            </div>
+
+            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Authentication</h4></div>
+            <div class="form-row"><label>Method</label>
+                <select class="form-control" name="mail_auth_mode" id="mail_auth_mode">
+                    <?php
+                    $mailAuth = (string)($mailCfg['auth_mode'] ?? 'login');
+                    foreach ([
+                        'none' => 'No authentication',
+                        'login' => 'Username / password (AUTH LOGIN)',
+                        'plain' => 'Username / password (AUTH PLAIN)',
+                    ] as $val => $lab): ?>
+                        <option value="<?= $val ?>" <?= $mailAuth === $val ? 'selected' : '' ?>><?= App::e($lab) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row mail-auth-fields"><label>Username</label>
+                <input class="form-control" name="mail_username" id="mail_username"
+                       value="<?= App::e($mailCfg['username'] ?? '') ?>"
+                       autocomplete="off"></div>
+            <div class="form-row mail-auth-fields"><label>Password</label>
+                <input class="form-control" type="password" name="mail_password" id="mail_password"
+                       value="" placeholder="<?= !empty($mailCfg['password']) ? '•••• saved (leave blank to keep)' : '' ?>"
+                       autocomplete="new-password"></div>
+
+            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Sender</h4></div>
+            <div class="form-row"><label>From email</label>
+                <input class="form-control" type="email" name="mail_from_email" id="mail_from_email"
+                       value="<?= App::e($mailCfg['from_email'] ?? '') ?>"
+                       placeholder="coldaisle@contoso.com"></div>
+            <div class="form-row"><label>From name</label>
+                <input class="form-control" name="mail_from_name"
+                       value="<?= App::e($mailCfg['from_name'] ?? App::APP_NAME) ?>"
+                       placeholder="ColdAisle"></div>
+            <div class="form-row full"><label>Reply-To (optional)</label>
+                <input class="form-control" type="email" name="mail_reply_to"
+                       value="<?= App::e($mailCfg['reply_to'] ?? '') ?>"
+                       placeholder="Same as From if blank"></div>
+
+            <div class="form-row full" style="margin-top:.35rem;padding-top:.75rem;border-top:1px solid var(--border,#2a3648)">
+                <label style="font-weight:600">Send test message</label>
+                <p class="text-muted" style="font-size:.75rem;margin:.2rem 0 .5rem">
+                    Uses the values in this form (save not required). Leave recipient blank to use your account email
+                    (<?= App::e((string)($user['email'] ?? 'not set')) ?>).
+                </p>
+            </div>
+            <div class="form-row"><label>Test recipient</label>
+                <input class="form-control" type="email" name="mail_test_to" id="mail_test_to"
+                       value="" placeholder="<?= App::e((string)($user['email'] ?? 'you@contoso.com')) ?>"
+                       autocomplete="off"></div>
+            <div class="form-row full" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+                <button class="btn btn-primary" type="submit" name="section" value="mail">Save Email</button>
+                <button class="btn btn-secondary" type="submit" name="section" value="test_mail">
+                    Send test email
+                </button>
+            </div>
+        </form>
+        <p class="hint text-muted" style="margin-top:.75rem">
+            Common setups: Microsoft 365 / Exchange (<code>smtp.office365.com</code>:587 STARTTLS + LOGIN),
+            Gmail app password (<code>smtp.gmail.com</code>:587), or your internal relay (often port 25, no auth).
+            Ensure this IIS host can reach the SMTP server (firewall / network ACL).
+        </p>
+        <script>
+        (function () {
+            var auth = document.getElementById('mail_auth_mode');
+            var enc = document.getElementById('mail_encryption');
+            var port = document.getElementById('mail_port');
+            function toggleAuth() {
+                var on = auth && auth.value !== 'none';
+                document.querySelectorAll('.mail-auth-fields').forEach(function (el) {
+                    el.style.display = on ? '' : 'none';
+                });
+            }
+            var lastEnc = enc ? enc.value : 'tls';
+            function suggestPort() {
+                if (!enc || !port) return;
+                var v = enc.value;
+                // Only auto-change when port still matches previous encryption default
+                var defaults = { none: '25', tls: '587', ssl: '465' };
+                var prevDefault = defaults[lastEnc] || '';
+                if (String(port.value) === prevDefault || port.value === '') {
+                    port.value = defaults[v] || '587';
+                }
+                lastEnc = v;
+            }
+            if (auth) auth.addEventListener('change', toggleAuth);
+            if (enc) enc.addEventListener('change', suggestPort);
+            toggleAuth();
+        })();
+        </script>
     </div>
 </div>
 
