@@ -666,6 +666,7 @@ if ($id) {
             html += '<div class="form-row"><label>Name</label><input class="form-control" name="name" required value="' + esc(pdu.name || '') + '"></div>';
             html += '<div class="form-row"><label>Vendor</label><input class="form-control" name="manufacturer" value="' + esc(pdu.manufacturer || '') + '"></div>';
             html += '<div class="form-row"><label>Model</label><input class="form-control" name="model" value="' + esc(pdu.model || '') + '"></div>';
+            html += '<div class="form-row"><label>Serial number</label><input class="form-control" name="serial_no" autocomplete="off" value="' + esc(pdu.serial_no || '') + '" placeholder="Asset / manufacturer serial"></div>';
             html += '<div class="form-row"><label>Scope</label><select class="form-control" name="pdu_scope">' +
                 optionsHtml([
                     { value: 'rack', label: 'Rack PDU' },
@@ -830,6 +831,7 @@ if ($id) {
                 name: g('name'),
                 manufacturer: g('manufacturer'),
                 model: g('model'),
+                serial_no: g('serial_no'),
                 input_type: g('input_type'),
                 rated_amps: g('rated_amps'),
                 input_voltage: g('input_voltage'),

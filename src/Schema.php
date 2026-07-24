@@ -138,6 +138,7 @@ class Schema
                 'mount_style' => "NVARCHAR(20) NOT NULL CONSTRAINT DF_pdus_mount DEFAULT 'vertical_rear'",
                 'position_u' => 'INT NULL',
                 'u_height' => 'INT NULL',
+                'serial_no' => 'NVARCHAR(100) NULL',
                 'snmp_community' => 'NVARCHAR(100) NULL',
                 'snmp_v3_sec_level' => 'NVARCHAR(30) NULL',
                 'phases' => 'INT NOT NULL CONSTRAINT DF_pdus_phases DEFAULT 1',

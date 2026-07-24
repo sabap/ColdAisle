@@ -479,6 +479,7 @@ CREATE TABLE pdus (
     u_height INT NULL DEFAULT 1,
     manufacturer NVARCHAR(100) NULL,
     model NVARCHAR(100) NULL,
+    serial_no NVARCHAR(100) NULL,
     ip_address NVARCHAR(45) NULL,
     -- outlets = discrete receptacle list; breakers = pigtail/bus to breaker positions
     output_mode NVARCHAR(20) NOT NULL DEFAULT 'outlets', -- outlets | breakers

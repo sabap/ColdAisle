@@ -390,8 +390,11 @@ layout_header('Users & Departments', $user, 'users');
     </div>
     <div class="card-body">
         <p class="text-muted" style="font-size:.88rem;margin-top:0">
-            Map AD/Entra groups to platform roles. At login, the highest-privilege matching group wins.
-            Applied when LDAPS/Entra sign-in is enabled.
+            Map AD/Entra groups to platform roles. At LDAPS login, membership is read from
+            <code>memberOf</code> and the <strong>highest-privilege</strong> matching map wins
+            (Global Admin &gt; Data Center Admin &gt; Operator &gt; Department Admin &gt; Auditor &gt; Viewer).
+            Role is re-evaluated on every login. Group ID may be the full DN, CN, or Entra object ID
+            (display name is also matched).
         </p>
         <div class="table-wrap">
             <table class="data">

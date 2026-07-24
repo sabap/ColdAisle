@@ -27,6 +27,10 @@ $formModal = !empty($formModal);
                value="<?= App::e($edit['manufacturer'] ?? '') ?>"></div>
     <div class="form-row"><label>Model</label>
         <input class="form-control" name="model" value="<?= App::e($edit['model'] ?? '') ?>"></div>
+    <div class="form-row"><label>Serial number</label>
+        <input class="form-control" name="serial_no" autocomplete="off"
+               value="<?= App::e($edit['serial_no'] ?? '') ?>"
+               placeholder="Asset / manufacturer serial"></div>
     <div class="form-row"><label>Scope</label>
         <select class="form-control" name="pdu_scope" id="power_pdu_scope">
             <?php foreach (['rack' => 'Rack PDU', 'row' => 'Row PDU', 'room' => 'Room PDU'] as $val => $lab): ?>
