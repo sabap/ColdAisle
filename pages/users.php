@@ -280,7 +280,10 @@ layout_header('Users & Departments', $user, 'users');
 <div class="users-admin-stack">
     <!-- Departments -->
     <div class="card">
-        <div class="card-header"><h2>Departments</h2></div>
+        <div class="card-header flex-between">
+            <h2>Departments</h2>
+            <button type="button" class="btn btn-sm btn-primary" data-open-modal="modal-dept">Add department</button>
+        </div>
         <div class="card-body flush">
             <table class="data table-fit">
                 <thead>
@@ -309,59 +312,24 @@ layout_header('Users & Departments', $user, 'users');
                         <td><?= (int)($d['user_count'] ?? 0) ?></td>
                         <td><?= (int)($d['device_count'] ?? 0) ?></td>
                         <td class="actions col-actions">
-                            <a class="btn btn-sm btn-secondary" href="?edit_dept=<?= (int)$d['department_id'] ?>#dept-form">Edit</a>
+                            <a class="btn btn-sm btn-secondary" href="?edit_dept=<?= (int)$d['department_id'] ?>">Edit</a>
                         </td>
                     </tr>
                 <?php endforeach; ?>
                 <?php if (!$departments): ?>
-                    <tr><td colspan="6" class="text-muted">No departments yet. Add Infrastructure, Applications, Info Sec, etc.</td></tr>
+                    <tr><td colspan="6" class="text-muted">No departments yet. Use <strong>Add department</strong> to create one.</td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>
-        </div>
-        <div class="card-body" id="dept-form">
-            <h3 class="mt-0"><?= $editDept ? 'Edit department' : 'Add department' ?></h3>
-            <form method="post" class="form-grid">
-                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
-                <input type="hidden" name="action" value="<?= $editDept ? 'update_department' : 'add_department' ?>">
-                <?php if ($editDept): ?>
-                    <input type="hidden" name="department_id" value="<?= (int)$editDept['department_id'] ?>">
-                <?php endif; ?>
-                <div class="form-row"><label>Name *</label>
-                    <input class="form-control" name="name" required
-                           value="<?= App::e($editDept['name'] ?? '') ?>"
-                           placeholder="Infrastructure, Applications, Info Sec…"></div>
-                <div class="form-row"><label>Code</label>
-                    <input class="form-control" name="code" value="<?= App::e($editDept['code'] ?? '') ?>"
-                           placeholder="INFRA, APP, ISEC"></div>
-                <div class="form-row"><label>Color</label>
-                    <input class="form-control" type="color" name="color_hex"
-                           value="<?= App::e(users_normalize_color($editDept['color_hex'] ?? '#3b82f6')) ?>"
-                           title="Used for rack device outline"></div>
-                <div class="form-row"><label>Manager</label>
-                    <input class="form-control" name="manager_name" value="<?= App::e($editDept['manager_name'] ?? '') ?>"></div>
-                <div class="form-row"><label>Contact email</label>
-                    <input class="form-control" type="email" name="contact_email" value="<?= App::e($editDept['contact_email'] ?? '') ?>"></div>
-                <div class="form-row"><label>Contact phone</label>
-                    <input class="form-control" name="contact_phone" value="<?= App::e($editDept['contact_phone'] ?? '') ?>"></div>
-                <div class="form-row full"><label>Notes</label>
-                    <textarea class="form-control" name="notes" rows="2"><?= App::e($editDept['notes'] ?? '') ?></textarea></div>
-                <?php if ($editDept): ?>
-                    <div class="form-row"><label><input type="checkbox" name="is_active" value="1" <?= !empty($editDept['is_active']) ? 'checked' : '' ?>> Active</label></div>
-                    <div class="form-row">
-                        <button class="btn btn-primary" type="submit">Save department</button>
-                        <a class="btn btn-secondary" href="<?= App::e(App::url('pages/users.php')) ?>">Cancel</a>
-                    </div>
-                <?php else: ?>
-                    <div class="form-row"><button class="btn btn-primary" type="submit">Add department</button></div>
-                <?php endif; ?>
-            </form>
         </div>
     </div>
 
     <!-- Users -->
     <div class="card users-admin-card">
-        <div class="card-header"><h2>Users</h2></div>
+        <div class="card-header flex-between">
+            <h2>Users</h2>
+            <button type="button" class="btn btn-sm btn-primary" data-open-modal="modal-user">Add user</button>
+        </div>
         <div class="card-body flush">
             <table class="data table-fit users-table">
                 <thead>
@@ -401,96 +369,29 @@ layout_header('Users & Departments', $user, 'users');
                                 : '<span class="badge badge-danger">Off</span>' ?>
                         </td>
                         <td class="actions col-actions">
-                            <a class="btn btn-sm btn-secondary" href="?edit_user=<?= (int)$u['user_id'] ?>#user-form">Edit</a>
+                            <a class="btn btn-sm btn-secondary" href="?edit_user=<?= (int)$u['user_id'] ?>">Edit</a>
                         </td>
                     </tr>
                 <?php endforeach; ?>
+                <?php if (!$users): ?>
+                    <tr><td colspan="5" class="text-muted">No users yet. Use <strong>Add user</strong> to create one.</td></tr>
+                <?php endif; ?>
                 </tbody>
             </table>
-        </div>
-        <div class="card-body" id="user-form">
-            <h3 class="mt-0"><?= $editUser ? 'Edit user' : 'Create user' ?></h3>
-            <form method="post" class="form-grid">
-                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
-                <input type="hidden" name="action" value="<?= $editUser ? 'update' : 'create' ?>">
-                <?php if ($editUser): ?>
-                    <input type="hidden" name="user_id" value="<?= (int)$editUser['user_id'] ?>">
-                    <div class="form-row"><label>Username</label>
-                        <input class="form-control" value="<?= App::e($editUser['username']) ?>" readonly></div>
-                <?php else: ?>
-                    <div class="form-row"><label>Username *</label>
-                        <input class="form-control" name="username" required></div>
-                <?php endif; ?>
-                <div class="form-row"><label>Display name</label>
-                    <input class="form-control" name="display_name" value="<?= App::e($editUser['display_name'] ?? '') ?>"></div>
-                <div class="form-row"><label>Email *</label>
-                    <input class="form-control" type="email" name="email" required value="<?= App::e($editUser['email'] ?? '') ?>"></div>
-                <div class="form-row"><label>Role</label>
-                    <select class="form-control" name="role_id">
-                        <?php foreach ($roles as $r): ?>
-                            <option value="<?= (int)$r['role_id'] ?>"
-                                <?= (int)($editUser['role_id'] ?? 0) === (int)$r['role_id'] ? 'selected' : '' ?>>
-                                <?= App::e($r['name']) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
-                        Department Admin must also have a department selected.
-                    </p>
-                </div>
-                <div class="form-row"><label>Department</label>
-                    <select class="form-control" name="department_id">
-                        <option value="">— None —</option>
-                        <?php foreach ($departments as $d):
-                            if (empty($d['is_active']) && (int)($editUser['department_id'] ?? 0) !== (int)$d['department_id']) {
-                                continue;
-                            }
-                            ?>
-                            <option value="<?= (int)$d['department_id'] ?>"
-                                <?= (int)($editUser['department_id'] ?? 0) === (int)$d['department_id'] ? 'selected' : '' ?>>
-                                <?= App::e($d['name']) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
-                        Required for Department Admin. Scopes device edits to this department.
-                    </p>
-                </div>
-                <div class="form-row"><label>Auth source</label>
-                    <select class="form-control" name="auth_source">
-                        <?php foreach (['local' => 'Local', 'ldaps' => 'LDAPS', 'entra' => 'Entra ID'] as $val => $lab): ?>
-                            <option value="<?= $val ?>"
-                                <?= ($editUser['auth_source'] ?? 'local') === $val ? 'selected' : '' ?>>
-                                <?= $lab ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="form-row"><label><?= $editUser ? 'New password (optional)' : 'Password (local)' ?></label>
-                    <input class="form-control" type="password" name="password" autocomplete="new-password"></div>
-                <?php if ($editUser): ?>
-                    <div class="form-row"><label>
-                        <input type="checkbox" name="is_active" value="1" <?= !empty($editUser['is_active']) ? 'checked' : '' ?>> Active
-                    </label></div>
-                    <div class="form-row">
-                        <button class="btn btn-primary" type="submit">Save user</button>
-                        <a class="btn btn-secondary" href="<?= App::e(App::url('pages/users.php')) ?>">Cancel</a>
-                    </div>
-                <?php else: ?>
-                    <div class="form-row"><button class="btn btn-primary" type="submit">Create user</button></div>
-                <?php endif; ?>
-            </form>
         </div>
     </div>
 </div><!-- /.users-admin-stack -->
 
 <!-- Security group → role (AD / Entra) -->
 <div class="card">
-    <div class="card-header"><h2>Security group → role mapping</h2></div>
+    <div class="card-header flex-between">
+        <h2>Security group → role mapping</h2>
+        <button type="button" class="btn btn-sm btn-primary" data-open-modal="modal-role-map">Add mapping</button>
+    </div>
     <div class="card-body">
         <p class="text-muted" style="font-size:.88rem;margin-top:0">
-            Map AD/Entra groups to platform roles. At login, the highest-privilege matching group wins
-            (<code>AuthManager::roleIdFromGroups()</code>). Configure now; applied when SSO is enabled.
+            Map AD/Entra groups to platform roles. At login, the highest-privilege matching group wins.
+            Applied when LDAPS/Entra sign-in is enabled.
         </p>
         <div class="table-wrap">
             <table class="data">
@@ -520,47 +421,18 @@ layout_header('Users & Departments', $user, 'users');
                 </tbody>
             </table>
         </div>
-        <h3 class="mt-2">Add role mapping</h3>
-        <form method="post" class="form-grid">
-            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
-            <input type="hidden" name="action" value="add_role_group_map">
-            <div class="form-row"><label>Role</label>
-                <select class="form-control" name="role_id" required>
-                    <option value="">—</option>
-                    <?php foreach ($roles as $r):
-                        if (!in_array($r['name'], ['Viewer', 'Department Admin', 'Data Center Admin', 'Global Admin', 'Administrator'], true)) {
-                            continue;
-                        }
-                        ?>
-                        <option value="<?= (int)$r['role_id'] ?>"><?= App::e($r['name']) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div class="form-row"><label>Auth source</label>
-                <select class="form-control" name="auth_source">
-                    <option value="ldaps">LDAPS</option>
-                    <option value="entra">Entra ID</option>
-                </select>
-            </div>
-            <div class="form-row"><label>Group name (display)</label>
-                <input class="form-control" name="group_name" placeholder="DCIM-DataCenter-Admins"></div>
-            <div class="form-row"><label>Group ID *</label>
-                <input class="form-control" name="group_id" required
-                       placeholder="LDAP DN / SID or Entra object ID"></div>
-            <div class="form-row full"><label>Notes</label>
-                <input class="form-control" name="notes" placeholder="Optional"></div>
-            <div class="form-row"><button class="btn btn-secondary" type="submit">Add role map</button></div>
-        </form>
     </div>
 </div>
 
-<!-- Security group mapping (future LDAPS / Entra) -->
+<!-- Security group → department -->
 <div class="card">
-    <div class="card-header"><h2>Security group → department mapping</h2></div>
+    <div class="card-header flex-between">
+        <h2>Security group → department mapping</h2>
+        <button type="button" class="btn btn-sm btn-primary" data-open-modal="modal-dept-map">Add mapping</button>
+    </div>
     <div class="card-body">
         <p class="text-muted" style="font-size:.88rem;margin-top:0">
-            When LDAPS or Entra ID sign-in is enabled, matching group membership can assign the user’s department automatically
-            (<code>AuthManager::departmentIdFromGroups()</code>). Configure maps now; they take effect once SSO is wired.
+            When LDAPS or Entra ID sign-in is enabled, matching group membership can assign the user’s department automatically.
         </p>
         <div class="table-wrap">
             <table class="data">
@@ -595,36 +467,296 @@ layout_header('Users & Departments', $user, 'users');
                 </tbody>
             </table>
         </div>
-        <h3 class="mt-2">Add mapping</h3>
-        <form method="post" class="form-grid">
-            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
-            <input type="hidden" name="action" value="add_group_map">
-            <div class="form-row"><label>Department</label>
-                <select class="form-control" name="department_id" required>
-                    <option value="">—</option>
-                    <?php foreach ($departments as $d): ?>
-                        <?php if (empty($d['is_active'])) {
-                            continue;
-                        } ?>
-                        <option value="<?= (int)$d['department_id'] ?>"><?= App::e($d['name']) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div class="form-row"><label>Auth source</label>
-                <select class="form-control" name="auth_source">
-                    <option value="ldaps">LDAPS</option>
-                    <option value="entra">Entra ID</option>
-                </select>
-            </div>
-            <div class="form-row"><label>Group name (display)</label>
-                <input class="form-control" name="group_name" placeholder="DCIM-Infrastructure"></div>
-            <div class="form-row"><label>Group ID *</label>
-                <input class="form-control" name="group_id" required
-                       placeholder="LDAP DN / SID or Entra object ID"></div>
-            <div class="form-row full"><label>Notes</label>
-                <input class="form-control" name="notes" placeholder="Optional"></div>
-            <div class="form-row"><button class="btn btn-secondary" type="submit">Add group map</button></div>
-        </form>
+    </div>
+</div>
+
+<!-- Add department modal -->
+<div class="app-modal" id="modal-dept" hidden aria-hidden="true">
+    <div class="app-modal-backdrop" data-modal-close></div>
+    <div class="app-modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-dept-title">
+        <div class="app-modal-head">
+            <h3 id="modal-dept-title">Add department</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
+        </div>
+        <div class="app-modal-body">
+            <form method="post" class="form-grid">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="add_department">
+                <div class="form-row"><label>Name *</label>
+                    <input class="form-control" name="name" required placeholder="Infrastructure, Applications, Info Sec…"></div>
+                <div class="form-row"><label>Code</label>
+                    <input class="form-control" name="code" placeholder="INFRA, APP, ISEC"></div>
+                <div class="form-row"><label>Color</label>
+                    <input class="form-control" type="color" name="color_hex" value="#3b82f6" title="Used for rack device outline"></div>
+                <div class="form-row"><label>Manager</label>
+                    <input class="form-control" name="manager_name"></div>
+                <div class="form-row"><label>Contact email</label>
+                    <input class="form-control" type="email" name="contact_email"></div>
+                <div class="form-row"><label>Contact phone</label>
+                    <input class="form-control" name="contact_phone"></div>
+                <div class="form-row full"><label>Notes</label>
+                    <textarea class="form-control" name="notes" rows="2"></textarea></div>
+                <div class="form-row full app-modal-actions">
+                    <button class="btn btn-primary" type="submit">Add department</button>
+                    <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<?php if ($editDept): ?>
+<div class="app-modal" id="modal-dept-edit" aria-hidden="false">
+    <div class="app-modal-backdrop" data-modal-close-nav></div>
+    <div class="app-modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-dept-edit-title">
+        <div class="app-modal-head">
+            <h3 id="modal-dept-edit-title">Edit department</h3>
+            <a class="btn btn-ghost btn-sm" href="<?= App::e(App::url('pages/users.php')) ?>" aria-label="Close">✕</a>
+        </div>
+        <div class="app-modal-body">
+            <form method="post" class="form-grid">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="update_department">
+                <input type="hidden" name="department_id" value="<?= (int)$editDept['department_id'] ?>">
+                <div class="form-row"><label>Name *</label>
+                    <input class="form-control" name="name" required value="<?= App::e($editDept['name'] ?? '') ?>"></div>
+                <div class="form-row"><label>Code</label>
+                    <input class="form-control" name="code" value="<?= App::e($editDept['code'] ?? '') ?>"></div>
+                <div class="form-row"><label>Color</label>
+                    <input class="form-control" type="color" name="color_hex"
+                           value="<?= App::e(users_normalize_color($editDept['color_hex'] ?? '#3b82f6')) ?>"></div>
+                <div class="form-row"><label>Manager</label>
+                    <input class="form-control" name="manager_name" value="<?= App::e($editDept['manager_name'] ?? '') ?>"></div>
+                <div class="form-row"><label>Contact email</label>
+                    <input class="form-control" type="email" name="contact_email" value="<?= App::e($editDept['contact_email'] ?? '') ?>"></div>
+                <div class="form-row"><label>Contact phone</label>
+                    <input class="form-control" name="contact_phone" value="<?= App::e($editDept['contact_phone'] ?? '') ?>"></div>
+                <div class="form-row full"><label>Notes</label>
+                    <textarea class="form-control" name="notes" rows="2"><?= App::e($editDept['notes'] ?? '') ?></textarea></div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="is_active" value="1" <?= !empty($editDept['is_active']) ? 'checked' : '' ?>> Active
+                </label></div>
+                <div class="form-row full app-modal-actions">
+                    <button class="btn btn-primary" type="submit">Save department</button>
+                    <a class="btn btn-secondary" href="<?= App::e(App::url('pages/users.php')) ?>">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<!-- Add user modal -->
+<div class="app-modal" id="modal-user" hidden aria-hidden="true">
+    <div class="app-modal-backdrop" data-modal-close></div>
+    <div class="app-modal-panel app-modal-panel-wide" role="dialog" aria-modal="true" aria-labelledby="modal-user-title">
+        <div class="app-modal-head">
+            <h3 id="modal-user-title">Add user</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
+        </div>
+        <div class="app-modal-body">
+            <form method="post" class="form-grid">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="create">
+                <div class="form-row"><label>Username *</label>
+                    <input class="form-control" name="username" required autocomplete="off"></div>
+                <div class="form-row"><label>Display name</label>
+                    <input class="form-control" name="display_name"></div>
+                <div class="form-row"><label>Email *</label>
+                    <input class="form-control" type="email" name="email" required></div>
+                <div class="form-row"><label>Role</label>
+                    <select class="form-control" name="role_id">
+                        <?php foreach ($roles as $r): ?>
+                            <option value="<?= (int)$r['role_id'] ?>"><?= App::e($r['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row"><label>Department</label>
+                    <select class="form-control" name="department_id">
+                        <option value="">— None —</option>
+                        <?php foreach ($departments as $d):
+                            if (empty($d['is_active'])) {
+                                continue;
+                            }
+                            ?>
+                            <option value="<?= (int)$d['department_id'] ?>"><?= App::e($d['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row"><label>Auth source</label>
+                    <select class="form-control" name="auth_source">
+                        <?php foreach (['local' => 'Local', 'ldaps' => 'LDAPS', 'entra' => 'Entra ID'] as $val => $lab): ?>
+                            <option value="<?= $val ?>"><?= $lab ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row"><label>Password (local)</label>
+                    <input class="form-control" type="password" name="password" autocomplete="new-password"></div>
+                <div class="form-row full app-modal-actions">
+                    <button class="btn btn-primary" type="submit">Create user</button>
+                    <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<?php if ($editUser): ?>
+<div class="app-modal" id="modal-user-edit" aria-hidden="false">
+    <div class="app-modal-backdrop" data-modal-close-nav></div>
+    <div class="app-modal-panel app-modal-panel-wide" role="dialog" aria-modal="true" aria-labelledby="modal-user-edit-title">
+        <div class="app-modal-head">
+            <h3 id="modal-user-edit-title">Edit user</h3>
+            <a class="btn btn-ghost btn-sm" href="<?= App::e(App::url('pages/users.php')) ?>" aria-label="Close">✕</a>
+        </div>
+        <div class="app-modal-body">
+            <form method="post" class="form-grid">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="update">
+                <input type="hidden" name="user_id" value="<?= (int)$editUser['user_id'] ?>">
+                <div class="form-row"><label>Username</label>
+                    <input class="form-control" value="<?= App::e($editUser['username']) ?>" readonly></div>
+                <div class="form-row"><label>Display name</label>
+                    <input class="form-control" name="display_name" value="<?= App::e($editUser['display_name'] ?? '') ?>"></div>
+                <div class="form-row"><label>Email *</label>
+                    <input class="form-control" type="email" name="email" required value="<?= App::e($editUser['email'] ?? '') ?>"></div>
+                <div class="form-row"><label>Role</label>
+                    <select class="form-control" name="role_id">
+                        <?php foreach ($roles as $r): ?>
+                            <option value="<?= (int)$r['role_id'] ?>"
+                                <?= (int)($editUser['role_id'] ?? 0) === (int)$r['role_id'] ? 'selected' : '' ?>>
+                                <?= App::e($r['name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row"><label>Department</label>
+                    <select class="form-control" name="department_id">
+                        <option value="">— None —</option>
+                        <?php foreach ($departments as $d):
+                            if (empty($d['is_active']) && (int)($editUser['department_id'] ?? 0) !== (int)$d['department_id']) {
+                                continue;
+                            }
+                            ?>
+                            <option value="<?= (int)$d['department_id'] ?>"
+                                <?= (int)($editUser['department_id'] ?? 0) === (int)$d['department_id'] ? 'selected' : '' ?>>
+                                <?= App::e($d['name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row"><label>Auth source</label>
+                    <select class="form-control" name="auth_source">
+                        <?php foreach (['local' => 'Local', 'ldaps' => 'LDAPS', 'entra' => 'Entra ID'] as $val => $lab): ?>
+                            <option value="<?= $val ?>"
+                                <?= ($editUser['auth_source'] ?? 'local') === $val ? 'selected' : '' ?>>
+                                <?= $lab ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row"><label>New password (optional)</label>
+                    <input class="form-control" type="password" name="password" autocomplete="new-password"></div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="is_active" value="1" <?= !empty($editUser['is_active']) ? 'checked' : '' ?>> Active
+                </label></div>
+                <div class="form-row full app-modal-actions">
+                    <button class="btn btn-primary" type="submit">Save user</button>
+                    <a class="btn btn-secondary" href="<?= App::e(App::url('pages/users.php')) ?>">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<!-- Add role mapping modal (always empty form) -->
+<div class="app-modal" id="modal-role-map" hidden aria-hidden="true">
+    <div class="app-modal-backdrop" data-modal-close></div>
+    <div class="app-modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-role-map-title">
+        <div class="app-modal-head">
+            <h3 id="modal-role-map-title">Add role mapping</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
+        </div>
+        <div class="app-modal-body">
+            <form method="post" class="form-grid">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="add_role_group_map">
+                <div class="form-row full"><label>Role</label>
+                    <select class="form-control" name="role_id" required>
+                        <option value="">—</option>
+                        <?php foreach ($roles as $r):
+                            if (!in_array($r['name'], ['Viewer', 'Department Admin', 'Data Center Admin', 'Global Admin', 'Administrator'], true)) {
+                                continue;
+                            }
+                            ?>
+                            <option value="<?= (int)$r['role_id'] ?>"><?= App::e($r['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row"><label>Auth source</label>
+                    <select class="form-control" name="auth_source">
+                        <option value="ldaps">LDAPS</option>
+                        <option value="entra">Entra ID</option>
+                    </select>
+                </div>
+                <div class="form-row"><label>Group name (display)</label>
+                    <input class="form-control" name="group_name" placeholder="DCIM-DataCenter-Admins"></div>
+                <div class="form-row full"><label>Group ID *</label>
+                    <input class="form-control" name="group_id" required
+                           placeholder="LDAP DN / SID or Entra object ID"></div>
+                <div class="form-row full"><label>Notes</label>
+                    <input class="form-control" name="notes" placeholder="Optional"></div>
+                <div class="form-row full app-modal-actions">
+                    <button class="btn btn-primary" type="submit">Add role map</button>
+                    <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="app-modal" id="modal-dept-map" hidden aria-hidden="true">
+    <div class="app-modal-backdrop" data-modal-close></div>
+    <div class="app-modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-dept-map-title">
+        <div class="app-modal-head">
+            <h3 id="modal-dept-map-title">Add department mapping</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
+        </div>
+        <div class="app-modal-body">
+            <form method="post" class="form-grid">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="add_group_map">
+                <div class="form-row full"><label>Department</label>
+                    <select class="form-control" name="department_id" required>
+                        <option value="">—</option>
+                        <?php foreach ($departments as $d): ?>
+                            <?php if (empty($d['is_active'])) {
+                                continue;
+                            } ?>
+                            <option value="<?= (int)$d['department_id'] ?>"><?= App::e($d['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row"><label>Auth source</label>
+                    <select class="form-control" name="auth_source">
+                        <option value="ldaps">LDAPS</option>
+                        <option value="entra">Entra ID</option>
+                    </select>
+                </div>
+                <div class="form-row"><label>Group name (display)</label>
+                    <input class="form-control" name="group_name" placeholder="DCIM-Infrastructure"></div>
+                <div class="form-row full"><label>Group ID *</label>
+                    <input class="form-control" name="group_id" required
+                           placeholder="LDAP DN / SID or Entra object ID"></div>
+                <div class="form-row full"><label>Notes</label>
+                    <input class="form-control" name="notes" placeholder="Optional"></div>
+                <div class="form-row full app-modal-actions">
+                    <button class="btn btn-primary" type="submit">Add group map</button>
+                    <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>
+                </div>
+            </form>
+        </div>
     </div>
 </div>
 
@@ -706,5 +838,67 @@ table.data.table-fit td.col-actions {
   gap: .35rem;
   font-size: .88rem;
 }
+.card-header.flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  flex-wrap: wrap;
+}
+.card-header.flex-between h2 {
+  margin: 0;
+}
 </style>
+<script>
+(function () {
+    function openModal(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.hidden = false;
+        el.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+        var focus = el.querySelector('input:not([type=hidden]), select, textarea, button');
+        if (focus) setTimeout(function () { focus.focus(); }, 50);
+    }
+    function closeModal(el) {
+        if (!el) return;
+        el.hidden = true;
+        el.setAttribute('aria-hidden', 'true');
+        // only unlock scroll if no other modal open
+        if (!document.querySelector('.app-modal:not([hidden])')) {
+            document.body.style.overflow = '';
+        }
+    }
+    document.querySelectorAll('[data-open-modal]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            openModal(btn.getAttribute('data-open-modal'));
+        });
+    });
+    document.querySelectorAll('[data-modal-close]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            closeModal(btn.closest('.app-modal'));
+        });
+    });
+    document.querySelectorAll('[data-modal-close-nav]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            window.location.href = <?= json_encode(App::url('pages/users.php')) ?>;
+        });
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+        var open = document.querySelector('.app-modal:not([hidden])');
+        if (!open) return;
+        // Edit modals navigate home; add modals just close
+        if (open.id === 'modal-dept-edit' || open.id === 'modal-user-edit') {
+            window.location.href = <?= json_encode(App::url('pages/users.php')) ?>;
+        } else {
+            closeModal(open);
+        }
+    });
+    // Edit modals rendered without [hidden] — lock scroll
+    if (document.getElementById('modal-dept-edit') || document.getElementById('modal-user-edit')) {
+        document.body.style.overflow = 'hidden';
+    }
+})();
+</script>
 <?php layout_footer(); ?>
