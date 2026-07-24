@@ -1171,6 +1171,70 @@ body.modal-open { overflow: hidden; }
   min-height: 1.9rem;
 }
 
+/* Generic app modal (Users page, etc.) */
+.app-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.app-modal[hidden] { display: none !important; }
+.app-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.62);
+  backdrop-filter: blur(3px);
+}
+.app-modal-panel {
+  position: relative;
+  width: min(34rem, 100%);
+  max-height: min(90vh, 44rem);
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  background: rgba(17, 24, 39, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  color: #e5eef7;
+}
+.app-modal-panel-wide {
+  width: min(42rem, 100%);
+}
+.app-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .9rem 1.1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.2);
+}
+.app-modal-head h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #f8fafc;
+}
+.app-modal-body {
+  padding: 1.1rem 1.15rem 1.25rem;
+  overflow-y: auto;
+}
+.app-modal-body .form-grid {
+  margin: 0;
+}
+.app-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-top: .35rem;
+  padding-top: .75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 /* LDAPS test result modal */
 .ldaps-modal {
   position: fixed;
