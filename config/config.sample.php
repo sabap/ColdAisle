@@ -8,7 +8,7 @@ declare(strict_types=1);
 return [
     // Brand is fixed in code (App::APP_NAME); kept here for reference only
     'app_name' => 'ColdAisle',
-    'version' => '0.2.21',
+    'version' => '0.2.22',
     // Generate: base64_encode(random_bytes(32)) â€” used to encrypt secrets in the DB
     // Never commit a real production key.
     'app_key' => '',

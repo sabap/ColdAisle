@@ -472,26 +472,30 @@ class AuthManager
      */
     public static function departmentIdFromGroups(string $authSource, array $groupIds): ?int
     {
-        $groupIds = array_values(array_filter(array_map('strval', $groupIds), static fn($g) => $g !== ''));
-        if (!$groupIds) {
+        $want = self::normalizeGroupTokenSet($groupIds);
+        if (!$want) {
             return null;
         }
         try {
             $maps = Database::fetchAll(
-                'SELECT department_id, group_id FROM department_group_maps
+                'SELECT department_id, group_id, group_name FROM department_group_maps
                  WHERE is_active = 1 AND auth_source = ?',
                 [strtolower($authSource)]
             );
         } catch (Throwable $e) {
-            return null;
-        }
-        $want = [];
-        foreach ($groupIds as $g) {
-            $want[strtolower($g)] = true;
+            // Older schema without group_name
+            try {
+                $maps = Database::fetchAll(
+                    'SELECT department_id, group_id FROM department_group_maps
+                     WHERE is_active = 1 AND auth_source = ?',
+                    [strtolower($authSource)]
+                );
+            } catch (Throwable $e2) {
+                return null;
+            }
         }
         foreach ($maps as $m) {
-            $gid = strtolower((string)($m['group_id'] ?? ''));
-            if ($gid !== '' && isset($want[$gid])) {
+            if (self::groupMapMatches($want, (string)($m['group_id'] ?? ''), $m['group_name'] ?? null)) {
                 return (int)$m['department_id'];
             }
         }
@@ -499,19 +503,25 @@ class AuthManager
     }
 
     /**
-     * Resolve role_id from external security groups (for AD/Entra login later).
-     * Highest-privilege match wins (Global Admin > DC Admin > Dept Admin > Viewer).
-     * @param list<string> $groupIds
+     * Resolve role_id from external security groups (LDAPS / Entra).
+     * Highest-privilege match wins (Global Admin > Data Center Admin > Operator > Dept Admin > Auditor > Viewer).
+     *
+     * Matching is case-insensitive against:
+     * - group_id (full DN, SID, Entra object ID, or CN)
+     * - group_name (display)
+     * - CN extracted from a DN-style group_id
+     *
+     * @param list<string> $groupIds User memberships (DNs, CNs, object IDs, …)
      */
     public static function roleIdFromGroups(string $authSource, array $groupIds): ?int
     {
-        $groupIds = array_values(array_filter(array_map('strval', $groupIds), static fn($g) => $g !== ''));
-        if (!$groupIds) {
+        $want = self::normalizeGroupTokenSet($groupIds);
+        if (!$want) {
             return null;
         }
         try {
             $maps = Database::fetchAll(
-                'SELECT m.role_id, m.group_id, r.name AS role_name
+                'SELECT m.role_id, m.group_id, m.group_name, r.name AS role_name
                  FROM role_group_maps m
                  INNER JOIN roles r ON r.role_id = m.role_id
                  WHERE m.is_active = 1 AND m.auth_source = ?',
@@ -520,24 +530,19 @@ class AuthManager
         } catch (Throwable $e) {
             return null;
         }
-        $want = [];
-        foreach ($groupIds as $g) {
-            $want[strtolower($g)] = true;
-        }
         $rank = [
             'Global Admin' => 100,
             'Administrator' => 100,
             'Data Center Admin' => 80,
-            'Department Admin' => 60,
             'Operator' => 70,
-            'Viewer' => 20,
+            'Department Admin' => 60,
             'Auditor' => 30,
+            'Viewer' => 20,
         ];
         $best = null;
         $bestScore = -1;
         foreach ($maps as $m) {
-            $gid = strtolower((string)($m['group_id'] ?? ''));
-            if ($gid === '' || !isset($want[$gid])) {
+            if (!self::groupMapMatches($want, (string)($m['group_id'] ?? ''), $m['group_name'] ?? null)) {
                 continue;
             }
             $score = $rank[$m['role_name'] ?? ''] ?? 10;
@@ -547,6 +552,75 @@ class AuthManager
             }
         }
         return $best;
+    }
+
+    /**
+     * Build a lowercase set of group tokens for matching.
+     * @param list<string> $groupIds
+     * @return array<string,true>
+     */
+    private static function normalizeGroupTokenSet(array $groupIds): array
+    {
+        $want = [];
+        foreach ($groupIds as $g) {
+            $g = strtolower(trim((string)$g));
+            if ($g === '') {
+                continue;
+            }
+            $want[$g] = true;
+            // If a full DN is present, also index its CN
+            if (str_starts_with($g, 'cn=') || str_contains($g, ',cn=') || preg_match('/^cn=/i', $g)) {
+                if (preg_match('/(?:^|,)cn=((?:\\\\.|[^\\\\,])+)/i', $g, $m)) {
+                    $cn = strtolower(self::unescapeLdapDnValue($m[1]));
+                    if ($cn !== '') {
+                        $want[$cn] = true;
+                    }
+                }
+            }
+        }
+        return $want;
+    }
+
+    /**
+     * Whether a role/department map row matches the user's group token set.
+     * @param array<string,true> $want
+     */
+    private static function groupMapMatches(array $want, string $groupId, ?string $groupName): bool
+    {
+        $candidates = [];
+        foreach ([$groupId, (string)$groupName] as $raw) {
+            $raw = trim($raw);
+            if ($raw === '') {
+                continue;
+            }
+            $candidates[] = strtolower($raw);
+            // DN → CN
+            if (preg_match('/(?:^|,)cn=((?:\\\\.|[^\\\\,])+)/i', $raw, $m)) {
+                $candidates[] = strtolower(self::unescapeLdapDnValue($m[1]));
+            }
+        }
+        foreach ($candidates as $c) {
+            if ($c !== '' && isset($want[$c])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function unescapeLdapDnValue(string $v): string
+    {
+        $out = preg_replace_callback(
+            '/\\\\([0-9A-Fa-f]{2}|.)/',
+            static function (array $mm): string {
+                $x = $mm[1];
+                if (strlen($x) === 2 && ctype_xdigit($x)) {
+                    return chr(hexdec($x));
+                }
+                return $x;
+            },
+            $v
+        );
+        return trim((string)($out ?? $v));
     }
 
     public static function attemptLocal(string $username, string $password): ?array

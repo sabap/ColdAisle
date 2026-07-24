@@ -245,7 +245,13 @@ class LdapAuth
             $parsed['user_filter']
         );
 
-        $search = @ldap_search($conn, $parsed['base_dn'], $filter, ['dn', 'mail', 'displayName', 'cn', 'sAMAccountName', 'userPrincipalName']);
+        // memberOf = direct group memberships (DNs). Used for role_group_maps / department maps.
+        $search = @ldap_search(
+            $conn,
+            $parsed['base_dn'],
+            $filter,
+            ['dn', 'mail', 'displayName', 'cn', 'sAMAccountName', 'userPrincipalName', 'memberOf']
+        );
         if (!$search) {
             App::log('LDAP search failed: ' . ldap_error($conn), 'error');
             return null;
@@ -266,10 +272,57 @@ class LdapAuth
         $email = $entry['mail'][0] ?? ($entry['userprincipalname'][0] ?? $username . '@local');
         $display = $entry['displayname'][0] ?? ($entry['cn'][0] ?? $username);
         $sam = $entry['samaccountname'][0] ?? $username;
+        $groupIds = self::extractGroupIdentifiers($entry);
 
         @ldap_unbind($conn);
 
-        return self::upsertUser($sam, $email, $display, $userDn);
+        return self::upsertUser($sam, $email, $display, $userDn, $groupIds);
+    }
+
+    /**
+     * Collect group identifiers from an LDAP user entry for map matching.
+     * Includes full memberOf DNs and the CN= RDN of each group.
+     *
+     * @param array<string,mixed> $entry from ldap_get_entries
+     * @return list<string>
+     */
+    private static function extractGroupIdentifiers(array $entry): array
+    {
+        $out = [];
+        // ldap_get_entries lowercases attribute names
+        $memberOf = $entry['memberof'] ?? null;
+        if (!is_array($memberOf)) {
+            return [];
+        }
+        $count = (int)($memberOf['count'] ?? 0);
+        for ($i = 0; $i < $count; $i++) {
+            $dn = trim((string)($memberOf[$i] ?? ''));
+            if ($dn === '') {
+                continue;
+            }
+            $out[] = $dn;
+            // CN=... first RDN (common admin mapping form)
+            if (preg_match('/^CN=((?:\\\\.|[^\\\\,])+)/i', $dn, $m)) {
+                $cn = $m[1];
+                // Unescape simple LDAP DN escapes (\2C → ,, \, → ,)
+                $cn = preg_replace_callback(
+                    '/\\\\([0-9A-Fa-f]{2}|.)/',
+                    static function (array $mm): string {
+                        $x = $mm[1];
+                        if (strlen($x) === 2 && ctype_xdigit($x)) {
+                            return chr(hexdec($x));
+                        }
+                        return $x;
+                    },
+                    $cn
+                ) ?? $cn;
+                $cn = trim($cn);
+                if ($cn !== '') {
+                    $out[] = $cn;
+                }
+            }
+        }
+        return array_values(array_unique($out));
     }
 
     /**
@@ -797,8 +850,16 @@ class LdapAuth
         );
     }
 
-    private static function upsertUser(string $username, string $email, string $displayName, string $externalId): array
-    {
+    /**
+     * @param list<string> $groupIds Group DNs / CNs from memberOf (for role & department maps)
+     */
+    private static function upsertUser(
+        string $username,
+        string $email,
+        string $displayName,
+        string $externalId,
+        array $groupIds = []
+    ): array {
         $existing = Database::fetchOne(
             'SELECT u.*, r.name AS role_name, r.permissions AS role_permissions
              FROM users u INNER JOIN roles r ON r.role_id = u.role_id
@@ -806,14 +867,36 @@ class LdapAuth
             [$username, $externalId]
         );
 
+        // Highest-privilege matching role (and optional department) from AD group maps
+        $mappedRoleId = AuthManager::roleIdFromGroups('ldaps', $groupIds);
+        $mappedDeptId = AuthManager::departmentIdFromGroups('ldaps', $groupIds);
+
         if ($existing) {
-            Database::update('users', [
+            $fields = [
                 'email' => $email,
                 'display_name' => $displayName,
                 'external_id' => $externalId,
                 'auth_source' => 'ldaps',
                 'updated_at' => date('Y-m-d H:i:s'),
-            ], 'user_id = :id', [':id' => (int)$existing['user_id']]);
+            ];
+            // Re-apply role on every login when maps match so privilege upgrades take effect
+            if ($mappedRoleId) {
+                $fields['role_id'] = $mappedRoleId;
+            }
+            if ($mappedDeptId) {
+                $fields['department_id'] = $mappedDeptId;
+            }
+            Database::update('users', $fields, 'user_id = :id', [':id' => (int)$existing['user_id']]);
+
+            if ($mappedRoleId && (int)($existing['role_id'] ?? 0) !== $mappedRoleId) {
+                App::log(
+                    'LDAPS role map: user ' . $username
+                    . ' role_id ' . (int)($existing['role_id'] ?? 0)
+                    . ' → ' . $mappedRoleId
+                    . ' (groups: ' . count($groupIds) . ')',
+                    'info'
+                );
+            }
 
             return Database::fetchOne(
                 'SELECT u.*, r.name AS role_name, r.permissions AS role_permissions
@@ -826,17 +909,37 @@ class LdapAuth
         $defaultRole = (int)(App::config('auth.ldaps.default_role_id')
             ?? Database::fetchValue("SELECT role_id FROM roles WHERE name = 'Viewer'")
             ?? 4);
+        $roleId = $mappedRoleId ?: $defaultRole;
 
-        $id = Database::insert('users', [
+        $insert = [
             'username' => $username,
             'email' => $email,
             'display_name' => $displayName,
             'password_hash' => null,
             'auth_source' => 'ldaps',
             'external_id' => $externalId,
-            'role_id' => $defaultRole,
+            'role_id' => $roleId,
             'is_active' => 1,
-        ]);
+        ];
+        if ($mappedDeptId) {
+            $insert['department_id'] = $mappedDeptId;
+        }
+
+        $id = Database::insert('users', $insert);
+
+        if ($mappedRoleId) {
+            App::log(
+                'LDAPS role map: new user ' . $username . ' role_id ' . $roleId
+                . ' (groups: ' . count($groupIds) . ')',
+                'info'
+            );
+        } elseif ($groupIds) {
+            App::log(
+                'LDAPS role map: no map match for ' . $username
+                . ' (' . count($groupIds) . ' groups); using default role_id ' . $defaultRole,
+                'info'
+            );
+        }
 
         return Database::fetchOne(
             'SELECT u.*, r.name AS role_name, r.permissions AS role_permissions

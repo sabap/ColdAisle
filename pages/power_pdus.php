@@ -108,6 +108,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                     ? max(1, (int)($_POST['u_height'] ?? 1)) : null,
                 'manufacturer' => $_POST['manufacturer'] !== '' ? $_POST['manufacturer'] : null,
                 'model' => $_POST['model'] !== '' ? $_POST['model'] : null,
+                'serial_no' => trim((string)($_POST['serial_no'] ?? '')) !== ''
+                    ? trim((string)$_POST['serial_no']) : null,
                 'ip_address' => $_POST['ip_address'] !== '' ? $_POST['ip_address'] : null,
                 'output_mode' => $outputMode,
                 'num_outlets' => $outputMode === 'outlets' ? $numOutlets : 0,
@@ -1050,6 +1052,12 @@ if ($pduId) {
                         $vm = trim(($p['manufacturer'] ?? '') . ' ' . ($p['model'] ?? ''));
                         echo $vm !== '' ? App::e($vm) : '<span class="text-muted">—</span>';
                     ?></dd>
+                </div>
+                <div>
+                    <dt>Serial number</dt>
+                    <dd><?= !empty($p['serial_no'])
+                        ? App::e((string)$p['serial_no'])
+                        : '<span class="text-muted">—</span>' ?></dd>
                 </div>
                 <div>
                     <dt>Location</dt>
