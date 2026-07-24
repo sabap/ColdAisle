@@ -110,13 +110,39 @@ class SnmpDiscover
             throw new RuntimeException('SNMP discovery failed: ' . $detail);
         }
 
+        // Offline MIB index: map numeric OIDs → Module::name when Net-SNMP still
+        // returns numeric keys (typical on Windows even after snmp_read_mib).
+        $indexSize = 0;
+        if (class_exists('MibService')) {
+            $indexSize = MibService::oidIndexSize();
+        }
+
         $candidates = [];
         $namedCount = 0;
+        $indexHits = 0;
         foreach ($collected as $oid => $meta) {
             $raw = $meta['raw'];
             $name = $meta['name'] ?? null;
+            $module = $meta['module'] ?? null;
+
+            // Prefer portable numeric form in the map when we have one
+            $mapOid = $oid;
+            if (!preg_match('/^\d+(?:\.\d+)*$/', $oid) && $name) {
+                // Symbolic-only key from module walk — keep for polling with MIBs loaded
+                $mapOid = $oid;
+            }
+
+            if (!$name && class_exists('MibService') && preg_match('/^\d+(?:\.\d+)*$/', $oid)) {
+                $resolved = MibService::resolveOidName($oid);
+                if ($resolved) {
+                    $name = $resolved['name'];
+                    $module = $resolved['module'];
+                    $indexHits++;
+                }
+            }
+
             $num = self::toNumber($raw);
-            $score = self::scoreOid($oid, $name, $raw, $num);
+            $score = self::scoreOid($mapOid, $name, $raw, $num);
             if ($score < 1) {
                 continue;
             }
@@ -124,13 +150,13 @@ class SnmpDiscover
                 $namedCount++;
             }
             $candidates[] = [
-                'oid' => $oid,
+                'oid' => $mapOid,
                 'name' => $name,
-                'module' => $meta['module'] ?? null,
+                'module' => $module,
                 'value' => is_scalar($raw) ? (string)$raw : json_encode($raw),
                 'numeric' => $num,
                 'score' => $score,
-                'hint' => self::hintFor($oid, $name, $raw, $num),
+                'hint' => self::hintFor($mapOid, $name, $raw, $num),
             ];
         }
         usort($candidates, static function ($a, $b) {
@@ -159,18 +185,24 @@ class SnmpDiscover
             if ($namedCount) {
                 $msg .= '; ' . $namedCount . ' with MIB names';
             }
+            if ($indexHits) {
+                $msg .= ' (' . $indexHits . ' from uploaded MIB text index)';
+            }
             if ($mibsLoaded) {
-                $msg .= '; ' . $mibsLoaded . ' MIB file(s) loaded';
+                $msg .= '; ' . $mibsLoaded . ' MIB file(s) loaded into Net-SNMP';
+            }
+            if ($indexSize) {
+                $msg .= '; offline index ' . $indexSize . ' objects';
             }
             $msg .= '.';
         } else {
             $msg .= '; limited power candidates - review and edit map.';
         }
 
-        if ($mibsLoaded > 0 && $namedCount === 0) {
-            $msg .= ' MIBs loaded but walks returned numeric OIDs only'
-                . ' (Net-SNMP may need IMPORT dependencies, or php.ini snmp.mib_directory).'
-                . ' Name-based scoring still uses OID path heuristics.';
+        if ($mibsLoaded > 0 && $namedCount === 0 && $indexSize === 0) {
+            $msg .= ' Could not parse OBJECT-TYPE assignments from uploaded MIBs.';
+        } elseif ($indexSize > 0 && $namedCount === 0) {
+            $msg .= ' Offline MIB index built but no walk OIDs matched (different enterprise tree or incomplete IMPORT chain in the MIB file).';
         }
 
         return [
@@ -182,6 +214,8 @@ class SnmpDiscover
             'walk_count' => count($collected),
             'named_count' => $namedCount,
             'mibs_loaded' => $mibsLoaded,
+            'mib_index_size' => $indexSize,
+            'mib_index_hits' => $indexHits,
             'message' => $msg,
         ];
     }
