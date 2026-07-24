@@ -105,6 +105,13 @@ class SiteBackupService
                 @mkdir($uploadsDst, 0775, true);
             }
 
+            // SNMP vendor MIBs (optional inventory)
+            $mibsSrc = App::ROOT . '/storage/snmp/mibs';
+            $mibsDst = $staging . '/snmp_mibs';
+            if (is_dir($mibsSrc)) {
+                self::copyTree($mibsSrc, $mibsDst);
+            }
+
             $manifest = [
                 'format' => 'coldaisle-site-backup',
                 'format_version' => self::FORMAT_VERSION,
@@ -250,6 +257,16 @@ class SiteBackupService
                     @mkdir($uploadsDst, 0775, true);
                 }
                 self::copyTree($uploadsSrc, $uploadsDst);
+            }
+
+            // SNMP MIBs
+            $mibsSrc = $root . '/snmp_mibs';
+            $mibsDst = App::ROOT . '/storage/snmp/mibs';
+            if (is_dir($mibsSrc)) {
+                if (!is_dir($mibsDst)) {
+                    @mkdir($mibsDst, 0775, true);
+                }
+                self::copyTree($mibsSrc, $mibsDst);
             }
 
             // Config: merge overlay + new DB + preserved app_key
