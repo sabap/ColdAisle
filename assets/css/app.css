@@ -298,11 +298,29 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   margin-bottom: 1.25rem; overflow: hidden;
 }
+/* Section heading row — subtle accent wash so sections are easy to spot while scrolling */
 .card-header {
   display: flex; align-items: center; justify-content: space-between; gap: 1rem;
-  padding: .85rem 1.15rem; border-bottom: 1px solid var(--border); flex-wrap: wrap;
+  padding: .85rem 1.15rem;
+  flex-wrap: wrap;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(59, 130, 246, 0.16) 0%,
+      rgba(59, 130, 246, 0.08) 42%,
+      rgba(30, 58, 95, 0.22) 100%
+    ),
+    var(--surface-2);
+  border-bottom: 1px solid rgba(59, 130, 246, 0.22);
+  box-shadow: inset 3px 0 0 0 var(--accent);
 }
-.card-header h2, .card-header h3 { margin: 0; font-size: 1rem; font-weight: 600; }
+.card-header h2, .card-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #f1f5f9;
+  letter-spacing: .01em;
+}
 .card-body { padding: 1.15rem; }
 .card-body.flush { padding: 0; }
 
