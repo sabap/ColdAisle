@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
+require_once dirname(__DIR__) . '/includes/timezone_field.php';
 require_once dirname(__DIR__) . '/src/Services/UpdateService.php';
 App::boot();
 $user = App::requirePermission('manage_settings');
@@ -20,18 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             SettingsService::set('disposal_notify_days', (string)(int)($_POST['disposal_notify_days'] ?? 7), 'lifecycle');
             $config['app_name'] = App::APP_NAME;
             $config['org_name'] = $_POST['org_name'] ?? $config['org_name'] ?? '';
-            $tzIn = trim((string)($_POST['timezone'] ?? 'UTC'));
-            if ($tzIn === '') {
-                $tzIn = 'UTC';
-            }
-            try {
-                new DateTimeZone($tzIn);
-                $config['timezone'] = $tzIn;
-            } catch (Throwable $e) {
-                throw new RuntimeException(
-                    'Invalid timezone “' . $tzIn . '”. Choose a value from the list (e.g. America/New_York).'
-                );
-            }
+            $config['timezone'] = coldaisle_normalize_timezone($_POST['timezone'] ?? 'UTC');
             $config['base_url'] = rtrim($_POST['base_url'] ?? '', '/');
         }
 
@@ -152,28 +142,99 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         }
 
         if ($section === 'test_mail') {
-            if (!class_exists('MailService')) {
-                throw new RuntimeException('MailService is not installed on this host. Deploy src/Services/MailService.php.');
+            // AJAX modal response (same pattern as test_ldaps)
+            $json = static function (array $payload): void {
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                exit;
+            };
+            try {
+                if (!class_exists('MailService')) {
+                    $json([
+                        'ok' => false,
+                        'summary' => 'MailService is not installed on this host.',
+                        'steps' => [[
+                            'ok' => false,
+                            'name' => 'MailService',
+                            'detail' => 'Deploy src/Services/MailService.php (update to a recent ColdAisle release).',
+                        ]],
+                    ]);
+                }
+                $existingMail = is_array($config['mail'] ?? null) ? $config['mail'] : [];
+                // Prefer form values so admins can test before clicking Save
+                $override = MailService::configFromPost($_POST, $existingMail);
+                $override['enabled'] = true;
+                $to = trim((string)($_POST['mail_test_to'] ?? ''));
+                if ($to === '') {
+                    $to = (string)($user['email'] ?? '');
+                }
+
+                $encLabel = match ((string)($override['encryption'] ?? 'tls')) {
+                    'ssl' => 'SSL/TLS',
+                    'tls' => 'STARTTLS',
+                    default => 'no encryption',
+                };
+                $authLabel = match ((string)($override['auth_mode'] ?? 'none')) {
+                    'login' => 'AUTH LOGIN',
+                    'plain' => 'AUTH PLAIN',
+                    default => 'no auth',
+                };
+                $host = trim((string)($override['host'] ?? ''));
+                $port = (int)($override['port'] ?? 0);
+                $from = trim((string)($override['from_email'] ?? ''));
+
+                $steps = [];
+                $cfgOk = $host !== '' && $from !== '' && filter_var($from, FILTER_VALIDATE_EMAIL)
+                    && (($override['auth_mode'] ?? 'none') === 'none' || trim((string)($override['username'] ?? '')) !== '');
+                $steps[] = [
+                    'ok' => $cfgOk && $to !== '' && filter_var($to, FILTER_VALIDATE_EMAIL),
+                    'name' => 'Configuration',
+                    'detail' => ($host !== '' ? "{$host}:{$port}" : 'host missing')
+                        . " · {$encLabel} · {$authLabel}"
+                        . ($from !== '' ? " · From {$from}" : ' · From missing')
+                        . ($to !== '' ? " · To {$to}" : ' · recipient missing'),
+                ];
+
+                $result = MailService::sendTest($to, $override);
+                $ok = !empty($result['ok']);
+                $msg = (string)($result['message'] ?? ($ok ? 'Test message sent.' : 'Test message failed.'));
+                $steps[] = [
+                    'ok' => $ok,
+                    'name' => 'SMTP delivery',
+                    'detail' => $msg,
+                ];
+                if ($ok) {
+                    $steps[] = [
+                        'ok' => true,
+                        'name' => 'Inbox check',
+                        'detail' => 'Server accepted the message. Check the recipient mailbox (and spam folder).',
+                    ];
+                }
+
+                AuditService::log((int)$user['user_id'], $user['username'], 'mail_test', 'system', null, [
+                    'ok' => $ok,
+                    'to' => $to,
+                ]);
+
+                $json([
+                    'ok' => $ok,
+                    'summary' => $ok
+                        ? ('Test email accepted for ' . ($to !== '' ? $to : 'recipient') . '.')
+                        : $msg,
+                    'steps' => $steps,
+                    'to' => $to,
+                ]);
+            } catch (Throwable $e) {
+                $json([
+                    'ok' => false,
+                    'summary' => 'Test error: ' . $e->getMessage(),
+                    'steps' => [[
+                        'ok' => false,
+                        'name' => 'Exception',
+                        'detail' => $e->getMessage(),
+                    ]],
+                ]);
             }
-            $existingMail = is_array($config['mail'] ?? null) ? $config['mail'] : [];
-            // Prefer form values so admins can test before clicking Save
-            $override = MailService::configFromPost($_POST, $existingMail);
-            $override['enabled'] = true;
-            $to = trim((string)($_POST['mail_test_to'] ?? ''));
-            if ($to === '') {
-                $to = (string)($user['email'] ?? '');
-            }
-            $result = MailService::sendTest($to, $override);
-            AuditService::log((int)$user['user_id'], $user['username'], 'mail_test', 'system', null, [
-                'ok' => !empty($result['ok']),
-                'to' => $to,
-            ]);
-            if (!empty($result['ok'])) {
-                App::flash('success', $result['message'] ?? 'Test message sent.');
-            } else {
-                App::flash('error', $result['message'] ?? 'Test message failed.');
-            }
-            App::redirect('pages/settings.php#mail');
         }
 
         if ($section === 'update_check') {
@@ -362,34 +423,14 @@ layout_header('Settings', $user, 'settings');
             <div class="form-row"><label>Organization</label>
                 <input class="form-control" name="org_name" value="<?= App::e($config['org_name'] ?? SettingsService::get('org_name', '')) ?>"></div>
             <?php
-            $tzList = timezone_identifiers_list();
-            $currentTz = (string)($config['timezone'] ?? 'UTC');
-            if ($currentTz === '') {
-                $currentTz = 'UTC';
-            }
-            // Keep a custom/legacy value selectable if it is not in the PHP list
-            if (!in_array($currentTz, $tzList, true)) {
-                array_unshift($tzList, $currentTz);
-            }
+            coldaisle_render_timezone_field([
+                'name' => 'timezone',
+                'value' => (string)($config['timezone'] ?? 'UTC'),
+                'id' => 'timezone_input',
+                'full' => true,
+                'hint' => 'Type to filter (e.g. New → America/New_York). Click a match or press Enter to choose the first result.',
+            ]);
             ?>
-            <div class="form-row full"><label for="timezone_input">Timezone</label>
-                <div class="tz-combobox" id="tz_combobox">
-                    <input class="form-control" type="text" name="timezone" id="timezone_input"
-                           value="<?= App::e($currentTz) ?>"
-                           autocomplete="off"
-                           spellcheck="false"
-                           role="combobox"
-                           aria-autocomplete="list"
-                           aria-expanded="false"
-                           aria-controls="timezone_list"
-                           placeholder="Search timezones (e.g. New, Chicago, UTC)…">
-                    <ul class="tz-combobox-list" id="timezone_list" role="listbox" hidden></ul>
-                </div>
-                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
-                    Type to filter (e.g. <code>New</code> → <code>America/New_York</code>). Click a match or press Enter to choose the first result.
-                </p>
-                <script type="application/json" id="tz_data"><?= json_encode(array_values($tzList), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?></script>
-            </div>
             <div class="form-row full"><label>Public site URL (optional)</label>
                 <input class="form-control" name="base_url" id="settings_base_url"
                        value="<?= App::e($config['base_url'] ?? '') ?>"
@@ -590,9 +631,7 @@ layout_header('Settings', $user, 'settings');
                        autocomplete="off"></div>
             <div class="form-row full" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
                 <button class="btn btn-primary" type="submit" name="section" value="mail">Save Email</button>
-                <button class="btn btn-secondary" type="submit" name="section" value="test_mail">
-                    Send test email
-                </button>
+                <button class="btn btn-secondary" type="button" id="mail_test_btn">Send test email</button>
             </div>
         </form>
         <p class="hint text-muted" style="margin-top:.75rem">
@@ -628,6 +667,21 @@ layout_header('Settings', $user, 'settings');
             toggleAuth();
         })();
         </script>
+    </div>
+</div>
+
+<!-- SMTP test result modal (same chrome as LDAPS test) -->
+<div id="mail_test_modal" class="ldaps-modal" hidden aria-hidden="true">
+    <div class="ldaps-modal-backdrop" data-mail-close></div>
+    <div class="ldaps-modal-panel ldaps-pending" role="dialog" aria-modal="true" aria-labelledby="mail_test_title">
+        <div class="ldaps-modal-head">
+            <h3 id="mail_test_title">SMTP test</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-mail-close aria-label="Close">✕</button>
+        </div>
+        <div id="mail_test_body" class="ldaps-modal-body"></div>
+        <div class="ldaps-modal-foot">
+            <button type="button" class="btn btn-secondary" data-mail-close>Close</button>
+        </div>
     </div>
 </div>
 
@@ -985,134 +1039,127 @@ layout_header('Settings', $user, 'settings');
     </div>
 </div>
 <script>
+// Shared helpers for settings connection-test modals
+function settingsTestEsc(s) {
+    var d = document.createElement('div');
+    d.textContent = s == null ? '' : String(s);
+    return d.innerHTML;
+}
+function settingsTestStepsHtml(steps) {
+    var html = '<ul class="ldaps-steps">';
+    (steps || []).forEach(function (step) {
+        var stepOk = !!step.ok;
+        html += '<li class="' + (stepOk ? 'ldaps-ok' : 'ldaps-bad') + '">';
+        html += '<span class="ldaps-ico" aria-hidden="true">' + (stepOk ? '✓' : '✗') + '</span>';
+        html += '<span class="ldaps-name">' + settingsTestEsc(step.name || '') + '</span>';
+        html += '<span class="ldaps-detail">' + settingsTestEsc(step.detail || '') + '</span>';
+        html += '</li>';
+    });
+    html += '</ul>';
+    return html;
+}
+function settingsTestPendingHtml(msg, sub) {
+    return '<div class="settings-test-loading">'
+        + '<div class="settings-test-spinner" role="status" aria-label="Loading"></div>'
+        + '<p class="ldaps-summary">' + settingsTestEsc(msg || 'Please wait…') + '</p>'
+        + (sub ? '<p class="settings-test-sub">' + settingsTestEsc(sub) + '</p>' : '')
+        + '</div>';
+}
+
+// SMTP test modal
 (function () {
-    var dataEl = document.getElementById('tz_data');
-    var input = document.getElementById('timezone_input');
-    var list = document.getElementById('timezone_list');
-    var box = document.getElementById('tz_combobox');
-    if (!dataEl || !input || !list || !box) return;
+    var btn = document.getElementById('mail_test_btn');
+    var modal = document.getElementById('mail_test_modal');
+    var body = document.getElementById('mail_test_body');
+    var title = document.getElementById('mail_test_title');
+    if (!btn || !modal || !body) return;
 
-    var all = [];
-    try { all = JSON.parse(dataEl.textContent || '[]'); } catch (e) { all = []; }
-    if (!Array.isArray(all) || !all.length) return;
+    var form = document.getElementById('mail_settings_form') || btn.closest('form');
+    var panel = modal.querySelector('.ldaps-modal-panel');
+    var defaultTo = <?= json_encode((string)($user['email'] ?? ''), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 
-    var active = -1;
-    var maxShow = 80;
+    function openModal() {
+        modal.hidden = false;
+        modal.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+    }
+    function closeModal() {
+        modal.hidden = true;
+        modal.setAttribute('aria-hidden', 'true');
+        if (!document.querySelector('.ldaps-modal:not([hidden]), .app-modal:not([hidden])')) {
+            document.body.style.overflow = '';
+        }
+    }
+    modal.querySelectorAll('[data-mail-close]').forEach(function (el) {
+        el.addEventListener('click', closeModal);
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !modal.hidden) closeModal();
+    });
 
-    function norm(s) {
-        return String(s || '').toLowerCase().replace(/_/g, ' ');
+    function showResult(data) {
+        var ok = !!(data && data.ok);
+        panel.classList.remove('ldaps-pass', 'ldaps-fail', 'ldaps-pending');
+        panel.classList.add(ok ? 'ldaps-pass' : 'ldaps-fail');
+        title.textContent = ok ? 'SMTP test passed' : 'SMTP test failed';
+        var html = '<p class="ldaps-summary">' + settingsTestEsc(data.summary || (ok ? 'OK' : 'Failed')) + '</p>';
+        html += settingsTestStepsHtml(data.steps || []);
+        body.innerHTML = html;
     }
 
-    function filter(q) {
-        q = norm(q).trim();
-        if (!q) return all.slice(0, maxShow);
-        var out = [];
-        for (var i = 0; i < all.length && out.length < maxShow; i++) {
-            var id = all[i];
-            var n = norm(id);
-            if (n.indexOf(q) !== -1 || id.toLowerCase().indexOf(q) !== -1) {
-                out.push(id);
-            }
-        }
-        return out;
-    }
+    btn.addEventListener('click', function () {
+        if (!form) return;
+        panel.classList.remove('ldaps-pass', 'ldaps-fail');
+        panel.classList.add('ldaps-pending');
+        title.textContent = 'Sending test email…';
+        body.innerHTML = settingsTestPendingHtml(
+            'Contacting SMTP server — please wait.',
+            'This can take several seconds depending on network and timeout settings.'
+        );
+        openModal();
+        btn.disabled = true;
 
-    function render(items) {
-        list.innerHTML = '';
-        active = -1;
-        if (!items.length) {
-            var empty = document.createElement('li');
-            empty.className = 'tz-empty';
-            empty.textContent = 'No matching timezones';
-            list.appendChild(empty);
-            return;
+        var fd = new FormData(form);
+        fd.set('section', 'test_mail');
+        fd.set('_csrf', (window.ColdAisle && window.ColdAisle.csrf) || form.querySelector('[name=_csrf]').value);
+        var toEl = document.getElementById('mail_test_to');
+        var toVal = toEl && toEl.value ? toEl.value.trim() : '';
+        if (!toVal && defaultTo) {
+            toVal = defaultTo;
+            if (toEl) toEl.value = defaultTo;
         }
-        items.forEach(function (id, idx) {
-            var li = document.createElement('li');
-            li.setAttribute('role', 'option');
-            li.setAttribute('data-value', id);
-            // Friendlier display: America/New_York → America/New York
-            li.textContent = id.replace(/_/g, ' ');
-            li.title = id;
-            li.addEventListener('mousedown', function (e) {
-                e.preventDefault(); // keep focus; avoid blur closing before select
-                pick(id);
+        fd.set('mail_test_to', toVal);
+
+        fetch(window.location.pathname + (window.location.search || ''), {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+        }).then(function (r) {
+            return r.json().then(function (j) {
+                return { json: j };
+            }).catch(function () {
+                return { json: { ok: false, summary: 'Invalid response from server.', steps: [] } };
             });
-            li.addEventListener('mouseenter', function () {
-                setActive(idx);
-            });
-            list.appendChild(li);
-        });
-    }
-
-    function openList() {
-        list.hidden = false;
-        input.setAttribute('aria-expanded', 'true');
-    }
-
-    function closeList() {
-        list.hidden = true;
-        input.setAttribute('aria-expanded', 'false');
-        active = -1;
-    }
-
-    function setActive(idx) {
-        var items = list.querySelectorAll('li[role="option"]');
-        items.forEach(function (el, i) {
-            el.setAttribute('aria-selected', i === idx ? 'true' : 'false');
-        });
-        active = idx;
-        if (items[idx]) {
-            items[idx].scrollIntoView({ block: 'nearest' });
-        }
-    }
-
-    function pick(id) {
-        input.value = id;
-        closeList();
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-
-    function refresh() {
-        render(filter(input.value));
-        openList();
-        if (list.querySelector('li[role="option"]')) {
-            setActive(0);
-        }
-    }
-
-    input.addEventListener('focus', function () {
-        refresh();
-    });
-    input.addEventListener('input', function () {
-        refresh();
-    });
-    input.addEventListener('keydown', function (e) {
-        var items = list.querySelectorAll('li[role="option"]');
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            if (list.hidden) refresh();
-            setActive(Math.min(active + 1, items.length - 1));
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            setActive(Math.max(active - 1, 0));
-        } else if (e.key === 'Enter') {
-            if (!list.hidden && active >= 0 && items[active]) {
-                e.preventDefault();
-                pick(items[active].getAttribute('data-value'));
+        }).then(function (res) {
+            if (res.json && typeof res.json.ok !== 'undefined') {
+                showResult(res.json);
+            } else {
+                showResult({
+                    ok: false,
+                    summary: (res.json && res.json.error) || 'Test request failed.',
+                    steps: []
+                });
             }
-        } else if (e.key === 'Escape') {
-            closeList();
-        }
-    });
-    input.addEventListener('blur', function () {
-        // Delay so mousedown on option can fire
-        setTimeout(closeList, 150);
-    });
-
-    // Click outside
-    document.addEventListener('click', function (e) {
-        if (!box.contains(e.target)) closeList();
+        }).catch(function (err) {
+            showResult({
+                ok: false,
+                summary: 'Network error: ' + (err && err.message ? err.message : 'request failed'),
+                steps: []
+            });
+        }).finally(function () {
+            btn.disabled = false;
+        });
     });
 })();
 
@@ -1130,10 +1177,14 @@ layout_header('Settings', $user, 'settings');
     function openModal() {
         modal.hidden = false;
         modal.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
     }
     function closeModal() {
         modal.hidden = true;
         modal.setAttribute('aria-hidden', 'true');
+        if (!document.querySelector('.ldaps-modal:not([hidden]), .app-modal:not([hidden])')) {
+            document.body.style.overflow = '';
+        }
     }
     modal.querySelectorAll('[data-ldaps-close]').forEach(function (el) {
         el.addEventListener('click', closeModal);
@@ -1142,28 +1193,13 @@ layout_header('Settings', $user, 'settings');
         if (e.key === 'Escape' && !modal.hidden) closeModal();
     });
 
-    function esc(s) {
-        var d = document.createElement('div');
-        d.textContent = s == null ? '' : String(s);
-        return d.innerHTML;
-    }
-
     function showResult(data) {
         var ok = !!(data && data.ok);
         panel.classList.remove('ldaps-pass', 'ldaps-fail', 'ldaps-pending');
         panel.classList.add(ok ? 'ldaps-pass' : 'ldaps-fail');
         title.textContent = ok ? 'LDAPS test passed' : 'LDAPS test failed';
-        var html = '<p class="ldaps-summary">' + esc(data.summary || (ok ? 'OK' : 'Failed')) + '</p>';
-        html += '<ul class="ldaps-steps">';
-        (data.steps || []).forEach(function (step) {
-            var stepOk = !!step.ok;
-            html += '<li class="' + (stepOk ? 'ldaps-ok' : 'ldaps-bad') + '">';
-            html += '<span class="ldaps-ico" aria-hidden="true">' + (stepOk ? '✓' : '✗') + '</span>';
-            html += '<span class="ldaps-name">' + esc(step.name || '') + '</span>';
-            html += '<span class="ldaps-detail">' + esc(step.detail || '') + '</span>';
-            html += '</li>';
-        });
-        html += '</ul>';
+        var html = '<p class="ldaps-summary">' + settingsTestEsc(data.summary || (ok ? 'OK' : 'Failed')) + '</p>';
+        html += settingsTestStepsHtml(data.steps || []);
         body.innerHTML = html;
     }
 
@@ -1172,7 +1208,10 @@ layout_header('Settings', $user, 'settings');
         panel.classList.remove('ldaps-pass', 'ldaps-fail');
         panel.classList.add('ldaps-pending');
         title.textContent = 'Testing LDAPS…';
-        body.innerHTML = '<p class="ldaps-summary">Contacting directory — please wait.</p>';
+        body.innerHTML = settingsTestPendingHtml(
+            'Contacting directory — please wait.',
+            'Binding and search can take a few seconds.'
+        );
         openModal();
         btn.disabled = true;
 
