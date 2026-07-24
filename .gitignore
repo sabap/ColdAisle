@@ -6,6 +6,8 @@
 !/storage/logs/.gitkeep
 /storage/uploads/*
 !/storage/uploads/.gitkeep
+/storage/snmp/mibs/*
+!/storage/snmp/mibs/.gitkeep
 
 # Backups / dumps (local)
 *.bak

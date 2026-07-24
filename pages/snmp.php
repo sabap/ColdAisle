@@ -175,8 +175,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             'add_profile', 'update_profile', 'deactivate_profile',
             'add_target', 'update_target', 'toggle', 'delete_target',
             'unschedule_pdu', 'unschedule_device',
+            'upload_mib', 'delete_mib',
         ], true) && !AuthManager::canEditSnmp($user)) {
             throw new RuntimeException('You do not have permission to edit SNMP settings.');
+        }
+
+        if ($action === 'upload_mib') {
+            if (empty($_FILES['mib_file'])) {
+                throw new RuntimeException('Choose a MIB file to upload.');
+            }
+            $result = MibService::upload($_FILES['mib_file']);
+            AuditService::log((int)$user['user_id'], $user['username'], 'mib_upload', 'system', null, [
+                'filename' => $result['filename'] ?? null,
+                'module' => $result['module'] ?? null,
+                'bytes' => $result['bytes'] ?? null,
+            ]);
+            App::flash('success', $result['message'] ?? 'MIB uploaded.');
+            App::redirect('pages/snmp.php#mibs');
+        }
+
+        if ($action === 'delete_mib') {
+            $fn = (string)($_POST['filename'] ?? '');
+            MibService::delete($fn);
+            AuditService::log((int)$user['user_id'], $user['username'], 'mib_delete', 'system', null, [
+                'filename' => $fn,
+            ]);
+            App::flash('success', 'Removed MIB file: ' . basename($fn));
+            App::redirect('pages/snmp.php#mibs');
         }
 
         if ($action === 'add_profile' || $action === 'update_profile') {
@@ -359,7 +384,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
     } catch (Throwable $e) {
         App::flash('error', $e->getMessage());
     }
-    App::redirect('pages/snmp.php' . (!empty($_GET['pdu_id']) ? '?pdu_id=' . (int)$_GET['pdu_id'] . '#targets' : '#targets'));
+    $hash = '#targets';
+    $act = (string)($_POST['action'] ?? '');
+    if (in_array($act, ['upload_mib', 'delete_mib'], true)) {
+        $hash = '#mibs';
+    } elseif (in_array($act, ['add_profile', 'update_profile', 'deactivate_profile'], true)) {
+        $hash = '#profiles';
+    }
+    App::redirect('pages/snmp.php' . (!empty($_GET['pdu_id']) ? '?pdu_id=' . (int)$_GET['pdu_id'] . '#targets' : $hash));
 }
 
 // Free-standing scheduled targets (is_enabled = 1)
@@ -428,6 +460,18 @@ foreach ($profiles as $p) {
 }
 $hasSnmp = extension_loaded('snmp');
 $canEdit = AuthManager::canEditSnmp($user);
+$mibStatus = MibService::status();
+$mibFiles = MibService::listMibs();
+if ($hasSnmp) {
+    MibService::loadAll();
+}
+$mibLoadedCount = 0;
+try {
+    // Reflect how many files snmp_read_mib accepted this request
+    $mibLoadedCount = MibService::loadAll();
+} catch (Throwable $e) {
+    $mibLoadedCount = 0;
+}
 
 // Site OID templates created via Discover OIDs (Vendor+Model)
 $siteOidTemplates = [];
@@ -723,6 +767,124 @@ layout_header('SNMP Polling', $user, 'snmp');
         <button class="btn btn-secondary" type="submit">Poll Now</button>
     </form>
 </div>
+
+<!-- Vendor MIBs (Phase 1: upload / list / delete) -->
+<div class="card" id="mibs">
+    <div class="card-header flex-between">
+        <h2>MIBs</h2>
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+            <span class="text-muted" style="font-size:.85rem">
+                <?= (int)$mibStatus['count'] ?> file(s)
+                <?php if ($hasSnmp && !empty($mibStatus['read_mib'])): ?>
+                    · <?= (int)$mibLoadedCount ?> loaded this request
+                <?php endif; ?>
+            </span>
+            <?php if ($canEdit): ?>
+                <button type="button" class="btn btn-sm btn-primary" data-open-modal="modal-upload-mib">Upload MIB</button>
+            <?php endif; ?>
+        </div>
+    </div>
+    <div class="card-body" style="padding-bottom:.5rem">
+        <p class="text-muted mb-0" style="font-size:.88rem">
+            Vendor MIB modules improve OID <em>names</em> during Discover (e.g. PowerNet labels).
+            Polling still uses numeric OIDs in site templates — MIBs are optional but helpful.
+            Files are stored in <code><?= App::e($mibStatus['dir']) ?></code>
+            (writable by the IIS app pool).
+            <?php if (!empty($mibStatus['php_mib_dir'])): ?>
+                PHP <code>snmp.mib_directory</code>: <code><?= App::e((string)$mibStatus['php_mib_dir']) ?></code>.
+            <?php else: ?>
+                ColdAisle loads these files via <code>snmp_read_mib()</code> each Discover/poll.
+            <?php endif; ?>
+        </p>
+        <?php if (!$hasSnmp): ?>
+            <p class="text-muted" style="font-size:.85rem;margin:.5rem 0 0">
+                PHP SNMP is not loaded — you can still upload files; they will be used after the extension is enabled.
+            </p>
+        <?php elseif (empty($mibStatus['read_mib'])): ?>
+            <p class="text-muted" style="font-size:.85rem;margin:.5rem 0 0">
+                <code>snmp_read_mib()</code> is not available in this PHP build — files are stored for inventory only.
+            </p>
+        <?php endif; ?>
+    </div>
+    <div class="card-body flush">
+        <table class="data">
+            <thead>
+            <tr>
+                <th>Filename</th>
+                <th>Module</th>
+                <th>Size</th>
+                <th>Modified</th>
+                <?php if ($canEdit): ?><th class="col-actions"></th><?php endif; ?>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($mibFiles as $mf): ?>
+                <tr>
+                    <td><code style="font-size:.85rem"><?= App::e($mf['filename']) ?></code></td>
+                    <td><?= !empty($mf['module'])
+                        ? App::e((string)$mf['module'])
+                        : '<span class="text-muted">—</span>' ?></td>
+                    <td style="font-size:.85rem"><?= number_format((int)$mf['size']) ?> B</td>
+                    <td style="font-size:.85rem"><?= App::e($mf['modified_iso']) ?></td>
+                    <?php if ($canEdit): ?>
+                    <td class="actions col-actions">
+                        <form method="post" style="display:inline"
+                              onsubmit="return confirm('Delete MIB <?= App::e(addslashes($mf['filename'])) ?>?');">
+                            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                            <input type="hidden" name="action" value="delete_mib">
+                            <input type="hidden" name="filename" value="<?= App::e($mf['filename']) ?>">
+                            <button class="btn btn-sm btn-danger" type="submit" title="Delete">×</button>
+                        </form>
+                    </td>
+                    <?php endif; ?>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$mibFiles): ?>
+                <tr>
+                    <td colspan="<?= $canEdit ? 5 : 4 ?>" class="text-muted">
+                        No MIB files yet.
+                        <?php if ($canEdit): ?>
+                            Use <strong>Upload MIB</strong> to add vendor modules
+                            (e.g. APC PowerNet <code>powernet###.mib</code>).
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<?php if ($canEdit): ?>
+<div class="app-modal" id="modal-upload-mib" hidden aria-hidden="true">
+    <div class="app-modal-backdrop" data-modal-close></div>
+    <div class="app-modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-upload-mib-title">
+        <div class="app-modal-head">
+            <h3 id="modal-upload-mib-title">Upload MIB</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
+        </div>
+        <div class="app-modal-body">
+            <form method="post" enctype="multipart/form-data" class="form-grid">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="upload_mib">
+                <div class="form-row full">
+                    <label>MIB file (.mib / .txt / .my)</label>
+                    <input class="form-control" type="file" name="mib_file" required
+                           accept=".mib,.txt,.my,.mi2,text/plain">
+                    <p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">
+                        Max <?= (int)(MibService::MAX_BYTES / 1000) ?> KB. Obtain modules from the vendor
+                        (e.g. Schneider/APC PowerNet, Raritan, ServerTech). ColdAisle does not bundle vendor MIBs.
+                    </p>
+                </div>
+                <div class="form-row full app-modal-actions">
+                    <button class="btn btn-primary" type="submit">Upload</button>
+                    <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 
 <!-- SNMPv3 Profiles -->
 <div class="card" id="profiles">

@@ -18,11 +18,12 @@ require_once __DIR__ . '/Services/Crypto.php';
 require_once __DIR__ . '/Services/SiteBackupService.php';
 require_once __DIR__ . '/Services/UpdateService.php';
 require_once __DIR__ . '/Services/MailService.php';
+require_once __DIR__ . '/Services/MibService.php';
 
 class App
 {
     /** App semver — keep in sync with /VERSION */
-    public const VERSION = '0.2.23';
+    public const VERSION = '0.2.24';
     /** Product name is fixed (not user-configurable). */
     public const APP_NAME = 'ColdAisle';
     public const ROOT = __DIR__ . '/..';

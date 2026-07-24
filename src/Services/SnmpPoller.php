@@ -8,6 +8,9 @@ class SnmpPoller
 {
     public static function pollAll(): array
     {
+        if (class_exists('MibService')) {
+            MibService::loadAll();
+        }
         $success = 0;
         $failed = 0;
 
@@ -80,6 +83,9 @@ class SnmpPoller
 
     public static function pollTarget(array $t): void
     {
+        if (class_exists('MibService')) {
+            MibService::loadAll();
+        }
         $oidMap = json_decode($t['oid_map'] ?? '{}', true) ?: [];
         // Prefer site template OIDs when target references one
         if (!empty($t['site_template_id'])) {
@@ -278,6 +284,9 @@ class SnmpPoller
      */
     public static function pollPduById(int $pduId): array
     {
+        if (class_exists('MibService')) {
+            MibService::loadAll();
+        }
         $pdu = Database::fetchOne('SELECT * FROM pdus WHERE pdu_id = ? AND is_active = 1', [$pduId]);
         if (!$pdu) {
             throw new RuntimeException('PDU not found.');

@@ -44,6 +44,11 @@ class SnmpDiscover
             throw new RuntimeException('PHP SNMP extension is not available.');
         }
 
+        // Load uploaded vendor MIBs so walks can resolve symbolic names when available
+        if (class_exists('MibService')) {
+            MibService::loadAll();
+        }
+
         @snmp_set_quick_print(true);
         if (defined('SNMP_VALUE_PLAIN')) {
             @snmp_set_valueretrieval(SNMP_VALUE_PLAIN);
