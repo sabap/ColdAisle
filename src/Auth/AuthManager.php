@@ -479,7 +479,7 @@ class AuthManager
         try {
             $maps = Database::fetchAll(
                 'SELECT department_id, group_id, group_name FROM department_group_maps
-                 WHERE is_active = 1 AND auth_source = ?',
+                 WHERE is_active = 1 AND LOWER(auth_source) = ?',
                 [strtolower($authSource)]
             );
         } catch (Throwable $e) {
@@ -487,11 +487,19 @@ class AuthManager
             try {
                 $maps = Database::fetchAll(
                     'SELECT department_id, group_id FROM department_group_maps
-                     WHERE is_active = 1 AND auth_source = ?',
+                     WHERE is_active = 1 AND LOWER(auth_source) = ?',
                     [strtolower($authSource)]
                 );
             } catch (Throwable $e2) {
-                return null;
+                try {
+                    $maps = Database::fetchAll(
+                        'SELECT department_id, group_id FROM department_group_maps
+                         WHERE auth_source = ?',
+                        [$authSource]
+                    );
+                } catch (Throwable $e3) {
+                    return null;
+                }
             }
         }
         foreach ($maps as $m) {
@@ -519,39 +527,137 @@ class AuthManager
         if (!$want) {
             return null;
         }
-        try {
-            $maps = Database::fetchAll(
-                'SELECT m.role_id, m.group_id, m.group_name, r.name AS role_name
-                 FROM role_group_maps m
-                 INNER JOIN roles r ON r.role_id = m.role_id
-                 WHERE m.is_active = 1 AND m.auth_source = ?',
-                [strtolower($authSource)]
-            );
-        } catch (Throwable $e) {
+        $maps = self::fetchRoleGroupMaps($authSource);
+        if (!$maps) {
             return null;
         }
         $rank = [
-            'Global Admin' => 100,
-            'Administrator' => 100,
-            'Data Center Admin' => 80,
-            'Operator' => 70,
-            'Department Admin' => 60,
-            'Auditor' => 30,
-            'Viewer' => 20,
+            'global admin' => 100,
+            'administrator' => 100,
+            'data center admin' => 80,
+            'operator' => 70,
+            'department admin' => 60,
+            'auditor' => 30,
+            'viewer' => 20,
         ];
         $best = null;
         $bestScore = -1;
+        $matched = [];
         foreach ($maps as $m) {
             if (!self::groupMapMatches($want, (string)($m['group_id'] ?? ''), $m['group_name'] ?? null)) {
                 continue;
             }
-            $score = $rank[$m['role_name'] ?? ''] ?? 10;
+            $roleName = trim((string)($m['role_name'] ?? ''));
+            $score = $rank[strtolower($roleName)] ?? 10;
+            // Prefer richer permission sets when names are unknown/custom
+            if ($score <= 10 && !empty($m['permissions'])) {
+                $perms = json_decode((string)$m['permissions'], true);
+                if (is_array($perms)) {
+                    if (in_array('*', $perms, true)) {
+                        $score = 100;
+                    } else {
+                        $score = max($score, min(95, 15 + count($perms)));
+                    }
+                }
+            }
+            $matched[] = $roleName . '(' . $score . ')';
             if ($score > $bestScore) {
                 $bestScore = $score;
                 $best = (int)$m['role_id'];
             }
         }
+        if ($matched) {
+            App::log(
+                'roleIdFromGroups(' . $authSource . '): matched [' . implode(', ', $matched)
+                . '] → role_id=' . ($best ?? 'null'),
+                'info'
+            );
+        }
         return $best;
+    }
+
+    /**
+     * Active role↔group maps for an auth source (with schema fallbacks).
+     * @return list<array<string,mixed>>
+     */
+    public static function fetchRoleGroupMaps(string $authSource): array
+    {
+        $src = strtolower($authSource);
+        try {
+            return Database::fetchAll(
+                'SELECT m.role_id, m.group_id, m.group_name, r.name AS role_name, r.permissions
+                 FROM role_group_maps m
+                 INNER JOIN roles r ON r.role_id = m.role_id
+                 WHERE m.is_active = 1 AND LOWER(m.auth_source) = ?',
+                [$src]
+            );
+        } catch (Throwable $e) {
+            // Older schema without group_name / is_active / permissions
+        }
+        try {
+            return Database::fetchAll(
+                'SELECT m.role_id, m.group_id, r.name AS role_name
+                 FROM role_group_maps m
+                 INNER JOIN roles r ON r.role_id = m.role_id
+                 WHERE LOWER(m.auth_source) = ?',
+                [$src]
+            );
+        } catch (Throwable $e2) {
+            try {
+                return Database::fetchAll(
+                    'SELECT m.role_id, m.group_id, r.name AS role_name
+                     FROM role_group_maps m
+                     INNER JOIN roles r ON r.role_id = m.role_id
+                     WHERE m.auth_source = ?',
+                    [$authSource]
+                );
+            } catch (Throwable $e3) {
+                App::log('fetchRoleGroupMaps failed: ' . $e3->getMessage(), 'warning');
+                return [];
+            }
+        }
+    }
+
+    /**
+     * All configured map group identifiers for nested-membership expansion.
+     * @return list<string>
+     */
+    public static function configuredMapGroupIds(string $authSource): array
+    {
+        $out = [];
+        foreach (self::fetchRoleGroupMaps($authSource) as $m) {
+            foreach ([(string)($m['group_id'] ?? ''), (string)($m['group_name'] ?? '')] as $g) {
+                $g = trim($g);
+                if ($g !== '') {
+                    $out[] = $g;
+                }
+            }
+        }
+        try {
+            $depts = Database::fetchAll(
+                'SELECT group_id, group_name FROM department_group_maps
+                 WHERE is_active = 1 AND LOWER(auth_source) = ?',
+                [strtolower($authSource)]
+            );
+        } catch (Throwable $e) {
+            try {
+                $depts = Database::fetchAll(
+                    'SELECT group_id FROM department_group_maps WHERE auth_source = ?',
+                    [$authSource]
+                );
+            } catch (Throwable $e2) {
+                $depts = [];
+            }
+        }
+        foreach ($depts as $m) {
+            foreach ([(string)($m['group_id'] ?? ''), (string)($m['group_name'] ?? '')] as $g) {
+                $g = trim($g);
+                if ($g !== '') {
+                    $out[] = $g;
+                }
+            }
+        }
+        return array_values(array_unique($out));
     }
 
     /**
@@ -563,18 +669,17 @@ class AuthManager
     {
         $want = [];
         foreach ($groupIds as $g) {
-            $g = strtolower(trim((string)$g));
-            if ($g === '') {
+            $raw = trim((string)$g);
+            if ($raw === '') {
                 continue;
             }
+            $g = strtolower($raw);
             $want[$g] = true;
-            // If a full DN is present, also index its CN
-            if (str_starts_with($g, 'cn=') || str_contains($g, ',cn=') || preg_match('/^cn=/i', $g)) {
-                if (preg_match('/(?:^|,)cn=((?:\\\\.|[^\\\\,])+)/i', $g, $m)) {
-                    $cn = strtolower(self::unescapeLdapDnValue($m[1]));
-                    if ($cn !== '') {
-                        $want[$cn] = true;
-                    }
+            // Always try to extract CN= from DN-like values
+            if (preg_match('/(?:^|,)\s*cn=((?:\\\\.|[^\\\\,])+)/i', $raw, $m)) {
+                $cn = strtolower(self::unescapeLdapDnValue($m[1]));
+                if ($cn !== '') {
+                    $want[$cn] = true;
                 }
             }
         }
@@ -595,13 +700,31 @@ class AuthManager
             }
             $candidates[] = strtolower($raw);
             // DN → CN
-            if (preg_match('/(?:^|,)cn=((?:\\\\.|[^\\\\,])+)/i', $raw, $m)) {
+            if (preg_match('/(?:^|,)\s*cn=((?:\\\\.|[^\\\\,])+)/i', $raw, $m)) {
                 $candidates[] = strtolower(self::unescapeLdapDnValue($m[1]));
             }
         }
         foreach ($candidates as $c) {
-            if ($c !== '' && isset($want[$c])) {
+            if ($c === '') {
+                continue;
+            }
+            if (isset($want[$c])) {
                 return true;
+            }
+            // Map short name vs user DN tokens: match CN substring forms
+            // e.g. want has full dn, candidate is plain cn
+            foreach ($want as $token => $_) {
+                if ($token === $c) {
+                    return true;
+                }
+                // "cn=foo,ou=..." starts with cn=candidate,
+                if (str_starts_with($token, 'cn=' . $c . ',')) {
+                    return true;
+                }
+                // candidate is full DN, token is CN
+                if (str_starts_with($c, 'cn=' . $token . ',')) {
+                    return true;
+                }
             }
         }
         return false;
