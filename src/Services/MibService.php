@@ -10,7 +10,7 @@ declare(strict_types=1);
 
 class MibService
 {
-    public const MAX_BYTES = 2_000_000; // 2 MB per file
+    public const MAX_BYTES = 8_000_000; // 8 MB per file (vendor packs e.g. APC PowerNet ~3 MB)
     /** @var list<string> */
     public const ALLOWED_EXTENSIONS = ['mib', 'txt', 'my', 'mi2'];
 
@@ -193,7 +193,12 @@ class MibService
         }
         $size = (int)($file['size'] ?? 0);
         if ($size <= 0 || $size > self::MAX_BYTES) {
-            throw new RuntimeException('MIB file must be between 1 byte and ' . (int)(self::MAX_BYTES / 1000) . ' KB.');
+            $maxMb = rtrim(rtrim(number_format(self::MAX_BYTES / 1_000_000, 1, '.', ''), '0'), '.');
+            throw new RuntimeException(
+                'MIB file must be between 1 byte and ' . $maxMb . ' MB'
+                . ' (got ' . number_format($size / 1_000_000, 2) . ' MB).'
+                . ' If upload still fails, raise PHP upload_max_filesize and post_max_size in php.ini.'
+            );
         }
 
         $orig = (string)($file['name'] ?? 'upload.mib');
