@@ -1100,6 +1100,7 @@ if ($action === 'new' || $id) {
                                     <table class="snmp-oid-table">
                                         <thead>
                                             <tr>
+                                                <th>Name</th>
                                                 <th>OID</th>
                                                 <th>Value</th>
                                                 <th>Hint</th>
@@ -1208,13 +1209,17 @@ if ($action === 'new' || $id) {
                         tbody.innerHTML = '';
                         (data.candidates || []).forEach(function (c) {
                             var tr = document.createElement('tr');
+                            var nm = c.name || '';
                             tr.innerHTML =
-                                '<td><code>' + esc(c.oid) + '</code></td>' +
+                                '<td style="font-size:.78rem;max-width:14rem;word-break:break-all">' +
+                                    (nm ? '<code title="' + esc(nm) + '">' + esc(nm) + '</code>' : '<span class="text-muted">—</span>') +
+                                '</td>' +
+                                '<td><code style="font-size:.78rem">' + esc(c.oid) + '</code></td>' +
                                 '<td>' + esc(c.value) + '</td>' +
                                 '<td>' + esc(c.hint || '') + '</td>' +
                                 '<td>' + esc(c.score) + '</td>';
                             tr.style.cursor = 'pointer';
-                            tr.title = 'Click to copy OID';
+                            tr.title = 'Click to copy OID' + (nm ? ' · ' + nm : '');
                             tr.addEventListener('click', function () {
                                 if (navigator.clipboard) navigator.clipboard.writeText(c.oid || '');
                                 toast('Copied ' + c.oid, 'info');
@@ -1222,7 +1227,7 @@ if ($action === 'new' || $id) {
                             tbody.appendChild(tr);
                         });
                         if (!(data.candidates || []).length) {
-                            tbody.innerHTML = '<tr><td colspan="4" class="text-muted">No scored candidates</td></tr>';
+                            tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No scored candidates</td></tr>';
                         }
 
                         if (data.existing_template) {

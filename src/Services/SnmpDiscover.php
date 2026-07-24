@@ -1,6 +1,7 @@
 <?php
 /**
  * Live SNMP discovery — walk common roots, score power-related OIDs.
+ * Phase 1.5: keep MIB symbolic names, name-based scoring/hints, UI name column.
  */
 declare(strict_types=1);
 
@@ -31,7 +32,8 @@ class SnmpDiscover
      * } $creds
      * @return array{
      *   ok:bool,host:string,sysDescr:?string,candidates:list<array>,
-     *   proposed_map:array<string,string>,walk_count:int,message:string
+     *   proposed_map:array<string,string>,walk_count:int,message:string,
+     *   named_count:int
      * }
      */
     public static function discover(array $creds): array
@@ -45,44 +47,35 @@ class SnmpDiscover
         }
 
         // Load uploaded vendor MIBs so walks can resolve symbolic names when available
+        $mibsLoaded = 0;
         if (class_exists('MibService')) {
-            MibService::loadAll();
+            $mibsLoaded = MibService::loadAll();
         }
 
-        @snmp_set_quick_print(true);
-        if (defined('SNMP_VALUE_PLAIN')) {
-            @snmp_set_valueretrieval(SNMP_VALUE_PLAIN);
-        }
         @ini_set('max_execution_time', '60');
 
         $port = (int)($creds['port'] ?? 161);
         $hostPort = $host . ($port !== 161 ? ':' . $port : '');
         $version = strtolower((string)($creds['snmp_version'] ?? '3'));
 
+        // Values as plain numbers when possible
+        @snmp_set_quick_print(true);
+        if (defined('SNMP_VALUE_PLAIN')) {
+            @snmp_set_valueretrieval(SNMP_VALUE_PLAIN);
+        }
+
         $sysDescr = self::snmpGet($hostPort, $version, $creds, '1.3.6.1.2.1.1.1.0');
+        /** @var array<string,array{raw:mixed,name:?string,module:?string,raw_key:string}> $collected */
         $collected = [];
         $errors = [];
 
-        foreach (self::WALK_ROOTS as $root) {
-            if (count($collected) >= self::MAX_OIDS) {
-                break;
-            }
-            try {
-                $walk = self::snmpWalk($hostPort, $version, $creds, $root);
-                foreach ($walk as $oid => $val) {
-                    $oid = self::normalizeOid((string)$oid);
-                    if ($oid === '' || isset($collected[$oid])) {
-                        continue;
-                    }
-                    $collected[$oid] = $val;
-                    if (count($collected) >= self::MAX_OIDS) {
-                        break 2;
-                    }
-                }
-            } catch (Throwable $e) {
-                $errors[] = $root . ': ' . $e->getMessage();
-            }
-        }
+        // 1) Prefer MODULE::name keys when MIBs resolve
+        self::setOidOutputFormat('module');
+        self::collectWalks($hostPort, $version, $creds, $collected, $errors);
+
+        // 2) Fill gaps with pure numeric OIDs (portable maps; names kept from module pass)
+        self::setOidOutputFormat('numeric');
+        self::collectWalks($hostPort, $version, $creds, $collected, $errors);
 
         // Always try lab + common leaf GETs even if walk failed
         $leafGets = [
@@ -93,6 +86,7 @@ class SnmpDiscover
             '1.3.6.1.4.1.318.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.318.1.1.1.4.2.8.0',
             '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.1',
+            '1.3.6.1.4.1.318.1.1.26.6.3.1.7.1', // rPDU2 phase power-ish (common)
             '1.3.6.1.4.1.3808.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.3808.1.1.1.4.2.5.0',
         ];
@@ -102,7 +96,12 @@ class SnmpDiscover
             }
             $v = self::snmpGet($hostPort, $version, $creds, $oid);
             if ($v !== null && $v !== false) {
-                $collected[$oid] = $v;
+                $collected[$oid] = [
+                    'raw' => $v,
+                    'name' => null,
+                    'module' => null,
+                    'raw_key' => $oid,
+                ];
             }
         }
 
@@ -112,22 +111,37 @@ class SnmpDiscover
         }
 
         $candidates = [];
-        foreach ($collected as $oid => $raw) {
-            $score = self::scoreOid($oid, $raw);
+        $namedCount = 0;
+        foreach ($collected as $oid => $meta) {
+            $raw = $meta['raw'];
+            $name = $meta['name'] ?? null;
+            $num = self::toNumber($raw);
+            $score = self::scoreOid($oid, $name, $raw, $num);
             if ($score < 1) {
                 continue;
             }
-            $num = self::toNumber($raw);
+            if ($name) {
+                $namedCount++;
+            }
             $candidates[] = [
                 'oid' => $oid,
+                'name' => $name,
+                'module' => $meta['module'] ?? null,
                 'value' => is_scalar($raw) ? (string)$raw : json_encode($raw),
                 'numeric' => $num,
                 'score' => $score,
-                'hint' => self::hintFor($oid, $raw, $num),
+                'hint' => self::hintFor($oid, $name, $raw, $num),
             ];
         }
         usort($candidates, static function ($a, $b) {
-            return $b['score'] <=> $a['score'];
+            $cmp = $b['score'] <=> $a['score'];
+            if ($cmp !== 0) {
+                return $cmp;
+            }
+            // Prefer named OIDs when scores tie
+            $an = $a['name'] ? 1 : 0;
+            $bn = $b['name'] ? 1 : 0;
+            return $bn <=> $an;
         });
         $candidates = array_slice($candidates, 0, 80);
 
@@ -139,6 +153,26 @@ class SnmpDiscover
             ];
         }
 
+        $msg = 'Walked ' . count($collected) . ' object(s)';
+        if (count($candidates)) {
+            $msg = 'Found ' . count($candidates) . ' candidate OID(s) from ' . count($collected) . ' objects';
+            if ($namedCount) {
+                $msg .= '; ' . $namedCount . ' with MIB names';
+            }
+            if ($mibsLoaded) {
+                $msg .= '; ' . $mibsLoaded . ' MIB file(s) loaded';
+            }
+            $msg .= '.';
+        } else {
+            $msg .= '; limited power candidates - review and edit map.';
+        }
+
+        if ($mibsLoaded > 0 && $namedCount === 0) {
+            $msg .= ' MIBs loaded but walks returned numeric OIDs only'
+                . ' (Net-SNMP may need IMPORT dependencies, or php.ini snmp.mib_directory).'
+                . ' Name-based scoring still uses OID path heuristics.';
+        }
+
         return [
             'ok' => true,
             'host' => $host,
@@ -146,9 +180,115 @@ class SnmpDiscover
             'candidates' => $candidates,
             'proposed_map' => $proposed,
             'walk_count' => count($collected),
-            'message' => count($candidates)
-                ? ('Found ' . count($candidates) . ' candidate OID(s) from ' . count($collected) . ' objects.')
-                : ('Walked ' . count($collected) . ' object(s); limited power candidates — review and edit map.'),
+            'named_count' => $namedCount,
+            'mibs_loaded' => $mibsLoaded,
+            'message' => $msg,
+        ];
+    }
+
+    /** @param 'module'|'numeric' $mode */
+    private static function setOidOutputFormat(string $mode): void
+    {
+        if (!function_exists('snmp_set_oid_output_format')) {
+            return;
+        }
+        if ($mode === 'module') {
+            if (defined('SNMP_OID_OUTPUT_MODULE')) {
+                @snmp_set_oid_output_format(SNMP_OID_OUTPUT_MODULE);
+            } elseif (defined('SNMP_OID_OUTPUT_FULL')) {
+                @snmp_set_oid_output_format(SNMP_OID_OUTPUT_FULL);
+            }
+            return;
+        }
+        if (defined('SNMP_OID_OUTPUT_NUMERIC')) {
+            @snmp_set_oid_output_format(SNMP_OID_OUTPUT_NUMERIC);
+        }
+    }
+
+    /**
+     * @param array<string,array{raw:mixed,name:?string,module:?string,raw_key:string}> $collected
+     * @param list<string> $errors
+     */
+    private static function collectWalks(
+        string $hostPort,
+        string $version,
+        array $creds,
+        array &$collected,
+        array &$errors
+    ): void {
+        foreach (self::WALK_ROOTS as $root) {
+            if (count($collected) >= self::MAX_OIDS) {
+                break;
+            }
+            try {
+                $walk = self::snmpWalk($hostPort, $version, $creds, $root);
+                foreach ($walk as $key => $val) {
+                    $parsed = self::parseOidKey((string)$key);
+                    $oid = $parsed['oid'];
+                    if ($oid === '') {
+                        continue;
+                    }
+                    if (!isset($collected[$oid])) {
+                        $collected[$oid] = [
+                            'raw' => $val,
+                            'name' => $parsed['name'],
+                            'module' => $parsed['module'],
+                            'raw_key' => $parsed['raw_key'],
+                        ];
+                    } elseif (empty($collected[$oid]['name']) && $parsed['name']) {
+                        $collected[$oid]['name'] = $parsed['name'];
+                        $collected[$oid]['module'] = $parsed['module'];
+                        $collected[$oid]['raw_key'] = $parsed['raw_key'];
+                    }
+                    if (count($collected) >= self::MAX_OIDS) {
+                        return;
+                    }
+                }
+            } catch (Throwable $e) {
+                $errors[] = $root . ': ' . $e->getMessage();
+            }
+        }
+    }
+
+    /**
+     * Parse a walk array key into numeric OID + optional symbolic name.
+     * When Net-SNMP returns only Module::name.instance (no dotted OID), the
+     * symbolic form is used as the oid string (pollable when MIBs are loaded).
+     *
+     * @return array{oid:string,name:?string,module:?string,raw_key:string}
+     */
+    private static function parseOidKey(string $key): array
+    {
+        $rawKey = trim($key);
+        $name = null;
+        $module = null;
+        $oid = '';
+
+        // PowerNet-MIB::rPDU2PhaseStatusLoad.1  or  SNMPv2-MIB::sysDescr.0
+        if (preg_match(
+            '/([A-Za-z][A-Za-z0-9_-]*)::([A-Za-z][A-Za-z0-9_-]*(?:\.\d+)*)/',
+            $rawKey,
+            $m
+        )) {
+            $module = $m[1];
+            $name = $m[1] . '::' . $m[2];
+        }
+
+        // Full or trailing dotted numeric OID (at least two arcs: 1.3 …)
+        if (preg_match('/(\d+(?:\.\d+)+)/', $rawKey, $m)) {
+            $oid = ltrim($m[1], '.');
+        }
+
+        // Symbolic-only key (common with SNMP_OID_OUTPUT_MODULE)
+        if ($oid === '' && $name !== null) {
+            $oid = $name;
+        }
+
+        return [
+            'oid' => $oid,
+            'name' => $name,
+            'module' => $module,
+            'raw_key' => $rawKey,
         ];
     }
 
@@ -239,17 +379,6 @@ class SnmpDiscover
         return 'noAuthNoPriv';
     }
 
-    private static function normalizeOid(string $oid): string
-    {
-        $oid = trim($oid);
-        // snmp may return "SNMPv2-MIB::sysDescr.0" or ".1.3.6..."
-        if (preg_match('/(\d+(?:\.\d+)+)$/', $oid, $m)) {
-            return $m[1];
-        }
-        $oid = ltrim($oid, '.');
-        return preg_match('/^\d/', $oid) ? $oid : '';
-    }
-
     private static function toNumber($raw): ?float
     {
         if ($raw === null || $raw === false) {
@@ -264,11 +393,16 @@ class SnmpDiscover
         return null;
     }
 
-    private static function scoreOid(string $oid, $raw): int
+    /** Lowercase haystack of name + oid for keyword scans. */
+    private static function nameHaystack(string $oid, ?string $name): string
+    {
+        return strtolower(($name ?? '') . ' ' . $oid);
+    }
+
+    private static function scoreOid(string $oid, ?string $name, $raw, ?float $num): int
     {
         $score = 0;
-        $num = self::toNumber($raw);
-        $s = strtolower($oid . ' ' . (is_string($raw) ? $raw : ''));
+        $s = self::nameHaystack($oid, $name);
 
         // Prefer enterprise power trees
         if (str_starts_with($oid, '1.3.6.1.4.1.')) {
@@ -277,55 +411,144 @@ class SnmpDiscover
         if (str_starts_with($oid, '1.3.6.1.4.1.99999.2.')) {
             $score += 8; // lab power metrics
         }
-        if (str_contains($s, 'watt') || str_contains($s, 'power') || str_contains($s, 'activepower')) {
-            $score += 6;
-        }
-        if (str_contains($s, 'amp') || str_contains($s, 'current') || str_contains($s, 'loadstatusload')) {
-            $score += 5;
-        }
-        if (str_contains($s, 'load') && $num !== null) {
-            $score += 3;
-        }
-        if (str_contains($s, 'volt')) {
+        // APC / Schneider
+        if (str_starts_with($oid, '1.3.6.1.4.1.318.')) {
             $score += 2;
         }
-        if (str_contains($s, 'temp')) {
-            $score += 2;
+
+        // --- MIB symbolic name scoring (Phase 1.5) ---
+        if ($name) {
+            $score += 3; // any resolved name is more useful than pure numeric
+            // Strong power/watt signals
+            if (preg_match('/watt|activepower|realpower|apparentpower|totalpower|phasepower|devicepower|powerwatts|power\.|power$/', $s)) {
+                $score += 12;
+            }
+            // APC PowerNet-style
+            if (preg_match('/rpdu2?.*power|phase.*power|bank.*power|outlet.*power|powernet/', $s)) {
+                $score += 10;
+            }
+            if (preg_match('/rpdu2?phasestatuspower|rpduidentdevicepower|upsadvoutput|loadstatuspower/', $s)) {
+                $score += 14;
+            }
+            // Current / amps
+            if (preg_match('/\bamp|current|amps\b|phase.*current|loadstatusload|phasestatusload|phasestatuscurrent/', $s)) {
+                $score += 10;
+            }
+            // Load % (often 0–100)
+            if (preg_match('/\bload\b|outputload|percentload|loadpercent/', $s)
+                && !preg_match('/download|payload/', $s)
+            ) {
+                $score += 6;
+                if ($num !== null && $num >= 0 && $num <= 100) {
+                    $score += 4;
+                }
+            }
+            // Voltage / temp (secondary)
+            if (preg_match('/\bvolt|voltage\b/', $s)) {
+                $score += 3;
+            }
+            if (preg_match('/\btemp|temperature\b/', $s)) {
+                $score += 3;
+            }
+            // Prefer phase/device totals over high-index outlet sensors
+            if (preg_match('/phase|device|ident|total|bank/', $s) && !preg_match('/outlet|receptacle|socket/', $s)) {
+                $score += 3;
+            }
+            if (preg_match('/outlet|receptacle/', $s)) {
+                $score -= 2; // still valid, but lower priority for "device load"
+            }
+            // Config / string junk
+            if (preg_match('/serial|name|location|contact|descr|model|firmware|version|statusenum|trap/', $s)
+                && !preg_match('/load|power|amp|watt|current/', $s)
+            ) {
+                $score -= 4;
+            }
+        } else {
+            // Numeric-only: weaker keyword hits from OID path alone
+            if (str_contains($s, 'watt') || str_contains($s, 'power')) {
+                $score += 4;
+            }
+            if (str_contains($s, 'amp') || str_contains($s, 'current')) {
+                $score += 3;
+            }
         }
+
+        // Value-range heuristics (always)
         if ($num !== null && $num >= 0) {
             $score += 1;
-            // Prefer plausible power ranges
             if ($num > 0 && $num < 500000) {
                 $score += 1;
             }
+            // Plausible total watts
+            if ($num >= 50 && $num <= 200000) {
+                $score += 2;
+            }
         }
-        // Skip pure sysObjectID style huge integers only if zero score otherwise
-        return $score;
+
+        return max(0, $score);
     }
 
-    private static function hintFor(string $oid, $raw, ?float $num): string
+    private static function hintFor(string $oid, ?string $name, $raw, ?float $num): string
     {
         $hints = [];
+        $s = self::nameHaystack($oid, $name);
+
         if (str_starts_with($oid, '1.3.6.1.4.1.99999.2.1')) {
             $hints[] = 'lab watts';
         }
         if (str_starts_with($oid, '1.3.6.1.4.1.99999.2.2')) {
             $hints[] = 'lab amps×10';
         }
-        if (str_contains(strtolower($oid), '318') && $num !== null && $num <= 100) {
-            $hints[] = 'possible load %';
+
+        if ($name) {
+            if (preg_match('/watt|activepower|realpower|apparentpower|devicepower|phasepower|powerwatts/', $s)) {
+                $hints[] = 'MIB: watts/power';
+            }
+            if (preg_match('/\bamp|current|phasestatuscurrent|loadstatusload/', $s)
+                && !preg_match('/watt|power/', $s)
+            ) {
+                $hints[] = 'MIB: amps/current';
+            }
+            if (preg_match('/\bload\b|outputload|loadpercent|phasestatusload/', $s)
+                && !preg_match('/watt|power|amp|current/', $s)
+            ) {
+                $hints[] = 'MIB: load %';
+            }
+            if (preg_match('/\bvolt|voltage\b/', $s)) {
+                $hints[] = 'MIB: voltage';
+            }
+            if (preg_match('/\btemp|temperature\b/', $s)) {
+                $hints[] = 'MIB: temperature';
+            }
+            if (preg_match('/rpdu2|powernet|apc/', $s)) {
+                $hints[] = 'APC PowerNet';
+            }
+            if (preg_match('/phase/', $s) && !preg_match('/outlet/', $s)) {
+                $hints[] = 'phase metric';
+            }
+            if (preg_match('/outlet|receptacle/', $s)) {
+                $hints[] = 'outlet metric';
+            }
         }
-        if ($num !== null && $num > 100 && $num < 20000) {
-            $hints[] = 'possible watts';
+
+        // Value fallbacks when name missing or unhelpful
+        if (!$hints) {
+            if (str_contains($oid, '.318.') && $num !== null && $num <= 100) {
+                $hints[] = 'possible load %';
+            }
+            if ($num !== null && $num > 100 && $num < 20000) {
+                $hints[] = 'possible watts';
+            }
+            if ($num !== null && $num > 0 && $num < 100) {
+                $hints[] = 'possible amps or %';
+            }
         }
-        if ($num !== null && $num > 0 && $num < 100) {
-            $hints[] = 'possible amps or %';
-        }
+
         return $hints ? implode(', ', $hints) : 'candidate';
     }
 
     /**
-     * @param list<array{oid:string,numeric:?float,score:int,hint:string}> $candidates
+     * @param list<array{oid:string,name?:?string,numeric:?float,score:int,hint:string}> $candidates
      * @return array<string,string>
      */
     private static function proposeMap(array $candidates, $sysDescr): array
@@ -338,25 +561,48 @@ class SnmpDiscover
         $amps = null;
         $ampsX10 = null;
 
-        foreach ($candidates as $c) {
+        $pick = static function (array $c, string $kind) use (&$watts, &$amps, &$ampsX10): void {
             $oid = $c['oid'];
+            $hint = strtolower($c['hint'] ?? '');
+            $name = strtolower((string)($c['name'] ?? ''));
             $n = $c['numeric'];
+            $hay = $name . ' ' . $hint;
+
             if ($watts === null && (
-                str_contains($c['hint'], 'watts')
+                str_contains($hay, 'watt')
+                || str_contains($hay, 'mib: watts')
+                || str_contains($hay, 'power')
                 || str_starts_with($oid, '1.3.6.1.4.1.99999.2.1')
-                || ($n !== null && $n >= 50 && $n <= 100000 && str_contains($c['hint'], 'possible watts'))
+                || ($n !== null && $n >= 50 && $n <= 100000 && str_contains($hint, 'possible watts'))
             )) {
-                $watts = $oid;
+                // Prefer non-outlet power
+                if (!str_contains($hay, 'outlet') || $watts === null) {
+                    $watts = $oid;
+                }
             }
             if ($ampsX10 === null && str_starts_with($oid, '1.3.6.1.4.1.99999.2.2')) {
                 $ampsX10 = $oid;
             }
-            if ($amps === null && $ampsX10 === null && (
-                str_contains($c['hint'], 'amps')
-                || ($n !== null && $n > 0 && $n < 80 && str_contains($c['hint'], 'possible amps'))
-            )) {
-                $amps = $oid;
+            if ($amps === null && $ampsX10 === null) {
+                $looksAmps = (str_contains($hay, 'amp') || str_contains($hay, 'current') || str_contains($hint, 'mib: amps'))
+                    && !str_contains($hay, 'watt')
+                    && !str_contains($hay, 'power');
+                $rangeAmps = $n !== null && $n > 0 && $n < 80 && str_contains($hint, 'possible amps');
+                if ($looksAmps || $rangeAmps) {
+                    $amps = $oid;
+                }
             }
+        };
+
+        // First pass: named high scores
+        foreach ($candidates as $c) {
+            if (!empty($c['name']) && ($c['score'] ?? 0) >= 8) {
+                $pick($c, 'named');
+            }
+        }
+        // Second pass: anything remaining
+        foreach ($candidates as $c) {
+            $pick($c, 'any');
         }
 
         // Fallbacks: highest-scoring enterprise numeric OIDs
