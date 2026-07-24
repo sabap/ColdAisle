@@ -265,18 +265,122 @@ class LdapAuth
         $entry = $entries[0];
         $userDn = $entry['dn'];
 
-        if (!@ldap_bind($conn, $userDn, $password)) {
-            return null;
-        }
-
         $email = $entry['mail'][0] ?? ($entry['userprincipalname'][0] ?? $username . '@local');
         $display = $entry['displayname'][0] ?? ($entry['cn'][0] ?? $username);
         $sam = $entry['samaccountname'][0] ?? $username;
         $groupIds = self::extractGroupIdentifiers($entry);
 
+        // Still bound as service account: expand nested group membership for configured maps
+        // (memberOf alone is only *direct* groups — nested DC Admin groups were missed).
+        $groupIds = self::expandGroupsForConfiguredMaps(
+            $conn,
+            $parsed['base_dn'],
+            $userDn,
+            $groupIds
+        );
+
+        if (!@ldap_bind($conn, $userDn, $password)) {
+            return null;
+        }
+
         @ldap_unbind($conn);
 
+        App::log(
+            'LDAPS auth groups for ' . $sam . ': ' . count($groupIds) . ' token(s)',
+            'info'
+        );
+
         return self::upsertUser($sam, $email, $display, $userDn, $groupIds);
+    }
+
+    /**
+     * For each configured role/department map group that is not already in $groupIds,
+     * check nested AD membership (LDAP_MATCHING_RULE_IN_CHAIN) while service-bound.
+     *
+     * @param resource|\LDAP\Connection $conn
+     * @param list<string> $groupIds
+     * @return list<string>
+     */
+    private static function expandGroupsForConfiguredMaps($conn, string $baseDn, string $userDn, array $groupIds): array
+    {
+        $mapIds = AuthManager::configuredMapGroupIds('ldaps');
+        if (!$mapIds) {
+            return $groupIds;
+        }
+
+        $have = [];
+        foreach ($groupIds as $g) {
+            $have[strtolower(trim((string)$g))] = true;
+        }
+
+        $escapedUserDn = self::escapeFilter($userDn);
+        // 1.2.840.113556.1.4.1941 = LDAP_MATCHING_RULE_IN_CHAIN (nested members)
+        $chain = '1.2.840.113556.1.4.1941';
+
+        foreach ($mapIds as $mapId) {
+            $mapId = trim($mapId);
+            if ($mapId === '') {
+                continue;
+            }
+            $key = strtolower($mapId);
+            if (isset($have[$key])) {
+                continue;
+            }
+            // Already have matching CN from memberOf?
+            $already = false;
+            foreach ($have as $tok => $_) {
+                if ($tok === $key
+                    || str_starts_with($tok, 'cn=' . $key . ',')
+                    || str_starts_with($key, 'cn=' . $tok . ',')
+                ) {
+                    $already = true;
+                    break;
+                }
+            }
+            if ($already) {
+                continue;
+            }
+
+            $escMap = self::escapeFilter($mapId);
+            // Resolve group by DN, CN, or sAMAccountName and require nested membership of user
+            if (preg_match('/^[a-zA-Z0-9]+=/', $mapId) && str_contains($mapId, '=')) {
+                // Looks like a DN
+                $filter = '(&(objectClass=group)(distinguishedName=' . $escMap . ')(member:' . $chain . ':=' . $escapedUserDn . '))';
+            } else {
+                $filter = '(&(objectClass=group)(|(cn=' . $escMap . ')(sAMAccountName=' . $escMap . ')(name=' . $escMap . '))'
+                    . '(member:' . $chain . ':=' . $escapedUserDn . '))';
+            }
+
+            $search = @ldap_search($conn, $baseDn, $filter, ['dn', 'cn', 'sAMAccountName', 'name'], 0, 5, 8);
+            if (!$search) {
+                continue;
+            }
+            $found = @ldap_get_entries($conn, $search);
+            if (empty($found['count'])) {
+                continue;
+            }
+            for ($i = 0; $i < (int)$found['count']; $i++) {
+                $dn = (string)($found[$i]['dn'] ?? '');
+                if ($dn !== '') {
+                    $groupIds[] = $dn;
+                    $have[strtolower($dn)] = true;
+                }
+                foreach (['cn', 'samaccountname', 'name'] as $attr) {
+                    if (!empty($found[$i][$attr][0])) {
+                        $v = trim((string)$found[$i][$attr][0]);
+                        if ($v !== '') {
+                            $groupIds[] = $v;
+                            $have[strtolower($v)] = true;
+                        }
+                    }
+                }
+                // Always include the configured map token so exact map match succeeds
+                $groupIds[] = $mapId;
+                $have[$key] = true;
+            }
+        }
+
+        return array_values(array_unique($groupIds));
     }
 
     /**
@@ -882,6 +986,13 @@ class LdapAuth
             // Re-apply role on every login when maps match so privilege upgrades take effect
             if ($mappedRoleId) {
                 $fields['role_id'] = $mappedRoleId;
+            } else {
+                App::log(
+                    'LDAPS role map: no role match for ' . $username
+                    . ' (group tokens: ' . count($groupIds) . '); keeping role_id '
+                    . (int)($existing['role_id'] ?? 0),
+                    'info'
+                );
             }
             if ($mappedDeptId) {
                 $fields['department_id'] = $mappedDeptId;
