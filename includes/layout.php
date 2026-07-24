@@ -29,7 +29,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="<?= App::e($csrf) ?>">
     <title><?= App::e($title) ?> · <?= App::e($appName) ?></title>
-    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=24">
+    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=25">
     <script>
     window.ColdAisle = { baseUrl: <?= json_encode(App::baseUrl()) ?>, csrf: <?= json_encode($csrf) ?> };
     window.WINDCIM = window.ColdAisle; // legacy alias
