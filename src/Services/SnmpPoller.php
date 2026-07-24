@@ -503,16 +503,42 @@ class SnmpPoller
         // procedural SNMP has no session object
     }
 
+    /**
+     * Coerce SNMP values to numbers. Does not scrape digits from model strings (e.g. AP8861).
+     */
     private static function toNumber($raw): ?float
     {
         if ($raw === null || $raw === false) {
             return null;
         }
-        if (is_numeric($raw)) {
+        if (is_int($raw) || is_float($raw)) {
             return (float)$raw;
         }
-        if (is_string($raw) && preg_match('/[-+]?\d*\.?\d+/', $raw, $m)) {
-            return (float)$m[0];
+        if (!is_string($raw)) {
+            if (is_numeric($raw)) {
+                return (float)$raw;
+            }
+            return null;
+        }
+        $s = trim($raw);
+        if ($s === '') {
+            return null;
+        }
+        if (is_numeric($s)) {
+            return (float)$s;
+        }
+        if (preg_match(
+            '/^(?:INTEGER|Integer32|Gauge32|Counter(?:32|64)|Unsigned32|Opaque|Timeticks|TimeTicks)\s*:\s*([-+]?\d+(?:\.\d+)?)\s*$/i',
+            $s,
+            $m
+        )) {
+            return (float)$m[1];
+        }
+        if (preg_match('/^([-+]?\d+(?:\.\d+)?)\s*(?:W|kW|V|A|VA|%|watts?|amps?|volts?)?\s*$/i', $s, $m)) {
+            return (float)$m[1];
+        }
+        if (preg_match('/^\(\s*(\d+)\s*\)/', $s, $m)) {
+            return (float)$m[1];
         }
         return null;
     }

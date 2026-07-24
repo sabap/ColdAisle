@@ -356,9 +356,26 @@ class MibService
      *
      * @return array{name:string,module:string}|null
      */
-    public static function resolveOidName(string $numericOid): ?array
+    /**
+     * Normalize numeric OID form used by PHP SNMP / Net-SNMP on Windows.
+     * Often omits the leading iso(1): "3.6.1.4.1.318…" → "1.3.6.1.4.1.318…".
+     */
+    public static function normalizeNumericOid(string $numericOid): string
     {
         $oid = ltrim(trim($numericOid), '.');
+        if ($oid === '') {
+            return '';
+        }
+        // Common Windows/Net-SNMP quirk: drop leading "1."
+        if (preg_match('/^3\.6\.1(?:\.|$)/', $oid)) {
+            $oid = '1.' . $oid;
+        }
+        return $oid;
+    }
+
+    public static function resolveOidName(string $numericOid): ?array
+    {
+        $oid = self::normalizeNumericOid($numericOid);
         if ($oid === '' || !preg_match('/^\d+(?:\.\d+)*$/', $oid)) {
             return null;
         }
@@ -489,8 +506,10 @@ class MibService
 
         $index = [];
         foreach ($nodes as $key => $node) {
-            if (isset($roots[$key])) {
-                continue; // skip pure SMI roots from candidate names
+            // Skip pure SMI anchors only (still absolute). Vendor redefinitions of
+            // names like "experimental" (APC products.4) must stay in the index.
+            if (isset($roots[$key]) && !empty($node['absolute'])) {
+                continue;
             }
             $oid = $resolve($key);
             if ($oid === null || $oid === '') {
@@ -512,6 +531,10 @@ class MibService
     /**
      * Parse OBJECT-TYPE / OBJECT IDENTIFIER assignments from one MIB file into $nodes.
      *
+     * Two-pass: high-precision OBJECT IDENTIFIER lines first, then OBJECT-TYPE etc.
+     * IMPORTS clauses like "FROM SNMP-FRAMEWORK-MIB / OBJECT-TYPE FROM RFC-1212"
+     * must not steal the first real "::= { enterprises … }" assignment (PowerNet).
+     *
      * @param array<string,array<string,mixed>> $nodes
      */
     private static function parseMibAssignments(string $path, string $module, array &$nodes): void
@@ -531,94 +554,155 @@ class MibService
             $module = $mm[1];
         }
 
-        // name OBJECT-TYPE ... ::= { parent n n }
-        // name OBJECT IDENTIFIER ::= { parent n }
-        // Limit body length to avoid runaway on huge files
-        if (!preg_match_all(
+        // Pass 1 — OBJECT IDENTIFIER with immediate ::= { … }
+        // (no body gap; avoids IMPORTS false positives)
+        if (preg_match_all(
+            '/\b([A-Za-z][A-Za-z0-9_-]*)\s+OBJECT\s+IDENTIFIER\s*::=\s*\{([^}]+)\}/i',
+            $text,
+            $matches,
+            PREG_SET_ORDER
+        )) {
+            foreach ($matches as $m) {
+                self::addOidNode($nodes, $m[1], $m[2], $module);
+            }
+        }
+
+        // Pass 2 — OBJECT-TYPE / OBJECT-IDENTITY / MODULE-IDENTITY / NOTIFICATION-TYPE
+        if (preg_match_all(
             '/\b([A-Za-z][A-Za-z0-9_-]*)\s+'
-            . '(?:OBJECT-TYPE|OBJECT-IDENTITY|MODULE-IDENTITY|NOTIFICATION-TYPE|OBJECT\s+IDENTIFIER)\b'
-            . '([\s\S]{0,8000}?)'
+            . '(?:OBJECT-TYPE|OBJECT-IDENTITY|MODULE-IDENTITY|NOTIFICATION-TYPE)\b'
+            . '([\s\S]{0,12000}?)'
             . '::=\s*\{([^}]+)\}/i',
             $text,
             $matches,
             PREG_SET_ORDER
         )) {
-            return;
-        }
-
-        foreach ($matches as $m) {
-            $label = $m[1];
-            $body = $m[2] ?? '';
-            $brace = trim($m[3] ?? '');
-            if ($label === '' || $brace === '') {
-                continue;
+            foreach ($matches as $m) {
+                $label = $m[1];
+                $body = $m[2] ?? '';
+                $brace = trim($m[3] ?? '');
+                if ($label === '' || $brace === '') {
+                    continue;
+                }
+                // IMPORTS residue: "SNMP-FRAMEWORK-MIB \n OBJECT-TYPE FROM RFC-1212 … ::= { enterprises 318 }"
+                if (preg_match('/^\s*FROM\b/i', $body)) {
+                    continue;
+                }
+                // Real definitions almost always carry one of these clauses
+                if (!preg_match(
+                    '/\b(?:SYNTAX|MAX-ACCESS|ACCESS|STATUS|DESCRIPTION|UNITS|INDEX|AUGMENTS|OBJECTS|'
+                    . 'LAST-UPDATED|ORGANIZATION|CONTACT-INFO|REVISION|REFERENCE)\b/i',
+                    $body
+                )) {
+                    continue;
+                }
+                self::addOidNode($nodes, $label, $brace, $module);
             }
-            // Skip obvious non-OID textual conventions in rare false positives
-            if (preg_match('/\bTEXTUAL-CONVENTION\b/i', $body) && !preg_match('/::=/', $body)) {
-                // still OK if we matched ::= {
-            }
-
-            $parsed = self::parseOidBrace($brace);
-            if ($parsed === null) {
-                continue;
-            }
-            $key = strtolower($label);
-            $nodes[$key] = [
-                'label' => $label,
-                'parent' => $parsed['parent'],
-                'subs' => $parsed['subs'],
-                'module' => $module,
-                'name' => $label,
-            ];
         }
     }
 
     /**
-     * Parse `{ parent 1 2 }` or `{ enterprises 318 }` or `{ 1 3 6 1 4 1 318 }`.
+     * @param array<string,array<string,mixed>> $nodes
+     */
+    private static function addOidNode(array &$nodes, string $label, string $brace, string $module): void
+    {
+        $label = trim($label);
+        $brace = trim($brace);
+        if ($label === '' || $brace === '') {
+            return;
+        }
+        $parsed = self::parseOidBrace($brace);
+        if ($parsed === null) {
+            return;
+        }
+        $key = strtolower($label);
+        // Never clobber core SMI anchors (vendor trees hang off enterprises)
+        static $protected = [
+            'iso' => true, 'org' => true, 'dod' => true, 'internet' => true,
+            'directory' => true, 'mgmt' => true, 'mib-2' => true, 'mib_2' => true,
+            'transmission' => true, 'private' => true, 'enterprises' => true,
+            'security' => true, 'snmpv2' => true, 'snmpmodules' => true,
+            'ccitt' => true, 'joint-iso-ccitt' => true,
+        ];
+        if (isset($protected[$key], $nodes[$key]['absolute'])) {
+            return;
+        }
+        $nodes[$key] = [
+            'label' => $label,
+            'parent' => $parsed['parent'],
+            'subs' => $parsed['subs'],
+            'module' => $module,
+            'name' => $label,
+        ];
+    }
+
+    /**
+     * Parse `{ parent 1 2 }`, `{ enterprises 318 }`, `{ enterprises apc(318) }`,
+     * `{ iso(1) org(3) dod(6) … }`, or `{ 1 3 6 1 4 1 318 }`.
      *
      * @return array{parent:string,subs:list<int>}|null
      */
     private static function parseOidBrace(string $brace): ?array
     {
-        $brace = trim(preg_replace('/\s+/', ' ', $brace) ?? $brace);
+        $brace = trim($brace);
         if ($brace === '') {
             return null;
         }
-        // Strip (name) annotations: iso(1) org(3) → keep numbers via separate path
-        // Tokenize: identifiers or integers; ignore parenthetical comments
-        $brace = preg_replace('/\([^\)]*\)/', '', $brace) ?? $brace;
-        $brace = trim(preg_replace('/\s+/', ' ', $brace) ?? $brace);
-        $tokens = preg_split('/\s+/', $brace) ?: [];
-        $tokens = array_values(array_filter($tokens, static fn($t) => $t !== ''));
-        if (!$tokens) {
+        // Tokens: name, name(n), or bare integer
+        if (!preg_match_all(
+            '/([A-Za-z][A-Za-z0-9_-]*)\s*(?:\(\s*(\d+)\s*\))?|(\d+)/',
+            $brace,
+            $tm,
+            PREG_SET_ORDER
+        )) {
             return null;
         }
 
-        // All integers → absolute from iso
-        $allInt = true;
-        $ints = [];
-        foreach ($tokens as $t) {
-            if (!preg_match('/^\d+$/', $t)) {
-                $allInt = false;
+        /** @var list<array{name:?string,num:?int}> $parts */
+        $parts = [];
+        foreach ($tm as $t) {
+            if (($t[3] ?? '') !== '') {
+                $parts[] = ['name' => null, 'num' => (int)$t[3]];
+            } else {
+                $parts[] = [
+                    'name' => $t[1],
+                    'num' => (($t[2] ?? '') !== '') ? (int)$t[2] : null,
+                ];
+            }
+        }
+        if (!$parts) {
+            return null;
+        }
+
+        // Absolute: every token carries a number (digit or name(n))
+        $allHaveNum = true;
+        $nums = [];
+        foreach ($parts as $p) {
+            if ($p['num'] === null) {
+                $allHaveNum = false;
                 break;
             }
-            $ints[] = (int)$t;
+            $nums[] = $p['num'];
         }
-        if ($allInt) {
-            return ['parent' => '', 'subs' => $ints];
+        if ($allHaveNum) {
+            return ['parent' => '', 'subs' => $nums];
         }
 
-        $parent = $tokens[0];
-        if (!preg_match('/^[A-Za-z][A-Za-z0-9_-]*$/', $parent)) {
+        // Relative: first token is bare parent name; remaining must be numbers / name(n)
+        $first = $parts[0];
+        if ($first['name'] === null || $first['num'] !== null) {
             return null;
         }
+        $parent = $first['name'];
         $subs = [];
-        for ($i = 1; $i < count($tokens); $i++) {
-            if (!preg_match('/^\d+$/', $tokens[$i])) {
-                // e.g. { foo bar 1 } unsupported — stop
+        for ($i = 1, $n = count($parts); $i < $n; $i++) {
+            $p = $parts[$i];
+            if ($p['num'] !== null) {
+                $subs[] = $p['num'];
+            } else {
+                // Nested bare name without number: { foo bar 1 } — unsupported
                 return null;
             }
-            $subs[] = (int)$tokens[$i];
         }
         return ['parent' => $parent, 'subs' => $subs];
     }
