@@ -88,6 +88,7 @@ class SiteBackupService
                 'auth' => $cfg['auth'] ?? new stdClass(),
                 'security' => $cfg['security'] ?? new stdClass(),
                 'updates' => $cfg['updates'] ?? new stdClass(),
+                'mail' => $cfg['mail'] ?? new stdClass(),
             ];
             // Never put DB password in the overlay (new site supplies its own)
             file_put_contents(
@@ -303,6 +304,21 @@ class SiteBackupService
                     'auto_check' => true,
                     'check_interval_hours' => 24,
                     'ssl_verify' => true,
+                ],
+                'mail' => is_array($overlay['mail'] ?? null) ? $overlay['mail'] : [
+                    'enabled' => false,
+                    'host' => '',
+                    'port' => 587,
+                    'encryption' => 'tls',
+                    'auth' => true,
+                    'auth_mode' => 'login',
+                    'username' => '',
+                    'password' => '',
+                    'from_email' => '',
+                    'from_name' => 'ColdAisle',
+                    'reply_to' => '',
+                    'timeout' => 30,
+                    'verify_peer' => true,
                 ],
                 'restored_at' => date('c'),
                 'restored_from_version' => $manifest['app_version'] ?? null,

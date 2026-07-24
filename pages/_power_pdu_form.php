@@ -10,8 +10,10 @@ $edit = $edit ?? [];
 $formAction = $formAction ?? 'add_pdu';
 $isUpdate = $formAction === 'update_pdu';
 $preZone = (int)($edit['zone_id'] ?? ($filterZone ?? 0));
+$formId = $formId ?? 'addPduForm';
+$formModal = !empty($formModal);
 ?>
-<form method="post" class="form-grid" id="addPduForm">
+<form method="post" class="form-grid" id="<?= App::e($formId) ?>">
     <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
     <input type="hidden" name="action" value="<?= App::e($formAction) ?>">
     <?php if ($isUpdate): ?>
@@ -276,13 +278,20 @@ $preZone = (int)($edit['zone_id'] ?? ($filterZone ?? 0));
                value="<?= App::e($edit['snmp_context'] ?? '') ?>"></div>
     <div class="form-row full"><label>Notes</label>
         <textarea class="form-control" name="notes" rows="2"><?= App::e($edit['notes'] ?? '') ?></textarea></div>
+    <?php if ($formModal): ?>
+    <div class="form-row full app-modal-actions">
+        <button class="btn btn-primary" type="submit"><?= $isUpdate ? 'Save PDU' : 'Add PDU' ?></button>
+        <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>
+    </div>
+    <?php else: ?>
     <div class="form-row">
         <button class="btn btn-primary" type="submit"><?= $isUpdate ? 'Save PDU' : 'Add PDU' ?></button>
     </div>
+    <?php endif; ?>
 </form>
 <script>
 (function () {
-    var root = document.getElementById('addPduForm');
+    var root = document.getElementById(<?= json_encode($formId) ?>);
     if (!root || root.getAttribute('data-bound')) return;
     root.setAttribute('data-bound', '1');
     var mount = root.querySelector('#power_mount_style');

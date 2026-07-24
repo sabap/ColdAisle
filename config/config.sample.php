@@ -1,4 +1,4 @@
-<?php
+?php
 /**
  * ColdAisle sample configuration
  * Copy to config.php or use the web setup wizard (setup.php).
@@ -8,16 +8,16 @@ declare(strict_types=1);
 return [
     // Brand is fixed in code (App::APP_NAME); kept here for reference only
     'app_name' => 'ColdAisle',
-    'version' => '0.2.18',
-    // Generate: base64_encode(random_bytes(32)) — used to encrypt secrets in the DB
+    'version' => '0.2.19',
+    // Generate: base64_encode(random_bytes(32)) â€” used to encrypt secrets in the DB
     // Never commit a real production key.
     'app_key' => '',
     'timezone' => 'UTC',
     'base_url' => '', // e.g. https://dcim.contoso.com
     'org_name' => 'My Organization',
-    // Phase B — transport & session hardening (see Settings → Security)
+    // Phase B â€” transport & session hardening (see Settings â†’ Security)
     'security' => [
-        'force_https' => false,          // 301 redirect HTTP → HTTPS
+        'force_https' => false,          // 301 redirect HTTP â†’ HTTPS
         'hsts' => false,                 // Strict-Transport-Security (only when already HTTPS)
         'hsts_max_age' => 31536000,      // 1 year
         'cookie_secure' => 'auto',       // auto | always | never
@@ -68,5 +68,21 @@ return [
         'auto_check' => true,
         'check_interval_hours' => 24,
         'ssl_verify' => true, // set false only if Windows PHP lacks CA certs (lab)
+    ],
+    // Outbound email (Settings â†’ Email). Used for test mail now; notifications later.
+    'mail' => [
+        'enabled' => false,
+        'host' => 'smtp.contoso.com',
+        'port' => 587,
+        'encryption' => 'tls', // none | tls (STARTTLS) | ssl (implicit TLS, port 465)
+        'auth' => true,
+        'auth_mode' => 'login', // none | login | plain
+        'username' => '',
+        'password' => '',
+        'from_email' => 'coldaisle@contoso.com',
+        'from_name' => 'ColdAisle',
+        'reply_to' => '',
+        'timeout' => 30,
+        'verify_peer' => true,
     ],
 ];

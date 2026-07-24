@@ -615,9 +615,12 @@ if ($pduId) {
                 <span class="text-muted" style="margin-left:.35rem"><?= App::e($p['zone_name']) ?></span>
             <?php endif; ?>
         </div>
-        <div class="flex gap-1">
+        <div class="flex gap-1" style="flex-wrap:wrap">
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_pdus.php')) ?>">← All PDUs</a>
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power.php')) ?>">Dashboard</a>
+            <?php if (AuthManager::canEditPower($user)): ?>
+                <button type="button" class="btn btn-primary" data-open-modal="modal-edit-pdu">Edit PDU</button>
+            <?php endif; ?>
             <?php if ($canConfigSnmp):
                 $pduAutoPoll = !empty($p['snmp_auto_poll']);
                 ?>
@@ -640,8 +643,8 @@ if ($pduId) {
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                 <input type="hidden" name="action" value="poll_pdu">
                 <input type="hidden" name="pdu_id" value="<?= $pduId ?>">
-                <button class="btn btn-primary" type="submit" title="Poll now using the site OID template (not SNMP Targets)">
-                    📡 Poll now
+                <button class="btn btn-secondary" type="submit" title="Poll now using the site OID template (not SNMP Targets)">
+                    Poll now
                 </button>
             </form>
             <?php endif; ?>
@@ -996,38 +999,150 @@ if ($pduId) {
     </script>
     <?php endif; ?>
 
-    <div class="split-2">
-        <div class="card">
-            <div class="card-header"><h2>Edit PDU</h2></div>
-            <div class="card-body">
+    <?php
+    $snmpProfiles = [];
+    try {
+        $snmpProfiles = Database::fetchAll(
+            'SELECT profile_id, name, security_name, security_level,
+                    auth_protocol, priv_protocol, context_name
+             FROM snmp_v3_profiles WHERE is_active = 1 ORDER BY name'
+        );
+    } catch (Throwable $e) {
+        $snmpProfiles = [];
+    }
+    $mountLabel = ($p['mount_style'] ?? '') === 'u_mounted'
+        ? ('U-mounted' . (!empty($p['position_u']) ? ' @ U' . (int)$p['position_u'] : '')
+            . (!empty($p['u_height']) ? ' · ' . (int)$p['u_height'] . 'U' : ''))
+        : 'Vertical rear (0U)';
+    $locBits = [];
+    if (!empty($p['cabinet_name'])) {
+        $locBits[] = (string)$p['cabinet_name'];
+    }
+    if (!empty($p['row_name'])) {
+        $locBits[] = 'Row ' . $p['row_name'];
+    }
+    $locSummary = $locBits ? implode(' · ', $locBits) : '—';
+    $inVSum = $p['input_voltage'] ?? $p['rated_volts'] ?? null;
+    $voltSummary = '—';
+    if ($inVSum !== null || !empty($p['output_voltage'])) {
+        if (!empty($p['input_voltage_ln'])) {
+            $voltSummary = (int)$inVSum . '/' . (int)$p['input_voltage_ln'] . ' V in';
+        } else {
+            $voltSummary = $inVSum !== null ? ((int)$inVSum . ' V in') : '—';
+        }
+        if (!empty($p['output_voltage'])) {
+            $voltSummary .= ' → ' . (int)$p['output_voltage'] . ' V out';
+        }
+    }
+    ?>
+    <div class="card mb-2">
+        <div class="card-header flex-between">
+            <h2>Overview</h2>
+            <?php if (AuthManager::canEditPower($user)): ?>
+                <button type="button" class="btn btn-sm btn-secondary" data-open-modal="modal-edit-pdu">Edit properties</button>
+            <?php endif; ?>
+        </div>
+        <div class="card-body">
+            <dl class="pdu-summary-grid">
+                <div>
+                    <dt>Vendor / model</dt>
+                    <dd><?php
+                        $vm = trim(($p['manufacturer'] ?? '') . ' ' . ($p['model'] ?? ''));
+                        echo $vm !== '' ? App::e($vm) : '<span class="text-muted">—</span>';
+                    ?></dd>
+                </div>
+                <div>
+                    <dt>Location</dt>
+                    <dd>
+                        <?php if (!empty($p['cabinet_id'])): ?>
+                            <a href="<?= App::e(App::url('pages/cabinets.php?id=' . (int)$p['cabinet_id'])) ?>">
+                                <?= App::e($locSummary) ?>
+                            </a>
+                        <?php else: ?>
+                            <?= App::e($locSummary) ?>
+                        <?php endif; ?>
+                    </dd>
+                </div>
+                <div>
+                    <dt>Zone</dt>
+                    <dd>
+                        <?php if (!empty($p['zone_id'])): ?>
+                            <a href="<?= App::e(App::url('pages/power_zones.php?id=' . (int)$p['zone_id'])) ?>">
+                                <?= App::e($p['zone_name'] ?? '—') ?>
+                            </a>
+                        <?php else: ?>
+                            <span class="text-muted">—</span>
+                        <?php endif; ?>
+                    </dd>
+                </div>
+                <div>
+                    <dt>Mount</dt>
+                    <dd><?= App::e($mountLabel) ?></dd>
+                </div>
+                <div>
+                    <dt>Electrical</dt>
+                    <dd><?= App::e(power_wiring_label($p['phase_wiring'] ?? null, (int)($p['phases'] ?? 1))) ?></dd>
+                </div>
+                <div>
+                    <dt>Voltage</dt>
+                    <dd><?= App::e($voltSummary) ?></dd>
+                </div>
+                <div>
+                    <dt>Input / rating</dt>
+                    <dd>
+                        <?= App::e($p['input_type'] ?? '—') ?>
+                        <?= $p['rated_amps'] !== null ? ' · ' . App::e((string)$p['rated_amps']) . ' A' : '' ?>
+                    </dd>
+                </div>
+                <div>
+                    <dt>IP address</dt>
+                    <dd><?= !empty($p['ip_address']) ? App::e((string)$p['ip_address']) : '<span class="text-muted">—</span>' ?></dd>
+                </div>
+                <?php if (!empty($p['notes'])): ?>
+                <div style="grid-column:1 / -1">
+                    <dt>Notes</dt>
+                    <dd><?= App::e((string)$p['notes']) ?></dd>
+                </div>
+                <?php endif; ?>
+            </dl>
+        </div>
+    </div>
+
+    <?php if (AuthManager::canEditPower($user)): ?>
+    <div class="app-modal" id="modal-edit-pdu" hidden aria-hidden="true">
+        <div class="app-modal-backdrop" data-modal-close></div>
+        <div class="app-modal-panel app-modal-panel-xl" role="dialog" aria-modal="true" aria-labelledby="modal-edit-pdu-title">
+            <div class="app-modal-head">
+                <h3 id="modal-edit-pdu-title">Edit PDU — <?= App::e($p['name']) ?></h3>
+                <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
+            </div>
+            <div class="app-modal-body">
                 <?php
                 $edit = $p;
                 $formAction = 'update_pdu';
-                $snmpProfiles = [];
-                try {
-                    $snmpProfiles = Database::fetchAll(
-                        'SELECT profile_id, name, security_name, security_level,
-                                auth_protocol, priv_protocol, context_name
-                         FROM snmp_v3_profiles WHERE is_active = 1 ORDER BY name'
-                    );
-                } catch (Throwable $e) {
-                    $snmpProfiles = [];
-                }
+                $formId = 'editPduForm';
+                $formModal = true;
                 require __DIR__ . '/_power_pdu_form.php';
                 ?>
             </div>
         </div>
-        <div class="card">
+    </div>
+    <?php endif; ?>
+
+    <div class="card">
             <?php if ($outputMode === 'breakers'):
                 $layout = power_normalize_breaker_layout($p['breaker_layout'] ?? 'odd_right_even_left');
                 $cols = max(1, min(3, (int)($p['breaker_columns'] ?? 2)));
                 $panelGrid = power_breaker_panel_grid($numSlots, $layout, $cols);
                 $layoutLabel = power_breaker_layout_options()[$layout] ?? $layout;
                 ?>
-                <div class="card-header"><h2>Breaker panel</h2></div>
+                <div class="card-header flex-between">
+                    <h2>Breaker panel</h2>
+                    <span class="text-muted" style="font-size:.85rem"><?= count($breakers) ?> breakers · <?= max(0, $numSlots) ?> slots</span>
+                </div>
                 <div class="card-body">
                     <?php if ($numSlots < 1): ?>
-                        <p class="text-muted">Set <strong>Breaker positions</strong> and layout on the PDU form and save first.</p>
+                        <p class="text-muted">Set <strong>Breaker positions</strong> and layout under <strong>Edit PDU</strong> and save first.</p>
                     <?php else: ?>
                         <p class="text-muted" style="font-size:.85rem;margin-top:0">
                             Layout: <strong><?= App::e($layoutLabel) ?></strong>.
@@ -1238,7 +1353,10 @@ if ($pduId) {
                 </div>
                 <?php endif; ?>
             <?php else: ?>
-                <div class="card-header"><h2>Outlets</h2></div>
+                <div class="card-header flex-between">
+                    <h2>Outlets</h2>
+                    <span class="text-muted" style="font-size:.85rem"><?= $usedOutlets ?> mapped · <?= count($outlets) ?> total</span>
+                </div>
                 <div class="card-body flush">
                     <div class="table-wrap" style="max-height:420px;overflow:auto">
                         <table class="data">
@@ -1271,16 +1389,58 @@ if ($pduId) {
                     </p>
                 </div>
             <?php endif; ?>
-            <div class="card-body">
-                <form method="post" onsubmit="return confirm('Deactivate this PDU?');">
+            <?php if (AuthManager::canEditPower($user)): ?>
+            <div class="card-body" style="border-top:1px solid var(--border, rgba(148,163,184,.15))">
+                <form method="post" onsubmit="return confirm('Deactivate this PDU?');" style="display:inline">
                     <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                     <input type="hidden" name="action" value="deactivate_pdu">
                     <input type="hidden" name="pdu_id" value="<?= $pduId ?>">
                     <button class="btn btn-danger btn-sm" type="submit">Deactivate PDU</button>
                 </form>
             </div>
-        </div>
+            <?php endif; ?>
     </div>
+    <script>
+    (function () {
+        function openModal(id) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.hidden = false;
+            el.setAttribute('aria-hidden', 'false');
+            document.body.style.overflow = 'hidden';
+            var focus = el.querySelector('input:not([type=hidden]), select, textarea, button');
+            if (focus) setTimeout(function () { focus.focus(); }, 50);
+        }
+        function closeModal(el) {
+            if (!el) return;
+            el.hidden = true;
+            el.setAttribute('aria-hidden', 'true');
+            if (!document.querySelector('.app-modal:not([hidden])')) {
+                document.body.style.overflow = '';
+            }
+        }
+        document.querySelectorAll('[data-open-modal]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                openModal(btn.getAttribute('data-open-modal'));
+            });
+        });
+        document.querySelectorAll('[data-modal-close]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                closeModal(btn.closest('.app-modal'));
+            });
+        });
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Escape') return;
+            var open = document.querySelector('.app-modal:not([hidden])');
+            // SNMP discover uses a separate overlay; leave that alone if it is open
+            if (!open) return;
+            closeModal(open);
+        });
+        if (location.hash === '#edit') {
+            openModal('modal-edit-pdu');
+        }
+    })();
+    </script>
     <style>
     .breaker-panel {
       display: flex;
@@ -1376,6 +1536,27 @@ if ($filterZone) {
 $sql .= ' ORDER BY p.name';
 $pdus = Database::fetchAll($sql, $params);
 
+$canEditPdu = AuthManager::canEditPower($user);
+$countRack = count(array_filter($pdus, static fn($x) => ($x['pdu_scope'] ?? 'rack') === 'rack'));
+$countRow = count(array_filter($pdus, static fn($x) => ($x['pdu_scope'] ?? '') === 'row'));
+$countRoom = count(array_filter($pdus, static fn($x) => ($x['pdu_scope'] ?? '') === 'room'));
+$totalKw = 0.0;
+foreach ($pdus as $pp) {
+    if ($pp['last_poll_watts'] !== null) {
+        $totalKw += (float)$pp['last_poll_watts'] / 1000.0;
+    }
+}
+$snmpProfiles = [];
+try {
+    $snmpProfiles = Database::fetchAll(
+        'SELECT profile_id, name, security_name, security_level,
+                auth_protocol, priv_protocol, context_name
+         FROM snmp_v3_profiles WHERE is_active = 1 ORDER BY name'
+    );
+} catch (Throwable $e) {
+    $snmpProfiles = [];
+}
+
 layout_header('PDU Management', $user, 'power_pdus');
 ?>
 <div class="flex-between mb-2">
@@ -1391,18 +1572,46 @@ layout_header('PDU Management', $user, 'power_pdus');
     <div class="flex gap-1">
         <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power.php')) ?>">← Dashboard</a>
         <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_zones.php')) ?>">Zones</a>
-        <a class="btn btn-primary" href="#add-pdu">+ PDU</a>
+        <?php if ($canEditPdu): ?>
+            <button type="button" class="btn btn-primary" data-open-modal="modal-add-pdu" id="add-pdu">+ PDU</button>
+        <?php endif; ?>
+    </div>
+</div>
+
+<div class="metrics">
+    <div class="metric-card">
+        <div class="label">PDUs</div>
+        <div class="value"><?= count($pdus) ?></div>
+        <div class="sub"><?= $countRack ?> rack · <?= $countRow ?> row · <?= $countRoom ?> room</div>
+    </div>
+    <div class="metric-card warning">
+        <div class="label">Polled load</div>
+        <div class="value"><?= number_format($totalKw, 2) ?> <span class="metric-unit">kW</span></div>
+        <div class="sub">sum of last SNMP polls</div>
+    </div>
+    <div class="metric-card accent">
+        <div class="label">SNMP on</div>
+        <div class="value"><?= count(array_filter($pdus, static fn($x) => !empty($x['snmp_enabled']))) ?></div>
+        <div class="sub">of <?= count($pdus) ?> listed</div>
     </div>
 </div>
 
 <div class="card">
-    <div class="card-header"><h2>All PDUs (<?= count($pdus) ?>)</h2></div>
+    <div class="card-header flex-between">
+        <h2>All PDUs</h2>
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+            <span class="text-muted" style="font-size:.85rem"><?= count($pdus) ?> active</span>
+            <?php if ($canEditPdu): ?>
+                <button type="button" class="btn btn-sm btn-primary" data-open-modal="modal-add-pdu">Add PDU</button>
+            <?php endif; ?>
+        </div>
+    </div>
     <div class="card-body flush">
         <table class="data">
             <thead>
             <tr>
                 <th>Name</th><th>Scope</th><th>Output</th><th>Phases</th><th>In → Out</th>
-                <th>Location</th><th>Zone</th><th>Amps</th><th>Load</th><th>SNMP</th><th></th>
+                <th>Location</th><th>Zone</th><th>Amps</th><th>Load</th><th>SNMP</th><th class="col-actions"></th>
             </tr>
             </thead>
             <tbody>
@@ -1460,54 +1669,101 @@ layout_header('PDU Management', $user, 'power_pdus');
                     <td><?= $p['rated_amps'] !== null ? App::e((string)$p['rated_amps']) : '—' ?></td>
                     <td><?= $p['last_poll_watts'] !== null ? number_format((float)$p['last_poll_watts'] / 1000, 2) . ' kW' : '—' ?></td>
                     <td><?= !empty($p['snmp_enabled']) ? '<span class="badge badge-success">v' . App::e((string)$p['snmp_version']) . '</span>' : '—' ?></td>
-                    <td class="actions">
-                        <a class="btn btn-sm btn-secondary" href="?id=<?= (int)$p['pdu_id'] ?>">Manage</a>
+                    <td class="actions col-actions">
+                        <a class="btn btn-sm btn-secondary" href="?id=<?= (int)$p['pdu_id'] ?>">Open</a>
                     </td>
                 </tr>
             <?php endforeach; ?>
             <?php if (!$pdus): ?>
-                <tr><td colspan="11" class="text-muted">No PDUs yet. Add one below or from a cabinet view.</td></tr>
+                <tr>
+                    <td colspan="11" class="text-muted">
+                        No PDUs yet.
+                        <?php if ($canEditPdu): ?>
+                            Use <strong>Add PDU</strong> to create one.
+                        <?php endif; ?>
+                    </td>
+                </tr>
             <?php endif; ?>
             </tbody>
         </table>
     </div>
 </div>
 
-<div class="card" id="add-pdu">
-    <div class="card-header"><h2>Add PDU</h2></div>
-    <div class="card-body">
-        <?php
-        $edit = [
-            'zone_id' => $filterZone ?: null,
-            'pdu_scope' => 'rack',
-            'phases' => 1,
-            'phase_wiring' => 'single',
-            'input_voltage' => 208,
-            'output_voltage' => 208,
-            'num_outlets' => 24,
-            'output_mode' => 'outlets',
-            'num_breaker_slots' => 42,
-            'breaker_layout' => 'odd_right_even_left',
-            'breaker_columns' => 2,
-            'rated_amps' => 30,
-            'mount_style' => 'vertical_rear',
-            'snmp_version' => '2c',
-            'snmp_port' => 161,
-            'sync_zone_voltage' => 1,
-        ];
-        $formAction = 'add_pdu';
-        $snmpProfiles = [];
-        try {
-            $snmpProfiles = Database::fetchAll(
-                'SELECT profile_id, name, security_name, security_level,
-                        auth_protocol, priv_protocol, context_name
-                 FROM snmp_v3_profiles WHERE is_active = 1 ORDER BY name'
-            );
-        } catch (Throwable $e) {
-            $snmpProfiles = [];
-        }
-        require __DIR__ . '/_power_pdu_form.php';
-        ?>
+<?php if ($canEditPdu): ?>
+<div class="app-modal" id="modal-add-pdu" hidden aria-hidden="true">
+    <div class="app-modal-backdrop" data-modal-close></div>
+    <div class="app-modal-panel app-modal-panel-xl" role="dialog" aria-modal="true" aria-labelledby="modal-add-pdu-title">
+        <div class="app-modal-head">
+            <h3 id="modal-add-pdu-title">Add PDU</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
+        </div>
+        <div class="app-modal-body">
+            <?php
+            $edit = [
+                'zone_id' => $filterZone ?: null,
+                'pdu_scope' => 'rack',
+                'phases' => 1,
+                'phase_wiring' => 'single',
+                'input_voltage' => 208,
+                'output_voltage' => 208,
+                'num_outlets' => 24,
+                'output_mode' => 'outlets',
+                'num_breaker_slots' => 42,
+                'breaker_layout' => 'odd_right_even_left',
+                'breaker_columns' => 2,
+                'rated_amps' => 30,
+                'mount_style' => 'vertical_rear',
+                'snmp_version' => '2c',
+                'snmp_port' => 161,
+                'sync_zone_voltage' => 1,
+            ];
+            $formAction = 'add_pdu';
+            $formId = 'addPduForm';
+            $formModal = true;
+            require __DIR__ . '/_power_pdu_form.php';
+            ?>
+        </div>
     </div>
 </div>
+<script>
+(function () {
+    function openModal(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.hidden = false;
+        el.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+        var focus = el.querySelector('input:not([type=hidden]), select, textarea, button');
+        if (focus) setTimeout(function () { focus.focus(); }, 50);
+    }
+    function closeModal(el) {
+        if (!el) return;
+        el.hidden = true;
+        el.setAttribute('aria-hidden', 'true');
+        if (!document.querySelector('.app-modal:not([hidden])')) {
+            document.body.style.overflow = '';
+        }
+    }
+    document.querySelectorAll('[data-open-modal]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            openModal(btn.getAttribute('data-open-modal'));
+        });
+    });
+    document.querySelectorAll('[data-modal-close]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            closeModal(btn.closest('.app-modal'));
+        });
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+        var open = document.querySelector('.app-modal:not([hidden])');
+        if (open) closeModal(open);
+    });
+    // Deep links from Power dashboard / Zones: #add-pdu
+    if (location.hash === '#add-pdu') {
+        openModal('modal-add-pdu');
+    }
+})();
+</script>
+<?php endif; ?>
 <?php layout_footer(); ?>
