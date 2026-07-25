@@ -141,6 +141,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             SettingsService::set('mail_enabled', !empty($mailCfg['enabled']) ? '1' : '0', 'mail');
         }
 
+        if ($section === 'power_alerts') {
+            if (!class_exists('PowerAlertService')) {
+                throw new RuntimeException('PowerAlertService is not installed. Deploy the latest release.');
+            }
+            $rawEmails = trim((string)($_POST['power_alerts_email'] ?? ''));
+            if ($rawEmails !== '') {
+                $parsed = PowerAlertService::normalizeEmailList($rawEmails);
+                if (!$parsed) {
+                    throw new RuntimeException('Alert email list has no valid addresses.');
+                }
+            }
+            PowerAlertService::saveSettingsFromPost($_POST);
+            App::flash('success', 'Power alert settings saved.');
+            App::redirect('pages/settings.php#power-alerts');
+        }
+
         if ($section === 'test_mail') {
             // AJAX modal response (same pattern as test_ldaps)
             $json = static function (array $payload): void {
@@ -331,8 +347,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         }
 
         // Write config.php (for general / auth / updates / security / mail)
+        // power_alerts uses settings table only (redirects earlier)
         if (!in_array($section, [
             'update_check', 'update_apply', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
+            'power_alerts',
         ], true)) {
             $export = var_export($config, true);
             $php = "<?php\n/** ColdAisle configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
@@ -356,6 +374,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#ldaps';
     } elseif ($secPost === 'mail' || $secPost === 'test_mail') {
         $redirHash = '#mail';
+    } elseif ($secPost === 'power_alerts') {
+        $redirHash = '#power-alerts';
     }
     App::redirect('pages/settings.php' . $redirHash);
 }
@@ -376,6 +396,12 @@ $mailCfg = class_exists('MailService') ? MailService::config() : [
 $mailStatus = class_exists('MailService')
     ? MailService::status()
     : ['ready' => false, 'enabled' => false, 'label' => 'Unavailable', 'detail' => 'MailService not deployed on this host.'];
+$powerAlerts = class_exists('PowerAlertService')
+    ? PowerAlertService::settings()
+    : [
+        'enabled' => false, 'email' => '', 'warn_pct' => 75.0, 'crit_pct' => 90.0,
+        'cooldown_min' => 60, 'util' => true, 'load_state' => true, 'ps' => true,
+    ];
 $updCfg = UpdateService::config();
 $caStatus = UpdateService::caBundleStatus();
 $ldapCaStatus = method_exists('LdapAuth', 'enterpriseCaStatus')
@@ -529,8 +555,8 @@ layout_header('Settings', $user, 'settings');
     </div>
     <div class="card-body">
         <p class="text-muted" style="font-size:.9rem;margin-top:0">
-            Outbound SMTP for future notifications (disposal alerts, local user activation, LDAPS welcome mail,
-            password resets, and more). Send a test message after saving to confirm the server accepts mail from this host.
+            Outbound SMTP for power load alerts, disposal notices, and other system mail.
+            Send a test message after saving to confirm the server accepts mail from this host.
         </p>
         <p class="text-muted" style="font-size:.8rem;margin:0 0 1rem">
             <?= App::e($mailStatus['detail'] ?? '') ?>
@@ -682,6 +708,77 @@ layout_header('Settings', $user, 'settings');
         <div class="ldaps-modal-foot">
             <button type="button" class="btn btn-secondary" data-mail-close>Close</button>
         </div>
+    </div>
+</div>
+
+<div class="card" id="power-alerts">
+    <div class="card-header flex-between">
+        <h2>Power alerts</h2>
+        <span class="badge <?= !empty($powerAlerts['enabled']) ? 'badge-success' : '' ?>">
+            <?= !empty($powerAlerts['enabled']) ? 'Enabled' : 'Off' ?>
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size:.9rem;margin-top:0">
+            After each SNMP poll, evaluate phase current vs rating, APC load-state, and dual power-supply health.
+            Raises in-app notifications for all users and optional email when SMTP is enabled.
+        </p>
+        <?php if (!class_exists('PowerAlertService')): ?>
+            <p class="alert alert-error">PowerAlertService is not deployed on this host. Update ColdAisle to enable this section.</p>
+        <?php else: ?>
+        <form method="post" class="form-grid">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="power_alerts">
+
+            <div class="form-row full"><label>
+                <input type="checkbox" name="power_alerts_enabled" value="1"
+                    <?= !empty($powerAlerts['enabled']) ? 'checked' : '' ?>>
+                Enable power alerts
+            </label></div>
+
+            <div class="form-row full"><label>Alert email recipients</label>
+                <input class="form-control" name="power_alerts_email"
+                       value="<?= App::e($powerAlerts['email'] ?? '') ?>"
+                       placeholder="ops@contoso.com, oncall@contoso.com">
+                <span class="text-muted" style="font-size:.75rem">Comma-separated. Requires Settings → Email (SMTP) enabled.</span>
+            </div>
+
+            <div class="form-row"><label>Warning util %</label>
+                <input class="form-control" type="number" min="1" max="100" step="1"
+                       name="power_alerts_warn_pct" value="<?= App::e((string)(int)$powerAlerts['warn_pct']) ?>">
+            </div>
+            <div class="form-row"><label>Critical util %</label>
+                <input class="form-control" type="number" min="1" max="100" step="1"
+                       name="power_alerts_crit_pct" value="<?= App::e((string)(int)$powerAlerts['crit_pct']) ?>">
+            </div>
+            <div class="form-row"><label>Cooldown-alert cooldown (minutes)</label>
+                <input class="form-control" type="number" min="5" max="10080" step="1"
+                       name="power_alerts_cooldown_min" value="<?= App::e((string)(int)$powerAlerts['cooldown_min']) ?>">
+                <span class="text-muted" style="font-size:.75rem">Same condition will not email/notify again until this elapses (severity escalations always notify).</span>
+            </div>
+
+            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Check types</h4></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="power_alerts_util" value="1"
+                    <?= !empty($powerAlerts['util']) ? 'checked' : '' ?>>
+                Phase / device current vs rating (util %)
+            </label></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="power_alerts_load_state" value="1"
+                    <?= !empty($powerAlerts['load_state']) ? 'checked' : '' ?>>
+                APC phase load-state (near overload / overload)
+            </label></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="power_alerts_ps" value="1"
+                    <?= !empty($powerAlerts['ps']) ? 'checked' : '' ?>>
+                Power supply fault / alarm
+            </label></div>
+
+            <div class="form-row full">
+                <button class="btn btn-primary" type="submit">Save power alerts</button>
+            </div>
+        </form>
+        <?php endif; ?>
     </div>
 </div>
 

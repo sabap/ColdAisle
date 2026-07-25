@@ -361,6 +361,21 @@ class SnmpPoller
                 'amps' => $amps,
             ]);
         }
+
+        // Phase util / load-state / PS alerts (settings-gated, cooldown)
+        if (class_exists('PowerAlertService')) {
+            try {
+                if (!function_exists('power_phase_poll_decode')) {
+                    $helpers = App::ROOT . '/includes/power_helpers.php';
+                    if (is_file($helpers)) {
+                        require_once $helpers;
+                    }
+                }
+                PowerAlertService::evaluatePdu($pduId);
+            } catch (Throwable $e) {
+                App::log('PowerAlertService: ' . $e->getMessage(), 'warning');
+            }
+        }
     }
 
     /**

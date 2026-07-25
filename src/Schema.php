@@ -187,6 +187,21 @@ class Schema
             self::ensureColumn('pdu_outlets', 'rated_amps', 'DECIMAL(8,2) NULL');
             self::ensureColumn('pdu_outlets', 'device_power_supply_id', 'INT NULL');
 
+            // Power alert cooldown / active state (after SNMP poll)
+            self::ensureTable(
+                'power_alert_state',
+                "CREATE TABLE power_alert_state (
+                    alert_key NVARCHAR(200) NOT NULL PRIMARY KEY,
+                    pdu_id INT NOT NULL,
+                    severity NVARCHAR(20) NOT NULL CONSTRAINT DF_pas_sev DEFAULT 'warning',
+                    is_active BIT NOT NULL CONSTRAINT DF_pas_active DEFAULT 1,
+                    last_fired_at DATETIME2 NULL,
+                    last_cleared_at DATETIME2 NULL,
+                    last_message NVARCHAR(500) NULL,
+                    notify_count INT NOT NULL CONSTRAINT DF_pas_count DEFAULT 0
+                )"
+            );
+
             self::ensureTable(
                 'pdu_breakers',
                 "CREATE TABLE pdu_breakers (
