@@ -24,8 +24,8 @@ require_once __DIR__ . '/Services/PowerHistoryService.php';
 
 class App
 {
-    /** App semver — keep in sync with /VERSION */
-    public const VERSION = '0.2.42';
+    /** App semver â€” keep in sync with /VERSION */
+    public const VERSION = '0.2.43';
     /** Product name is fixed (not user-configurable). */
     public const APP_NAME = 'ColdAisle';
     public const ROOT = __DIR__ . '/..';
@@ -255,7 +255,7 @@ class App
     }
 
     /**
-     * Redirect HTTP→HTTPS when force_https is on.
+     * Redirect HTTPâ†’HTTPS when force_https is on.
      */
     public static function enforceTransportSecurity(): void
     {
@@ -288,7 +288,7 @@ class App
         header('X-Frame-Options: SAMEORIGIN');
         header('Referrer-Policy: strict-origin-when-cross-origin');
         header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
-        // Frame ancestors only — full CSP would break existing inline scripts
+        // Frame ancestors only â€” full CSP would break existing inline scripts
         header("Content-Security-Policy: frame-ancestors 'self'");
 
         $sec = self::isInstalled() ? self::securityConfig() : [];
@@ -342,7 +342,7 @@ class App
         if ($key === null) {
             return self::$config;
         }
-        // Brand is not configurable — ignore any legacy config/settings value
+        // Brand is not configurable â€” ignore any legacy config/settings value
         if ($key === 'app_name') {
             return self::APP_NAME;
         }
@@ -357,7 +357,7 @@ class App
         return $val;
     }
 
-    /** Always "ColdAisle" — not user-configurable. */
+    /** Always "ColdAisle" â€” not user-configurable. */
     public static function appName(): string
     {
         return self::APP_NAME;
@@ -367,7 +367,7 @@ class App
     {
         if (!empty(self::$config['base_url'])) {
             $configured = rtrim((string)self::$config['base_url'], '/');
-            // Config may say https://… before IIS has a certificate binding.
+            // Config may say https://â€¦ before IIS has a certificate binding.
             // Until the request is actually HTTPS (or force_https is on), prefer the
             // live request origin so CSS/login links keep working over HTTP.
             if (PHP_SAPI !== 'cli'
@@ -409,7 +409,7 @@ class App
 
     /**
      * URL path to the application root (no trailing slash), e.g. '' or '/ColdAisle'.
-     * Must NOT include /pages, /api, etc. — those are inside the app.
+     * Must NOT include /pages, /api, etc. â€” those are inside the app.
      */
     public static function basePath(): string
     {
@@ -515,7 +515,7 @@ class App
                 . 'a{color:#93c5fd}</style></head><body><div class="box">'
                 . '<h1 style="margin-top:0;font-size:1.25rem">Access denied</h1>'
                 . '<p>Your role (<strong>' . $role . '</strong>) does not include permission <code>' . $need . '</code>.</p>'
-                . '<p><a href="' . App::e(App::url('index.php')) . '">← Dashboard</a></p>'
+                . '<p><a href="' . App::e(App::url('index.php')) . '">â† Dashboard</a></p>'
                 . '</div></body></html>';
             exit;
         }

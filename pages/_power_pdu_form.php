@@ -163,15 +163,19 @@ $formModal = !empty($formModal);
     <div class="form-row power-outlet-fields"><label>Outlets</label>
         <input class="form-control" type="number" min="1" max="128" name="num_outlets"
                value="<?= App::e((string)$formNumOutlets) ?>"></div>
-    <div class="form-row power-outlet-fields"><label>Outlet type (NEMA/IEC)</label>
+    <div class="form-row power-outlet-fields"><label>Default outlet type</label>
         <select class="form-control" name="outlet_type">
-            <?php foreach (['C13','C19','C14','C20','5-15R','5-20R','L5-20R','L5-30R','L6-20R','L6-30R','L14-30R','Other'] as $t): ?>
+            <?php foreach (power_outlet_connector_types() as $t): ?>
                 <option<?= $t === 'C13' ? ' selected' : '' ?>><?= App::e($t) ?></option>
             <?php endforeach; ?>
         </select>
     </div>
     <div class="form-row power-outlet-fields"><label>Outlet AMP (default)</label>
         <input class="form-control" type="number" step="0.1" name="outlet_amps" value="10"></div>
+    <p class="text-muted power-outlet-fields" style="font-size:.78rem;margin:0 0 .5rem;grid-column:1/-1">
+        Defaults apply to every outlet at create. Mixed banks (C13 + C19, etc.) are set per outlet
+        on the PDU detail page after save.
+    </p>
     <div class="form-row power-breaker-fields" style="display:none"><label>Breaker positions (slots)</label>
         <input class="form-control" type="number" min="1" max="128" name="num_breaker_slots"
                value="<?= App::e((string)$formNumBreakerSlots) ?>"

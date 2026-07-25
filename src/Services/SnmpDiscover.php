@@ -97,6 +97,12 @@ class SnmpDiscover
             '1.3.6.1.4.1.318.1.1.26.2.1.9.1',
             '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.1',
             '1.3.6.1.4.1.318.1.1.26.6.3.1.7.1', // rPDU2 phase power-ish (common)
+            // rPDU2 outlet metered status (table column.instance) — walks often hit MAX_OIDS first
+            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.6.1', // StatusCurrent.1
+            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.7.1', // StatusPower.1
+            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.5.1', // StatusState.1
+            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.3.1', // StatusName.1
+            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.6.1.1', // module-index style Current.1.1
             '1.3.6.1.4.1.3808.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.3808.1.1.1.4.2.5.0',
         ];
@@ -209,6 +215,9 @@ class SnmpDiscover
                 'sysUpTime' => '1.3.6.1.2.1.1.3.0',
             ];
         }
+        // Always try known APC rPDU2 outlet table bases when the agent responds
+        // (full enterprise walks often exhaust MAX_OIDS before 26.9 outlet tables).
+        $proposed = self::injectApcOutletBases($proposed, $hostPort, $version, $creds, $sysDescr, $collected);
 
         // Serial number from walk / leaf GETs (also propose map key)
         $serialHit = self::extractSerialFromCollected($collected);
@@ -251,6 +260,13 @@ class SnmpDiscover
             }
         }
 
+        $outletKeyCount = 0;
+        foreach (array_keys($proposed) as $pk) {
+            if (preg_match('/^outlet_(amps|watts|power|current|name|state)\b/i', (string)$pk)) {
+                $outletKeyCount++;
+            }
+        }
+
         $msg = 'Walked ' . count($collected) . ' object(s)';
         if (count($candidates)) {
             $msg = 'Found ' . count($candidates) . ' high-signal candidate OID(s) from '
@@ -260,6 +276,9 @@ class SnmpDiscover
             }
             if ($serialHit) {
                 $msg .= '; serial ' . $serialHit['value'];
+            }
+            if ($outletKeyCount > 0) {
+                $msg .= '; ' . $outletKeyCount . ' outlet table column(s) in proposed map';
             }
             if ($namedCount) {
                 $msg .= '; ' . $namedCount . ' with MIB names';
@@ -276,6 +295,9 @@ class SnmpDiscover
             $msg .= '.';
         } else {
             $msg .= '; limited power candidates - review and edit map.';
+            if ($outletKeyCount > 0) {
+                $msg .= ' Outlet table columns still proposed (' . $outletKeyCount . ').';
+            }
         }
 
         if ($mibsLoaded > 0 && $namedCount === 0 && $indexSize === 0) {
@@ -827,12 +849,19 @@ class SnmpDiscover
             if (preg_match('/\btemp|temperature\b/', $s)) {
                 $score += 4;
             }
-            // Prefer phase/device totals over outlet sensors
+            // Prefer phase/device totals over bulk outlet sensors
             if (preg_match('/phasestatus|identdevice|devicestatus|phasetophase/', $s)) {
                 $score += 4;
             }
+            // Demote high-index outlet leaves (clutter) but keep outlet #1 / table bases useful
             if (preg_match('/outlet|receptacle/', $s)) {
-                $score -= 6;
+                if (preg_match('/outletmeteredstatus(current|power|name|state)/', $s)
+                    || preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.9\.4\.3\.1\.[3567](?:\.1)?$/', $s)
+                ) {
+                    $score += 8; // first-instance / named status columns → propose as table bases
+                } else {
+                    $score -= 6;
+                }
             }
             // Rating for util %
             if (preg_match('/maxphasecurrentrating|identdevicerating|maxcurrentrating/', $s)) {
@@ -1273,6 +1302,89 @@ class SnmpDiscover
     }
 
     /**
+     * Known APC PowerNet rPDU2OutletMeteredStatus column bases (walked .1…N by SnmpPoller).
+     * @return array<string,string> map key => base OID
+     */
+    public static function apcRpdu2OutletBases(): array
+    {
+        return [
+            'outlet_name' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.3',
+            'outlet_state' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.5',
+            'outlet_amps_x10' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.6',
+            'outlet_watts_hundredths_kw' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.7',
+        ];
+    }
+
+    /**
+     * If the agent answers rPDU2 outlet current/power, add table bases to the proposed map.
+     *
+     * @param array<string,string> $proposed
+     * @param array<string,mixed> $creds
+     * @param array<string,array{raw:mixed,name?:?string}> $collected
+     * @return array<string,string>
+     */
+    private static function injectApcOutletBases(
+        array $proposed,
+        string $hostPort,
+        string $version,
+        array $creds,
+        $sysDescr,
+        array $collected
+    ): array {
+        foreach (array_keys($proposed) as $k) {
+            if (preg_match('/^outlet_(amps|watts|power|current|name|state)\b/i', (string)$k)) {
+                return $proposed; // already mapped from candidates
+            }
+        }
+
+        $hay = strtolower((string)$sysDescr) . ' ' . json_encode($proposed) . ' ' . implode(' ', array_keys($collected));
+        $looksApc = (bool)preg_match('/apc|schneider|powernet|rpdu|1\.3\.6\.1\.4\.1\.318/', $hay);
+        // Also probe when enterprise walk already saw rPDU2 phase / device OIDs
+        if (!$looksApc) {
+            foreach ($collected as $oid => $_) {
+                if (str_starts_with((string)$oid, '1.3.6.1.4.1.318.1.1.26')
+                    || str_starts_with((string)$oid, '1.3.6.1.4.1.318.1.1.12')
+                ) {
+                    $looksApc = true;
+                    break;
+                }
+            }
+        }
+        if (!$looksApc) {
+            return $proposed;
+        }
+
+        $bases = self::apcRpdu2OutletBases();
+        $probeCurrent = $bases['outlet_amps_x10'];
+        $ok = false;
+        // Prefer already-collected first instance
+        foreach ([$probeCurrent . '.1', $probeCurrent . '.1.1'] as $leaf) {
+            if (isset($collected[$leaf])) {
+                $ok = true;
+                break;
+            }
+        }
+        if (!$ok) {
+            foreach ([$probeCurrent . '.1', $probeCurrent . '.1.1'] as $leaf) {
+                $v = self::snmpGet($hostPort, $version, $creds, $leaf);
+                if ($v !== null && $v !== false) {
+                    $ok = true;
+                    break;
+                }
+            }
+        }
+        if (!$ok) {
+            return $proposed;
+        }
+        foreach ($bases as $key => $oid) {
+            if (!isset($proposed[$key])) {
+                $proposed[$key] = $oid;
+            }
+        }
+        return $proposed;
+    }
+
+    /**
      * Per-outlet table column bases for SnmpPoller::collectOutletTables.
      * Candidates are usually instance OIDs (…column.1 or …column.1.N); strip index → base.
      *
@@ -1296,10 +1408,10 @@ class SnmpDiscover
 
         // Known APC rPDU2OutletMeteredStatus* column bases (PowerNet)
         $apcBases = [
-            'name' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.3',
-            'state' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.5',
-            'amps' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.6',
-            'watts' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.7',
+            'name' => self::apcRpdu2OutletBases()['outlet_name'],
+            'state' => self::apcRpdu2OutletBases()['outlet_state'],
+            'amps' => self::apcRpdu2OutletBases()['outlet_amps_x10'],
+            'watts' => self::apcRpdu2OutletBases()['outlet_watts_hundredths_kw'],
         ];
 
         foreach ($candidates as $c) {
