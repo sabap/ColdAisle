@@ -269,17 +269,24 @@ class SnmpPoller
                     }
                 }
             }
-            $nOut = is_array($result['outlets'] ?? null) ? count($result['outlets']) : 0;
+            $nOutLive = is_array($result['outlets'] ?? null) ? count($result['outlets']) : 0;
+            $nInv = isset($result['device_num_outlets']) ? (int)$result['device_num_outlets'] : 0;
             $msg = 'Polled via site OID template (' . $result['ok'] . ' metric(s)';
             if ($nPhase > 0) {
                 $msg .= ', ' . $nPhase . ' phase(s)';
             }
-            if ($nOut > 0) {
-                $msg .= ', ' . $nOut . ' outlet(s)';
+            if ($nOutLive > 0) {
+                $msg .= ', ' . $nOutLive . ' metered outlet(s)';
+            } elseif ($nInv > 0) {
+                $msg .= ', ' . $nInv . ' outlet(s) inventory';
+                $sync = $result['outlet_sync'] ?? null;
+                if (is_array($sync) && !empty($sync['added'])) {
+                    $msg .= ' (+' . (int)$sync['added'] . ' rows)';
+                }
             } else {
                 $od = $result['outlet_diag'] ?? null;
                 if (is_array($od) && ($od['status'] ?? '') === 'probe_failed') {
-                    $msg .= '; no per-outlet SNMP on this device';
+                    $msg .= '; no per-outlet power SNMP (phase-metered only)';
                 } elseif (is_array($od) && ($od['status'] ?? '') === 'no_keys') {
                     $msg .= '; no outlet_* keys in template';
                 } elseif (is_array($od) && ($od['status'] ?? '') !== 'ok') {
@@ -295,6 +302,8 @@ class SnmpPoller
                 'phases' => $result['phases'],
                 'outlets' => $result['outlets'] ?? null,
                 'outlet_diag' => $result['outlet_diag'] ?? null,
+                'device_num_outlets' => $result['device_num_outlets'] ?? null,
+                'outlet_sync' => $result['outlet_sync'] ?? null,
             ];
         }
 
@@ -352,6 +361,8 @@ class SnmpPoller
         );
 
         $got = self::collectOidMap($session, $oidMap);
+        // Device inventory size (APC rPDU2 NumOutlets) even when no metered outlet table
+        $invCount = self::probeDeviceNumOutlets($session, $oidMap, $got);
         self::closeSession($session);
 
         if ($got['ok'] === 0) {
@@ -367,16 +378,89 @@ class SnmpPoller
             $got['outlets'] ?? null
         );
 
+        $outletSync = null;
+        if ($invCount === null && is_array($got['outlets'] ?? null) && $got['outlets']) {
+            $invCount = count($got['outlets']);
+        }
+        $outMode = strtolower(trim((string)($pdu['output_mode'] ?? 'outlets')));
+        if ($outMode !== 'breakers' && $invCount !== null && $invCount > 0) {
+            if (!function_exists('power_sync_outlet_inventory')) {
+                $helpers = App::ROOT . '/includes/power_helpers.php';
+                if (is_file($helpers)) {
+                    require_once $helpers;
+                }
+            }
+            if (function_exists('power_sync_outlet_inventory')) {
+                $outletSync = power_sync_outlet_inventory((int)$pdu['pdu_id'], $invCount);
+            }
+        }
+
         return [
             'watts' => $got['watts'],
             'amps' => $got['amps'],
             'phases' => $got['phases'],
             'outlets' => $got['outlets'] ?? null,
             'outlet_diag' => $got['outlet_diag'] ?? null,
+            'device_num_outlets' => $invCount,
+            'outlet_sync' => $outletSync,
             'serial_no' => $got['serial_no'] ?? null,
             'ok' => $got['ok'],
             'failed' => $got['failed'],
         ];
+    }
+
+    /**
+     * Prefer map key device_num_outlets / num_outlets; else APC rPDU2 properties.
+     * Also use live outlet table length when present.
+     *
+     * @param array<string,mixed> $oidMap
+     * @param array<string,mixed> $got
+     */
+    private static function probeDeviceNumOutlets($session, array $oidMap, array $got): ?int
+    {
+        foreach (['device_num_outlets', 'num_outlets', 'outlet_count'] as $k) {
+            if (!empty($oidMap[$k]) && is_string($oidMap[$k])) {
+                try {
+                    $raw = self::get($session, ltrim($oidMap[$k], '.'));
+                    $n = self::toNumber($raw);
+                    if ($n !== null && $n >= 1 && $n <= 128) {
+                        return (int)$n;
+                    }
+                } catch (Throwable $e) {
+                    // continue
+                }
+            }
+        }
+        if (is_array($got['outlets'] ?? null) && count($got['outlets']) > 0) {
+            return count($got['outlets']);
+        }
+        $blob = '';
+        foreach ($oidMap as $v) {
+            if (is_string($v)) {
+                $blob .= ' ' . $v;
+            }
+        }
+        if (!str_contains($blob, '1.3.6.1.4.1.318.1.1.26')
+            && !str_contains($blob, '1.3.6.1.4.1.318.1.1.12')
+        ) {
+            return null;
+        }
+        // rPDU2DevicePropertiesNumOutlets.moduleIndex (.1 typical)
+        foreach ([
+            '1.3.6.1.4.1.318.1.1.26.4.2.1.4.1',
+            '1.3.6.1.4.1.318.1.1.12.3.1.4.0', // older rPDU outlet count
+        ] as $oid) {
+            try {
+                $raw = self::get($session, $oid);
+                $n = self::toNumber($raw);
+                if ($n !== null && $n >= 1 && $n <= 128) {
+                    return (int)$n;
+                }
+            } catch (Throwable $e) {
+                // continue
+            }
+        }
+        return null;
     }
 
     /**

@@ -36,10 +36,133 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
     }
     $action = $_POST['action'] ?? '';
     try {
+        if ($action === 'save_pdu_template') {
+            $pid = (int)($_POST['pdu_id'] ?? 0);
+            $overwrite = !empty($_POST['overwrite']);
+            if ($pid <= 0) {
+                throw new RuntimeException('PDU id required.');
+            }
+            $src = Database::fetchOne('SELECT * FROM pdus WHERE pdu_id = ? AND is_active = 1', [$pid]);
+            if (!$src) {
+                throw new RuntimeException('PDU not found.');
+            }
+            $vendor = trim((string)($src['manufacturer'] ?? ''));
+            $model = trim((string)($src['model'] ?? ''));
+            if ($vendor === '' || $model === '') {
+                throw new RuntimeException('Set manufacturer and model on this PDU before creating a template.');
+            }
+            $name = power_pdu_template_display_name($vendor, $model);
+            $outlets = Database::fetchAll(
+                'SELECT outlet_number, outlet_type, rated_amps, label
+                 FROM pdu_outlets WHERE pdu_id = ? ORDER BY outlet_number',
+                [$pid]
+            );
+            $payload = power_pdu_template_payload_from_pdu($src, $outlets);
+            // Prefer inventory count when outlets exist
+            if ($outlets) {
+                $payload['fields']['num_outlets'] = count($outlets);
+            }
+            $fieldsJson = json_encode($payload['fields'], JSON_UNESCAPED_SLASHES);
+            $outletsJson = $payload['outlets']
+                ? json_encode($payload['outlets'], JSON_UNESCAPED_SLASHES)
+                : null;
+
+            $existing = null;
+            try {
+                $existing = Database::fetchOne(
+                    'SELECT template_id, name FROM pdu_templates
+                     WHERE is_active = 1 AND (
+                        name = ? OR (vendor = ? AND model = ?)
+                     )',
+                    [$name, $vendor, $model]
+                );
+            } catch (Throwable $e) {
+                // table may not exist until Schema ensure — force ensure
+                if (class_exists('Schema')) {
+                    Schema::ensure();
+                }
+                $existing = Database::fetchOne(
+                    'SELECT template_id, name FROM pdu_templates
+                     WHERE is_active = 1 AND (
+                        name = ? OR (vendor = ? AND model = ?)
+                     )',
+                    [$name, $vendor, $model]
+                );
+            }
+
+            if ($existing && !$overwrite) {
+                App::flash(
+                    'error',
+                    'PDU template "' . $name . '" already exists. '
+                    . 'Confirm overwrite from the PDU page, or cancel.'
+                );
+                // Stash so UI can offer overwrite without re-typing
+                $_SESSION['pdu_template_overwrite'] = [
+                    'pdu_id' => $pid,
+                    'template_id' => (int)$existing['template_id'],
+                    'name' => $name,
+                ];
+                App::redirect('pages/power_pdus.php?id=' . $pid . '&tpl_exists=1');
+            }
+
+            if ($existing) {
+                Database::update('pdu_templates', [
+                    'name' => $name,
+                    'vendor' => $vendor,
+                    'model' => $model,
+                    'fields_json' => $fieldsJson,
+                    'outlets_json' => $outletsJson,
+                    'updated_at' => date('Y-m-d H:i:s'),
+                    'is_active' => 1,
+                ], 'template_id = :id', [':id' => (int)$existing['template_id']]);
+                unset($_SESSION['pdu_template_overwrite']);
+                App::flash('success', 'Overwrote PDU template "' . $name . '".');
+            } else {
+                Database::insert('pdu_templates', [
+                    'name' => $name,
+                    'vendor' => $vendor,
+                    'model' => $model,
+                    'fields_json' => $fieldsJson,
+                    'outlets_json' => $outletsJson,
+                    'is_active' => 1,
+                ]);
+                App::flash('success', 'Created PDU template "' . $name . '". Apply it when adding new PDUs.');
+            }
+            App::redirect('pages/power_pdus.php?id=' . $pid);
+        }
+
         if ($action === 'add_pdu' || $action === 'update_pdu') {
             $outputMode = power_normalize_output_mode($_POST['output_mode'] ?? 'outlets');
-            $numOutlets = max(1, min(128, (int)($_POST['num_outlets'] ?? 24)));
+            // Outlets: count comes from SNMP / template / detail editor — not create form type pickers
+            $numOutlets = max(0, min(128, (int)($_POST['num_outlets'] ?? 0)));
             $numBreakerSlots = max(1, min(128, (int)($_POST['num_breaker_slots'] ?? 42)));
+            $applyTplId = (int)($_POST['pdu_template_id'] ?? 0);
+            $tplOutlets = [];
+            $tplFields = [];
+            if ($action === 'add_pdu' && $applyTplId > 0) {
+                try {
+                    $tplRow = Database::fetchOne(
+                        'SELECT * FROM pdu_templates WHERE template_id = ? AND is_active = 1',
+                        [$applyTplId]
+                    );
+                    if ($tplRow) {
+                        $tplFields = json_decode((string)($tplRow['fields_json'] ?? '{}'), true) ?: [];
+                        $tplOutlets = json_decode((string)($tplRow['outlets_json'] ?? '[]'), true) ?: [];
+                        if ($numOutlets < 1 && !empty($tplFields['num_outlets'])) {
+                            $numOutlets = max(0, min(128, (int)$tplFields['num_outlets']));
+                        }
+                        if (!$tplOutlets && $numOutlets < 1 && is_array($tplOutlets)) {
+                            // keep 0
+                        }
+                        if ($numOutlets < 1 && $tplOutlets) {
+                            $numOutlets = count($tplOutlets);
+                        }
+                    }
+                } catch (Throwable $e) {
+                    $tplFields = [];
+                    $tplOutlets = [];
+                }
+            }
             $breakerLayout = power_normalize_breaker_layout($_POST['breaker_layout'] ?? 'odd_right_even_left');
             $breakerColumns = max(1, min(3, (int)($_POST['breaker_columns'] ?? 2)));
             if ($breakerLayout === 'single_column') {
@@ -178,44 +301,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 if ($pid <= 0) {
                     throw new RuntimeException('PDU id required.');
                 }
-                Database::update('pdus', $row, 'pdu_id = :id', [':id' => $pid]);
-                if ($outputMode === 'outlets') {
-                    $existingOutlets = (int) Database::fetchValue(
-                        'SELECT COUNT(*) FROM pdu_outlets WHERE pdu_id = ?',
-                        [$pid]
-                    );
-                    $outletType = $_POST['outlet_type'] ?? 'C13';
-                    $outletAmps = $_POST['outlet_amps'] !== '' ? (float)$_POST['outlet_amps'] : null;
-                    for ($i = $existingOutlets + 1; $i <= $numOutlets; $i++) {
-                        Database::insert('pdu_outlets', [
-                            'pdu_id' => $pid,
-                            'outlet_number' => $i,
-                            'label' => 'Outlet ' . $i,
-                            'outlet_type' => $outletType,
-                            'rated_amps' => $outletAmps,
-                        ]);
-                    }
+                // Don't zero out inventory count on edit if form omitted it
+                if ($outputMode === 'outlets' && $numOutlets < 1) {
+                    unset($row['num_outlets']);
                 }
+                Database::update('pdus', $row, 'pdu_id = :id', [':id' => $pid]);
                 power_sync_zone_voltage($zoneId, $elec, $scope);
                 App::flash('success', 'PDU updated.');
                 App::redirect('pages/power_pdus.php?id=' . $pid);
             }
 
             $row['is_active'] = 1;
+            if ($outputMode === 'outlets' && $numOutlets < 1) {
+                $row['num_outlets'] = 0;
+            }
             $pid = Database::insert('pdus', $row);
             if ($outputMode === 'outlets') {
-                $outletType = $_POST['outlet_type'] ?? 'C13';
-                $outletAmps = $_POST['outlet_amps'] !== '' ? (float)$_POST['outlet_amps'] : null;
-                for ($i = 1; $i <= $numOutlets; $i++) {
-                    Database::insert('pdu_outlets', [
-                        'pdu_id' => $pid,
-                        'outlet_number' => $i,
-                        'label' => 'Outlet ' . $i,
-                        'outlet_type' => $outletType,
-                        'rated_amps' => $outletAmps,
-                    ]);
+                if ($numOutlets > 0) {
+                    power_sync_outlet_inventory((int)$pid, $numOutlets, 'C13', null);
+                    if ($tplOutlets) {
+                        power_apply_outlet_defs((int)$pid, $tplOutlets, true);
+                    }
+                    $msg = 'PDU created with ' . $numOutlets . ' outlet inventory row(s)'
+                        . ($applyTplId > 0 ? ' from template' : '') . '.';
+                } else {
+                    $msg = 'PDU created. Outlet inventory will fill from SNMP poll (device outlet count) or a template.';
                 }
-                $msg = 'PDU created with ' . $numOutlets . ' outlets.';
             } else {
                 $msg = 'PDU created with ' . $numBreakerSlots . ' breaker positions. Add breakers below.';
             }
@@ -715,7 +826,24 @@ if ($pduId) {
         && trim((string)($p['ip_address'] ?? '')) !== '';
 
     layout_header('PDU: ' . $p['name'], $user, 'power_pdus');
+    $tplExists = !empty($_GET['tpl_exists']) && !empty($_SESSION['pdu_template_overwrite'])
+        && (int)($_SESSION['pdu_template_overwrite']['pdu_id'] ?? 0) === $pduId;
+    $tplExistName = $tplExists ? (string)($_SESSION['pdu_template_overwrite']['name'] ?? '') : '';
     ?>
+    <?php if ($tplExists): ?>
+    <div class="alert alert-warning" style="margin-bottom:1rem">
+        <strong>PDU template already exists:</strong> <?= App::e($tplExistName) ?>.
+        Overwrite with this PDU’s electrical settings and outlet types, or cancel.
+        <form method="post" style="display:inline;margin-left:.5rem">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="action" value="save_pdu_template">
+            <input type="hidden" name="pdu_id" value="<?= $pduId ?>">
+            <input type="hidden" name="overwrite" value="1">
+            <button class="btn btn-sm btn-primary" type="submit">Overwrite template</button>
+        </form>
+        <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/power_pdus.php?id=' . $pduId)) ?>">Cancel</a>
+    </div>
+    <?php endif; ?>
     <div class="flex-between mb-2">
         <div>
             <span class="badge"><?= App::e($p['pdu_scope'] ?? 'rack') ?></span>
@@ -732,6 +860,15 @@ if ($pduId) {
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power.php')) ?>">Dashboard</a>
             <?php if (AuthManager::canEditPower($user)): ?>
                 <button type="button" class="btn btn-primary" data-open-modal="modal-edit-pdu">Edit PDU</button>
+                <form method="post" style="display:inline" id="pduCreateTemplateForm">
+                    <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                    <input type="hidden" name="action" value="save_pdu_template">
+                    <input type="hidden" name="pdu_id" value="<?= $pduId ?>">
+                    <input type="hidden" name="overwrite" id="pduTplOverwrite" value="0">
+                    <button class="btn btn-secondary" type="submit" title="Save electrical + outlet layout as a reusable template (Vendor+Model)">
+                        Create PDU template
+                    </button>
+                </form>
             <?php endif; ?>
             <?php if ($canConfigSnmp):
                 $pduAutoPoll = !empty($p['snmp_auto_poll']);
@@ -1305,6 +1442,15 @@ if ($pduId) {
     } catch (Throwable $e) {
         $snmpProfiles = [];
     }
+    $pduTemplates = [];
+    try {
+        $pduTemplates = Database::fetchAll(
+            'SELECT template_id, name, vendor, model, fields_json, outlets_json
+             FROM pdu_templates WHERE is_active = 1 ORDER BY name'
+        );
+    } catch (Throwable $e) {
+        $pduTemplates = [];
+    }
     $mountLabel = ($p['mount_style'] ?? '') === 'u_mounted'
         ? ('U-mounted' . (!empty($p['position_u']) ? ' @ U' . (int)$p['position_u'] : '')
             . (!empty($p['u_height']) ? ' · ' . (int)$p['u_height'] . 'U' : ''))
@@ -1844,7 +1990,7 @@ if ($pduId) {
                                 </tr>
                             <?php endforeach; ?>
                             <?php if (!$outletRows): ?>
-                                <tr><td colspan="8" class="text-muted">No outlets — set inventory count above and save, or Poll after outlet OIDs are mapped.</td></tr>
+                                <tr><td colspan="8" class="text-muted">No outlets yet — Poll now (uses SNMP NumOutlets), apply a PDU template, or set inventory count and save.</td></tr>
                             <?php endif; ?>
                             </tbody>
                         </table>
@@ -1853,22 +1999,18 @@ if ($pduId) {
                     </form>
                     <?php endif; ?>
                     <p class="text-muted" style="font-size:.78rem;padding:.65rem 1rem;margin:0">
-                        Create-time outlet count/type is only a starting point — set mixed types per outlet here
-                        (or bulk range, e.g. 1–21 C13, 22–24 C19). Device mapping is still done from the cabinet
-                        rack PDU overlay or device Power Supply section.
+                        Outlet <strong>count</strong> comes from SNMP device properties on poll (e.g. APC NumOutlets)
+                        or a PDU template. Set mixed types/labels here (bulk range OK). Device mapping is from the
+                        cabinet rack overlay or device Power Supply section.
                         <?php if ($hasOutletLive): ?>
-                            Live values from last SNMP poll<?= !empty($p['last_poll_at'])
+                            Live A/W from last SNMP poll<?= !empty($p['last_poll_at'])
                                 ? ' · ' . App::e((string)$p['last_poll_at'])
                                 : '' ?>.
                         <?php elseif ($canConfigSnmp && !empty($p['last_poll_at'])): ?>
-                            <strong>No live outlet metrics from last poll.</strong>
-                            ColdAisle tried APC rPDU2 outlet OIDs; this agent/device did not answer them
-                            (common for floor PDUs / lab agents that only expose phase totals).
-                            Inventory types above still apply for mapping. Metered rack PDUs (e.g. AP88xx)
-                            publish per-outlet A/W and will fill these columns after Poll.
+                            <strong>No live per-outlet power</strong> (typical for phase-metered AP8861:
+                            inventory only). After labeling types, use <em>Create PDU template</em> to clone layout.
                         <?php elseif ($canConfigSnmp): ?>
-                            Live A/W/load columns appear after SNMP poll when the device exposes an outlet table
-                            (APC rPDU2 metered outlets).
+                            Poll to pull outlet count from the device; label types afterward.
                         <?php endif; ?>
                     </p>
                 </div>
@@ -2041,6 +2183,15 @@ try {
 } catch (Throwable $e) {
     $snmpProfiles = [];
 }
+$pduTemplates = [];
+try {
+    $pduTemplates = Database::fetchAll(
+        'SELECT template_id, name, vendor, model, fields_json, outlets_json
+         FROM pdu_templates WHERE is_active = 1 ORDER BY name'
+    );
+} catch (Throwable $e) {
+    $pduTemplates = [];
+}
 
 layout_header('PDU Management', $user, 'power_pdus');
 ?>
@@ -2191,7 +2342,7 @@ layout_header('PDU Management', $user, 'power_pdus');
                 'phase_wiring' => 'single',
                 'input_voltage' => 208,
                 'output_voltage' => 208,
-                'num_outlets' => 24,
+                'num_outlets' => 0,
                 'output_mode' => 'outlets',
                 'num_breaker_slots' => 42,
                 'breaker_layout' => 'odd_right_even_left',
