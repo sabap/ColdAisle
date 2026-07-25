@@ -338,6 +338,45 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
   font-size: .88rem;
 }
 .power-chart-loading .power-chart-empty { opacity: .7; }
+.power-chart-outage-badge {
+  display: inline-block;
+  margin-left: .5rem;
+  padding: .1rem .4rem;
+  border-radius: 999px;
+  font-size: .65rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  vertical-align: middle;
+  text-transform: none;
+}
+.power-chart-phase-legend {
+  margin-left: .45rem;
+  font-size: .65rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+}
+.power-chart-phase-legend i {
+  display: inline-block;
+  width: .55rem;
+  height: .55rem;
+  border-radius: 2px;
+  margin: 0 .2rem 0 .35rem;
+  vertical-align: middle;
+}
+.power-outage-summary {
+  font-size: .88rem;
+  padding: .55rem .75rem;
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fecaca;
+}
+.power-outage-summary[hidden] { display: none !important; }
 .zone-card .power-chart-sm {
   margin-top: .55rem;
   border-radius: 8px;

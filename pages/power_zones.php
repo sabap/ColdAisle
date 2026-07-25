@@ -277,9 +277,10 @@ if ($zoneId) {
     <div class="card power-history-wide mb-2" data-power-history data-scope="zone" data-id="<?= (int)$zoneId ?>" data-hours="24">
         <div class="card-header flex-between">
             <h2 style="margin:0;font-size:1.05rem">Last 24 hours — this zone</h2>
-            <span class="text-muted" style="font-size:.8rem">Sum of zone PDUs · 5‑min buckets</span>
+            <span class="text-muted" style="font-size:.8rem">Zone PDUs · red markers = phase outages</span>
         </div>
         <div class="card-body power-history-body">
+            <div class="power-outage-summary" data-outage-summary hidden></div>
             <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Output (usage)" data-color="#38bdf8" data-height="200"></div>
             <div class="power-chart power-chart-lg" data-metric="volts" data-unit="V" data-label="Input voltage (avg L–N)" data-color="#a78bfa" data-height="160"></div>
         </div>
@@ -661,7 +662,7 @@ if ($zoneId) {
     })();
     </script>
     <?php endif; ?>
-    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=2"></script>
+    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=3"></script>
     <?php
     layout_footer();
     exit;
@@ -918,5 +919,5 @@ layout_header('Power Zones', $user, 'power_zones');
 })();
 </script>
 <?php endif; ?>
-<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=2"></script>
+<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=3"></script>
 <?php layout_footer(); ?>
