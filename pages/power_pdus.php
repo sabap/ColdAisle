@@ -1856,12 +1856,19 @@ if ($pduId) {
                         Create-time outlet count/type is only a starting point — set mixed types per outlet here
                         (or bulk range, e.g. 1–21 C13, 22–24 C19). Device mapping is still done from the cabinet
                         rack PDU overlay or device Power Supply section.
-                        <?php if (!$hasOutletLive && $canConfigSnmp): ?>
-                            Live A/W/load columns appear after SNMP poll (APC rPDU2 outlet table or Discover).
-                        <?php elseif ($hasOutletLive): ?>
+                        <?php if ($hasOutletLive): ?>
                             Live values from last SNMP poll<?= !empty($p['last_poll_at'])
                                 ? ' · ' . App::e((string)$p['last_poll_at'])
                                 : '' ?>.
+                        <?php elseif ($canConfigSnmp && !empty($p['last_poll_at'])): ?>
+                            <strong>No live outlet metrics from last poll.</strong>
+                            ColdAisle tried APC rPDU2 outlet OIDs; this agent/device did not answer them
+                            (common for floor PDUs / lab agents that only expose phase totals).
+                            Inventory types above still apply for mapping. Metered rack PDUs (e.g. AP88xx)
+                            publish per-outlet A/W and will fill these columns after Poll.
+                        <?php elseif ($canConfigSnmp): ?>
+                            Live A/W/load columns appear after SNMP poll when the device exposes an outlet table
+                            (APC rPDU2 metered outlets).
                         <?php endif; ?>
                     </p>
                 </div>

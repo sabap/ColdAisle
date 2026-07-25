@@ -257,6 +257,10 @@ try {
             $outletData = is_string($outletJson) ? json_decode($outletJson, true) : null;
             if (is_array($outletData) && $outletData) {
                 $bits[] = count($outletData) . ' outlet(s)';
+            } elseif (!empty($result['outlet_diag']['message'])
+                && ($result['outlet_diag']['status'] ?? '') !== 'ok'
+            ) {
+                // already folded into result.message for form poll; keep JSON detail
             }
             App::json([
                 'ok' => true,
@@ -266,6 +270,7 @@ try {
                 'last_poll_amps' => $fresh['last_poll_amps'] ?? null,
                 'last_poll_phases' => is_array($phaseData) ? $phaseData : null,
                 'last_poll_outlets' => is_array($outletData) ? $outletData : null,
+                'outlet_diag' => $result['outlet_diag'] ?? null,
                 'message' => implode(' ', $bits),
             ]);
         }
