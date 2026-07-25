@@ -374,7 +374,28 @@ class SnmpPoller
         // History sample (watts/amps/volts/phases) for 24h charts & reports
         if (class_exists('PowerHistoryService')) {
             try {
-                PowerHistoryService::recordSample($pduId, $watts, $amps, $phases);
+                $nominalLn = null;
+                try {
+                    $pduRow = Database::fetchOne(
+                        'SELECT input_voltage, input_voltage_ln, rated_volts FROM pdus WHERE pdu_id = ?',
+                        [$pduId]
+                    );
+                    if ($pduRow) {
+                        if (isset($pduRow['input_voltage_ln']) && is_numeric($pduRow['input_voltage_ln'])) {
+                            $nominalLn = (float)$pduRow['input_voltage_ln'];
+                        } elseif (isset($pduRow['input_voltage']) && is_numeric($pduRow['input_voltage'])) {
+                            // L–L often √3 × L–N for wye; if 208/240 treat as L–L
+                            $ll = (float)$pduRow['input_voltage'];
+                            $nominalLn = ($ll >= 180) ? round($ll / 1.732, 1) : $ll;
+                        } elseif (isset($pduRow['rated_volts']) && is_numeric($pduRow['rated_volts'])) {
+                            $ll = (float)$pduRow['rated_volts'];
+                            $nominalLn = ($ll >= 180) ? round($ll / 1.732, 1) : $ll;
+                        }
+                    }
+                } catch (Throwable $e) {
+                    // ignore
+                }
+                PowerHistoryService::recordSample($pduId, $watts, $amps, $phases, $nominalLn);
             } catch (Throwable $e) {
                 // Fallback: legacy minimal insert
                 if ($watts !== null || $amps !== null) {

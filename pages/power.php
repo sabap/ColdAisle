@@ -165,9 +165,10 @@ layout_header('Power Dashboard', $user, 'power');
 <div class="card power-history-wide mb-2" data-power-history data-scope="site" data-hours="24">
     <div class="card-header flex-between">
         <h2 style="margin:0">Last 24 hours — facility</h2>
-        <span class="text-muted" style="font-size:.8rem">Sum of polled PDUs · 5‑min buckets</span>
+        <span class="text-muted" style="font-size:.8rem">Sum of polled PDUs · 5‑min buckets · red markers = phase outages</span>
     </div>
     <div class="card-body power-history-body">
+        <div class="power-outage-summary" data-outage-summary hidden></div>
         <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Output (usage)" data-color="#38bdf8" data-height="200"></div>
         <div class="power-chart power-chart-lg" data-metric="volts" data-unit="V" data-label="Input voltage (avg L–N)" data-color="#a78bfa" data-height="160"></div>
     </div>
@@ -370,5 +371,5 @@ layout_header('Power Dashboard', $user, 'power');
         </table>
     </div>
 </div>
-<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=2"></script>
+<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=3"></script>
 <?php layout_footer(); ?>
