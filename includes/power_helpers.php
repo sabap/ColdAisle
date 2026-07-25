@@ -93,6 +93,26 @@ function power_wiring_label(?string $wiring, int $phases = 1): string
     ][$wiring ?? ''] ?? ($phases . 'φ');
 }
 
+/** @return list<string> PDU input connector options (plug / inlet). */
+function power_pdu_input_types(): array
+{
+    return [
+        'L6-30P',
+        'L6-20P',
+        'L5-30P',
+        'L5-20P',
+        'L14-30P',
+        'L21-20P',
+        'L21-30P',
+        'CS8365',
+        'IEC 60309 3P+N+E 32A',
+        'IEC 60309 3P+N+E 16A',
+        'Hardwired',
+        'C20',
+        'Other',
+    ];
+}
+
 /**
  * Decode pdus.last_poll_phases JSON for UI.
  *

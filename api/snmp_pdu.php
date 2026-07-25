@@ -114,6 +114,18 @@ try {
             $templateName = SnmpDiscover::templateName($prereqs['vendor'], $prereqs['model']);
             $existing = SnmpDiscover::findSiteTemplateByName($templateName);
 
+            $serialApplied = false;
+            $serial = $result['serial_no'] ?? null;
+            if (is_string($serial) && $serial !== '') {
+                $serialApplied = SnmpDiscover::applySerialToPduIfEmpty($id, $serial);
+            }
+            $msg = (string)($result['message'] ?? '');
+            if ($serialApplied) {
+                $msg .= ' Serial number saved on PDU: ' . $serial . '.';
+            } elseif (is_string($serial) && $serial !== '' && !empty($pdu['serial_no'])) {
+                $msg .= ' Serial from device: ' . $serial . ' (PDU field already set).';
+            }
+
             App::json([
                 'ok' => true,
                 'pdu_id' => $id,
@@ -122,7 +134,10 @@ try {
                 'candidates' => $result['candidates'],
                 'proposed_map' => $result['proposed_map'],
                 'walk_count' => $result['walk_count'],
-                'message' => $result['message'],
+                'message' => $msg,
+                'serial_no' => $serial,
+                'serial_oid' => $result['serial_oid'] ?? null,
+                'serial_applied' => $serialApplied,
                 'template_name' => $templateName,
                 'vendor' => $prereqs['vendor'],
                 'model' => $prereqs['model'],
@@ -170,6 +185,12 @@ try {
             // Link template to PDU only (no snmp_targets row — Poll now / auto-poll use the template)
             SnmpDiscover::assignTemplateToPdu($id, (int)$saved['template_id']);
 
+            // Optional serial from discover UI / map
+            $serialApplied = false;
+            if (!empty($data['serial_no'])) {
+                $serialApplied = SnmpDiscover::applySerialToPduIfEmpty($id, (string)$data['serial_no']);
+            }
+
             $tpl = SnmpDiscover::getSiteTemplate((int)$saved['template_id']);
             AuditService::log(
                 (int)$user['user_id'],
@@ -180,18 +201,25 @@ try {
                 [
                     'template_id' => $saved['template_id'],
                     'name' => $saved['name'],
+                    'serial_applied' => $serialApplied,
                 ]
             );
+
+            $message = (!empty($saved['overwritten'])
+                    ? 'Overwrote template "' . $saved['name'] . '"'
+                    : 'Created template "' . $saved['name'] . '"')
+                . ' and assigned to this PDU. Enable Scheduled poll to include it in the scheduler.';
+            if ($serialApplied) {
+                $message .= ' Serial number saved on PDU.';
+            }
 
             App::json([
                 'ok' => true,
                 'created' => !empty($saved['created']),
                 'overwritten' => !empty($saved['overwritten']),
+                'serial_applied' => $serialApplied,
                 'template' => snmp_pdu_template_public($tpl),
-                'message' => (!empty($saved['overwritten'])
-                        ? 'Overwrote template "' . $saved['name'] . '"'
-                        : 'Created template "' . $saved['name'] . '"')
-                    . ' and assigned to this PDU. Enable Scheduled poll to include it in the scheduler.',
+                'message' => $message,
             ]);
         }
 

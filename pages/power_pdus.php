@@ -971,6 +971,11 @@ if ($pduId) {
             document.getElementById('pduSnmpDiscWalk').textContent = String(data.walk_count != null ? data.walk_count : '—');
             document.getElementById('pduSnmpDiscSys').textContent = data.sysDescr || '—';
             document.getElementById('pduSnmpDiscMessage').textContent = data.message || '';
+            if (data.serial_applied && data.serial_no) {
+                toast('Serial number saved on PDU: ' + data.serial_no, 'success');
+            } else if (data.serial_no) {
+                toast('Device serial: ' + data.serial_no, 'info');
+            }
 
             var mapUl = document.getElementById('pduSnmpProposedMap');
             mapUl.innerHTML = '';
@@ -1064,7 +1069,8 @@ if ($pduId) {
                 action: 'save_template',
                 pdu_id: pduId,
                 oid_map: map,
-                overwrite: !!overwrite
+                overwrite: !!overwrite,
+                serial_no: (lastDiscover && lastDiscover.serial_no) ? lastDiscover.serial_no : null
             }).then(function (data) {
                 toast(data.message || 'Template saved', 'success');
                 setTimeout(function () { window.location.reload(); }, 600);

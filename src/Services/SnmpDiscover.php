@@ -92,6 +92,9 @@ class SnmpDiscover
             '1.3.6.1.4.1.99999.2.3.0',
             '1.3.6.1.4.1.318.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.318.1.1.1.4.2.8.0',
+            '1.3.6.1.4.1.318.1.1.12.1.6.0', // rPDUIdentSerialNumber
+            '1.3.6.1.4.1.318.1.1.26.2.1.9.0', // rPDU2IdentSerialNumber (scalar form)
+            '1.3.6.1.4.1.318.1.1.26.2.1.9.1',
             '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.1',
             '1.3.6.1.4.1.318.1.1.26.6.3.1.7.1', // rPDU2 phase power-ish (common)
             '1.3.6.1.4.1.3808.1.1.1.4.2.3.0',
@@ -207,6 +210,22 @@ class SnmpDiscover
             ];
         }
 
+        // Serial number from walk / leaf GETs (also propose map key)
+        $serialHit = self::extractSerialFromCollected($collected);
+        if ($serialHit) {
+            $proposed['serial_no'] = $serialHit['oid'];
+            // Surface as a top identity candidate even if filtered as "noise"
+            array_unshift($scored, [
+                'oid' => $serialHit['oid'],
+                'name' => $serialHit['name'],
+                'module' => $serialHit['module'],
+                'value' => $serialHit['value'],
+                'numeric' => null,
+                'score' => 100,
+                'hint' => 'PDU serial number → serial_no field',
+            ]);
+        }
+
         // UI table: high-signal only
         $candidates = [];
         foreach ($scored as $c) {
@@ -239,6 +258,9 @@ class SnmpDiscover
             if ($noiseSkipped > 0) {
                 $msg .= ' (filtered ' . $noiseSkipped . ' config/identity OIDs)';
             }
+            if ($serialHit) {
+                $msg .= '; serial ' . $serialHit['value'];
+            }
             if ($namedCount) {
                 $msg .= '; ' . $namedCount . ' with MIB names';
             }
@@ -268,6 +290,8 @@ class SnmpDiscover
             'sysDescr' => is_string($sysDescr) ? $sysDescr : null,
             'candidates' => $candidates,
             'proposed_map' => $proposed,
+            'serial_no' => $serialHit['value'] ?? null,
+            'serial_oid' => $serialHit['oid'] ?? null,
             'walk_count' => count($collected),
             'named_count' => $namedCount,
             'mibs_loaded' => $mibsLoaded,
@@ -275,6 +299,130 @@ class SnmpDiscover
             'mib_index_hits' => $indexHits,
             'message' => $msg,
         ];
+    }
+
+    /**
+     * Find manufacturer serial from walked OIDs (APC rPDUIdentSerialNumber, etc.).
+     *
+     * @param array<string,array{raw:mixed,name:?string,module:?string}> $collected
+     * @return array{oid:string,value:string,name:?string,module:?string}|null
+     */
+    private static function extractSerialFromCollected(array $collected): ?array
+    {
+        $best = null;
+        $bestScore = -1;
+        foreach ($collected as $oid => $meta) {
+            $name = strtolower((string)($meta['name'] ?? ''));
+            $mapOid = (string)$oid;
+            if (preg_match('/^\d+(?:\.\d+)*$/', $mapOid)) {
+                $mapOid = class_exists('MibService')
+                    ? MibService::normalizeNumericOid($mapOid)
+                    : self::normalizeNumericOidLocal($mapOid);
+            }
+            // Resolve name if missing
+            $dispName = $meta['name'] ?? null;
+            $module = $meta['module'] ?? null;
+            if (!$dispName && class_exists('MibService') && preg_match('/^\d+(?:\.\d+)*$/', $mapOid)) {
+                $resolved = MibService::resolveOidName($mapOid);
+                if ($resolved) {
+                    $dispName = $resolved['name'];
+                    $module = $resolved['module'];
+                    $name = strtolower($dispName);
+                }
+            }
+
+            $hay = $name . ' ' . strtolower((string)$dispName) . ' ' . $mapOid;
+            // Prefer PDU body serial over NMC card serial
+            $score = 0;
+            if (preg_match('/identserialnumber|ident.*serial(?!.*nmc)/', $hay)
+                || preg_match('/rpduidentserial|rpdu2identserialnumber/', $hay)
+            ) {
+                $score = 50;
+            } elseif (preg_match('/serialnumber|serial_no|serialnum/', $hay)
+                && !preg_match('/nmc|battery|pack|outlet|module|card/', $hay)
+            ) {
+                $score = 30;
+            } elseif (preg_match('/nmcserial/', $hay)) {
+                $score = 10; // last resort
+            } else {
+                continue;
+            }
+
+            $val = self::cleanSerialValue($meta['raw'] ?? null);
+            if ($val === null || $val === '') {
+                continue;
+            }
+            // Known APC OIDs boost
+            if (str_starts_with($mapOid, '1.3.6.1.4.1.318.1.1.12.1.6')
+                || str_starts_with($mapOid, '1.3.6.1.4.1.318.1.1.26.2.1.9')
+            ) {
+                $score += 20;
+            }
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $best = [
+                    'oid' => $mapOid,
+                    'value' => $val,
+                    'name' => $dispName,
+                    'module' => $module,
+                ];
+            }
+        }
+        return $best;
+    }
+
+    /** @param mixed $raw */
+    public static function cleanSerialValue($raw): ?string
+    {
+        if ($raw === null || $raw === false) {
+            return null;
+        }
+        if (is_int($raw) || is_float($raw)) {
+            $s = (string)$raw;
+        } elseif (is_string($raw)) {
+            $s = trim($raw);
+            // Strip SNMP type prefix: STRING: "ABC123"
+            if (preg_match('/^(?:STRING|OCTET\s*STRING|Hex-STRING)\s*:\s*(.*)$/i', $s, $m)) {
+                $s = trim($m[1]);
+            }
+            $s = trim($s, " \t\"'");
+        } else {
+            return null;
+        }
+        if ($s === '' || strcasecmp($s, 'null') === 0 || $s === '""') {
+            return null;
+        }
+        // Reject obvious non-serials
+        if (strlen($s) > 80 || preg_match('/[\r\n]/', $s)) {
+            return null;
+        }
+        return $s;
+    }
+
+    /**
+     * Write serial onto PDU when empty (does not overwrite a user-entered serial).
+     * @return bool true if the row was updated
+     */
+    public static function applySerialToPduIfEmpty(int $pduId, ?string $serial): bool
+    {
+        $serial = self::cleanSerialValue($serial);
+        if ($serial === null || $serial === '' || $pduId < 1) {
+            return false;
+        }
+        try {
+            $row = Database::fetchOne('SELECT serial_no FROM pdus WHERE pdu_id = ?', [$pduId]);
+            if (!$row) {
+                return false;
+            }
+            $cur = trim((string)($row['serial_no'] ?? ''));
+            if ($cur !== '') {
+                return false;
+            }
+            Database::update('pdus', ['serial_no' => $serial], 'pdu_id = :id', [':id' => $pduId]);
+            return true;
+        } catch (Throwable $e) {
+            return false;
+        }
     }
 
     /** @param 'module'|'numeric' $mode */

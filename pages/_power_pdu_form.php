@@ -134,7 +134,7 @@ $formModal = !empty($formModal);
     <div class="form-row"><label>Input connector</label>
         <select class="form-control" name="input_type" id="power_input_type">
             <option value="">—</option>
-            <?php foreach (['L6-30P','L6-20P','L5-30P','L5-20P','L14-30P','CS8365','IEC 60309 3P+N+E 32A','IEC 60309 3P+N+E 16A','Hardwired','C20','Other'] as $t): ?>
+            <?php foreach (power_pdu_input_types() as $t): ?>
                 <option <?= ($edit['input_type'] ?? '') === $t ? 'selected' : '' ?>><?= App::e($t) ?></option>
             <?php endforeach; ?>
         </select>
