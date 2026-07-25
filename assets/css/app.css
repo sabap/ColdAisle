@@ -283,6 +283,70 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
 .attn-list li.attn-danger span { background: #7f1d1d; color: #fca5a5; }
 .power-quick-actions { display: flex; flex-direction: column; gap: .5rem; }
 .btn-block { width: 100%; justify-content: center; text-align: center; }
+/* Power history charts */
+.power-history-wide { margin-bottom: 1.25rem; }
+.power-history-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1rem 1.1rem 1.15rem;
+}
+.power-chart {
+  position: relative;
+  min-height: 100px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(15,23,42,.55), rgba(15,23,42,.15));
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.power-chart-lg { min-height: 200px; }
+.power-chart-sm { min-height: 96px; }
+.power-chart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: .55rem .85rem 0;
+  gap: .75rem;
+}
+.power-chart-label {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.power-chart-now {
+  font-size: 1.05rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.power-chart-svg { display: block; width: 100%; }
+.power-chart .pc-grid { stroke: rgba(148,163,184,.12); stroke-width: 1; }
+.power-chart .pc-axis {
+  fill: var(--muted);
+  font-size: 10px;
+  font-family: inherit;
+}
+.power-chart .pc-line {
+  filter: drop-shadow(0 0 6px rgba(56,189,248,.35));
+}
+.power-chart-empty {
+  padding: 1.5rem 1rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: .88rem;
+}
+.power-chart-loading .power-chart-empty { opacity: .7; }
+.zone-card .power-chart-sm {
+  margin-top: .55rem;
+  border-radius: 8px;
+  min-height: 72px;
+}
+.zone-card .power-chart-head { padding: .35rem .5rem 0; }
+.zone-card .power-chart-now { font-size: .9rem; }
+.zone-card .power-chart-label { font-size: .65rem; }
+
 .btn-ghost {
   background: transparent;
   border: 1px solid var(--border);

@@ -598,7 +598,10 @@ CREATE TABLE pdu_readings (
     pdu_id INT NOT NULL REFERENCES pdus(pdu_id) ON DELETE CASCADE,
     watts DECIMAL(12,2) NULL,
     amps DECIMAL(10,2) NULL,
-    volts DECIMAL(8,2) NULL,
+    volts DECIMAL(8,2) NULL, -- avg L–N when phases present
+    volts_ll DECIMAL(8,2) NULL, -- avg L–L when available
+    phases_json NVARCHAR(MAX) NULL, -- compact per-phase snapshot for history
+    outage_phases NVARCHAR(40) NULL, -- e.g. L1,L3 crude flags
     kwh DECIMAL(14,4) NULL,
     temperature_c DECIMAL(6,2) NULL,
     humidity_pct DECIMAL(5,2) NULL,
