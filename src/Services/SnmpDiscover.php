@@ -22,6 +22,13 @@ class SnmpDiscover
 
     private const MAX_OIDS = 400;
     private const WALK_TIMEOUT_SEC = 8;
+    /** Candidates shown in Discover UI (high-signal only). */
+    private const MAX_DISPLAY_CANDIDATES = 40;
+    /** Minimum score to appear in the Discover table. */
+    private const MIN_DISPLAY_SCORE = 14;
+    /** Wider pool used only for proposeMap (still noise-filtered). */
+    private const MAX_PROPOSE_POOL = 120;
+    private const MIN_PROPOSE_SCORE = 6;
 
     /**
      * @param array{
@@ -117,9 +124,10 @@ class SnmpDiscover
             $indexSize = MibService::oidIndexSize();
         }
 
-        $candidates = [];
+        $scored = [];
         $namedCount = 0;
         $indexHits = 0;
+        $noiseSkipped = 0;
         foreach ($collected as $oid => $meta) {
             $raw = $meta['raw'];
             $name = $meta['name'] ?? null;
@@ -148,15 +156,18 @@ class SnmpDiscover
                 }
             }
 
+            // Hard-drop config / threshold / reset / identity noise before scoring
+            if (self::isDiscoverNoise($mapOid, $name, $raw)) {
+                $noiseSkipped++;
+                continue;
+            }
+
             $num = self::toNumber($raw);
             $score = self::scoreOid($mapOid, $name, $raw, $num);
             if ($score < 1) {
                 continue;
             }
-            if ($name) {
-                $namedCount++;
-            }
-            $candidates[] = [
+            $scored[] = [
                 'oid' => $mapOid,
                 'name' => $name,
                 'module' => $module,
@@ -166,7 +177,7 @@ class SnmpDiscover
                 'hint' => self::hintFor($mapOid, $name, $raw, $num),
             ];
         }
-        usort($candidates, static function ($a, $b) {
+        usort($scored, static function ($a, $b) {
             $cmp = $b['score'] <=> $a['score'];
             if ($cmp !== 0) {
                 return $cmp;
@@ -176,9 +187,19 @@ class SnmpDiscover
             $bn = $b['name'] ? 1 : 0;
             return $bn <=> $an;
         });
-        $candidates = array_slice($candidates, 0, 80);
 
-        $proposed = self::proposeMap($candidates, $sysDescr);
+        // Proposed map uses a wider noise-filtered pool (not only the UI table)
+        $proposePool = [];
+        foreach ($scored as $c) {
+            if (($c['score'] ?? 0) < self::MIN_PROPOSE_SCORE) {
+                continue;
+            }
+            $proposePool[] = $c;
+            if (count($proposePool) >= self::MAX_PROPOSE_POOL) {
+                break;
+            }
+        }
+        $proposed = self::proposeMap($proposePool, $sysDescr);
         if (!$proposed) {
             $proposed = [
                 'sysDescr' => '1.3.6.1.2.1.1.1.0',
@@ -186,9 +207,38 @@ class SnmpDiscover
             ];
         }
 
+        // UI table: high-signal only
+        $candidates = [];
+        foreach ($scored as $c) {
+            if (($c['score'] ?? 0) < self::MIN_DISPLAY_SCORE) {
+                continue;
+            }
+            if (!empty($c['name'])) {
+                $namedCount++;
+            }
+            $candidates[] = $c;
+            if (count($candidates) >= self::MAX_DISPLAY_CANDIDATES) {
+                break;
+            }
+        }
+        // If everything scored mid-tier, show top slice so Discover is not empty
+        if (!$candidates && $scored) {
+            $candidates = array_slice($scored, 0, min(20, count($scored)));
+            $namedCount = 0;
+            foreach ($candidates as $c) {
+                if (!empty($c['name'])) {
+                    $namedCount++;
+                }
+            }
+        }
+
         $msg = 'Walked ' . count($collected) . ' object(s)';
         if (count($candidates)) {
-            $msg = 'Found ' . count($candidates) . ' candidate OID(s) from ' . count($collected) . ' objects';
+            $msg = 'Found ' . count($candidates) . ' high-signal candidate OID(s) from '
+                . count($collected) . ' objects';
+            if ($noiseSkipped > 0) {
+                $msg .= ' (filtered ' . $noiseSkipped . ' config/identity OIDs)';
+            }
             if ($namedCount) {
                 $msg .= '; ' . $namedCount . ' with MIB names';
             }
@@ -512,6 +562,51 @@ class SnmpDiscover
         return strtolower(($name ?? '') . ' ' . $oid);
     }
 
+    /**
+     * Hard-reject OIDs that clutter Discover (config, thresholds, resets, identity).
+     * Live status metrics (power/current/voltage/VA/PF/peak/PS) return false.
+     */
+    private static function isDiscoverNoise(string $oid, ?string $name, $raw): bool
+    {
+        $s = self::nameHaystack($oid, $name);
+
+        // Always drop pure identity / non-metric strings (model AP8861, timestamps as text)
+        if (self::isNonMetricString($raw)) {
+            // Allow only if name is clearly a live metric (rare string enums)
+            if (!preg_match('/loadstate|powersupply.*status|status$/i', $s)) {
+                return true;
+            }
+        }
+
+        // Config / write / audit — never useful as map candidates in the UI list
+        if (preg_match(
+            '/\bconfig\b|threshold|nearoverload|overloadpower|lowload|'
+            . 'reset|timestamp|starttime|start_time|'
+            . 'orientation|displayorientation|hardwarerev|firmwarerev|'
+            . 'identmodel|identserial|identname|partnumber|'
+            . 'trap|notification|control\b|initiate|'
+            . 'phaseconfig|deviceconfig|outletconfig|'
+            . 'index\b|numphases|numoutlets|module\b|'
+            . 'peakpowerstart|peakcurrentstart|peakpowerreset|peakcurrentreset/',
+            $s
+        )) {
+            // Keep useful rating / max phase current (not a threshold alarm point)
+            if (preg_match('/maxphasecurrentrating|identdevicerating|devicerating|maxcurrentrating/', $s)
+                && !preg_match('/threshold|near|overload|lowload|reset/', $s)
+            ) {
+                return false;
+            }
+            return true;
+        }
+
+        // Table index / entry shells without a metric leaf
+        if ($name && preg_match('/::(.*)(table|entry)$/i', $name)) {
+            return true;
+        }
+
+        return false;
+    }
+
     private static function scoreOid(string $oid, ?string $name, $raw, ?float $num): int
     {
         $score = 0;
@@ -535,86 +630,79 @@ class SnmpDiscover
             $score -= 6;
         }
 
-        // Config / enum / audit noise — not primary load candidates
-        if (preg_match(
-            '/config|threshold|reset|timestamp|starttime|orientation|display|'
-            . 'powerfactor|powersupply|properties|identhardware|peakpowerstart|peakcurrentstart/',
-            $s
-        )) {
-            $score -= 12;
+        // Soft demote remaining secondary enums (PS / load state still allowed)
+        if (preg_match('/properties|identhardware|identdeviceorientation/', $s)) {
+            $score -= 10;
         }
 
         // --- MIB symbolic name scoring (Phase 1.5) ---
         if ($name) {
-            $score += 3; // any resolved name is more useful than pure numeric
-            // Strong power/watt signals (not PowerFactor / PowerSupply)
+            $score += 2; // resolved name helps; keep modest so noise can't ride on it
+
+            // Strong live power / watts
             if (preg_match(
                 '/watt|activepower|realpower|totalpower|phasepower|devicepower|powerwatts|'
-                . 'statuspower(?!factor)|identdevicepower(?!factor|va)/',
+                . 'statuspower(?!factor)|identdevicepowerwatts|identdevicepower(?!factor|va)/',
                 $s
-            )
-                || (preg_match('/(?<![a-z])power(?![a-z-])/', $s)
-                    && !preg_match('/powerfactor|powersupply|threshold|config|apparent/', $s))
+            )) {
+                $score += 14;
+            }
+            if (preg_match('/apparentpower|powerva|identdevicepowerva/', $s)) {
+                $score += 10;
+            }
+            if (preg_match('/powerfactor/', $s)) {
+                $score += 8;
+            }
+            if (preg_match('/peakcurrent|peakpower/', $s) && !preg_match('/reset|timestamp|start/', $s)) {
+                $score += 8;
+            }
+            // APC high-value leaves
+            if (preg_match('/rpdu2?phasestatuspower(?!factor)|rpduidentdevicepowerwatts|upsadvoutput/', $s)) {
+                $score += 12;
+            } elseif (preg_match('/rpdu2phasestatus(current|voltage|apparent|powerfactor|peakcurrent|loadstate)/', $s)) {
+                $score += 10;
+            } elseif (preg_match('/rpdu2phasetophase|phasetophasestatusvoltage/', $s)) {
+                $score += 8;
+            } elseif (preg_match('/powersupply\d?status|powersupplyalarm/', $s)) {
+                $score += 6;
+            }
+            // Current / amps (live status only — config already filtered)
+            if (preg_match('/statuscurrent|phasestatuscurrent|loadstatusload|(?<![a-z])current(?![a-z])|\bamps?\b/', $s)
+                && !preg_match('/peak|threshold|config/', $s)
             ) {
                 $score += 12;
             }
-            if (preg_match('/apparentpower|powerva/', $s) && !preg_match('/config|threshold/', $s)) {
-                $score += 6;
-            }
-            if (preg_match('/powerfactor/', $s) && !preg_match('/config|threshold/', $s)) {
-                $score += 4;
-            }
-            if (preg_match('/peakcurrent/', $s) && !preg_match('/reset|timestamp|start/', $s)) {
-                $score += 6;
-            }
-            // APC PowerNet leaf patterns (not the module prefix alone)
-            if (preg_match('/rpdu2?phasestatuspower(?!factor)|rpduidentdevicepowerwatts|upsadvoutput/', $s)) {
-                $score += 14;
-            } elseif (preg_match('/rpdu2?.*statuspower(?!factor)|identdevicepower(?!factor)/', $s)) {
-                $score += 10;
-            }
-            // Current / amps
-            if (preg_match('/\bamp|current|amps\b|phase.*current|loadstatusload|phasestatuscurrent/', $s)
-                && !preg_match('/threshold|config|reset|timestamp/', $s)
-            ) {
-                $score += 10;
-            }
-            // Load % (often 0–100)
-            if (preg_match('/\bload\b|outputload|percentload|loadpercent/', $s)
-                && !preg_match('/download|payload|threshold|config|loadstate/', $s)
-            ) {
-                $score += 6;
-                if ($num !== null && $num >= 0 && $num <= 100) {
-                    $score += 4;
-                }
-            }
-            // Voltage / temp (secondary)
-            if (preg_match('/\bvolt|voltage\b/', $s) && !preg_match('/config/', $s)) {
-                $score += 3;
+            // Voltage
+            if (preg_match('/statusvoltage|phasestatusvoltage|phasetophase|(?<![a-z])voltage(?![a-z])/', $s)) {
+                $score += 8;
             }
             if (preg_match('/\btemp|temperature\b/', $s)) {
-                $score += 3;
-            }
-            // Prefer phase/device totals over high-index outlet sensors
-            if (preg_match('/phase|device|ident|total|bank/', $s) && !preg_match('/outlet|receptacle|socket/', $s)) {
-                $score += 3;
-            }
-            if (preg_match('/outlet|receptacle/', $s)) {
-                $score -= 2; // still valid, but lower priority for "device load"
-            }
-            // Config / string junk
-            if (preg_match('/serial|name|location|contact|descr|model|firmware|version|statusenum|trap|identmodel|partnumber|sku/', $s)
-                && !preg_match('/load|power|amp|watt|current/', $s)
-            ) {
-                $score -= 8;
-            }
-        } else {
-            // Numeric-only: weaker keyword hits from OID path alone
-            if (str_contains($s, 'watt') || str_contains($s, 'power')) {
                 $score += 4;
             }
-            if (str_contains($s, 'amp') || str_contains($s, 'current')) {
+            // Prefer phase/device totals over outlet sensors
+            if (preg_match('/phasestatus|identdevice|devicestatus|phasetophase/', $s)) {
+                $score += 4;
+            }
+            if (preg_match('/outlet|receptacle/', $s)) {
+                $score -= 6;
+            }
+            // Rating for util %
+            if (preg_match('/maxphasecurrentrating|identdevicerating|maxcurrentrating/', $s)) {
+                $score += 6;
+            }
+            // Identity leftovers
+            if (preg_match('/serial|location|contact|descr|model|firmware|version|trap|sku/', $s)
+                && !preg_match('/load|power|amp|watt|current|volt/', $s)
+            ) {
+                $score -= 10;
+            }
+        } else {
+            // Numeric-only: weak; need clear value heuristics
+            if (str_contains($s, 'watt') || (str_contains($s, 'power') && !str_contains($s, 'factor'))) {
                 $score += 3;
+            }
+            if (str_contains($s, 'amp') || str_contains($s, 'current')) {
+                $score += 2;
             }
         }
 
@@ -624,8 +712,8 @@ class SnmpDiscover
             if ($num > 0 && $num < 500000) {
                 $score += 1;
             }
-            // Plausible total watts
-            if ($num >= 50 && $num <= 200000) {
+            // Plausible total watts (device totals, not tiny enums)
+            if ($num >= 50 && $num <= 200000 && preg_match('/watt|power(?!factor)|statuspower/', $s)) {
                 $score += 2;
             }
         }
@@ -634,8 +722,7 @@ class SnmpDiscover
         if ($nonMetric) {
             $metricName = (bool)preg_match(
                 '/watt|activepower|realpower|apparentpower|devicepower|phasepower|powerwatts|'
-                . 'statuspower|identdevicepower|phasestatus(power|load|current)|'
-                . '(?<![a-z])(amps?|current|load|volt|temp)(?![a-z])/',
+                . 'statuspower|identdevicepower|phasestatus|loadstate|powersupply/',
                 $s
             );
             $identityName = (bool)preg_match(
@@ -646,6 +733,13 @@ class SnmpDiscover
             if (!$metricName || $identityName) {
                 return 0;
             }
+        }
+
+        // Unnamed OIDs with no metric keyword and only tiny enum-like values → drop
+        if (!$name && $num !== null && $num >= 0 && $num <= 5
+            && !preg_match('/watt|power|amp|current|volt|load|temp/', $s)
+        ) {
+            return 0;
         }
 
         return max(0, $score);
