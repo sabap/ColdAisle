@@ -246,6 +246,100 @@ function power_ps_status_label(?float $state): string
 }
 
 /**
+ * Decode pdus.last_poll_outlets JSON for UI.
+ * Snapshot keys are outlet numbers as strings: "1" => {amps,watts,name,state,num?}.
+ *
+ * @return array{
+ *   by_num:array<int,array{num:int,amps:?float,watts:?float,name:?string,state:?float}>,
+ *   count:int,
+ *   sum_watts:?float,
+ *   sum_amps:?float
+ * }|null
+ */
+function power_outlet_poll_decode($json): ?array
+{
+    if ($json === null || $json === '') {
+        return null;
+    }
+    if (is_array($json)) {
+        $data = $json;
+    } else {
+        $data = json_decode((string)$json, true);
+    }
+    if (!is_array($data) || !$data) {
+        return null;
+    }
+    $byNum = [];
+    $sumW = 0.0;
+    $sumA = 0.0;
+    $anyW = false;
+    $anyA = false;
+    foreach ($data as $k => $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $num = isset($row['num']) && is_numeric($row['num'])
+            ? (int)$row['num']
+            : (is_numeric($k) ? (int)$k : 0);
+        if ($num < 1) {
+            continue;
+        }
+        $amps = isset($row['amps']) && is_numeric($row['amps']) ? (float)$row['amps'] : null;
+        $watts = isset($row['watts']) && is_numeric($row['watts']) ? (float)$row['watts'] : null;
+        $state = isset($row['state']) && is_numeric($row['state']) ? (float)$row['state'] : null;
+        $name = isset($row['name']) && is_string($row['name']) && trim($row['name']) !== ''
+            ? trim($row['name'])
+            : null;
+        if ($amps === null && $watts === null && $state === null && $name === null) {
+            continue;
+        }
+        $byNum[$num] = [
+            'num' => $num,
+            'amps' => $amps,
+            'watts' => $watts,
+            'name' => $name,
+            'state' => $state,
+        ];
+        if ($watts !== null) {
+            $sumW += $watts;
+            $anyW = true;
+        }
+        if ($amps !== null) {
+            $sumA += $amps;
+            $anyA = true;
+        }
+    }
+    if (!$byNum) {
+        return null;
+    }
+    ksort($byNum, SORT_NUMERIC);
+    return [
+        'by_num' => $byNum,
+        'count' => count($byNum),
+        'sum_watts' => $anyW ? round($sumW, 3) : null,
+        'sum_amps' => $anyA ? round($sumA, 3) : null,
+    ];
+}
+
+/**
+ * APC rPDU2OutletMeteredStatusState (load band) — same enum as phase load state.
+ * Some switched PDUs use 1=on / 2=off; prefer load labels when 1–4.
+ */
+function power_outlet_state_label(?float $state): string
+{
+    if ($state === null) {
+        return '—';
+    }
+    return match ((int)$state) {
+        1 => 'low',
+        2 => 'normal',
+        3 => 'near overload',
+        4 => 'overload',
+        default => (string)(int)$state,
+    };
+}
+
+/**
  * Approx kW capacity from amps × volts × phase factor (rough planning figure).
  */
 function power_estimate_kw(?float $amps, ?int $volts, int $phases = 1): ?float

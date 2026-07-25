@@ -169,6 +169,8 @@ class Schema
                 'snmp_auto_poll' => 'BIT NOT NULL CONSTRAINT DF_pdus_snmp_auto DEFAULT 0',
                 // Last multi-phase snapshot JSON: { "L1": {watts,amps,volts}, "L2":…, "L3":… }
                 'last_poll_phases' => 'NVARCHAR(MAX) NULL',
+                // Last per-outlet snapshot JSON: { "1": {amps,watts,name,state}, … }
+                'last_poll_outlets' => 'NVARCHAR(MAX) NULL',
                 // Floor plan placement for row/room PDUs
                 'room_id' => 'INT NULL',
                 'pos_x' => 'DECIMAL(10,3) NULL',

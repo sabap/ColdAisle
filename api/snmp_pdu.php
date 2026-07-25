@@ -226,7 +226,7 @@ try {
         if ($action === 'poll_now') {
             $result = SnmpPoller::pollPduById($id);
             $fresh = Database::fetchOne(
-                'SELECT last_poll_at, last_poll_watts, last_poll_amps, last_poll_phases, snmp_site_template_id
+                'SELECT last_poll_at, last_poll_watts, last_poll_amps, last_poll_phases, last_poll_outlets, snmp_site_template_id
                  FROM pdus WHERE pdu_id = ?',
                 [$id]
             );
@@ -243,7 +243,20 @@ try {
             $phaseJson = $fresh['last_poll_phases'] ?? null;
             $phaseData = is_string($phaseJson) ? json_decode($phaseJson, true) : null;
             if (is_array($phaseData) && $phaseData) {
-                $bits[] = count($phaseData) . ' phase(s)';
+                $nPh = 0;
+                foreach (['L1', 'L2', 'L3'] as $lab) {
+                    if (isset($phaseData[$lab])) {
+                        $nPh++;
+                    }
+                }
+                if ($nPh > 0) {
+                    $bits[] = $nPh . ' phase(s)';
+                }
+            }
+            $outletJson = $fresh['last_poll_outlets'] ?? null;
+            $outletData = is_string($outletJson) ? json_decode($outletJson, true) : null;
+            if (is_array($outletData) && $outletData) {
+                $bits[] = count($outletData) . ' outlet(s)';
             }
             App::json([
                 'ok' => true,
@@ -252,6 +265,7 @@ try {
                 'last_poll_watts' => $fresh['last_poll_watts'] ?? null,
                 'last_poll_amps' => $fresh['last_poll_amps'] ?? null,
                 'last_poll_phases' => is_array($phaseData) ? $phaseData : null,
+                'last_poll_outlets' => is_array($outletData) ? $outletData : null,
                 'message' => implode(' ', $bits),
             ]);
         }

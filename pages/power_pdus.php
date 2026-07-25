@@ -312,13 +312,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             require_once dirname(__DIR__) . '/src/Services/SnmpPoller.php';
             $result = SnmpPoller::pollPduById($pid);
             $fresh = Database::fetchOne(
-                'SELECT last_poll_at, last_poll_watts, last_poll_amps FROM pdus WHERE pdu_id = ?',
+                'SELECT last_poll_at, last_poll_watts, last_poll_amps, last_poll_outlets FROM pdus WHERE pdu_id = ?',
                 [$pid]
             );
             $bits = [$result['message']];
             if ($fresh && $fresh['last_poll_watts'] !== null) {
                 $bits[] = 'Load ' . number_format((float)$fresh['last_poll_watts'] / 1000, 3) . ' kW'
                     . ($fresh['last_poll_amps'] !== null ? ' · ' . rtrim(rtrim(sprintf('%.2F', (float)$fresh['last_poll_amps']), '0'), '.') . ' A' : '');
+            }
+            if (!empty($fresh['last_poll_outlets'])) {
+                $od = json_decode((string)$fresh['last_poll_outlets'], true);
+                if (is_array($od) && $od) {
+                    $bits[] = count($od) . ' outlet(s)';
+                }
             }
             App::flash('success', implode(' ', $bits));
             App::redirect('pages/power_pdus.php?id=' . $pid);
@@ -1543,21 +1549,110 @@ if ($pduId) {
                     </script>
                 </div>
                 <?php endif; ?>
-            <?php else: ?>
-                <div class="card-header flex-between">
+            <?php else:
+                $outletLive = power_outlet_poll_decode($p['last_poll_outlets'] ?? null);
+                $outletLiveBy = $outletLive['by_num'] ?? [];
+                $hasOutletLive = !empty($outletLiveBy);
+                $showOutletName = false;
+                $showOutletState = false;
+                $showOutletWatts = false;
+                $showOutletAmps = false;
+                foreach ($outletLiveBy as $lv) {
+                    if (!empty($lv['name'])) {
+                        $showOutletName = true;
+                    }
+                    if ($lv['state'] !== null) {
+                        $showOutletState = true;
+                    }
+                    if ($lv['watts'] !== null) {
+                        $showOutletWatts = true;
+                    }
+                    if ($lv['amps'] !== null) {
+                        $showOutletAmps = true;
+                    }
+                }
+                // Live-only rows when inventory is empty but SNMP returned outlets
+                $outletRows = $outlets;
+                if (!$outletRows && $hasOutletLive) {
+                    foreach ($outletLiveBy as $num => $lv) {
+                        $outletRows[] = [
+                            'outlet_number' => $num,
+                            'outlet_type' => null,
+                            'rated_amps' => null,
+                            'connected_device_id' => null,
+                            'device_label' => null,
+                            'label' => null,
+                        ];
+                    }
+                }
+                ?>
+                <div class="card-header flex-between" style="flex-wrap:wrap;gap:.5rem">
                     <h2>Outlets</h2>
-                    <span class="text-muted" style="font-size:.85rem"><?= $usedOutlets ?> mapped · <?= count($outlets) ?> total</span>
+                    <span class="text-muted" style="font-size:.85rem">
+                        <?= $usedOutlets ?> mapped · <?= count($outlets) ?> inventory
+                        <?php if ($hasOutletLive): ?>
+                            · <?= (int)$outletLive['count'] ?> polled
+                            <?php if ($outletLive['sum_watts'] !== null): ?>
+                                · Σ <?= App::e(power_fmt_metric($outletLive['sum_watts'] / 1000, 3)) ?> kW
+                            <?php endif; ?>
+                        <?php endif; ?>
+                    </span>
                 </div>
                 <div class="card-body flush">
                     <div class="table-wrap" style="max-height:420px;overflow:auto">
                         <table class="data">
-                            <thead><tr><th>#</th><th>Type</th><th>A</th><th>Device</th></tr></thead>
-                            <tbody>
-                            <?php foreach ($outlets as $o): ?>
+                            <thead>
                                 <tr>
-                                    <td><?= (int)$o['outlet_number'] ?></td>
+                                    <th>#</th>
+                                    <?php if ($showOutletName): ?><th>Name</th><?php endif; ?>
+                                    <th>Type</th>
+                                    <th>Rated</th>
+                                    <?php if ($showOutletAmps): ?><th>Current</th><?php endif; ?>
+                                    <?php if ($showOutletWatts): ?><th>Power</th><?php endif; ?>
+                                    <?php if ($showOutletState): ?><th>Load</th><?php endif; ?>
+                                    <th>Device</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            <?php foreach ($outletRows as $o):
+                                $onum = (int)$o['outlet_number'];
+                                $live = $outletLiveBy[$onum] ?? null;
+                                ?>
+                                <tr>
+                                    <td><strong><?= $onum ?></strong></td>
+                                    <?php if ($showOutletName): ?>
+                                        <td>
+                                            <?php
+                                            $nm = $live['name'] ?? null;
+                                            if ($nm === null && !empty($o['label'])) {
+                                                $nm = (string)$o['label'];
+                                            }
+                                            echo $nm !== null && $nm !== '' ? App::e($nm) : '<span class="text-muted">—</span>';
+                                            ?>
+                                        </td>
+                                    <?php endif; ?>
                                     <td><?= App::e($o['outlet_type'] ?? '—') ?></td>
-                                    <td><?= $o['rated_amps'] !== null ? App::e((string)$o['rated_amps']) : '—' ?></td>
+                                    <td><?= $o['rated_amps'] !== null ? App::e((string)$o['rated_amps']) . ' A' : '—' ?></td>
+                                    <?php if ($showOutletAmps): ?>
+                                        <td><?= ($live && $live['amps'] !== null)
+                                            ? App::e(power_fmt_metric($live['amps'], 2)) . ' A'
+                                            : '—' ?></td>
+                                    <?php endif; ?>
+                                    <?php if ($showOutletWatts): ?>
+                                        <td>
+                                            <?php if ($live && $live['watts'] !== null): ?>
+                                                <?= App::e(power_fmt_metric($live['watts'] / 1000, 3)) ?> kW
+                                                <span class="text-muted" style="font-size:.78rem">(<?= App::e(power_fmt_metric($live['watts'], 0)) ?> W)</span>
+                                            <?php else: ?>
+                                                —
+                                            <?php endif; ?>
+                                        </td>
+                                    <?php endif; ?>
+                                    <?php if ($showOutletState): ?>
+                                        <td><?= ($live && $live['state'] !== null)
+                                            ? App::e(power_outlet_state_label($live['state']))
+                                            : '—' ?></td>
+                                    <?php endif; ?>
                                     <td>
                                         <?php if (!empty($o['connected_device_id'])): ?>
                                             <a href="<?= App::e(App::url('pages/devices.php?id=' . (int)$o['connected_device_id'])) ?>">
@@ -1569,14 +1664,23 @@ if ($pduId) {
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
-                            <?php if (!$outlets): ?>
-                                <tr><td colspan="4" class="text-muted">No outlets.</td></tr>
+                            <?php if (!$outletRows): ?>
+                                <tr><td colspan="8" class="text-muted">No outlets.</td></tr>
                             <?php endif; ?>
                             </tbody>
                         </table>
                     </div>
                     <p class="text-muted" style="font-size:.78rem;padding:.65rem 1rem;margin:0">
                         Map outlets to devices from the cabinet rack view PDU overlay or device Power Supply section.
+                        <?php if (!$hasOutletLive && $canConfigSnmp): ?>
+                            Live A/W/load columns appear after SNMP poll with
+                            <code>outlet_amps_x10</code> / <code>outlet_watts_hundredths_kw</code>
+                            (APC rPDU2 pack or Discover).
+                        <?php elseif ($hasOutletLive): ?>
+                            Live values from last SNMP poll<?= !empty($p['last_poll_at'])
+                                ? ' · ' . App::e((string)$p['last_poll_at'])
+                                : '' ?>.
+                        <?php endif; ?>
                     </p>
                 </div>
             <?php endif; ?>

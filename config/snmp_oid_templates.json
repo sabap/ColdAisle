@@ -68,8 +68,8 @@
     {
       "id": "apc_rpdu2_phases",
       "vendor": "APC / Schneider",
-      "label": "APC rPDU2 3-phase status (AP88xx typical)",
-      "notes": "AP8861-class: device watts from rPDUIdentDevicePowerWatts (true W). Phase power/VA are hundredths of kW (×10→W). Phase current/peak are tenths of A (÷10). PF phase ÷100, device Ident PF ÷1000. L–L volts + dual PS status included. Verify after first Poll against the PDU web UI.",
+      "label": "APC rPDU2 3-phase + outlets (AP88xx typical)",
+      "notes": "AP8861-class: device watts from rPDUIdentDevicePowerWatts (true W). Phase power/VA are hundredths of kW (×10→W). Phase/outlet current tenths of A (÷10). PF phase ÷100, device Ident PF ÷1000. Outlet keys are table bases (walked .1…N). L–L volts + dual PS included. Verify after first Poll against the PDU web UI.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
         "sysUpTime": "1.3.6.1.2.1.1.3.0",
@@ -104,7 +104,11 @@
         "phase_l31_volts": "1.3.6.1.4.1.318.1.1.26.13.1.1.5.1",
         "ps1_status": "1.3.6.1.4.1.318.1.1.26.4.3.1.13.1",
         "ps2_status": "1.3.6.1.4.1.318.1.1.26.4.3.1.14.1",
-        "ps_alarm": "1.3.6.1.4.1.318.1.1.26.4.3.1.12.1"
+        "ps_alarm": "1.3.6.1.4.1.318.1.1.26.4.3.1.12.1",
+        "outlet_name": "1.3.6.1.4.1.318.1.1.26.9.4.3.1.3",
+        "outlet_state": "1.3.6.1.4.1.318.1.1.26.9.4.3.1.5",
+        "outlet_amps_x10": "1.3.6.1.4.1.318.1.1.26.9.4.3.1.6",
+        "outlet_watts_hundredths_kw": "1.3.6.1.4.1.318.1.1.26.9.4.3.1.7"
       }
     },
     {
