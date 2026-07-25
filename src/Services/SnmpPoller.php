@@ -78,6 +78,23 @@ class SnmpPoller
             // columns may not exist yet
         }
 
+        // After a multi-PDU cycle: flush digest only if hold window already elapsed
+        // (so 84 PDUs in one event batch together; next scheduled poll also flushes).
+        if (class_exists('PowerAlertService')) {
+            try {
+                $dig = PowerAlertService::flushDigestsIfDue(false);
+                if (!empty($dig['flushed'])) {
+                    App::log(sprintf(
+                        'SNMP poll power digest: %d PDU(s), %d condition(s)',
+                        (int)$dig['pdu_count'],
+                        (int)$dig['alert_count']
+                    ), 'info');
+                }
+            } catch (Throwable $e) {
+                App::log('Power alert digest flush: ' . $e->getMessage(), 'warning');
+            }
+        }
+
         return ['success' => $success, 'failed' => $failed];
     }
 

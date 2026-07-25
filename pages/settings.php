@@ -400,7 +400,7 @@ $powerAlerts = class_exists('PowerAlertService')
     ? PowerAlertService::settings()
     : [
         'enabled' => false, 'email' => '', 'warn_pct' => 75.0, 'crit_pct' => 90.0,
-        'cooldown_min' => 60, 'util' => true, 'load_state' => true, 'ps' => true,
+        'cooldown_min' => 60, 'hold_sec' => 120, 'util' => true, 'load_state' => true, 'ps' => true,
     ];
 $updCfg = UpdateService::config();
 $caStatus = UpdateService::caBundleStatus();
@@ -720,8 +720,10 @@ layout_header('Settings', $user, 'settings');
     </div>
     <div class="card-body">
         <p class="text-muted" style="font-size:.9rem;margin-top:0">
-            After each SNMP poll, evaluate phase current vs rating, APC load-state, and dual power-supply health.
-            Raises in-app notifications for all users and optional email when SMTP is enabled.
+            After SNMP poll, evaluate phase util, APC load-state, and power-supply health.
+            Alerts are <strong>held and batched</strong> into one digest (not one email per PDU),
+            rolled up as PDU → Cabinet → Row → Zone → Datacenter — so a site-wide event
+            does not generate dozens of messages.
         </p>
         <?php if (!class_exists('PowerAlertService')): ?>
             <p class="alert alert-error">PowerAlertService is not deployed on this host. Update ColdAisle to enable this section.</p>
@@ -751,10 +753,19 @@ layout_header('Settings', $user, 'settings');
                 <input class="form-control" type="number" min="1" max="100" step="1"
                        name="power_alerts_crit_pct" value="<?= App::e((string)(int)$powerAlerts['crit_pct']) ?>">
             </div>
-            <div class="form-row"><label>Cooldown-alert cooldown (minutes)</label>
+            <div class="form-row"><label>Hold time (minutes)</label>
+                <input class="form-control" type="number" min="0.25" max="60" step="0.25"
+                       name="power_alerts_hold_min"
+                       value="<?= App::e((string)round(((int)($powerAlerts['hold_sec'] ?? 120)) / 60, 2)) ?>">
+                <span class="text-muted" style="font-size:.75rem">
+                    Wait after the first alert so other PDUs can join the same digest (default 2).
+                    One email lists all affected PDUs by location.
+                </span>
+            </div>
+            <div class="form-row"><label>Re-alert cooldown (minutes)</label>
                 <input class="form-control" type="number" min="5" max="10080" step="1"
                        name="power_alerts_cooldown_min" value="<?= App::e((string)(int)$powerAlerts['cooldown_min']) ?>">
-                <span class="text-muted" style="font-size:.75rem">Same condition will not email/notify again until this elapses (severity escalations always notify).</span>
+                <span class="text-muted" style="font-size:.75rem">After a digest, the same condition will not re-queue until this elapses (severity escalations still queue).</span>
             </div>
 
             <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Check types</h4></div>
