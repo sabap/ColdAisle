@@ -304,6 +304,110 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             App::redirect('pages/power_pdus.php');
         }
 
+        if ($action === 'save_outlets') {
+            $pid = (int)($_POST['pdu_id'] ?? 0);
+            if ($pid <= 0) {
+                throw new RuntimeException('PDU id required.');
+            }
+            $pduRow = Database::fetchOne('SELECT * FROM pdus WHERE pdu_id = ? AND is_active = 1', [$pid]);
+            if (!$pduRow) {
+                throw new RuntimeException('PDU not found.');
+            }
+            $types = power_outlet_connector_types();
+            $numOutlets = max(1, min(128, (int)($_POST['num_outlets'] ?? ($pduRow['num_outlets'] ?? 24))));
+            $defaultType = (string)($_POST['default_outlet_type'] ?? 'C13');
+            if (!in_array($defaultType, $types, true)) {
+                $defaultType = 'C13';
+            }
+            // Grow/shrink inventory rows (new rows get default type)
+            $existing = Database::fetchAll(
+                'SELECT outlet_id, outlet_number FROM pdu_outlets WHERE pdu_id = ?',
+                [$pid]
+            );
+            $byNum = [];
+            foreach ($existing as $o) {
+                $byNum[(int)$o['outlet_number']] = $o;
+            }
+            for ($i = 1; $i <= $numOutlets; $i++) {
+                if (!isset($byNum[$i])) {
+                    Database::insert('pdu_outlets', [
+                        'pdu_id' => $pid,
+                        'outlet_number' => $i,
+                        'label' => 'Outlet ' . $i,
+                        'outlet_type' => $defaultType,
+                    ]);
+                }
+            }
+            foreach ($byNum as $num => $o) {
+                if ($num > $numOutlets) {
+                    // Only delete unmapped extras
+                    $full = Database::fetchOne('SELECT * FROM pdu_outlets WHERE outlet_id = ?', [(int)$o['outlet_id']]);
+                    if ($full && empty($full['connected_device_id']) && empty($full['device_power_supply_id'])) {
+                        Database::delete('pdu_outlets', 'outlet_id = ?', [(int)$o['outlet_id']]);
+                    }
+                }
+            }
+            Database::update('pdus', ['num_outlets' => $numOutlets], 'pdu_id = :id', [':id' => $pid]);
+
+            $ids = $_POST['outlet_id'] ?? [];
+            $labels = $_POST['outlet_label'] ?? [];
+            $oTypes = $_POST['outlet_type'] ?? [];
+            $amps = $_POST['outlet_rated_amps'] ?? [];
+            if (is_array($ids)) {
+                foreach ($ids as $idx => $oidRaw) {
+                    $oid = (int)$oidRaw;
+                    if ($oid < 1) {
+                        continue;
+                    }
+                    $row = Database::fetchOne(
+                        'SELECT * FROM pdu_outlets WHERE outlet_id = ? AND pdu_id = ?',
+                        [$oid, $pid]
+                    );
+                    if (!$row) {
+                        continue;
+                    }
+                    $type = trim((string)($oTypes[$idx] ?? $row['outlet_type'] ?? 'C13'));
+                    if ($type === '' || !in_array($type, $types, true)) {
+                        // Allow free-text types already stored / custom
+                        if ($type === '') {
+                            $type = 'C13';
+                        }
+                    }
+                    $label = trim((string)($labels[$idx] ?? ''));
+                    $rated = isset($amps[$idx]) && $amps[$idx] !== '' && is_numeric($amps[$idx])
+                        ? (float)$amps[$idx]
+                        : null;
+                    Database::update('pdu_outlets', [
+                        'label' => $label !== '' ? $label : null,
+                        'outlet_type' => $type,
+                        'rated_amps' => $rated,
+                    ], 'outlet_id = :id AND pdu_id = :p', [
+                        ':id' => $oid,
+                        ':p' => $pid,
+                    ]);
+                }
+            }
+            // Optional bulk type range: e.g. 1-21 C13, 22-24 C19
+            $bulkFrom = (int)($_POST['bulk_from'] ?? 0);
+            $bulkTo = (int)($_POST['bulk_to'] ?? 0);
+            $bulkType = trim((string)($_POST['bulk_type'] ?? ''));
+            if ($bulkFrom >= 1 && $bulkTo >= $bulkFrom && $bulkType !== ''
+                && in_array($bulkType, $types, true)
+            ) {
+                $bulkTo = min($bulkTo, $numOutlets);
+                for ($n = $bulkFrom; $n <= $bulkTo; $n++) {
+                    Database::update(
+                        'pdu_outlets',
+                        ['outlet_type' => $bulkType],
+                        'pdu_id = :p AND outlet_number = :n',
+                        [':p' => $pid, ':n' => $n]
+                    );
+                }
+            }
+            App::flash('success', 'Outlets saved (' . $numOutlets . ' inventory rows).');
+            App::redirect('pages/power_pdus.php?id=' . $pid);
+        }
+
         if ($action === 'poll_pdu') {
             $pid = (int)($_POST['pdu_id'] ?? 0);
             if ($pid <= 0) {
@@ -1576,6 +1680,7 @@ if ($pduId) {
                 if (!$outletRows && $hasOutletLive) {
                     foreach ($outletLiveBy as $num => $lv) {
                         $outletRows[] = [
+                            'outlet_id' => null,
                             'outlet_number' => $num,
                             'outlet_type' => null,
                             'rated_amps' => null,
@@ -1584,6 +1689,12 @@ if ($pduId) {
                             'label' => null,
                         ];
                     }
+                }
+                $canEditOutlets = AuthManager::canEditPower($user);
+                $connectorTypes = power_outlet_connector_types();
+                $invCount = max(count($outlets), (int)($p['num_outlets'] ?? 0), $hasOutletLive ? (int)$outletLive['count'] : 0);
+                if ($invCount < 1) {
+                    $invCount = 24;
                 }
                 ?>
                 <div class="card-header flex-between" style="flex-wrap:wrap;gap:.5rem">
@@ -1599,12 +1710,48 @@ if ($pduId) {
                     </span>
                 </div>
                 <div class="card-body flush">
-                    <div class="table-wrap" style="max-height:420px;overflow:auto">
+                    <?php if ($canEditOutlets): ?>
+                    <form method="post" id="pduOutletsForm">
+                        <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                        <input type="hidden" name="action" value="save_outlets">
+                        <input type="hidden" name="pdu_id" value="<?= $pduId ?>">
+                        <div style="display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;padding:.75rem 1rem;border-bottom:1px solid var(--border, rgba(148,163,184,.15));align-items:flex-end">
+                            <div>
+                                <label class="text-muted" style="font-size:.75rem;display:block">Inventory count</label>
+                                <input class="form-control" type="number" min="1" max="128" name="num_outlets"
+                                       value="<?= (int)$invCount ?>" style="width:6rem">
+                            </div>
+                            <div>
+                                <label class="text-muted" style="font-size:.75rem;display:block">Type for new rows</label>
+                                <select class="form-control" name="default_outlet_type" style="min-width:7rem">
+                                    <?php foreach ($connectorTypes as $ct): ?>
+                                        <option value="<?= App::e($ct) ?>"<?= $ct === 'C13' ? ' selected' : '' ?>><?= App::e($ct) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div style="flex:1;min-width:14rem">
+                                <label class="text-muted" style="font-size:.75rem;display:block">Bulk set type (range)</label>
+                                <div style="display:flex;gap:.35rem;flex-wrap:wrap;align-items:center">
+                                    <input class="form-control" type="number" min="1" max="128" name="bulk_from" placeholder="from" style="width:4.5rem" title="Outlet # from">
+                                    <span class="text-muted">–</span>
+                                    <input class="form-control" type="number" min="1" max="128" name="bulk_to" placeholder="to" style="width:4.5rem" title="Outlet # to">
+                                    <select class="form-control" name="bulk_type" style="min-width:7rem">
+                                        <option value="">— type —</option>
+                                        <?php foreach ($connectorTypes as $ct): ?>
+                                            <option value="<?= App::e($ct) ?>"><?= App::e($ct) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                            </div>
+                            <button class="btn btn-primary btn-sm" type="submit">Save outlets</button>
+                        </div>
+                    <?php endif; ?>
+                    <div class="table-wrap" style="max-height:480px;overflow:auto">
                         <table class="data">
                             <thead>
                                 <tr>
                                     <th>#</th>
-                                    <?php if ($showOutletName): ?><th>Name</th><?php endif; ?>
+                                    <th>Label</th>
                                     <th>Type</th>
                                     <th>Rated</th>
                                     <?php if ($showOutletAmps): ?><th>Current</th><?php endif; ?>
@@ -1617,22 +1764,54 @@ if ($pduId) {
                             <?php foreach ($outletRows as $o):
                                 $onum = (int)$o['outlet_number'];
                                 $live = $outletLiveBy[$onum] ?? null;
+                                $oid = (int)($o['outlet_id'] ?? 0);
+                                $curType = (string)($o['outlet_type'] ?? 'C13');
                                 ?>
                                 <tr>
-                                    <td><strong><?= $onum ?></strong></td>
-                                    <?php if ($showOutletName): ?>
-                                        <td>
-                                            <?php
+                                    <td><strong><?= $onum ?></strong>
+                                        <?php if ($canEditOutlets && $oid > 0): ?>
+                                            <input type="hidden" name="outlet_id[]" value="<?= $oid ?>">
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($canEditOutlets && $oid > 0): ?>
+                                            <input class="form-control form-control-sm" name="outlet_label[]"
+                                                   value="<?= App::e((string)($o['label'] ?? '')) ?>"
+                                                   placeholder="<?= App::e($live['name'] ?? ('Outlet ' . $onum)) ?>"
+                                                   style="min-width:7rem">
+                                        <?php else:
                                             $nm = $live['name'] ?? null;
                                             if ($nm === null && !empty($o['label'])) {
                                                 $nm = (string)$o['label'];
                                             }
                                             echo $nm !== null && $nm !== '' ? App::e($nm) : '<span class="text-muted">—</span>';
-                                            ?>
-                                        </td>
-                                    <?php endif; ?>
-                                    <td><?= App::e($o['outlet_type'] ?? '—') ?></td>
-                                    <td><?= $o['rated_amps'] !== null ? App::e((string)$o['rated_amps']) . ' A' : '—' ?></td>
+                                        endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($canEditOutlets && $oid > 0): ?>
+                                            <select class="form-control form-control-sm" name="outlet_type[]" style="min-width:6.5rem">
+                                                <?php
+                                                $typeOpts = $connectorTypes;
+                                                if ($curType !== '' && !in_array($curType, $typeOpts, true)) {
+                                                    $typeOpts[] = $curType;
+                                                }
+                                                foreach ($typeOpts as $ct): ?>
+                                                    <option value="<?= App::e($ct) ?>"<?= $ct === $curType ? ' selected' : '' ?>><?= App::e($ct) ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        <?php else: ?>
+                                            <?= App::e($o['outlet_type'] ?? '—') ?>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($canEditOutlets && $oid > 0): ?>
+                                            <input class="form-control form-control-sm" type="number" step="0.1" name="outlet_rated_amps[]"
+                                                   value="<?= $o['rated_amps'] !== null ? App::e((string)$o['rated_amps']) : '' ?>"
+                                                   style="width:4.5rem" placeholder="A">
+                                        <?php else: ?>
+                                            <?= $o['rated_amps'] !== null ? App::e((string)$o['rated_amps']) . ' A' : '—' ?>
+                                        <?php endif; ?>
+                                    </td>
                                     <?php if ($showOutletAmps): ?>
                                         <td><?= ($live && $live['amps'] !== null)
                                             ? App::e(power_fmt_metric($live['amps'], 2)) . ' A'
@@ -1665,17 +1844,20 @@ if ($pduId) {
                                 </tr>
                             <?php endforeach; ?>
                             <?php if (!$outletRows): ?>
-                                <tr><td colspan="8" class="text-muted">No outlets.</td></tr>
+                                <tr><td colspan="8" class="text-muted">No outlets — set inventory count above and save, or Poll after outlet OIDs are mapped.</td></tr>
                             <?php endif; ?>
                             </tbody>
                         </table>
                     </div>
+                    <?php if ($canEditOutlets): ?>
+                    </form>
+                    <?php endif; ?>
                     <p class="text-muted" style="font-size:.78rem;padding:.65rem 1rem;margin:0">
-                        Map outlets to devices from the cabinet rack view PDU overlay or device Power Supply section.
+                        Create-time outlet count/type is only a starting point — set mixed types per outlet here
+                        (or bulk range, e.g. 1–21 C13, 22–24 C19). Device mapping is still done from the cabinet
+                        rack PDU overlay or device Power Supply section.
                         <?php if (!$hasOutletLive && $canConfigSnmp): ?>
-                            Live A/W/load columns appear after SNMP poll with
-                            <code>outlet_amps_x10</code> / <code>outlet_watts_hundredths_kw</code>
-                            (APC rPDU2 pack or Discover).
+                            Live A/W/load columns appear after SNMP poll (APC rPDU2 outlet table or Discover).
                         <?php elseif ($hasOutletLive): ?>
                             Live values from last SNMP poll<?= !empty($p['last_poll_at'])
                                 ? ' · ' . App::e((string)$p['last_poll_at'])

@@ -245,6 +245,18 @@ function power_ps_status_label(?float $state): string
     };
 }
 
+/** @return list<string> Common receptacle / plug types for outlet inventory. */
+function power_outlet_connector_types(): array
+{
+    return [
+        'C13', 'C14', 'C19', 'C20',
+        '5-15R', '5-20R', 'L5-20R', 'L5-30R',
+        'L6-20R', 'L6-30R', 'L14-30R',
+        'IEC 60309 16A', 'IEC 60309 32A',
+        'Hardwired', 'Other',
+    ];
+}
+
 /**
  * Decode pdus.last_poll_outlets JSON for UI.
  * Snapshot keys are outlet numbers as strings: "1" => {amps,watts,name,state,num?}.

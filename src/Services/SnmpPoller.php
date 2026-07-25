@@ -124,6 +124,7 @@ class SnmpPoller
         if (!$oidMap) {
             $oidMap = ['sysDescr' => '1.3.6.1.2.1.1.1.0'];
         }
+        $oidMap = self::ensureApcOutletMapKeys($oidMap);
 
         $session = self::openSession(
             $t['host'],
@@ -318,6 +319,9 @@ class SnmpPoller
         if ($nOut > 0 && !isset($oidMap['outlet_max'])) {
             $oidMap['outlet_max'] = (string)max(1, min(128, $nOut + 4));
         }
+        // Older Discover maps often omit outlet_* keys (walk budget). If the map
+        // already uses APC rPDU2 trees, attach known outlet table bases.
+        $oidMap = self::ensureApcOutletMapKeys($oidMap);
 
         $creds = SnmpDiscover::credsFromPdu($pdu);
         if ($creds['host'] === '') {
@@ -364,6 +368,40 @@ class SnmpPoller
             'ok' => $got['ok'],
             'failed' => $got['failed'],
         ];
+    }
+
+    /**
+     * When a site map already uses APC rPDU2 phase/device OIDs but Discover never
+     * proposed outlet_* table bases, attach the known PowerNet columns.
+     *
+     * @param array<string,mixed> $oidMap
+     * @return array<string,mixed>
+     */
+    private static function ensureApcOutletMapKeys(array $oidMap): array
+    {
+        foreach ($oidMap as $k => $_) {
+            if (is_string($k) && preg_match('/^outlet_(amps|watts|power|current|name|state)\b/i', $k)) {
+                return $oidMap;
+            }
+        }
+        $blob = '';
+        foreach ($oidMap as $v) {
+            if (is_string($v)) {
+                $blob .= ' ' . $v;
+            }
+        }
+        if (!str_contains($blob, '1.3.6.1.4.1.318.1.1.26')
+            && !str_contains($blob, '1.3.6.1.4.1.318.1.1.12')
+        ) {
+            return $oidMap;
+        }
+        require_once __DIR__ . '/SnmpDiscover.php';
+        foreach (SnmpDiscover::apcRpdu2OutletBases() as $key => $oid) {
+            if (!isset($oidMap[$key])) {
+                $oidMap[$key] = $oid;
+            }
+        }
+        return $oidMap;
     }
 
     /**
