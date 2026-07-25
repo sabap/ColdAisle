@@ -6,8 +6,8 @@
  * aggregated series by site / zone / pdu over a rolling window.
  *
  * Roadmap (sub-phases):
- *  1) Foundation + 24h charts (dashboard, PDU) — this class
- *  2) Zone list mini-charts + zone detail full charts
+ *  1) Foundation + 24h charts (dashboard, PDU) — done
+ *  2) Zone list mini-charts + zone detail full charts — done
  *  3) Per-phase outage detection & markers on charts
  *  4) Reports: weekly / monthly / annual / custom range export
  */
