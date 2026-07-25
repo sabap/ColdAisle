@@ -201,6 +201,22 @@ class Schema
                     notify_count INT NOT NULL CONSTRAINT DF_pas_count DEFAULT 0
                 )"
             );
+            // Hold-window queue → one cascaded digest (PDU→cabinet→row→zone→DC)
+            self::ensureTable(
+                'power_alert_queue',
+                "CREATE TABLE power_alert_queue (
+                    queue_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                    alert_key NVARCHAR(200) NOT NULL,
+                    pdu_id INT NOT NULL,
+                    severity NVARCHAR(20) NOT NULL CONSTRAINT DF_paq_sev DEFAULT 'warning',
+                    kind NVARCHAR(40) NOT NULL CONSTRAINT DF_paq_kind DEFAULT 'power',
+                    summary NVARCHAR(200) NULL,
+                    message NVARCHAR(500) NULL,
+                    queued_at DATETIME2 NOT NULL CONSTRAINT DF_paq_queued DEFAULT SYSUTCDATETIME(),
+                    digest_id NVARCHAR(40) NULL,
+                    digested_at DATETIME2 NULL
+                )"
+            );
 
             self::ensureTable(
                 'pdu_breakers',

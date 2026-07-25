@@ -795,6 +795,24 @@ GO
 CREATE NONCLUSTERED INDEX IX_power_alert_state_pdu ON power_alert_state(pdu_id, is_active);
 GO
 
+-- Hold-window queue for batched digests (one email for many PDUs)
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'power_alert_queue')
+CREATE TABLE power_alert_queue (
+    queue_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    alert_key NVARCHAR(200) NOT NULL,
+    pdu_id INT NOT NULL,
+    severity NVARCHAR(20) NOT NULL DEFAULT 'warning',
+    kind NVARCHAR(40) NOT NULL DEFAULT 'power',
+    summary NVARCHAR(200) NULL,
+    message NVARCHAR(500) NULL,
+    queued_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    digest_id NVARCHAR(40) NULL,
+    digested_at DATETIME2 NULL
+);
+GO
+CREATE NONCLUSTERED INDEX IX_power_alert_queue_pending ON power_alert_queue(digest_id, queued_at);
+GO
+
 -- ============================================================
 -- Reports & Audits
 -- ============================================================
