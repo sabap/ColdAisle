@@ -653,6 +653,22 @@ CREATE TABLE snmp_site_oid_templates (
 );
 GO
 
+-- PDU inventory templates (electrical + optional outlet type layout; no IP/name/serial)
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'pdu_templates')
+CREATE TABLE pdu_templates (
+    template_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL, -- usually Vendor+Model
+    vendor NVARCHAR(100) NULL,
+    model NVARCHAR(100) NULL,
+    fields_json NVARCHAR(MAX) NOT NULL DEFAULT '{}', -- static form fields JSON
+    outlets_json NVARCHAR(MAX) NULL, -- optional [{outlet_number,outlet_type,rated_amps,label}]
+    notes NVARCHAR(500) NULL,
+    is_active BIT NOT NULL DEFAULT 1,
+    created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
+GO
+
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'snmp_targets')
 CREATE TABLE snmp_targets (
     target_id INT IDENTITY(1,1) PRIMARY KEY,

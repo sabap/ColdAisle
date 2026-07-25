@@ -100,6 +100,22 @@ class Schema
                     updated_at DATETIME2 NOT NULL CONSTRAINT DF_snmp_site_updated DEFAULT SYSUTCDATETIME()
                 )"
             );
+            // Inventory templates for rack/row PDUs (electrical + optional outlet layout)
+            self::ensureTable(
+                'pdu_templates',
+                "CREATE TABLE pdu_templates (
+                    template_id INT IDENTITY(1,1) PRIMARY KEY,
+                    name NVARCHAR(150) NOT NULL,
+                    vendor NVARCHAR(100) NULL,
+                    model NVARCHAR(100) NULL,
+                    fields_json NVARCHAR(MAX) NOT NULL CONSTRAINT DF_pdu_tpl_fields DEFAULT '{}',
+                    outlets_json NVARCHAR(MAX) NULL,
+                    notes NVARCHAR(500) NULL,
+                    is_active BIT NOT NULL CONSTRAINT DF_pdu_tpl_active DEFAULT 1,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_pdu_tpl_created DEFAULT SYSUTCDATETIME(),
+                    updated_at DATETIME2 NOT NULL CONSTRAINT DF_pdu_tpl_updated DEFAULT SYSUTCDATETIME()
+                )"
+            );
             // Optional link from poll targets to a site OID template (shared map)
             try {
                 $hasTargets = Database::fetchValue(

@@ -612,3 +612,185 @@ function power_breaker_panel_grid(int $numSlots, string $layout, int $columns = 
     }
     return $grid;
 }
+
+/**
+ * Grow/shrink pdu_outlets inventory to $numOutlets.
+ * Adds missing numbers (default type/amps); removes unmapped extras above count.
+ * Never overwrites existing outlet_type / label / rated_amps.
+ *
+ * @return array{added:int,removed:int,total:int}
+ */
+function power_sync_outlet_inventory(
+    int $pduId,
+    int $numOutlets,
+    string $defaultType = 'C13',
+    ?float $defaultAmps = null
+): array {
+    $numOutlets = max(0, min(128, $numOutlets));
+    $existing = Database::fetchAll(
+        'SELECT outlet_id, outlet_number, connected_device_id, device_power_supply_id
+         FROM pdu_outlets WHERE pdu_id = ?',
+        [$pduId]
+    );
+    $byNum = [];
+    foreach ($existing as $o) {
+        $byNum[(int)$o['outlet_number']] = $o;
+    }
+    $added = 0;
+    for ($i = 1; $i <= $numOutlets; $i++) {
+        if (!isset($byNum[$i])) {
+            Database::insert('pdu_outlets', [
+                'pdu_id' => $pduId,
+                'outlet_number' => $i,
+                'label' => 'Outlet ' . $i,
+                'outlet_type' => $defaultType !== '' ? $defaultType : 'C13',
+                'rated_amps' => $defaultAmps,
+            ]);
+            $added++;
+        }
+    }
+    $removed = 0;
+    foreach ($byNum as $num => $o) {
+        if ($num > $numOutlets) {
+            if (empty($o['connected_device_id']) && empty($o['device_power_supply_id'])) {
+                Database::delete('pdu_outlets', 'outlet_id = ?', [(int)$o['outlet_id']]);
+                $removed++;
+            }
+        }
+    }
+    Database::update('pdus', ['num_outlets' => $numOutlets], 'pdu_id = :id', [':id' => $pduId]);
+    return ['added' => $added, 'removed' => $removed, 'total' => $numOutlets];
+}
+
+/**
+ * Apply optional per-outlet definitions (from a PDU template) without clobbering
+ * rows that already have a non-default type/label set by the user — always applies
+ * on brand-new rows just inserted, or when force is true.
+ *
+ * @param list<array{outlet_number?:int,outlet_type?:?string,rated_amps?:?float,label?:?string}> $defs
+ */
+function power_apply_outlet_defs(int $pduId, array $defs, bool $force = false): int
+{
+    $updated = 0;
+    foreach ($defs as $d) {
+        if (!is_array($d)) {
+            continue;
+        }
+        $n = (int)($d['outlet_number'] ?? 0);
+        if ($n < 1) {
+            continue;
+        }
+        $row = Database::fetchOne(
+            'SELECT * FROM pdu_outlets WHERE pdu_id = ? AND outlet_number = ?',
+            [$pduId, $n]
+        );
+        if (!$row) {
+            continue;
+        }
+        $fields = [];
+        if (array_key_exists('outlet_type', $d) && $d['outlet_type'] !== null && $d['outlet_type'] !== '') {
+            if ($force || empty($row['outlet_type']) || $row['outlet_type'] === 'C13') {
+                $fields['outlet_type'] = (string)$d['outlet_type'];
+            }
+        }
+        if (array_key_exists('rated_amps', $d) && $d['rated_amps'] !== null && $d['rated_amps'] !== '') {
+            if ($force || $row['rated_amps'] === null) {
+                $fields['rated_amps'] = is_numeric($d['rated_amps']) ? (float)$d['rated_amps'] : null;
+            }
+        }
+        if (array_key_exists('label', $d) && $d['label'] !== null && trim((string)$d['label']) !== '') {
+            $lab = trim((string)$d['label']);
+            if ($force || empty($row['label']) || $row['label'] === ('Outlet ' . $n)) {
+                $fields['label'] = $lab;
+            }
+        }
+        if ($fields) {
+            Database::update(
+                'pdu_outlets',
+                $fields,
+                'outlet_id = :id',
+                [':id' => (int)$row['outlet_id']]
+            );
+            $updated++;
+        }
+    }
+    return $updated;
+}
+
+/** Fields stored on a PDU inventory template (no instance-specific data). */
+function power_pdu_template_static_keys(): array
+{
+    return [
+        'manufacturer', 'model', 'pdu_scope', 'mount_style', 'u_height',
+        'phases', 'phase_wiring',
+        'input_voltage', 'input_voltage_ln', 'output_voltage', 'output_voltage_ln',
+        'rated_volts', 'sync_zone_voltage',
+        'input_type', 'rated_amps',
+        'output_mode', 'num_outlets', 'num_breaker_slots', 'breaker_layout', 'breaker_columns',
+        'snmp_enabled', 'snmp_version', 'snmp_port', 'snmp_v3_profile_id', 'snmp_v3_sec_level',
+        'notes',
+    ];
+}
+
+/**
+ * Build template payload from a pdus row + optional outlets.
+ *
+ * @param array<string,mixed> $pdu
+ * @param list<array<string,mixed>>|null $outlets
+ * @return array{fields:array<string,mixed>,outlets:list<array<string,mixed>>}
+ */
+function power_pdu_template_payload_from_pdu(array $pdu, ?array $outlets = null): array
+{
+    $fields = [];
+    foreach (power_pdu_template_static_keys() as $k) {
+        if (!array_key_exists($k, $pdu)) {
+            continue;
+        }
+        $v = $pdu[$k];
+        if ($v === null || $v === '') {
+            continue;
+        }
+        $fields[$k] = $v;
+    }
+    // Never keep placement / identity
+    unset($fields['name'], $fields['serial_no'], $fields['ip_address']);
+
+    $outletDefs = [];
+    if (is_array($outlets)) {
+        foreach ($outlets as $o) {
+            $n = (int)($o['outlet_number'] ?? 0);
+            if ($n < 1) {
+                continue;
+            }
+            $def = ['outlet_number' => $n];
+            if (!empty($o['outlet_type'])) {
+                $def['outlet_type'] = (string)$o['outlet_type'];
+            }
+            if (isset($o['rated_amps']) && $o['rated_amps'] !== null && $o['rated_amps'] !== '') {
+                $def['rated_amps'] = (float)$o['rated_amps'];
+            }
+            $lab = trim((string)($o['label'] ?? ''));
+            if ($lab !== '' && $lab !== ('Outlet ' . $n)) {
+                $def['label'] = $lab;
+            }
+            $outletDefs[] = $def;
+        }
+    }
+    return ['fields' => $fields, 'outlets' => $outletDefs];
+}
+
+function power_pdu_template_display_name(?string $vendor, ?string $model, ?string $fallback = null): string
+{
+    $v = trim((string)$vendor);
+    $m = trim((string)$model);
+    if ($v !== '' && $m !== '') {
+        return $v . '+' . $m;
+    }
+    if ($m !== '') {
+        return $m;
+    }
+    if ($v !== '') {
+        return $v;
+    }
+    return $fallback !== null && trim($fallback) !== '' ? trim($fallback) : 'PDU template';
+}

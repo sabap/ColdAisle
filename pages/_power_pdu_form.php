@@ -144,6 +144,45 @@ $formModal = !empty($formModal);
     <div class="form-row"><label>IP address</label>
         <input class="form-control" name="ip_address" value="<?= App::e($edit['ip_address'] ?? '') ?>"></div>
 
+    <?php
+    $pduTemplates = $pduTemplates ?? [];
+    $formNumBreakerSlots = max(1, (int)($edit['num_breaker_slots'] ?? 42));
+    // Hidden seed for updates / template apply (not shown on create for outlets mode)
+    $formNumOutlets = max(0, (int)($edit['num_outlets'] ?? 0));
+    ?>
+    <?php if (!$isUpdate && $pduTemplates): ?>
+    <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">PDU template</h4></div>
+    <div class="form-row full">
+        <label>Apply PDU template</label>
+        <select class="form-control" id="power_apply_pdu_template" data-templates="<?= App::e(json_encode(array_map(static function ($t) {
+            $fields = json_decode((string)($t['fields_json'] ?? '{}'), true) ?: [];
+            $outlets = json_decode((string)($t['outlets_json'] ?? '[]'), true) ?: [];
+            return [
+                'template_id' => (int)$t['template_id'],
+                'name' => (string)$t['name'],
+                'vendor' => (string)($t['vendor'] ?? ''),
+                'model' => (string)($t['model'] ?? ''),
+                'fields' => $fields,
+                'outlets' => $outlets,
+            ];
+        }, $pduTemplates), JSON_UNESCAPED_SLASHES)) ?>">
+            <option value="">— None (manual) —</option>
+            <?php foreach ($pduTemplates as $pt): ?>
+                <option value="<?= (int)$pt['template_id'] ?>">
+                    <?= App::e($pt['name']) ?>
+                    <?php if (!empty($pt['model'])): ?>
+                        · <?= App::e((string)$pt['model']) ?>
+                    <?php endif; ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+        <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+            Fills electrical / SNMP profile / outlet layout. Name, IP, serial, and placement stay blank for you to set.
+        </p>
+        <input type="hidden" name="pdu_template_id" id="power_pdu_template_id" value="">
+    </div>
+    <?php endif; ?>
+
     <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Distribution outputs</h4></div>
     <div class="form-row"><label>Output type</label>
         <select class="form-control" name="output_mode" id="power_output_mode">
@@ -151,31 +190,11 @@ $formModal = !empty($formModal);
             <option value="breakers" <?= ($edit['output_mode'] ?? '') === 'breakers' ? 'selected' : '' ?>>Breakers / pigtails</option>
         </select>
         <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
-            Row PDUs often use breakers with pigtails to racks (multi-slot breakers). Rack PDUs usually use outlets.
+            Row PDUs often use breakers with pigtails to racks. Rack PDUs usually use outlets —
+            inventory rows are created from SNMP (device outlet count) or a PDU template after save.
         </p>
     </div>
-    <?php
-    // Keep number inputs valid for HTML5 even when the inactive mode is hidden
-    // (browsers still validate display:none fields and block submit with no visible error).
-    $formNumOutlets = max(1, (int)($edit['num_outlets'] ?? 24));
-    $formNumBreakerSlots = max(1, (int)($edit['num_breaker_slots'] ?? 42));
-    ?>
-    <div class="form-row power-outlet-fields"><label>Outlets</label>
-        <input class="form-control" type="number" min="1" max="128" name="num_outlets"
-               value="<?= App::e((string)$formNumOutlets) ?>"></div>
-    <div class="form-row power-outlet-fields"><label>Default outlet type</label>
-        <select class="form-control" name="outlet_type">
-            <?php foreach (power_outlet_connector_types() as $t): ?>
-                <option<?= $t === 'C13' ? ' selected' : '' ?>><?= App::e($t) ?></option>
-            <?php endforeach; ?>
-        </select>
-    </div>
-    <div class="form-row power-outlet-fields"><label>Outlet AMP (default)</label>
-        <input class="form-control" type="number" step="0.1" name="outlet_amps" value="10"></div>
-    <p class="text-muted power-outlet-fields" style="font-size:.78rem;margin:0 0 .5rem;grid-column:1/-1">
-        Defaults apply to every outlet at create. Mixed banks (C13 + C19, etc.) are set per outlet
-        on the PDU detail page after save.
-    </p>
+    <input type="hidden" name="num_outlets" id="power_num_outlets" value="<?= App::e((string)$formNumOutlets) ?>">
     <div class="form-row power-breaker-fields" style="display:none"><label>Breaker positions (slots)</label>
         <input class="form-control" type="number" min="1" max="128" name="num_breaker_slots"
                value="<?= App::e((string)$formNumBreakerSlots) ?>"
@@ -367,11 +386,53 @@ $formModal = !empty($formModal);
         var br = mode === 'breakers';
         setGroupEnabled('.power-outlet-fields', !br);
         setGroupEnabled('.power-breaker-fields', br);
-        // Ensure number fields stay within min when re-enabled
-        var nOut = root.querySelector('input[name="num_outlets"]');
         var nBrk = root.querySelector('input[name="num_breaker_slots"]');
-        if (nOut && (!nOut.value || parseInt(nOut.value, 10) < 1)) nOut.value = '24';
         if (nBrk && (!nBrk.value || parseInt(nBrk.value, 10) < 1)) nBrk.value = '42';
+    }
+
+    // Apply inventory template → form fields (create only)
+    var tplSel = root.querySelector('#power_apply_pdu_template');
+    var tplIdInp = root.querySelector('#power_pdu_template_id');
+    var tplCatalog = [];
+    try {
+        if (tplSel && tplSel.getAttribute('data-templates')) {
+            tplCatalog = JSON.parse(tplSel.getAttribute('data-templates') || '[]') || [];
+        }
+    } catch (e) { tplCatalog = []; }
+    function setFormVal(name, val) {
+        var el = root.querySelector('[name="' + name + '"]');
+        if (!el) return;
+        if (el.type === 'checkbox') {
+            el.checked = !!val && val !== '0' && val !== 0;
+            return;
+        }
+        el.value = val == null ? '' : String(val);
+    }
+    function applyPduTemplate(tid) {
+        var t = tplCatalog.find(function (x) { return String(x.template_id) === String(tid); });
+        if (tplIdInp) tplIdInp.value = tid || '';
+        if (!t || !t.fields) return;
+        var f = t.fields;
+        Object.keys(f).forEach(function (k) {
+            // never overwrite identity / placement on apply
+            if (['name', 'serial_no', 'ip_address', 'cabinet_id', 'row_id', 'zone_id', 'position_u'].indexOf(k) >= 0) return;
+            setFormVal(k, f[k]);
+        });
+        if (f.num_outlets != null) {
+            var nOut = root.querySelector('#power_num_outlets') || root.querySelector('input[name="num_outlets"]');
+            if (nOut) nOut.value = String(f.num_outlets);
+        }
+        if (snmpEn) snmpEn.dispatchEvent(new Event('change'));
+        if (snmpVer) snmpVer.dispatchEvent(new Event('change'));
+        if (phases) phases.dispatchEvent(new Event('change'));
+        if (outMode) outMode.dispatchEvent(new Event('change'));
+        if (scope) scope.dispatchEvent(new Event('change'));
+        if (mount) mount.dispatchEvent(new Event('change'));
+    }
+    if (tplSel) {
+        tplSel.addEventListener('change', function () {
+            applyPduTemplate(tplSel.value);
+        });
     }
     function toggleScope() {
         var s = scope ? scope.value : 'rack';
