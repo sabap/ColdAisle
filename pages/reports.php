@@ -8,6 +8,34 @@ $user = App::requirePermission('view_reports');
 
 $report = $_GET['report'] ?? '';
 
+// Power history report filters
+$phPreset = strtolower(trim((string)($_GET['preset'] ?? 'week')));
+if (!in_array($phPreset, ['week', 'month', 'year', 'custom'], true)) {
+    $phPreset = 'week';
+}
+$phScope = strtolower(trim((string)($_GET['scope'] ?? 'site')));
+if (!in_array($phScope, ['site', 'zone', 'pdu'], true)) {
+    $phScope = 'site';
+}
+$phId = isset($_GET['id']) && $_GET['id'] !== '' ? (int)$_GET['id'] : null;
+$phFrom = trim((string)($_GET['from'] ?? ''));
+$phTo = trim((string)($_GET['to'] ?? ''));
+if ($phPreset === 'custom' && ($phFrom === '' || $phTo === '')) {
+    $phFrom = $phFrom !== '' ? $phFrom : date('Y-m-d', strtotime('-7 days'));
+    $phTo = $phTo !== '' ? $phTo : date('Y-m-d');
+}
+$phZones = [];
+$phPdus = [];
+try {
+    $phZones = Database::fetchAll('SELECT zone_id, name FROM power_zones ORDER BY name');
+    $phPdus = Database::fetchAll(
+        'SELECT pdu_id, name FROM pdus WHERE is_active = 1 ORDER BY name'
+    );
+} catch (Throwable $e) {
+    $phZones = [];
+    $phPdus = [];
+}
+
 function report_inventory_summary(): array
 {
     return [
@@ -111,6 +139,7 @@ function report_audit_history(): array
 layout_header('Reports', $user, 'reports');
 
 $catalog = [
+    'power_history' => 'Power History',
     'inventory_summary' => 'Inventory Summary',
     'cabinet_utilization' => 'Cabinet Utilization',
     'power_capacity' => 'Power Capacity',
@@ -136,7 +165,199 @@ $catalog = [
     </div>
 </div>
 
-<?php if ($report === 'inventory_summary'):
+<?php if ($report === 'power_history'):
+    $hoursMap = ['week' => 24 * 7, 'month' => 24 * 31, 'year' => 24 * 365];
+    $phHours = $hoursMap[$phPreset] ?? 24 * 7;
+    $phFromArg = $phPreset === 'custom' ? $phFrom : null;
+    $phToArg = $phPreset === 'custom' ? $phTo : null;
+    $phData = ['ok' => false, 'series' => ['t' => []], 'summary' => [], 'outages' => []];
+    if (class_exists('PowerHistoryService')) {
+        $phData = PowerHistoryService::series(
+            $phScope,
+            $phId,
+            $phHours,
+            $phFromArg,
+            $phToArg
+        );
+    }
+    $phSummary = $phData['summary'] ?? [];
+    $phRows = class_exists('PowerHistoryService') ? PowerHistoryService::tableRows($phData) : [];
+    $csvQs = http_build_query(array_filter([
+        'scope' => $phScope,
+        'id' => $phId,
+        'preset' => $phPreset !== 'custom' ? $phPreset : null,
+        'from' => $phPreset === 'custom' ? $phFrom : null,
+        'to' => $phPreset === 'custom' ? $phTo : null,
+        'format' => 'csv',
+    ], static fn($v) => $v !== null && $v !== ''));
+    $chartHours = (int)($phData['hours'] ?? $phHours);
+    $chartFrom = $phPreset === 'custom' ? $phFrom : '';
+    $chartTo = $phPreset === 'custom' ? $phTo : '';
+    ?>
+<div class="card mb-2">
+    <div class="card-header flex-between">
+        <h2 style="margin:0">Power History</h2>
+        <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('api/power_history.php?' . $csvQs)) ?>">Export CSV</a>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size:.9rem;margin-top:0">
+            Historical load and voltage from SNMP samples (retention ~<?= (int)(class_exists('PowerHistoryService') ? PowerHistoryService::RETENTION_DAYS : 400) ?> days).
+            Weekly / monthly / annual presets or a custom date range.
+        </p>
+        <form method="get" class="form-grid" id="power-history-report-form">
+            <input type="hidden" name="report" value="power_history">
+            <div class="form-row"><label>Range</label>
+                <select class="form-control" name="preset" id="ph_preset">
+                    <option value="week" <?= $phPreset === 'week' ? 'selected' : '' ?>>Last 7 days</option>
+                    <option value="month" <?= $phPreset === 'month' ? 'selected' : '' ?>>Last 31 days</option>
+                    <option value="year" <?= $phPreset === 'year' ? 'selected' : '' ?>>Last 365 days</option>
+                    <option value="custom" <?= $phPreset === 'custom' ? 'selected' : '' ?>>Custom range</option>
+                </select>
+            </div>
+            <div class="form-row ph-custom" <?= $phPreset !== 'custom' ? 'style="display:none"' : '' ?>><label>From</label>
+                <input class="form-control" type="date" name="from" value="<?= App::e($phFrom) ?>"></div>
+            <div class="form-row ph-custom" <?= $phPreset !== 'custom' ? 'style="display:none"' : '' ?>><label>To</label>
+                <input class="form-control" type="date" name="to" value="<?= App::e($phTo) ?>"></div>
+            <div class="form-row"><label>Scope</label>
+                <select class="form-control" name="scope" id="ph_scope">
+                    <option value="site" <?= $phScope === 'site' ? 'selected' : '' ?>>Entire site</option>
+                    <option value="zone" <?= $phScope === 'zone' ? 'selected' : '' ?>>Zone</option>
+                    <option value="pdu" <?= $phScope === 'pdu' ? 'selected' : '' ?>>PDU</option>
+                </select>
+            </div>
+            <div class="form-row" id="ph_zone_row" <?= $phScope !== 'zone' ? 'style="display:none"' : '' ?>><label>Zone</label>
+                <select class="form-control" name="id" id="ph_zone_id" <?= $phScope !== 'zone' ? 'disabled' : '' ?>>
+                    <option value="">— select —</option>
+                    <?php foreach ($phZones as $z): ?>
+                        <option value="<?= (int)$z['zone_id'] ?>" <?= $phScope === 'zone' && $phId === (int)$z['zone_id'] ? 'selected' : '' ?>>
+                            <?= App::e($z['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row" id="ph_pdu_row" <?= $phScope !== 'pdu' ? 'style="display:none"' : '' ?>><label>PDU</label>
+                <select class="form-control" name="id" id="ph_pdu_id" <?= $phScope !== 'pdu' ? 'disabled' : '' ?>>
+                    <option value="">— select —</option>
+                    <?php foreach ($phPdus as $p): ?>
+                        <option value="<?= (int)$p['pdu_id'] ?>" <?= $phScope === 'pdu' && $phId === (int)$p['pdu_id'] ? 'selected' : '' ?>>
+                            <?= App::e($p['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row" style="align-self:end">
+                <button class="btn btn-primary" type="submit">Run report</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="metrics power-metrics">
+    <div class="metric-card warning">
+        <div class="label">Peak load</div>
+        <div class="value"><?= isset($phSummary['kw']['max']) ? number_format((float)$phSummary['kw']['max'], 2) : '—' ?> <span class="metric-unit">kW</span></div>
+        <div class="sub">avg <?= isset($phSummary['kw']['avg']) ? number_format((float)$phSummary['kw']['avg'], 2) : '—' ?> · min <?= isset($phSummary['kw']['min']) ? number_format((float)$phSummary['kw']['min'], 2) : '—' ?></div>
+    </div>
+    <div class="metric-card accent">
+        <div class="label">Input voltage</div>
+        <div class="value"><?= isset($phSummary['volts']['avg']) ? number_format((float)$phSummary['volts']['avg'], 0) : '—' ?> <span class="metric-unit">V avg</span></div>
+        <div class="sub">peak <?= isset($phSummary['volts']['max']) ? number_format((float)$phSummary['volts']['max'], 0) : '—' ?> · min <?= isset($phSummary['volts']['min']) ? number_format((float)$phSummary['volts']['min'], 0) : '—' ?></div>
+    </div>
+    <div class="metric-card">
+        <div class="label">Samples</div>
+        <div class="value"><?= (int)($phSummary['sample_count'] ?? 0) ?></div>
+        <div class="sub"><?= (int)($phSummary['points'] ?? 0) ?> chart buckets · <?= (int)($phSummary['bucket_minutes'] ?? 0) ?> min</div>
+    </div>
+    <div class="metric-card <?= !empty($phSummary['outage_events']) ? 'danger' : 'success' ?>">
+        <div class="label">Outage events</div>
+        <div class="value"><?= (int)($phSummary['outage_events'] ?? 0) ?></div>
+        <div class="sub">phase dead / low-V / overload</div>
+    </div>
+</div>
+
+<div class="card power-history-wide mb-2"
+     data-power-history
+     data-scope="<?= App::e($phScope) ?>"
+     <?= $phId ? 'data-id="' . (int)$phId . '"' : '' ?>
+     <?php if ($phPreset === 'custom'): ?>
+        data-from="<?= App::e($chartFrom) ?>"
+        data-to="<?= App::e($chartTo) ?>"
+     <?php else: ?>
+        data-preset="<?= App::e($phPreset) ?>"
+        data-hours="<?= (int)$chartHours ?>"
+     <?php endif; ?>>
+    <div class="card-header flex-between">
+        <h2 style="margin:0;font-size:1.05rem">Load &amp; voltage</h2>
+        <span class="text-muted" style="font-size:.8rem">
+            <?= App::e(($phData['from'] ?? '') . ' → ' . ($phData['to'] ?? '')) ?>
+        </span>
+    </div>
+    <div class="card-body power-history-body">
+        <div class="power-outage-summary" data-outage-summary hidden></div>
+        <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Output (usage)" data-color="#38bdf8" data-height="220"></div>
+        <div class="power-chart power-chart-lg" data-metric="volts" data-unit="V" data-label="Input voltage (avg L–N)" data-color="#a78bfa" data-height="180"></div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header flex-between">
+        <h2>Bucket table</h2>
+        <span class="text-muted" style="font-size:.85rem"><?= count($phRows) ?> rows</span>
+    </div>
+    <div class="card-body flush" style="max-height:28rem;overflow:auto">
+        <table class="data">
+            <thead><tr><th>Time</th><th>kW</th><th>Watts</th><th>Volts</th><th>Amps</th></tr></thead>
+            <tbody>
+            <?php foreach (array_reverse($phRows) as $r): ?>
+                <tr>
+                    <td><?= App::e((string)$r['time']) ?></td>
+                    <td><?= $r['kw'] !== null ? App::e((string)$r['kw']) : '—' ?></td>
+                    <td><?= $r['watts'] !== null ? App::e((string)$r['watts']) : '—' ?></td>
+                    <td><?= $r['volts'] !== null ? App::e((string)$r['volts']) : '—' ?></td>
+                    <td><?= $r['amps'] !== null ? App::e((string)$r['amps']) : '—' ?></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$phRows): ?>
+                <tr><td colspan="5" class="text-muted">No samples in this range. Poll PDUs with SNMP to build history.</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+<script>
+(function () {
+    var preset = document.getElementById('ph_preset');
+    var scope = document.getElementById('ph_scope');
+    function syncCustom() {
+        var custom = preset && preset.value === 'custom';
+        document.querySelectorAll('.ph-custom').forEach(function (el) {
+            el.style.display = custom ? '' : 'none';
+        });
+    }
+    function syncScope() {
+        var v = scope ? scope.value : 'site';
+        var zr = document.getElementById('ph_zone_row');
+        var pr = document.getElementById('ph_pdu_row');
+        var zi = document.getElementById('ph_zone_id');
+        var pi = document.getElementById('ph_pdu_id');
+        if (zr) zr.style.display = v === 'zone' ? '' : 'none';
+        if (pr) pr.style.display = v === 'pdu' ? '' : 'none';
+        if (zi) { zi.disabled = v !== 'zone'; if (v !== 'zone') zi.name = ''; else zi.name = 'id'; }
+        if (pi) { pi.disabled = v !== 'pdu'; if (v !== 'pdu') pi.name = ''; else pi.name = 'id'; }
+        if (v === 'site') {
+            if (zi) zi.name = '';
+            if (pi) pi.name = '';
+        }
+    }
+    if (preset) preset.addEventListener('change', syncCustom);
+    if (scope) scope.addEventListener('change', syncScope);
+    syncCustom();
+    syncScope();
+})();
+</script>
+<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=4"></script>
+
+<?php elseif ($report === 'inventory_summary'):
     $data = report_inventory_summary(); ?>
 <div class="split-2">
     <div class="card"><div class="card-header"><h2>By Type</h2></div>
