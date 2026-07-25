@@ -200,14 +200,17 @@ class PowerHistoryService
         $hours = max(1, min(24 * 90, $hours));
         $bucketMin = self::bucketMinutesForHours($hours);
 
+        // PDU scope: aggregate entirely in PHP so volts / phase lines / outages
+        // share the same time buckets (avoids SQL vs PHP timezone mismatches).
+        if ($scope === 'pdu' && $scopeId && $scopeId > 0) {
+            return self::seriesFromRawPduSamples($scopeId, $hours, $bucketMin);
+        }
+
         $params = [];
         $where = 'r.polled_at >= DATEADD(HOUR, -' . (int)$hours . ', SYSUTCDATETIME())';
         $join = '';
 
-        if ($scope === 'pdu' && $scopeId && $scopeId > 0) {
-            $where .= ' AND r.pdu_id = ?';
-            $params[] = $scopeId;
-        } elseif ($scope === 'zone' && $scopeId && $scopeId > 0) {
+        if ($scope === 'zone' && $scopeId && $scopeId > 0) {
             $join = ' INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.is_active = 1 AND p.zone_id = ? ';
             $params[] = $scopeId;
         } else {
@@ -218,42 +221,53 @@ class PowerHistoryService
 
         $bucketExpr = "DATEADD(MINUTE, (DATEDIFF(MINUTE, '20000101', r.polled_at) / {$bucketMin}) * {$bucketMin}, '20000101')";
 
-        if ($scope === 'pdu') {
-            $sql = "SELECT {$bucketExpr} AS bucket,
-                           AVG(r.watts) AS watts,
-                           AVG(r.amps) AS amps,
-                           AVG(r.volts) AS volts
+        // Prefer volts column; fall back to volts derived in PHP path for zone/site raw fill
+        $sql = "SELECT bucket,
+                       SUM(pdu_watts) AS watts,
+                       SUM(pdu_amps) AS amps,
+                       AVG(pdu_volts) AS volts
+                FROM (
+                    SELECT r.pdu_id,
+                           {$bucketExpr} AS bucket,
+                           AVG(r.watts) AS pdu_watts,
+                           AVG(r.amps) AS pdu_amps,
+                           AVG(COALESCE(r.volts, r.volts_ll)) AS pdu_volts
                     FROM pdu_readings r
                     {$join}
                     WHERE {$where}
-                    GROUP BY {$bucketExpr}
-                    ORDER BY bucket";
-        } else {
-            $sql = "SELECT bucket,
-                           SUM(pdu_watts) AS watts,
-                           SUM(pdu_amps) AS amps,
-                           AVG(pdu_volts) AS volts
-                    FROM (
-                        SELECT r.pdu_id,
-                               {$bucketExpr} AS bucket,
-                               AVG(r.watts) AS pdu_watts,
-                               AVG(r.amps) AS pdu_amps,
-                               AVG(r.volts) AS pdu_volts
-                        FROM pdu_readings r
-                        {$join}
-                        WHERE {$where}
-                        GROUP BY r.pdu_id, {$bucketExpr}
-                    ) x
-                    GROUP BY bucket
-                    ORDER BY bucket";
-        }
+                    GROUP BY r.pdu_id, {$bucketExpr}
+                ) x
+                GROUP BY bucket
+                ORDER BY bucket";
 
         $rows = [];
         try {
             $rows = Database::fetchAll($sql, $params);
         } catch (Throwable $e) {
-            App::log('PowerHistory series: ' . $e->getMessage(), 'warning');
-            $rows = [];
+            // Older schema without volts_ll
+            try {
+                $sql = "SELECT bucket,
+                               SUM(pdu_watts) AS watts,
+                               SUM(pdu_amps) AS amps,
+                               AVG(pdu_volts) AS volts
+                        FROM (
+                            SELECT r.pdu_id,
+                                   {$bucketExpr} AS bucket,
+                                   AVG(r.watts) AS pdu_watts,
+                                   AVG(r.amps) AS pdu_amps,
+                                   AVG(r.volts) AS pdu_volts
+                            FROM pdu_readings r
+                            {$join}
+                            WHERE {$where}
+                            GROUP BY r.pdu_id, {$bucketExpr}
+                        ) x
+                        GROUP BY bucket
+                        ORDER BY bucket";
+                $rows = Database::fetchAll($sql, $params);
+            } catch (Throwable $e2) {
+                App::log('PowerHistory series: ' . $e2->getMessage(), 'warning');
+                $rows = [];
+            }
         }
 
         $t = [];
@@ -261,11 +275,9 @@ class PowerHistoryService
         $kw = [];
         $volts = [];
         $amps = [];
-        $bucketKeys = [];
         foreach ($rows as $r) {
             $bt = self::formatBucket($r['bucket'] ?? null);
             $t[] = $bt;
-            $bucketKeys[$bt] = count($t) - 1;
             $w = isset($r['watts']) && is_numeric($r['watts']) ? (float)$r['watts'] : null;
             $watts[] = $w;
             $kw[] = $w !== null ? round($w / 1000.0, 3) : null;
@@ -273,22 +285,10 @@ class PowerHistoryService
             $amps[] = isset($r['amps']) && is_numeric($r['amps']) ? round((float)$r['amps'], 3) : null;
         }
 
-        $outages = self::loadOutageMarkers($scope, $scopeId, $hours, $bucketMin);
-        $phaseVolts = null;
-        if ($scope === 'pdu' && $scopeId) {
-            $phaseVolts = self::loadPhaseVoltageSeries($scopeId, $hours, $bucketMin, $t);
-        }
+        // Carry-forward voltage so sparse samples still draw a continuous line
+        $volts = self::carryForward($volts);
 
-        $series = [
-            't' => $t,
-            'watts' => $watts,
-            'kw' => $kw,
-            'volts' => $volts,
-            'amps' => $amps,
-        ];
-        if ($phaseVolts) {
-            $series['phase_volts'] = $phaseVolts;
-        }
+        $outages = self::loadOutageMarkers($scope, $scopeId, $hours, $bucketMin);
 
         $outageCount = count($outages);
         $outagePhases = [];
@@ -304,7 +304,13 @@ class PowerHistoryService
             'scope_id' => $scopeId,
             'hours' => $hours,
             'bucket_minutes' => $bucketMin,
-            'series' => $series,
+            'series' => [
+                't' => $t,
+                'watts' => $watts,
+                'kw' => $kw,
+                'volts' => $volts,
+                'amps' => $amps,
+            ],
             'outages' => $outages,
             'meta' => [
                 'points' => count($t),
@@ -313,6 +319,228 @@ class PowerHistoryService
                 'outage_phases' => array_keys($outagePhases),
             ],
         ];
+    }
+
+    /**
+     * Build PDU series in PHP so watts/volts/phase lines share identical buckets.
+     *
+     * @return array<string,mixed>
+     */
+    private static function seriesFromRawPduSamples(int $pduId, int $hours, int $bucketMin): array
+    {
+        $rows = [];
+        try {
+            $rows = Database::fetchAll(
+                'SELECT polled_at, watts, amps, volts, volts_ll, phases_json, outage_phases
+                 FROM pdu_readings
+                 WHERE pdu_id = ?
+                   AND polled_at >= DATEADD(HOUR, -' . (int)$hours . ', SYSUTCDATETIME())
+                 ORDER BY polled_at',
+                [$pduId]
+            );
+        } catch (Throwable $e) {
+            try {
+                $rows = Database::fetchAll(
+                    'SELECT polled_at, watts, amps, volts, phases_json, outage_phases
+                     FROM pdu_readings
+                     WHERE pdu_id = ?
+                       AND polled_at >= DATEADD(HOUR, -' . (int)$hours . ', SYSUTCDATETIME())
+                     ORDER BY polled_at',
+                    [$pduId]
+                );
+            } catch (Throwable $e2) {
+                $rows = [];
+            }
+        }
+
+        /** @var array<int,array{w:list<float>,a:list<float>,v:list<float>,L1:list<float>,L2:list<float>,L3:list<float>,out:array}> $buckets */
+        $buckets = [];
+        foreach ($rows as $r) {
+            $ts = strtotime((string)($r['polled_at'] ?? ''));
+            if (!$ts) {
+                continue;
+            }
+            $bKey = self::bucketUnix($ts, $bucketMin);
+            if (!isset($buckets[$bKey])) {
+                $buckets[$bKey] = [
+                    'w' => [], 'a' => [], 'v' => [],
+                    'L1' => [], 'L2' => [], 'L3' => [],
+                    'out' => [],
+                ];
+            }
+            if (isset($r['watts']) && is_numeric($r['watts'])) {
+                $buckets[$bKey]['w'][] = (float)$r['watts'];
+            }
+            if (isset($r['amps']) && is_numeric($r['amps'])) {
+                $buckets[$bKey]['a'][] = (float)$r['amps'];
+            }
+
+            $phaseV = ['L1' => null, 'L2' => null, 'L3' => null];
+            $json = null;
+            if (!empty($r['phases_json'])) {
+                $json = json_decode((string)$r['phases_json'], true);
+            }
+            if (is_array($json)) {
+                foreach (['L1', 'L2', 'L3'] as $lab) {
+                    if (isset($json[$lab]['volts']) && is_numeric($json[$lab]['volts'])) {
+                        $vv = (float)$json[$lab]['volts'];
+                        $phaseV[$lab] = $vv;
+                        $buckets[$bKey][$lab][] = $vv;
+                    }
+                }
+            }
+
+            $v = null;
+            if (isset($r['volts']) && is_numeric($r['volts'])) {
+                $v = (float)$r['volts'];
+            } else {
+                $pv = array_filter($phaseV, static fn($x) => $x !== null);
+                if ($pv) {
+                    $v = array_sum($pv) / count($pv);
+                } elseif (isset($r['volts_ll']) && is_numeric($r['volts_ll'])) {
+                    // L–L → approximate L–N for display continuity
+                    $v = (float)$r['volts_ll'] / 1.732;
+                }
+            }
+            if ($v !== null) {
+                $buckets[$bKey]['v'][] = $v;
+            }
+
+            $op = trim((string)($r['outage_phases'] ?? ''));
+            if ($op !== '') {
+                $buckets[$bKey]['out'][] = $op;
+            }
+        }
+
+        ksort($buckets, SORT_NUMERIC);
+
+        $t = [];
+        $watts = [];
+        $kw = [];
+        $volts = [];
+        $amps = [];
+        $L1 = [];
+        $L2 = [];
+        $L3 = [];
+        $outages = [];
+
+        foreach ($buckets as $bKey => $b) {
+            $t[] = date('c', $bKey);
+            $w = $b['w'] ? array_sum($b['w']) / count($b['w']) : null;
+            $a = $b['a'] ? array_sum($b['a']) / count($b['a']) : null;
+            $v = $b['v'] ? array_sum($b['v']) / count($b['v']) : null;
+            $watts[] = $w !== null ? round($w, 3) : null;
+            $kw[] = $w !== null ? round($w / 1000.0, 3) : null;
+            $volts[] = $v !== null ? round($v, 2) : null;
+            $amps[] = $a !== null ? round($a, 3) : null;
+            $L1[] = $b['L1'] ? round(array_sum($b['L1']) / count($b['L1']), 2) : null;
+            $L2[] = $b['L2'] ? round(array_sum($b['L2']) / count($b['L2']), 2) : null;
+            $L3[] = $b['L3'] ? round(array_sum($b['L3']) / count($b['L3']), 2) : null;
+
+            if ($b['out']) {
+                $phases = [];
+                $reasons = [];
+                foreach ($b['out'] as $op) {
+                    $parsed = self::parseOutagePhasesString($op);
+                    foreach ($parsed['phases'] as $ph) {
+                        $phases[$ph] = true;
+                    }
+                    foreach ($parsed['reasons'] as $rs) {
+                        $reasons[$rs] = true;
+                    }
+                }
+                $phList = array_keys($phases);
+                sort($phList);
+                $rsList = array_keys($reasons);
+                $label = $phList ? implode(',', $phList) : 'outage';
+                if ($rsList) {
+                    $label .= ' (' . implode('/', $rsList) . ')';
+                }
+                $outages[] = [
+                    't' => date('c', $bKey),
+                    'phases' => $phList,
+                    'label' => $label,
+                    'count' => count($b['out']),
+                    'reasons' => $rsList,
+                ];
+            }
+        }
+
+        // Continuous lines when some buckets lack voltage but earlier ones had it
+        $volts = self::carryForward($volts);
+        $L1 = self::carryForward($L1);
+        $L2 = self::carryForward($L2);
+        $L3 = self::carryForward($L3);
+
+        $hasPhase = false;
+        foreach (array_merge($L1, $L2, $L3) as $pv) {
+            if ($pv !== null) {
+                $hasPhase = true;
+                break;
+            }
+        }
+
+        $series = [
+            't' => $t,
+            'watts' => $watts,
+            'kw' => $kw,
+            'volts' => $volts,
+            'amps' => $amps,
+        ];
+        if ($hasPhase) {
+            $series['phase_volts'] = ['L1' => $L1, 'L2' => $L2, 'L3' => $L3];
+        }
+
+        $outagePhases = [];
+        foreach ($outages as $o) {
+            foreach ($o['phases'] as $ph) {
+                $outagePhases[$ph] = true;
+            }
+        }
+
+        return [
+            'ok' => true,
+            'scope' => 'pdu',
+            'scope_id' => $pduId,
+            'hours' => $hours,
+            'bucket_minutes' => $bucketMin,
+            'series' => $series,
+            'outages' => $outages,
+            'meta' => [
+                'points' => count($t),
+                'sample_count' => count($rows),
+                'outage_events' => count($outages),
+                'outage_phases' => array_keys($outagePhases),
+                'has_phase_volts' => $hasPhase,
+            ],
+        ];
+    }
+
+    /** Unix timestamp floored to bucket start (seconds). */
+    private static function bucketUnix(int $ts, int $bucketMin): int
+    {
+        $step = max(1, $bucketMin) * 60;
+        return (int)(floor($ts / $step) * $step);
+    }
+
+    /**
+     * Forward-fill nulls so a sparse metric still draws a continuous line.
+     * @param list<?float> $vals
+     * @return list<?float>
+     */
+    private static function carryForward(array $vals): array
+    {
+        $last = null;
+        $out = [];
+        foreach ($vals as $v) {
+            if ($v !== null && is_numeric($v)) {
+                $last = (float)$v;
+                $out[] = $last;
+            } else {
+                $out[] = $last;
+            }
+        }
+        return $out;
     }
 
     /**
@@ -432,110 +660,6 @@ class PowerHistoryService
             'phases' => array_keys($phases),
             'reasons' => array_keys($reasons),
         ];
-    }
-
-    /**
-     * Per-phase LN voltage series for a single PDU (from phases_json samples).
-     *
-     * @param list<string> $bucketTimes aligned empty series lengths
-     * @return array{L1:list<?float>,L2:list<?float>,L3:list<?float>}|null
-     */
-    private static function loadPhaseVoltageSeries(
-        int $pduId,
-        int $hours,
-        int $bucketMin,
-        array $bucketTimes
-    ): ?array {
-        if (!$bucketTimes) {
-            return null;
-        }
-        try {
-            $rows = Database::fetchAll(
-                'SELECT polled_at, phases_json FROM pdu_readings
-                 WHERE pdu_id = ?
-                   AND polled_at >= DATEADD(HOUR, -' . (int)$hours . ', SYSUTCDATETIME())
-                   AND phases_json IS NOT NULL
-                 ORDER BY polled_at',
-                [$pduId]
-            );
-        } catch (Throwable $e) {
-            return null;
-        }
-        if (!$rows) {
-            return null;
-        }
-
-        // Map bucket ISO -> accumulators
-        $acc = [];
-        foreach ($bucketTimes as $bt) {
-            $acc[$bt] = ['L1' => [], 'L2' => [], 'L3' => []];
-        }
-
-        foreach ($rows as $r) {
-            $ts = strtotime((string)$r['polled_at']);
-            if (!$ts) {
-                continue;
-            }
-            // Floor to bucket
-            $floor = (int)(floor($ts / 60 / $bucketMin) * $bucketMin * 60);
-            $bt = date('c', $floor);
-            // Find nearest bucket key in series (format may differ slightly)
-            $key = self::nearestBucketKey($bt, $bucketTimes);
-            if ($key === null) {
-                continue;
-            }
-            $json = json_decode((string)$r['phases_json'], true);
-            if (!is_array($json)) {
-                continue;
-            }
-            foreach (['L1', 'L2', 'L3'] as $lab) {
-                if (isset($json[$lab]['volts']) && is_numeric($json[$lab]['volts'])) {
-                    $acc[$key][$lab][] = (float)$json[$lab]['volts'];
-                }
-            }
-        }
-
-        $out = ['L1' => [], 'L2' => [], 'L3' => []];
-        $any = false;
-        foreach ($bucketTimes as $bt) {
-            foreach (['L1', 'L2', 'L3'] as $lab) {
-                $vals = $acc[$bt][$lab] ?? [];
-                if ($vals) {
-                    $out[$lab][] = round(array_sum($vals) / count($vals), 2);
-                    $any = true;
-                } else {
-                    $out[$lab][] = null;
-                }
-            }
-        }
-        return $any ? $out : null;
-    }
-
-    /** @param list<string> $bucketTimes */
-    private static function nearestBucketKey(string $bt, array $bucketTimes): ?string
-    {
-        if (isset(array_flip($bucketTimes)[$bt])) {
-            return $bt;
-        }
-        $ts = strtotime($bt);
-        if (!$ts) {
-            return null;
-        }
-        $best = null;
-        $bestDiff = PHP_INT_MAX;
-        foreach ($bucketTimes as $k) {
-            $kts = strtotime($k);
-            if (!$kts) {
-                continue;
-            }
-            $d = abs($kts - $ts);
-            if ($d < $bestDiff) {
-                $bestDiff = $d;
-                $best = $k;
-            }
-        }
-        // Within 10 minutes
-        return ($best !== null && $bestDiff <= 600) ? $best : null;
     }
 
     private static function bucketMinutesForHours(int $hours): int
