@@ -261,10 +261,8 @@ class SnmpPoller
         $siteTplId = (int)($pdu['snmp_site_template_id'] ?? 0);
         if ($siteTplId > 0) {
             $result = self::pollPduFromSiteTemplate($pdu, $siteTplId);
-            $nPhase = is_array($result['phases'] ?? null) ? count($result['phases']) : 0;
-            // Count only L1/L2/L3 for phase message (meta keys _ll/_device/_ps)
+            $nPhase = 0;
             if (is_array($result['phases'] ?? null)) {
-                $nPhase = 0;
                 foreach (['L1', 'L2', 'L3'] as $lab) {
                     if (isset($result['phases'][$lab])) {
                         $nPhase++;
@@ -278,6 +276,15 @@ class SnmpPoller
             }
             if ($nOut > 0) {
                 $msg .= ', ' . $nOut . ' outlet(s)';
+            } else {
+                $od = $result['outlet_diag'] ?? null;
+                if (is_array($od) && ($od['status'] ?? '') === 'probe_failed') {
+                    $msg .= '; no per-outlet SNMP on this device';
+                } elseif (is_array($od) && ($od['status'] ?? '') === 'no_keys') {
+                    $msg .= '; no outlet_* keys in template';
+                } elseif (is_array($od) && ($od['status'] ?? '') !== 'ok') {
+                    $msg .= '; outlets not read';
+                }
             }
             $msg .= ').';
             return [
@@ -287,6 +294,7 @@ class SnmpPoller
                 'amps' => $result['amps'],
                 'phases' => $result['phases'],
                 'outlets' => $result['outlets'] ?? null,
+                'outlet_diag' => $result['outlet_diag'] ?? null,
             ];
         }
 
@@ -364,6 +372,7 @@ class SnmpPoller
             'amps' => $got['amps'],
             'phases' => $got['phases'],
             'outlets' => $got['outlets'] ?? null,
+            'outlet_diag' => $got['outlet_diag'] ?? null,
             'serial_no' => $got['serial_no'] ?? null,
             'ok' => $got['ok'],
             'failed' => $got['failed'],
@@ -626,7 +635,8 @@ class SnmpPoller
         }
 
         // Per-outlet table walks (APC rPDU2OutletMeteredStatus* bases)
-        $outletsOut = self::collectOutletTables($session, $oidMap, $ok, $failed, $lastErr);
+        $outletDiag = null;
+        $outletsOut = self::collectOutletTables($session, $oidMap, $ok, $failed, $lastErr, $outletDiag);
 
         $phasesOut = null;
         if ($phaseBag || $ll || $deviceVa !== null || $devicePf !== null
@@ -719,6 +729,7 @@ class SnmpPoller
             'amps' => $amps,
             'phases' => $phasesOut,
             'outlets' => $outletsOut,
+            'outlet_diag' => $outletDiag,
             'serial_no' => $serialNo,
             'ok' => $ok,
             'failed' => $failed,
@@ -732,6 +743,7 @@ class SnmpPoller
      *
      * Index style: probe base.1 then base.1.1 (APC module.outlet).
      *
+     * @param-out array{status:string,message:string,columns?:int,style?:string}|null $diag
      * @return array<string,array<string,mixed>>|null
      */
     private static function collectOutletTables(
@@ -739,8 +751,10 @@ class SnmpPoller
         array $oidMap,
         int &$ok,
         int &$failed,
-        ?string &$lastErr
+        ?string &$lastErr,
+        ?array &$diag = null
     ): ?array {
+        $diag = null;
         /** @var array<string,array{oid:string,scale_key:string}> $columns */
         $columns = [];
         foreach ($oidMap as $metric => $oid) {
@@ -763,6 +777,10 @@ class SnmpPoller
             ];
         }
         if (!$columns) {
+            $diag = [
+                'status' => 'no_keys',
+                'message' => 'No outlet_* OIDs in site template map',
+            ];
             return null;
         }
 
@@ -772,6 +790,13 @@ class SnmpPoller
             ?? $columns['name']['oid'];
         $style = self::probeOutletIndexStyle($session, $probeOid);
         if ($style === null) {
+            $diag = [
+                'status' => 'probe_failed',
+                'message' => 'Outlet table not present on this agent (no response at '
+                    . $probeOid . '.1 or .1.1) — typical for floor PDUs or lab agents without rPDU2 outlet metering',
+                'columns' => count($columns),
+                'probe_base' => $probeOid,
+            ];
             return null;
         }
 
@@ -783,7 +808,6 @@ class SnmpPoller
 
         require_once __DIR__ . '/SnmpDiscover.php';
         $byNum = [];
-        $miss = 0;
         for ($i = 1; $i <= $max; $i++) {
             $suffix = $style === 'module' ? ('.1.' . $i) : ('.' . $i);
             $row = ['num' => $i];
@@ -811,18 +835,37 @@ class SnmpPoller
                 }
             }
             if (!$got) {
-                $miss++;
                 // Stop after first full miss (tables are contiguous)
                 if ($i === 1) {
+                    $diag = [
+                        'status' => 'empty',
+                        'message' => 'Outlet index style ' . $style . ' probed OK but first row GETs failed',
+                        'columns' => count($columns),
+                        'style' => $style,
+                    ];
                     return null;
                 }
                 break;
             }
-            $miss = 0;
             $byNum[(string)$i] = $row;
         }
 
-        return $byNum ?: null;
+        if ($byNum) {
+            $diag = [
+                'status' => 'ok',
+                'message' => count($byNum) . ' outlet(s)',
+                'columns' => count($columns),
+                'style' => $style,
+            ];
+            return $byNum;
+        }
+        $diag = [
+            'status' => 'empty',
+            'message' => 'Outlet walk returned no rows',
+            'columns' => count($columns),
+            'style' => $style,
+        ];
+        return null;
     }
 
     /** @return 'simple'|'module'|null */
