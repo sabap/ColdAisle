@@ -348,26 +348,36 @@ class SnmpPoller
     /**
      * GET each map OID and classify device totals vs phase1/2/3 metrics.
      *
-     * Supported phase keys: phase1_watts, phase2_amps, phase3_volts, phase1_amps_x10, …
-     * Device totals: watts, amps, amps_x10 (exact key or total_/device_ prefix).
-     * If no device watts/amps but phases have them, totals are summed from phases.
+     * Phase keys: phase1_watts, phase2_amps_x10, phase3_volts, phase1_va_hundredths_kw,
+     *   phase1_pf_x100, phase1_peak_amps_x10, phase1_load_state, …
+     * L–L: phase_l12_volts, phase_l23_volts, phase_l31_volts
+     * Device: watts, amps, va, pf_x1000, ps1_status, ps2_status, ps_alarm, phase_rated_amps
+     * Scales: see applyMetricScale().
      *
      * @param callable|null $onMetric function(string $metric, mixed $raw, ?float $num): void
-     * @return array{
-     *   watts:?float,amps:?float,
-     *   phases:?array<string,array{watts:?float,amps:?float,volts:?float}>,
-     *   ok:int,failed:int,last_error:?string
-     * }
+     * @return array{watts:?float,amps:?float,phases:?array,ok:int,failed:int,last_error:?string}
      */
     private static function collectOidMap($session, array $oidMap, ?callable $onMetric = null): array
     {
         $deviceWatts = null;
         $deviceAmps = null;
-        /** @var array<int,array{watts:?float,amps:?float,volts:?float}> $phaseBag */
+        $deviceVa = null;
+        $devicePf = null;
+        $ratedAmps = null;
+        $ps1 = null;
+        $ps2 = null;
+        $psAlarm = null;
+        $ll = [];
+        /** @var array<int,array<string,?float>> $phaseBag */
         $phaseBag = [];
         $ok = 0;
         $failed = 0;
         $lastErr = null;
+
+        $emptyPhase = static fn(): array => [
+            'watts' => null, 'amps' => null, 'volts' => null,
+            'va' => null, 'pf' => null, 'peak_amps' => null, 'load_state' => null,
+        ];
 
         foreach ($oidMap as $metric => $oid) {
             if (is_string($metric) && str_starts_with($metric, '_')) {
@@ -388,20 +398,42 @@ class SnmpPoller
                     $onMetric((string)$metric, $raw, $num);
                 }
 
-                // phase1_watts, phase2_amps_x10, phase3_volts, phase1_watts_tenths_kw, …
-                if (preg_match('/^phase([123])_(watts|amps|volts)\b/i', $metricKey, $pm)) {
+                // Allow scale suffixes: phase1_watts_hundredths_kw, phase2_amps_x10, …
+                if (preg_match(
+                    '/^phase([123])_(watts|amps|volts|va|pf|peak_amps|load_state)(?:_|$)/i',
+                    $metricKey,
+                    $pm
+                )) {
                     $idx = (int)$pm[1];
                     $field = strtolower($pm[2]);
                     if (!isset($phaseBag[$idx])) {
-                        $phaseBag[$idx] = ['watts' => null, 'amps' => null, 'volts' => null];
+                        $phaseBag[$idx] = $emptyPhase();
                     }
                     if ($num !== null) {
                         $phaseBag[$idx][$field] = $num;
                     }
+                } elseif (preg_match('/^phase_l12_volts\b/', $metricKey) && $num !== null) {
+                    $ll['L1-2'] = $num;
+                } elseif (preg_match('/^phase_l23_volts\b/', $metricKey) && $num !== null) {
+                    $ll['L2-3'] = $num;
+                } elseif (preg_match('/^phase_l31_volts\b/', $metricKey) && $num !== null) {
+                    $ll['L3-1'] = $num;
                 } elseif (self::isDeviceTotalWattsKey($metricKey) && $num !== null) {
                     $deviceWatts = $num;
                 } elseif (self::isDeviceTotalAmpsKey($metricKey) && $num !== null) {
                     $deviceAmps = $num;
+                } elseif (preg_match('/^(va|device_va|total_va)\b/', $metricKey) && $num !== null) {
+                    $deviceVa = $num;
+                } elseif (preg_match('/^(pf|device_pf|power_factor)\b/', $metricKey) && $num !== null) {
+                    $devicePf = $num;
+                } elseif (preg_match('/^(phase_rated_amps|max_phase_amps|rated_phase_amps)\b/', $metricKey) && $num !== null) {
+                    $ratedAmps = $num;
+                } elseif (preg_match('/^ps1_status\b/', $metricKey) && $num !== null) {
+                    $ps1 = $num;
+                } elseif (preg_match('/^ps2_status\b/', $metricKey) && $num !== null) {
+                    $ps2 = $num;
+                } elseif (preg_match('/^ps_alarm\b/', $metricKey) && $num !== null) {
+                    $psAlarm = $num;
                 }
                 $ok++;
             } catch (Throwable $e) {
@@ -411,17 +443,57 @@ class SnmpPoller
         }
 
         $phasesOut = null;
-        if ($phaseBag) {
+        if ($phaseBag || $ll || $deviceVa !== null || $devicePf !== null
+            || $ps1 !== null || $ps2 !== null || $psAlarm !== null || $ratedAmps !== null
+        ) {
             $phasesOut = [];
             $labels = [1 => 'L1', 2 => 'L2', 3 => 'L3'];
             ksort($phaseBag);
             foreach ($phaseBag as $idx => $fields) {
-                if ($fields['watts'] === null && $fields['amps'] === null && $fields['volts'] === null) {
+                $has = false;
+                foreach ($fields as $v) {
+                    if ($v !== null) {
+                        $has = true;
+                        break;
+                    }
+                }
+                if (!$has) {
                     continue;
                 }
                 $phasesOut[$labels[$idx] ?? ('L' . $idx)] = $fields;
             }
-            if (!$phasesOut) {
+            if ($ll) {
+                $phasesOut['_ll'] = $ll;
+            }
+            $deviceMeta = [];
+            if ($deviceVa !== null) {
+                $deviceMeta['va'] = $deviceVa;
+            }
+            if ($devicePf !== null) {
+                $deviceMeta['pf'] = $devicePf;
+            }
+            if ($ratedAmps !== null) {
+                $deviceMeta['rated_amps'] = $ratedAmps;
+            }
+            if ($deviceMeta) {
+                $phasesOut['_device'] = $deviceMeta;
+            }
+            $ps = [];
+            if ($ps1 !== null) {
+                $ps['ps1'] = $ps1;
+            }
+            if ($ps2 !== null) {
+                $ps['ps2'] = $ps2;
+            }
+            if ($psAlarm !== null) {
+                $ps['alarm'] = $psAlarm;
+            }
+            if ($ps) {
+                $phasesOut['_ps'] = $ps;
+            }
+            // Only L1/L2/L3 → still a phase snapshot; meta-only is also stored
+            $hasPhaseRow = isset($phasesOut['L1']) || isset($phasesOut['L2']) || isset($phasesOut['L3']);
+            if (!$hasPhaseRow && !isset($phasesOut['_ll']) && !isset($phasesOut['_device']) && !isset($phasesOut['_ps'])) {
                 $phasesOut = null;
             }
         }
@@ -429,12 +501,12 @@ class SnmpPoller
         // Prefer explicit device totals; else sum phases for zone rollup
         $watts = $deviceWatts;
         $amps = $deviceAmps;
-        if ($watts === null && $phasesOut) {
+        if ($watts === null && is_array($phasesOut)) {
             $sum = 0.0;
             $any = false;
-            foreach ($phasesOut as $p) {
-                if ($p['watts'] !== null) {
-                    $sum += (float)$p['watts'];
+            foreach (['L1', 'L2', 'L3'] as $lab) {
+                if (isset($phasesOut[$lab]['watts']) && $phasesOut[$lab]['watts'] !== null) {
+                    $sum += (float)$phasesOut[$lab]['watts'];
                     $any = true;
                 }
             }
@@ -442,12 +514,12 @@ class SnmpPoller
                 $watts = round($sum, 3);
             }
         }
-        if ($amps === null && $phasesOut) {
+        if ($amps === null && is_array($phasesOut)) {
             $sum = 0.0;
             $any = false;
-            foreach ($phasesOut as $p) {
-                if ($p['amps'] !== null) {
-                    $sum += (float)$p['amps'];
+            foreach (['L1', 'L2', 'L3'] as $lab) {
+                if (isset($phasesOut[$lab]['amps']) && $phasesOut[$lab]['amps'] !== null) {
+                    $sum += (float)$phasesOut[$lab]['amps'];
                     $any = true;
                 }
             }
@@ -466,24 +538,43 @@ class SnmpPoller
         ];
     }
 
+    /**
+     * Metric key scale suffixes (applied before storage):
+     * - hundredths_kw / 0_01kw / centikw → ×10 (APC rPDU2 power/VA in 0.01 kW units → W/VA)
+     * - tenths_kw / dkw → ×100 (0.1 kW units → W)
+     * - x1000 (e.g. pf_x1000) → ÷1000
+     * - x100 (e.g. pf_x100) → ÷100
+     * - amps_x10 / peak_amps_x10 / *_x10 on current → ÷10
+     *   (does NOT apply ÷10 to watts/va — use hundredths_kw for APC power)
+     */
     private static function applyMetricScale(string $metricKey, ?float $num): ?float
     {
         if ($num === null) {
             return null;
         }
-        // tenths of kW → watts (common on some APC phase power OIDs)
-        if (str_contains($metricKey, 'tenths_kw') || str_contains($metricKey, '_dkw')) {
+        $k = strtolower($metricKey);
+        // APC rPDU2 phase/device power often in hundredths of kW (42 → 420 W)
+        if (str_contains($k, 'hundredths_kw') || str_contains($k, '0_01kw') || str_contains($k, 'centikw')) {
+            return round($num * 10.0, 3);
+        }
+        if (str_contains($k, 'tenths_kw') || str_contains($k, '_dkw')) {
             return round($num * 100.0, 3);
         }
-        if (str_contains($metricKey, '_x100') || str_contains($metricKey, 'x100')) {
+        if (str_contains($k, 'x1000') || str_contains($k, '_x1000')) {
+            return round($num / 1000.0, 4);
+        }
+        if (str_contains($k, 'x100') || str_contains($k, '_x100')) {
             return round($num / 100.0, 4);
         }
-        if (str_contains($metricKey, 'amps_x10') || str_contains($metricKey, 'ampsx10')
-            || str_ends_with($metricKey, '_x10') || str_contains($metricKey, 'x10')) {
-            // Avoid matching "x100"
-            if (!str_contains($metricKey, 'x100') && !str_contains($metricKey, '_x100')) {
-                return round($num / 10.0, 3);
-            }
+        // Tenths of amps (and only amps/current — never watts)
+        $isAmpish = (bool)preg_match('/amp|current/', $k);
+        $isWattish = (bool)preg_match('/watt|power|va\b/', $k) && !str_contains($k, 'factor');
+        if ($isAmpish && !$isWattish && (
+            str_contains($k, 'amps_x10') || str_contains($k, 'ampsx10')
+            || str_contains($k, 'peak_amps_x10') || str_ends_with($k, '_x10')
+            || (str_contains($k, 'x10') && !str_contains($k, 'x100'))
+        )) {
+            return round($num / 10.0, 3);
         }
         return $num;
     }
@@ -493,7 +584,10 @@ class SnmpPoller
         if (str_starts_with($key, 'phase')) {
             return false;
         }
-        return (bool)preg_match('/^(watts?|total_watts?|device_watts?|load_watts?)(?:_x10|_x100|_tenths_kw|_dkw)?$/', $key);
+        return (bool)preg_match(
+            '/^(watts?|total_watts?|device_watts?|load_watts?)(?:_hundredths_kw|_tenths_kw|_dkw|_0_01kw|_centikw)?$/',
+            $key
+        );
     }
 
     private static function isDeviceTotalAmpsKey(string $key): bool

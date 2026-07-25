@@ -717,27 +717,53 @@ if ($pduId) {
     </div>
 
     <?php
-    $phaseRows = power_phase_poll_rows($p['last_poll_phases'] ?? null);
-    if ($phaseRows):
+    $phaseSnap = power_phase_poll_decode($p['last_poll_phases'] ?? null);
+    $phaseRows = $phaseSnap['rows'] ?? [];
+    if ($phaseSnap && ($phaseRows || !empty($phaseSnap['ll']) || !empty($phaseSnap['device']) || !empty($phaseSnap['ps']))):
         $phaseWattsSum = 0.0;
         $phaseWattsAny = false;
+        $showVa = false;
+        $showPf = false;
+        $showPeak = false;
+        $showState = false;
+        $ratedAmps = isset($phaseSnap['device']['rated_amps']) ? (float)$phaseSnap['device']['rated_amps'] : null;
         foreach ($phaseRows as $pr) {
             if ($pr['watts'] !== null) {
                 $phaseWattsSum += $pr['watts'];
                 $phaseWattsAny = true;
             }
+            if ($pr['va'] !== null) {
+                $showVa = true;
+            }
+            if ($pr['pf'] !== null) {
+                $showPf = true;
+            }
+            if ($pr['peak_amps'] !== null) {
+                $showPeak = true;
+            }
+            if ($pr['load_state'] !== null) {
+                $showState = true;
+            }
         }
+        $showUtil = $ratedAmps !== null && $ratedAmps > 0;
         ?>
     <div class="card mb-2" id="pdu-phase-status">
-        <div class="card-header flex-between">
+        <div class="card-header flex-between" style="flex-wrap:wrap;gap:.5rem">
             <strong>Phase status</strong>
             <span class="text-muted" style="font-size:.85rem">
                 L1 / L2 / L3 from last SNMP poll
                 <?php if ($phaseWattsAny): ?>
                     · sum <?= App::e(power_fmt_metric($phaseWattsSum / 1000, 3)) ?> kW
                 <?php endif; ?>
+                <?php if (!empty($phaseSnap['device']['va'])): ?>
+                    · device <?= App::e(power_fmt_metric($phaseSnap['device']['va'] / 1000, 3)) ?> kVA
+                <?php endif; ?>
+                <?php if (isset($phaseSnap['device']['pf'])): ?>
+                    · PF <?= App::e(power_fmt_metric($phaseSnap['device']['pf'], 3)) ?>
+                <?php endif; ?>
             </span>
         </div>
+        <?php if ($phaseRows): ?>
         <div class="card-body" style="padding:0; overflow-x:auto">
             <table class="data" style="margin:0">
                 <thead>
@@ -745,11 +771,21 @@ if ($pduId) {
                         <th>Phase</th>
                         <th>Voltage</th>
                         <th>Power</th>
+                        <?php if ($showVa): ?><th>Apparent</th><?php endif; ?>
+                        <?php if ($showPf): ?><th>PF</th><?php endif; ?>
                         <th>Current</th>
+                        <?php if ($showPeak): ?><th>Peak A</th><?php endif; ?>
+                        <?php if ($showUtil): ?><th>Util</th><?php endif; ?>
+                        <?php if ($showState): ?><th>State</th><?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
-                <?php foreach ($phaseRows as $pr): ?>
+                <?php foreach ($phaseRows as $pr):
+                    $utilPct = ($showUtil && $pr['amps'] !== null)
+                        ? round(($pr['amps'] / $ratedAmps) * 100, 1)
+                        : null;
+                    $utilClass = $utilPct !== null ? power_util_class($utilPct) : '';
+                    ?>
                     <tr>
                         <td><strong><?= App::e($pr['label']) ?></strong></td>
                         <td><?= $pr['volts'] !== null ? App::e(power_fmt_metric($pr['volts'], 1)) . ' V' : '—' ?></td>
@@ -761,19 +797,79 @@ if ($pduId) {
                                 —
                             <?php endif; ?>
                         </td>
+                        <?php if ($showVa): ?>
+                            <td><?= $pr['va'] !== null ? App::e(power_fmt_metric($pr['va'] / 1000, 3)) . ' kVA' : '—' ?></td>
+                        <?php endif; ?>
+                        <?php if ($showPf): ?>
+                            <td><?= $pr['pf'] !== null ? App::e(power_fmt_metric($pr['pf'], 2)) : '—' ?></td>
+                        <?php endif; ?>
                         <td><?= $pr['amps'] !== null ? App::e(power_fmt_metric($pr['amps'], 2)) . ' A' : '—' ?></td>
+                        <?php if ($showPeak): ?>
+                            <td><?= $pr['peak_amps'] !== null ? App::e(power_fmt_metric($pr['peak_amps'], 2)) . ' A' : '—' ?></td>
+                        <?php endif; ?>
+                        <?php if ($showUtil): ?>
+                            <td>
+                                <?php if ($utilPct !== null): ?>
+                                    <span class="badge badge-<?= App::e($utilClass) ?>"><?= App::e(power_fmt_metric($utilPct, 1)) ?>%</span>
+                                    <span class="text-muted" style="font-size:.75rem">/ <?= App::e(power_fmt_metric($ratedAmps, 0)) ?> A</span>
+                                <?php else: ?>
+                                    —
+                                <?php endif; ?>
+                            </td>
+                        <?php endif; ?>
+                        <?php if ($showState): ?>
+                            <td><?= App::e(power_phase_load_state_label($pr['load_state'])) ?></td>
+                        <?php endif; ?>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
             </table>
         </div>
+        <?php endif; ?>
+        <?php if (!empty($phaseSnap['ll']) || !empty($phaseSnap['ps'])): ?>
+        <div class="card-body" style="border-top:1px solid var(--border); font-size:.9rem">
+            <?php if (!empty($phaseSnap['ll'])): ?>
+                <div style="margin-bottom:.35rem">
+                    <strong>Line–line</strong>
+                    <?php
+                    $llBits = [];
+                    foreach (['L1-2', 'L2-3', 'L3-1'] as $lk) {
+                        if (isset($phaseSnap['ll'][$lk])) {
+                            $llBits[] = $lk . ' ' . power_fmt_metric($phaseSnap['ll'][$lk], 0) . ' V';
+                        }
+                    }
+                    foreach ($phaseSnap['ll'] as $lk => $lv) {
+                        if (!in_array($lk, ['L1-2', 'L2-3', 'L3-1'], true)) {
+                            $llBits[] = $lk . ' ' . power_fmt_metric($lv, 0) . ' V';
+                        }
+                    }
+                    echo App::e(implode(' · ', $llBits));
+                    ?>
+                </div>
+            <?php endif; ?>
+            <?php if (!empty($phaseSnap['ps'])): ?>
+                <div>
+                    <strong>Power supplies</strong>
+                    <?php if (isset($phaseSnap['ps']['ps1'])): ?>
+                        · PS1 <?= App::e(power_ps_status_label($phaseSnap['ps']['ps1'])) ?>
+                    <?php endif; ?>
+                    <?php if (isset($phaseSnap['ps']['ps2'])): ?>
+                        · PS2 <?= App::e(power_ps_status_label($phaseSnap['ps']['ps2'])) ?>
+                    <?php endif; ?>
+                    <?php if (isset($phaseSnap['ps']['alarm'])): ?>
+                        · alarm <?= (int)$phaseSnap['ps']['alarm'] === 1 ? 'none' : (string)(int)$phaseSnap['ps']['alarm'] ?>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
     </div>
     <?php elseif ((int)($p['phases'] ?? 1) >= 2 && $canConfigSnmp): ?>
     <div class="card mb-2">
         <div class="card-body text-muted" style="font-size:.9rem">
             This PDU is configured as multi-phase, but no per-phase SNMP data has been polled yet.
-            Map <code>phase1_watts</code> / <code>phase1_amps</code> / <code>phase1_volts</code> (and phase2/3)
-            in the site OID template — Discover will propose them when it sees .1/.2/.3 instances — then
+            Use Discover or the <strong>APC rPDU2 3-phase</strong> OID pack
+            (<code>phase1_watts_hundredths_kw</code>, <code>phase1_amps_x10</code>, …), then
             <strong>Poll now</strong>.
         </div>
     </div>

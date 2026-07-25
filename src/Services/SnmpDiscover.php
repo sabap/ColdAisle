@@ -535,27 +535,53 @@ class SnmpDiscover
             $score -= 6;
         }
 
+        // Config / enum / audit noise — not primary load candidates
+        if (preg_match(
+            '/config|threshold|reset|timestamp|starttime|orientation|display|'
+            . 'powerfactor|powersupply|properties|identhardware|peakpowerstart|peakcurrentstart/',
+            $s
+        )) {
+            $score -= 12;
+        }
+
         // --- MIB symbolic name scoring (Phase 1.5) ---
         if ($name) {
             $score += 3; // any resolved name is more useful than pure numeric
-            // Strong power/watt signals (avoid bare "powernet" module name alone)
-            if (preg_match('/watt|activepower|realpower|apparentpower|totalpower|phasepower|devicepower|powerwatts|(?<![a-z])power(?![a-z-])/', $s)) {
+            // Strong power/watt signals (not PowerFactor / PowerSupply)
+            if (preg_match(
+                '/watt|activepower|realpower|totalpower|phasepower|devicepower|powerwatts|'
+                . 'statuspower(?!factor)|identdevicepower(?!factor|va)/',
+                $s
+            )
+                || (preg_match('/(?<![a-z])power(?![a-z-])/', $s)
+                    && !preg_match('/powerfactor|powersupply|threshold|config|apparent/', $s))
+            ) {
                 $score += 12;
             }
-            // APC PowerNet leaf patterns (not the module prefix PowerNet-MIB::)
-            if (preg_match('/rpdu2?.*power|phase.*power|bank.*power|outlet.*power|statuspower|identdevicepower/', $s)) {
+            if (preg_match('/apparentpower|powerva/', $s) && !preg_match('/config|threshold/', $s)) {
+                $score += 6;
+            }
+            if (preg_match('/powerfactor/', $s) && !preg_match('/config|threshold/', $s)) {
+                $score += 4;
+            }
+            if (preg_match('/peakcurrent/', $s) && !preg_match('/reset|timestamp|start/', $s)) {
+                $score += 6;
+            }
+            // APC PowerNet leaf patterns (not the module prefix alone)
+            if (preg_match('/rpdu2?phasestatuspower(?!factor)|rpduidentdevicepowerwatts|upsadvoutput/', $s)) {
+                $score += 14;
+            } elseif (preg_match('/rpdu2?.*statuspower(?!factor)|identdevicepower(?!factor)/', $s)) {
                 $score += 10;
             }
-            if (preg_match('/rpdu2?phasestatuspower|rpduidentdevicepower|upsadvoutput|loadstatuspower/', $s)) {
-                $score += 14;
-            }
             // Current / amps
-            if (preg_match('/\bamp|current|amps\b|phase.*current|loadstatusload|phasestatusload|phasestatuscurrent/', $s)) {
+            if (preg_match('/\bamp|current|amps\b|phase.*current|loadstatusload|phasestatuscurrent/', $s)
+                && !preg_match('/threshold|config|reset|timestamp/', $s)
+            ) {
                 $score += 10;
             }
             // Load % (often 0–100)
             if (preg_match('/\bload\b|outputload|percentload|loadpercent/', $s)
-                && !preg_match('/download|payload/', $s)
+                && !preg_match('/download|payload|threshold|config|loadstate/', $s)
             ) {
                 $score += 6;
                 if ($num !== null && $num >= 0 && $num <= 100) {
@@ -563,7 +589,7 @@ class SnmpDiscover
                 }
             }
             // Voltage / temp (secondary)
-            if (preg_match('/\bvolt|voltage\b/', $s)) {
+            if (preg_match('/\bvolt|voltage\b/', $s) && !preg_match('/config/', $s)) {
                 $score += 3;
             }
             if (preg_match('/\btemp|temperature\b/', $s)) {
@@ -644,8 +670,18 @@ class SnmpDiscover
             ) {
                 $hints[] = 'identity/config string';
             }
-            if (preg_match('/watt|activepower|realpower|apparentpower|devicepower|phasepower|powerwatts|statuspower|identdevicepower/', $s)) {
+            if (preg_match('/powerfactor/', $s) && !preg_match('/config/', $s)) {
+                $hints[] = 'MIB: power factor';
+            } elseif (preg_match('/apparentpower|powerva/', $s)) {
+                $hints[] = 'MIB: apparent power (VA)';
+            } elseif (preg_match(
+                '/watt|activepower|realpower|devicepower|phasepower|powerwatts|statuspower(?!factor)|identdevicepower(?!factor|va)/',
+                $s
+            )) {
                 $hints[] = 'MIB: watts/power';
+            }
+            if (preg_match('/peakcurrent/', $s) && !preg_match('/reset|timestamp/', $s)) {
+                $hints[] = 'MIB: peak current';
             }
             if (preg_match('/\bamp|current|phasestatuscurrent|loadstatusload/', $s)
                 && !preg_match('/watt|power/', $s)
@@ -704,6 +740,7 @@ class SnmpDiscover
             'sysUpTime' => '1.3.6.1.2.1.1.3.0',
         ];
         $watts = null;
+        $wattsScore = -1;
         $amps = null;
         $ampsX10 = null;
 
@@ -712,34 +749,54 @@ class SnmpDiscover
         foreach ($phaseKeys as $k => $oid) {
             $map[$k] = $oid;
         }
+        // Device-level VA/PF/PS + L–L voltages
+        foreach (self::proposeDeviceAndLlKeys($candidates) as $k => $oid) {
+            $map[$k] = $oid;
+        }
 
-        $pick = static function (array $c, string $kind) use (&$watts, &$amps, &$ampsX10): void {
+        $pick = static function (array $c) use (&$watts, &$wattsScore, &$amps, &$ampsX10): void {
             $oid = $c['oid'];
             $hint = strtolower($c['hint'] ?? '');
             $name = strtolower((string)($c['name'] ?? ''));
             $n = $c['numeric'];
             $hay = $name . ' ' . $hint;
+            $sc = (int)($c['score'] ?? 0);
+
+            if (preg_match('/config|threshold|reset|timestamp|powerfactor|powersupply|properties/', $hay)) {
+                return;
+            }
 
             // Prefer device/total power — skip pure phase-instance leaves when we already map phases
             $isPhaseLeaf = (bool)preg_match('/phasestatus|phase\d|\.phase/i', $hay)
                 || (bool)preg_match('/\.[123]$/', $oid);
 
-            if ($watts === null && (
-                str_contains($hay, 'watt')
+            $looksWatts = str_contains($hay, 'watt')
                 || str_contains($hay, 'mib: watts')
-                || str_contains($hay, 'devicepower')
-                || str_contains($hay, 'identdevicepower')
+                || str_contains($hay, 'identdevicepowerwatts')
+                || (str_contains($hay, 'identdevicepower') && !str_contains($hay, 'factor') && !str_contains($hay, 'va'))
                 || str_starts_with($oid, '1.3.6.1.4.1.99999.2.1')
-                || ($n !== null && $n >= 50 && $n <= 100000 && str_contains($hint, 'possible watts'))
-            )) {
+                || ($n !== null && $n >= 50 && $n <= 100000 && str_contains($hint, 'possible watts'));
+
+            if ($looksWatts) {
                 if (str_contains($hay, 'outlet')) {
                     return;
                 }
-                // Device-level names win over a random phase leaf
                 if ($isPhaseLeaf && !preg_match('/device|total|ident/', $hay)) {
                     return;
                 }
-                $watts = $oid;
+                // Prefer explicit *PowerWatts / ident device power over scaled rPDU2 status
+                $pref = $sc;
+                if (str_contains($hay, 'powerwatts') || str_contains($hay, 'identdevicepowerwatts')) {
+                    $pref += 50;
+                } elseif (str_contains($hay, 'identdevicepower')) {
+                    $pref += 30;
+                } elseif (str_contains($hay, 'devicestatuspower') && !str_contains($hay, 'peak')) {
+                    $pref += 5;
+                }
+                if ($pref > $wattsScore) {
+                    $wattsScore = $pref;
+                    $watts = $oid;
+                }
             }
             if ($ampsX10 === null && str_starts_with($oid, '1.3.6.1.4.1.99999.2.2')) {
                 $ampsX10 = $oid;
@@ -761,12 +818,12 @@ class SnmpDiscover
         // First pass: named high scores
         foreach ($candidates as $c) {
             if (!empty($c['name']) && ($c['score'] ?? 0) >= 8) {
-                $pick($c, 'named');
+                $pick($c);
             }
         }
         // Second pass: anything remaining
         foreach ($candidates as $c) {
-            $pick($c, 'any');
+            $pick($c);
         }
 
         // Fallbacks: highest-scoring enterprise numeric OIDs (not phase leaves if phases mapped)
@@ -777,12 +834,15 @@ class SnmpDiscover
                     if ($phaseKeys && preg_match('/\.[123]$/', $c['oid'])) {
                         continue;
                     }
+                    $hay = strtolower((string)($c['name'] ?? ''));
+                    if (preg_match('/config|threshold|factor|supply/', $hay)) {
+                        continue;
+                    }
                     $watts = $c['oid'];
                     break;
                 }
             }
         }
-        // If still no device total but we have phase watts, sum is applied at poll time
         if ($ampsX10 !== null) {
             $map['amps_x10'] = $ampsX10;
         } elseif ($amps !== null) {
@@ -796,9 +856,10 @@ class SnmpDiscover
 
     /**
      * When Discover sees the same metric parent with instances .1 .2 .3, map to phaseN_*.
+     * APC rPDU2 uses scaled keys (amps_x10, watts_hundredths_kw, …).
      *
      * @param list<array{oid:string,name?:?string,hint?:string,score?:int,numeric?:?float}> $candidates
-     * @return array<string,string> e.g. phase1_watts => OID
+     * @return array<string,string>
      */
     private static function proposePhaseMapKeys(array $candidates): array
     {
@@ -814,7 +875,6 @@ class SnmpDiscover
             }
             $parent = $m[1];
             $idx = (int)$m[2];
-            // Keep best score per parent+index
             if (!isset($byParent[$parent][$idx])
                 || ($c['score'] ?? 0) > ($byParent[$parent][$idx]['score'] ?? 0)
             ) {
@@ -823,7 +883,6 @@ class SnmpDiscover
         }
 
         $out = [];
-        // Prefer parents that have all three phases and a clear metric name
         $families = [];
         foreach ($byParent as $parent => $idxs) {
             if (!isset($idxs[1], $idxs[2], $idxs[3])) {
@@ -833,47 +892,136 @@ class SnmpDiscover
                 (string)($idxs[1]['name'] ?? '') . ' '
                 . (string)($idxs[1]['hint'] ?? '') . ' ' . $parent
             );
-            if (preg_match('/outlet|receptacle|socket/', $hay)) {
+            if (preg_match('/outlet|receptacle|socket|config|threshold|reset|timestamp|starttime/', $hay)) {
                 continue;
             }
-            $kind = null;
-            // Order: current/voltage first so "PowerNet-MIB::…Current" is not treated as watts
-            // (module name contains "power").
-            if (preg_match('/statuscurrent|phasestatuscurrent|(?<![a-z])current(?![a-z])|\bamps?\b/', $hay)
-                && !preg_match('/peak|max|watt|statuspower|powerfactor|voltage|(?<![a-z])volts?(?![a-z])/', $hay)
+            $kind = null; // map key suffix including scale
+            $apc = (bool)preg_match('/rpdu2|powernet|1\.3\.6\.1\.4\.1\.318/', $hay . $parent);
+
+            if (preg_match('/peakcurrent/', $hay)) {
+                $kind = $apc ? 'peak_amps_x10' : 'peak_amps';
+            } elseif (preg_match('/statuscurrent|phasestatuscurrent|(?<![a-z])current(?![a-z])/', $hay)
+                && !preg_match('/peak|max|watt|statuspower|powerfactor|voltage/', $hay)
             ) {
-                $kind = 'amps';
-            } elseif (preg_match('/statusvoltage|phasestatusvoltage|(?<![a-z])voltage(?![a-z])|(?<![a-z])volts?(?![a-z])/', $hay)
-                && !preg_match('/peak|max|current|amp/', $hay)
+                $kind = $apc ? 'amps_x10' : 'amps';
+            } elseif (preg_match('/statusvoltage|phasestatusvoltage|(?<![a-z])voltage(?![a-z])/', $hay)
+                && !preg_match('/peak|max|current|amp|phasetophase|lineto/', $hay)
             ) {
                 $kind = 'volts';
-            } elseif (preg_match('/statuspower|activepower|realpower|phasepower|devicepower|(?<![a-z])watts?(?![a-z])|(?<![a-z])power(?![a-z-])/', $hay)
-                && !preg_match('/powerfactor|apparent|reactive|current|voltage/', $hay)
+            } elseif (preg_match('/apparentpower/', $hay)) {
+                $kind = $apc ? 'va_hundredths_kw' : 'va';
+            } elseif (preg_match('/powerfactor/', $hay)) {
+                $kind = $apc ? 'pf_x100' : 'pf';
+            } elseif (preg_match('/loadstate/', $hay)) {
+                $kind = 'load_state';
+            } elseif (preg_match('/statuspower(?!factor)|activepower|realpower|phasepower|(?<![a-z])watts?(?![a-z])/', $hay)
+                && !preg_match('/powerfactor|apparent|reactive|current|voltage|peak/', $hay)
             ) {
-                $kind = 'watts';
+                $kind = $apc ? 'watts_hundredths_kw' : 'watts';
             }
             if ($kind === null) {
                 continue;
             }
             $score = ($idxs[1]['score'] ?? 0) + ($idxs[2]['score'] ?? 0) + ($idxs[3]['score'] ?? 0);
-            // Prefer named rPDU2 phase status
             if (preg_match('/rpdu2|phasestatus/', $hay)) {
                 $score += 20;
             }
-            $families[] = ['parent' => $parent, 'kind' => $kind, 'idxs' => $idxs, 'score' => $score];
+            // Base kind for uniqueness (amps vs peak_amps)
+            $base = preg_replace('/_x10|_hundredths_kw|_x100$/', '', $kind) ?? $kind;
+            $families[] = [
+                'parent' => $parent,
+                'kind' => $kind,
+                'base' => $base,
+                'idxs' => $idxs,
+                'score' => $score,
+            ];
         }
 
         usort($families, static fn($a, $b) => $b['score'] <=> $a['score']);
-        $usedKind = [];
+        $usedBase = [];
         foreach ($families as $fam) {
-            $kind = $fam['kind'];
-            if (isset($usedKind[$kind])) {
-                continue; // one family per metric type
+            if (isset($usedBase[$fam['base']])) {
+                continue;
             }
-            $usedKind[$kind] = true;
+            $usedBase[$fam['base']] = true;
             for ($i = 1; $i <= 3; $i++) {
-                $out['phase' . $i . '_' . $kind] = $fam['parent'] . '.' . $i;
+                $out['phase' . $i . '_' . $fam['kind']] = $fam['parent'] . '.' . $i;
             }
+        }
+        return $out;
+    }
+
+    /**
+     * Device totals (VA/PF), dual PS status, L–L voltages, phase rating.
+     *
+     * @param list<array{oid:string,name?:?string,hint?:string,score?:int,numeric?:?float}> $candidates
+     * @return array<string,string>
+     */
+    private static function proposeDeviceAndLlKeys(array $candidates): array
+    {
+        $out = [];
+        $best = []; // key => [score, oid]
+
+        $consider = static function (string $key, array $c, int $bonus = 0) use (&$best): void {
+            $sc = (int)($c['score'] ?? 0) + $bonus;
+            if (!isset($best[$key]) || $sc > $best[$key][0]) {
+                $best[$key] = [$sc, $c['oid']];
+            }
+        };
+
+        foreach ($candidates as $c) {
+            $name = strtolower((string)($c['name'] ?? ''));
+            $hay = $name . ' ' . strtolower((string)($c['hint'] ?? ''));
+            $oid = (string)($c['oid'] ?? '');
+            if ($oid === '' || preg_match('/config|threshold|reset|timestamp|starttime/', $hay)) {
+                continue;
+            }
+
+            if (preg_match('/identdevicepowerwatts|rpduidentdevicepowerwatts/', $hay)) {
+                $consider('watts', $c, 80);
+            }
+            if (preg_match('/identdevicepowerva|powerva\.0|devicepowerva/', $hay)
+                && !preg_match('/phase/', $hay)
+            ) {
+                $consider('va', $c, 40);
+            }
+            if (preg_match('/identdevicepowerfactor/', $hay)) {
+                $consider('pf_x1000', $c, 40);
+            } elseif (preg_match('/devicestatuspowerfactor/', $hay) && !preg_match('/phase/', $hay)) {
+                $consider('pf_x100', $c, 20);
+            }
+            if (preg_match('/powersupply1status|rpdu2devicesstatuspowersupply1|powersupply1status/', $hay)
+                || preg_match('/rpdu2devicesstatuspowersupply1status|powersupply1status/', $hay)
+            ) {
+                $consider('ps1_status', $c, 15);
+            }
+            if (str_contains($hay, 'powersupply1status') || str_contains($hay, 'power_supply1')) {
+                $consider('ps1_status', $c, 15);
+            }
+            if (str_contains($hay, 'powersupply2status')) {
+                $consider('ps2_status', $c, 15);
+            }
+            if (str_contains($hay, 'powersupplyalarm') && !str_contains($hay, 'phase')) {
+                $consider('ps_alarm', $c, 15);
+            }
+            if (preg_match('/maxphasecurrentrating|loaddevmaxphaseload|identdevicerating/', $hay)) {
+                $consider('phase_rated_amps', $c, 10);
+            }
+            if (preg_match('/voltage1to2|phasetophasestatusvoltage1to2|linetoline.*1.*2/', $hay)
+                || str_contains($hay, 'voltage1to2')
+            ) {
+                $consider('phase_l12_volts', $c, 25);
+            }
+            if (str_contains($hay, 'voltage2to3')) {
+                $consider('phase_l23_volts', $c, 25);
+            }
+            if (str_contains($hay, 'voltage3to1')) {
+                $consider('phase_l31_volts', $c, 25);
+            }
+        }
+
+        foreach ($best as $key => $pair) {
+            $out[$key] = $pair[1];
         }
         return $out;
     }
