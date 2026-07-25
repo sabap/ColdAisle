@@ -371,7 +371,25 @@ class SnmpPoller
             SnmpDiscover::applySerialToPduIfEmpty($pduId, $serialNo);
         }
 
-        if ($watts !== null || $amps !== null) {
+        // History sample (watts/amps/volts/phases) for 24h charts & reports
+        if (class_exists('PowerHistoryService')) {
+            try {
+                PowerHistoryService::recordSample($pduId, $watts, $amps, $phases);
+            } catch (Throwable $e) {
+                // Fallback: legacy minimal insert
+                if ($watts !== null || $amps !== null) {
+                    try {
+                        Database::insert('pdu_readings', [
+                            'pdu_id' => $pduId,
+                            'watts' => $watts,
+                            'amps' => $amps,
+                        ]);
+                    } catch (Throwable $e2) {
+                        // ignore
+                    }
+                }
+            }
+        } elseif ($watts !== null || $amps !== null) {
             Database::insert('pdu_readings', [
                 'pdu_id' => $pduId,
                 'watts' => $watts,

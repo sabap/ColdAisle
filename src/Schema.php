@@ -187,6 +187,20 @@ class Schema
             self::ensureColumn('pdu_outlets', 'rated_amps', 'DECIMAL(8,2) NULL');
             self::ensureColumn('pdu_outlets', 'device_power_supply_id', 'INT NULL');
 
+            // Power history (Phase 1) — extend pdu_readings for charts / reports
+            try {
+                $hasReadings = Database::fetchValue(
+                    "SELECT 1 FROM sys.tables WHERE name = 'pdu_readings' AND SCHEMA_NAME(schema_id) = 'dbo'"
+                );
+                if ($hasReadings) {
+                    self::ensureColumn('pdu_readings', 'volts_ll', 'DECIMAL(8,2) NULL');
+                    self::ensureColumn('pdu_readings', 'phases_json', 'NVARCHAR(MAX) NULL');
+                    self::ensureColumn('pdu_readings', 'outage_phases', 'NVARCHAR(40) NULL');
+                }
+            } catch (Throwable $e) {
+                // ignore
+            }
+
             // Power alert cooldown / active state (after SNMP poll)
             self::ensureTable(
                 'power_alert_state',

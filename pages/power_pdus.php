@@ -716,6 +716,18 @@ if ($pduId) {
         </div>
     </div>
 
+    <!-- 24h PDU history -->
+    <div class="card power-history-wide mb-2" data-power-history data-scope="pdu" data-id="<?= (int)$pduId ?>" data-hours="24">
+        <div class="card-header flex-between">
+            <h2 style="margin:0;font-size:1.05rem">Last 24 hours</h2>
+            <span class="text-muted" style="font-size:.8rem">From SNMP samples</span>
+        </div>
+        <div class="card-body power-history-body">
+            <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Output (usage)" data-color="#38bdf8" data-height="180"></div>
+            <div class="power-chart" data-metric="volts" data-unit="V" data-label="Input voltage (avg L–N)" data-color="#a78bfa" data-height="140"></div>
+        </div>
+    </div>
+
     <?php
     $phaseSnap = power_phase_poll_decode($p['last_poll_phases'] ?? null);
     $phaseRows = $phaseSnap['rows'] ?? [];
@@ -1692,6 +1704,7 @@ if ($pduId) {
     .breaker-slot .bs-slot { font-family: var(--mono); font-size: .68rem; font-weight: 600; }
     .breaker-slot .bs-slot-id { font-family: var(--mono); font-size: .58rem; opacity: .9; font-weight: 600; }
     </style>
+    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=1"></script>
     <?php
     layout_footer();
     exit;
