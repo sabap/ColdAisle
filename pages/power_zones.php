@@ -273,6 +273,18 @@ if ($zoneId) {
         </div>
     <?php endif; ?>
 
+    <!-- Phase 2: zone-scoped 24h history -->
+    <div class="card power-history-wide mb-2" data-power-history data-scope="zone" data-id="<?= (int)$zoneId ?>" data-hours="24">
+        <div class="card-header flex-between">
+            <h2 style="margin:0;font-size:1.05rem">Last 24 hours — this zone</h2>
+            <span class="text-muted" style="font-size:.8rem">Sum of zone PDUs · 5‑min buckets</span>
+        </div>
+        <div class="card-body power-history-body">
+            <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Output (usage)" data-color="#38bdf8" data-height="200"></div>
+            <div class="power-chart power-chart-lg" data-metric="volts" data-unit="V" data-label="Input voltage (avg L–N)" data-color="#a78bfa" data-height="160"></div>
+        </div>
+    </div>
+
     <div class="card mb-2">
         <div class="card-header flex-between">
             <h2>Overview</h2>
@@ -649,6 +661,7 @@ if ($zoneId) {
     })();
     </script>
     <?php endif; ?>
+    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=2"></script>
     <?php
     layout_footer();
     exit;
@@ -699,6 +712,65 @@ layout_header('Power Zones', $user, 'power_zones');
         <div class="sub"><?= $listHasMax ? 'sum of zone max kW' : 'set max kW on zones' ?></div>
     </div>
 </div>
+
+<?php if ($zones): ?>
+<div class="card mb-2">
+    <div class="card-header flex-between">
+        <h2>Zones — 24h glance</h2>
+        <span class="text-muted" style="font-size:.8rem">Usage + input voltage per zone</span>
+    </div>
+    <div class="card-body">
+        <div class="zone-cards zone-cards-history">
+            <?php foreach ($zones as $z):
+                $color = power_normalize_color($z['color_hex'] ?? null);
+                $pollKw = ((float)($z['poll_watts'] ?? 0)) / 1000.0;
+                $maxKw = $z['max_kw'] !== null && $z['max_kw'] !== '' ? (float)$z['max_kw'] : null;
+                $pct = ($maxKw && $maxKw > 0) ? min(100, round(100 * $pollKw / $maxKw, 1)) : null;
+                $cls = $pct !== null ? power_util_class((float)$pct) : '';
+                $zid = (int)$z['zone_id'];
+                ?>
+                <div class="zone-card zone-card-static" style="--zone-color: <?= App::e($color) ?>">
+                    <a class="zone-card-link" href="<?= App::e(App::url('pages/power_zones.php?id=' . $zid)) ?>">
+                        <div class="zone-card-top">
+                            <span class="zone-swatch" style="background:<?= App::e($color) ?>"></span>
+                            <div class="zone-card-title">
+                                <strong><?= App::e($z['name']) ?></strong>
+                                <span class="text-muted"><?= App::e($z['dc_name'] ?? '') ?> · Feed <?= App::e((string)($z['feed_type'] ?? '—')) ?></span>
+                            </div>
+                            <span class="badge"><?= (int)($z['pdu_count'] ?? 0) ?> PDU</span>
+                        </div>
+                        <div class="zone-card-metrics">
+                            <div>
+                                <span class="zcm-label">Load</span>
+                                <span class="zcm-val"><?= number_format($pollKw, 1) ?> kW</span>
+                            </div>
+                            <div>
+                                <span class="zcm-label">Cap</span>
+                                <span class="zcm-val"><?= $maxKw !== null ? number_format($maxKw, 1) . ' kW' : '—' ?></span>
+                            </div>
+                            <?php if ($pct !== null): ?>
+                            <div>
+                                <span class="zcm-label">Util</span>
+                                <span class="zcm-val"><?= $pct ?>%</span>
+                            </div>
+                            <?php endif; ?>
+                        </div>
+                        <?php if ($pct !== null): ?>
+                            <div class="util-bar" style="margin-top:.35rem">
+                                <div class="util-bar-fill util-<?= App::e($cls) ?>" style="width:<?= $pct ?>%"></div>
+                            </div>
+                        <?php endif; ?>
+                    </a>
+                    <div class="zone-card-charts" data-power-history data-scope="zone" data-id="<?= $zid ?>" data-hours="24">
+                        <div class="power-chart power-chart-sm" data-metric="kw" data-unit="kW" data-label="Usage 24h" data-color="#38bdf8" data-height="72"></div>
+                        <div class="power-chart power-chart-sm" data-metric="volts" data-unit="V" data-label="Input V 24h" data-color="#a78bfa" data-height="64"></div>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
 
 <div class="card">
     <div class="card-header flex-between">
@@ -846,4 +918,5 @@ layout_header('Power Zones', $user, 'power_zones');
 })();
 </script>
 <?php endif; ?>
+<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=2"></script>
 <?php layout_footer(); ?>

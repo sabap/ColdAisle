@@ -347,6 +347,38 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
 .zone-card .power-chart-now { font-size: .9rem; }
 .zone-card .power-chart-label { font-size: .65rem; }
 
+/* Zone list history cards (Phase 2) */
+.zone-cards-history {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+.zone-card-static {
+  display: flex;
+  flex-direction: column;
+  text-decoration: none;
+  color: inherit;
+  cursor: default;
+}
+.zone-card-static .zone-card-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+.zone-card-static .zone-card-link:hover .zone-card-title strong {
+  color: var(--accent, #38bdf8);
+}
+.zone-card-charts {
+  display: flex;
+  flex-direction: column;
+  gap: .45rem;
+  margin-top: .55rem;
+  padding-top: .15rem;
+}
+.zone-card-charts .power-chart-sm {
+  margin-top: 0;
+}
+
 .btn-ghost {
   background: transparent;
   border: 1px solid var(--border);
