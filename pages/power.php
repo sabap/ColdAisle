@@ -371,5 +371,5 @@ layout_header('Power Dashboard', $user, 'power');
         </table>
     </div>
 </div>
-<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=3"></script>
+<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=4"></script>
 <?php layout_footer(); ?>

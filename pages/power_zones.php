@@ -662,7 +662,7 @@ if ($zoneId) {
     })();
     </script>
     <?php endif; ?>
-    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=3"></script>
+    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=4"></script>
     <?php
     layout_footer();
     exit;
@@ -919,5 +919,5 @@ layout_header('Power Zones', $user, 'power_zones');
 })();
 </script>
 <?php endif; ?>
-<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=3"></script>
+<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=4"></script>
 <?php layout_footer(); ?>
