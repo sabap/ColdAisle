@@ -771,12 +771,28 @@ CREATE TABLE notifications (
     user_id INT NULL REFERENCES users(user_id),
     title NVARCHAR(200) NOT NULL,
     message NVARCHAR(MAX) NOT NULL,
-    category NVARCHAR(50) NOT NULL DEFAULT 'info', -- info, warning, disposal, audit, system
+    category NVARCHAR(50) NOT NULL DEFAULT 'info', -- info, warning, disposal, audit, system, power
     entity_type NVARCHAR(50) NULL,
     entity_id INT NULL,
     is_read BIT NOT NULL DEFAULT 0,
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );
+GO
+
+-- Active power alert keys (cooldown / clear tracking after SNMP poll)
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'power_alert_state')
+CREATE TABLE power_alert_state (
+    alert_key NVARCHAR(200) NOT NULL PRIMARY KEY,
+    pdu_id INT NOT NULL,
+    severity NVARCHAR(20) NOT NULL DEFAULT 'warning',
+    is_active BIT NOT NULL DEFAULT 1,
+    last_fired_at DATETIME2 NULL,
+    last_cleared_at DATETIME2 NULL,
+    last_message NVARCHAR(500) NULL,
+    notify_count INT NOT NULL DEFAULT 0
+);
+GO
+CREATE NONCLUSTERED INDEX IX_power_alert_state_pdu ON power_alert_state(pdu_id, is_active);
 GO
 
 -- ============================================================

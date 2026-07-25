@@ -32,7 +32,7 @@ $notes = Database::fetchAll(
 layout_header('Notifications', $user, 'dashboard');
 ?>
 <div class="flex-between mb-2">
-    <p class="text-muted mb-0">Disposal alerts, system messages, and audit notices.</p>
+    <p class="text-muted mb-0">Power load alerts, disposal notices, system messages, and audit notices.</p>
     <form method="post">
         <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
         <input type="hidden" name="action" value="mark_all">
