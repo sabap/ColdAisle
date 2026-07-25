@@ -94,11 +94,16 @@ function power_wiring_label(?string $wiring, int $phases = 1): string
 }
 
 /**
- * Decode pdus.last_poll_phases JSON into ordered L1/L2/L3 rows for UI.
+ * Decode pdus.last_poll_phases JSON for UI.
  *
- * @return list<array{label:string,watts:?float,amps:?float,volts:?float}>|null
+ * @return array{
+ *   rows:list<array{label:string,watts:?float,amps:?float,volts:?float,va:?float,pf:?float,peak_amps:?float,load_state:?float}>,
+ *   ll:array<string,float>,
+ *   device:array{va?:float,pf?:float,rated_amps?:float},
+ *   ps:array{ps1?:float,ps2?:float,alarm?:float}
+ * }|null
  */
-function power_phase_poll_rows($json): ?array
+function power_phase_poll_decode($json): ?array
 {
     if ($json === null || $json === '') {
         return null;
@@ -117,10 +122,19 @@ function power_phase_poll_rows($json): ?array
             continue;
         }
         $p = $data[$label];
-        $watts = isset($p['watts']) && is_numeric($p['watts']) ? (float)$p['watts'] : null;
-        $amps = isset($p['amps']) && is_numeric($p['amps']) ? (float)$p['amps'] : null;
-        $volts = isset($p['volts']) && is_numeric($p['volts']) ? (float)$p['volts'] : null;
-        if ($watts === null && $amps === null && $volts === null) {
+        $num = static function ($v): ?float {
+            return isset($v) && is_numeric($v) ? (float)$v : null;
+        };
+        $watts = $num($p['watts'] ?? null);
+        $amps = $num($p['amps'] ?? null);
+        $volts = $num($p['volts'] ?? null);
+        $va = $num($p['va'] ?? null);
+        $pf = $num($p['pf'] ?? null);
+        $peak = $num($p['peak_amps'] ?? null);
+        $loadState = $num($p['load_state'] ?? null);
+        if ($watts === null && $amps === null && $volts === null
+            && $va === null && $pf === null && $peak === null
+        ) {
             continue;
         }
         $rows[] = [
@@ -128,9 +142,50 @@ function power_phase_poll_rows($json): ?array
             'watts' => $watts,
             'amps' => $amps,
             'volts' => $volts,
+            'va' => $va,
+            'pf' => $pf,
+            'peak_amps' => $peak,
+            'load_state' => $loadState,
         ];
     }
-    return $rows ?: null;
+    $ll = [];
+    if (isset($data['_ll']) && is_array($data['_ll'])) {
+        foreach ($data['_ll'] as $k => $v) {
+            if (is_numeric($v)) {
+                $ll[(string)$k] = (float)$v;
+            }
+        }
+    }
+    $device = [];
+    if (isset($data['_device']) && is_array($data['_device'])) {
+        foreach (['va', 'pf', 'rated_amps'] as $k) {
+            if (isset($data['_device'][$k]) && is_numeric($data['_device'][$k])) {
+                $device[$k] = (float)$data['_device'][$k];
+            }
+        }
+    }
+    $ps = [];
+    if (isset($data['_ps']) && is_array($data['_ps'])) {
+        foreach (['ps1', 'ps2', 'alarm'] as $k) {
+            if (isset($data['_ps'][$k]) && is_numeric($data['_ps'][$k])) {
+                $ps[$k] = (float)$data['_ps'][$k];
+            }
+        }
+    }
+    if (!$rows && !$ll && !$device && !$ps) {
+        return null;
+    }
+    return ['rows' => $rows, 'll' => $ll, 'device' => $device, 'ps' => $ps];
+}
+
+/**
+ * @return list<array{label:string,watts:?float,amps:?float,volts:?float}>|null
+ * @deprecated use power_phase_poll_decode
+ */
+function power_phase_poll_rows($json): ?array
+{
+    $d = power_phase_poll_decode($json);
+    return $d['rows'] ?? null;
 }
 
 function power_fmt_metric(?float $n, int $decimals = 2): string
@@ -139,6 +194,35 @@ function power_fmt_metric(?float $n, int $decimals = 2): string
         return '—';
     }
     return rtrim(rtrim(sprintf('%.' . $decimals . 'F', $n), '0'), '.') ?: '0';
+}
+
+/** APC rPDU2 load-state enum (approx). */
+function power_phase_load_state_label(?float $state): string
+{
+    if ($state === null) {
+        return '—';
+    }
+    return match ((int)$state) {
+        1 => 'low',
+        2 => 'normal',
+        3 => 'near overload',
+        4 => 'overload',
+        default => (string)(int)$state,
+    };
+}
+
+/** APC power-supply status enum (approx). */
+function power_ps_status_label(?float $state): string
+{
+    if ($state === null) {
+        return '—';
+    }
+    return match ((int)$state) {
+        1 => 'OK',
+        2 => 'fault',
+        3 => 'not present',
+        default => (string)(int)$state,
+    };
 }
 
 /**
