@@ -145,8 +145,8 @@ class SnmpPoller
                 : null,
         ], 'target_id = :id', [':id' => (int)$t['target_id']]);
 
-        if (!empty($t['pdu_id']) && ($got['watts'] !== null || $got['amps'] !== null || $got['phases'] !== null)) {
-            self::writePduPoll((int)$t['pdu_id'], $got['watts'], $got['amps'], $got['phases']);
+        if (!empty($t['pdu_id']) && ($got['watts'] !== null || $got['amps'] !== null || $got['phases'] !== null || !empty($got['serial_no']))) {
+            self::writePduPoll((int)$t['pdu_id'], $got['watts'], $got['amps'], $got['phases'], $got['serial_no'] ?? null);
         }
 
         self::closeSession($session);
@@ -303,12 +303,19 @@ class SnmpPoller
             throw new RuntimeException($got['last_error'] ?: 'All SNMP GETs failed for PDU template poll');
         }
 
-        self::writePduPoll((int)$pdu['pdu_id'], $got['watts'], $got['amps'], $got['phases']);
+        self::writePduPoll(
+            (int)$pdu['pdu_id'],
+            $got['watts'],
+            $got['amps'],
+            $got['phases'],
+            $got['serial_no'] ?? null
+        );
 
         return [
             'watts' => $got['watts'],
             'amps' => $got['amps'],
             'phases' => $got['phases'],
+            'serial_no' => $got['serial_no'] ?? null,
             'ok' => $got['ok'],
             'failed' => $got['failed'],
         ];
@@ -316,10 +323,15 @@ class SnmpPoller
 
     /**
      * Persist device-total + optional multi-phase snapshot on a PDU.
-     * @param array<string,array<string,?float>>|null $phases
+     * @param array<string,mixed>|null $phases
      */
-    private static function writePduPoll(int $pduId, ?float $watts, ?float $amps, ?array $phases): void
-    {
+    private static function writePduPoll(
+        int $pduId,
+        ?float $watts,
+        ?float $amps,
+        ?array $phases,
+        ?string $serialNo = null
+    ): void {
         $row = [
             'last_poll_at' => date('Y-m-d H:i:s'),
             'last_poll_watts' => $watts,
@@ -334,6 +346,12 @@ class SnmpPoller
             // Column may not exist until Schema::ensure runs
             unset($row['last_poll_phases']);
             Database::update('pdus', $row, 'pdu_id = :id', [':id' => $pduId]);
+        }
+
+        // Fill empty serial from SNMP (never overwrite a value already set)
+        if ($serialNo !== null && $serialNo !== '') {
+            require_once __DIR__ . '/SnmpDiscover.php';
+            SnmpDiscover::applySerialToPduIfEmpty($pduId, $serialNo);
         }
 
         if ($watts !== null || $amps !== null) {
@@ -351,11 +369,11 @@ class SnmpPoller
      * Phase keys: phase1_watts, phase2_amps_x10, phase3_volts, phase1_va_hundredths_kw,
      *   phase1_pf_x100, phase1_peak_amps_x10, phase1_load_state, …
      * L–L: phase_l12_volts, phase_l23_volts, phase_l31_volts
-     * Device: watts, amps, va, pf_x1000, ps1_status, ps2_status, ps_alarm, phase_rated_amps
+     * Device: watts, amps, va, pf_x1000, ps1_status, ps2_status, ps_alarm, phase_rated_amps, serial_no
      * Scales: see applyMetricScale().
      *
      * @param callable|null $onMetric function(string $metric, mixed $raw, ?float $num): void
-     * @return array{watts:?float,amps:?float,phases:?array,ok:int,failed:int,last_error:?string}
+     * @return array{watts:?float,amps:?float,phases:?array,serial_no:?string,ok:int,failed:int,last_error:?string}
      */
     private static function collectOidMap($session, array $oidMap, ?callable $onMetric = null): array
     {
@@ -364,6 +382,7 @@ class SnmpPoller
         $deviceVa = null;
         $devicePf = null;
         $ratedAmps = null;
+        $serialNo = null;
         $ps1 = null;
         $ps2 = null;
         $psAlarm = null;
@@ -396,6 +415,14 @@ class SnmpPoller
                 $num = self::applyMetricScale($metricKey, $num);
                 if ($onMetric) {
                     $onMetric((string)$metric, $raw, $num);
+                }
+
+                // String identity metrics (serial)
+                if (preg_match('/^(serial_no|serial|serialnumber)\b/', $metricKey)) {
+                    require_once __DIR__ . '/SnmpDiscover.php';
+                    $serialNo = SnmpDiscover::cleanSerialValue($raw) ?? $serialNo;
+                    $ok++;
+                    continue;
                 }
 
                 // Allow scale suffixes: phase1_watts_hundredths_kw, phase2_amps_x10, …
@@ -532,6 +559,7 @@ class SnmpPoller
             'watts' => $watts,
             'amps' => $amps,
             'phases' => $phasesOut,
+            'serial_no' => $serialNo,
             'ok' => $ok,
             'failed' => $failed,
             'last_error' => $lastErr,

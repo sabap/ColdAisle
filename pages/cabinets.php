@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
+require_once dirname(__DIR__) . '/includes/power_helpers.php';
 App::boot();
 $user = App::requirePermission('view_cabinets');
 
@@ -262,10 +263,12 @@ if ($id) {
         'C13', 'C14', 'C19', 'C20', '5-15R', '5-20R', 'L5-20R', 'L5-30R',
         'L6-20R', 'L6-30R', 'L14-30R', 'IEC 60309 16A', 'IEC 60309 32A', 'Hardwired', 'Other',
     ];
-    $inputTypes = [
-        'L6-30P', 'L6-20P', 'L5-30P', 'L5-20P', 'L14-30P', 'CS8365',
-        'IEC 60309 3P+N+E 32A', 'IEC 60309 3P+N+E 16A', 'Hardwired', 'C20', 'Other',
-    ];
+    $inputTypes = function_exists('power_pdu_input_types')
+        ? power_pdu_input_types()
+        : [
+            'L6-30P', 'L6-20P', 'L5-30P', 'L5-20P', 'L14-30P', 'L21-20P', 'L21-30P', 'CS8365',
+            'IEC 60309 3P+N+E 32A', 'IEC 60309 3P+N+E 16A', 'Hardwired', 'C20', 'Other',
+        ];
 
     $cabinetAuditCanLog = AuthManager::can($user, 'edit_audits')
         || AuthManager::can($user, 'edit_infrastructure')
