@@ -121,6 +121,14 @@
         lastX = x;
         lastPt = points[points.length - 1];
       }
+      // One sample: short horizontal segment (not a lone hard-to-see dot)
+      if (points.length === 1) {
+        var p0 = points[0];
+        var x2 = Math.min(padL + plotW, p0.x + Math.max(28, plotW * 0.1));
+        pathD = 'M ' + p0.x.toFixed(1) + ' ' + p0.y.toFixed(1) + ' L ' + x2.toFixed(1) + ' ' + p0.y.toFixed(1);
+        firstX = p0.x;
+        lastX = x2;
+      }
       if (points.length && firstX != null && lastX != null) {
         areaD = pathD
           + ' L ' + lastX.toFixed(1) + ' ' + (padT + plotH).toFixed(1)
