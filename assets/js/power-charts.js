@@ -314,7 +314,10 @@
     var scope = root.getAttribute('data-scope') || 'site';
     var id = root.getAttribute('data-id') || '';
     var hours = parseInt(root.getAttribute('data-hours') || '24', 10) || 24;
-    var cacheKey = scope + '|' + id + '|' + hours;
+    var from = root.getAttribute('data-from') || '';
+    var to = root.getAttribute('data-to') || '';
+    var preset = root.getAttribute('data-preset') || '';
+    var cacheKey = scope + '|' + id + '|' + hours + '|' + from + '|' + to + '|' + preset;
 
     if (root._pcSeries && root._pcCacheKey === cacheKey && !opts.force) {
       paintFromCache(root);
@@ -323,7 +326,14 @@
 
     var base = (window.ColdAisle && window.ColdAisle.baseUrl) || '';
     var url = base.replace(/\/$/, '') + '/api/power_history.php?scope=' + encodeURIComponent(scope)
-      + '&hours=' + hours + (id ? '&id=' + encodeURIComponent(id) : '');
+      + (id ? '&id=' + encodeURIComponent(id) : '');
+    if (from && to) {
+      url += '&from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
+    } else if (preset) {
+      url += '&preset=' + encodeURIComponent(preset);
+    } else {
+      url += '&hours=' + hours;
+    }
 
     var charts = root.querySelectorAll('[data-metric]');
     if (!root._pcSeries) {

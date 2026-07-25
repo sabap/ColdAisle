@@ -9,7 +9,7 @@
  *  1) Foundation + 24h charts (dashboard, PDU) — done
  *  2) Zone list mini-charts + zone detail full charts — done
  *  3) Per-phase outage detection & markers on charts — done
- *  4) Reports: weekly / monthly / annual / custom range export
+ *  4) Reports: weekly / monthly / annual / custom range export — done
  */
 declare(strict_types=1);
 
@@ -191,23 +191,40 @@ class PowerHistoryService
      *   meta:array<string,mixed>
      * }
      */
-    public static function series(string $scope, ?int $scopeId, int $hours = 24): array
-    {
+    /**
+     * @param string|null $fromIso Inclusive start (Y-m-d or ISO); null = now - $hours
+     * @param string|null $toIso Exclusive/end (Y-m-d or ISO); null = now
+     */
+    public static function series(
+        string $scope,
+        ?int $scopeId,
+        int $hours = 24,
+        ?string $fromIso = null,
+        ?string $toIso = null
+    ): array {
         $scope = strtolower($scope);
         if (!in_array($scope, ['site', 'zone', 'pdu'], true)) {
             $scope = 'site';
         }
-        $hours = max(1, min(24 * 90, $hours));
-        $bucketMin = self::bucketMinutesForHours($hours);
+        [$fromTs, $toTs, $hoursEff] = self::resolveRange($hours, $fromIso, $toIso);
+        $bucketMin = self::bucketMinutesForHours($hoursEff);
+        $fromSql = date('Y-m-d H:i:s', $fromTs);
+        $toSql = date('Y-m-d H:i:s', $toTs);
 
         // PDU scope: aggregate entirely in PHP so volts / phase lines / outages
         // share the same time buckets (avoids SQL vs PHP timezone mismatches).
         if ($scope === 'pdu' && $scopeId && $scopeId > 0) {
-            return self::seriesFromRawPduSamples($scopeId, $hours, $bucketMin);
+            $result = self::seriesFromRawPduSamples($scopeId, $hoursEff, $bucketMin, $fromTs, $toTs);
+            $result['from'] = date('c', $fromTs);
+            $result['to'] = date('c', $toTs);
+            $result['summary'] = self::summarizeSeries($result);
+            return $result;
         }
 
         $params = [];
-        $where = 'r.polled_at >= DATEADD(HOUR, -' . (int)$hours . ', SYSUTCDATETIME())';
+        $where = 'r.polled_at >= ? AND r.polled_at < ?';
+        $params[] = $fromSql;
+        $params[] = $toSql;
         $join = '';
 
         if ($scope === 'zone' && $scopeId && $scopeId > 0) {
@@ -288,7 +305,7 @@ class PowerHistoryService
         // Carry-forward voltage so sparse samples still draw a continuous line
         $volts = self::carryForward($volts);
 
-        $outages = self::loadOutageMarkers($scope, $scopeId, $hours, $bucketMin);
+        $outages = self::loadOutageMarkers($scope, $scopeId, $bucketMin, $fromTs, $toTs);
 
         $outageCount = count($outages);
         $outagePhases = [];
@@ -298,11 +315,13 @@ class PowerHistoryService
             }
         }
 
-        return [
+        $result = [
             'ok' => true,
             'scope' => $scope,
             'scope_id' => $scopeId,
-            'hours' => $hours,
+            'hours' => $hoursEff,
+            'from' => date('c', $fromTs),
+            'to' => date('c', $toTs),
             'bucket_minutes' => $bucketMin,
             'series' => [
                 't' => $t,
@@ -314,11 +333,114 @@ class PowerHistoryService
             'outages' => $outages,
             'meta' => [
                 'points' => count($t),
-                'sample_count' => self::countSamples($scope, $scopeId, $hours),
+                'sample_count' => self::countSamplesRange($scope, $scopeId, $fromTs, $toTs),
                 'outage_events' => $outageCount,
                 'outage_phases' => array_keys($outagePhases),
             ],
         ];
+        $result['summary'] = self::summarizeSeries($result);
+        return $result;
+    }
+
+    /**
+     * Resolve rolling hours or absolute from/to into unix range.
+     * @return array{0:int,1:int,2:int} [fromTs, toTs, hoursEff]
+     */
+    public static function resolveRange(int $hours, ?string $fromIso, ?string $toIso): array
+    {
+        $toTs = time();
+        $fromTs = $toTs - max(1, $hours) * 3600;
+        if ($toIso !== null && trim($toIso) !== '') {
+            $t = strtotime(trim($toIso));
+            if ($t !== false) {
+                // date-only → end of day
+                if (preg_match('/^\d{4}-\d{2}-\d{2}$/', trim($toIso))) {
+                    $t = strtotime(trim($toIso) . ' 23:59:59') ?: $t;
+                }
+                $toTs = $t;
+            }
+        }
+        if ($fromIso !== null && trim($fromIso) !== '') {
+            $t = strtotime(trim($fromIso));
+            if ($t !== false) {
+                if (preg_match('/^\d{4}-\d{2}-\d{2}$/', trim($fromIso))) {
+                    $t = strtotime(trim($fromIso) . ' 00:00:00') ?: $t;
+                }
+                $fromTs = $t;
+            }
+        }
+        if ($fromTs >= $toTs) {
+            $fromTs = $toTs - 86400;
+        }
+        $maxSpan = self::RETENTION_DAYS * 86400;
+        if (($toTs - $fromTs) > $maxSpan) {
+            $fromTs = $toTs - $maxSpan;
+        }
+        $hoursEff = max(1, (int)ceil(($toTs - $fromTs) / 3600));
+        return [$fromTs, $toTs, $hoursEff];
+    }
+
+    /**
+     * Peak / avg / min stats for report cards.
+     * @param array<string,mixed> $seriesResult
+     * @return array<string,mixed>
+     */
+    public static function summarizeSeries(array $seriesResult): array
+    {
+        $s = $seriesResult['series'] ?? [];
+        $kw = is_array($s['kw'] ?? null) ? $s['kw'] : [];
+        $volts = is_array($s['volts'] ?? null) ? $s['volts'] : [];
+        $amps = is_array($s['amps'] ?? null) ? $s['amps'] : [];
+        $kwN = array_values(array_filter($kw, static fn($v) => $v !== null && is_numeric($v)));
+        $vN = array_values(array_filter($volts, static fn($v) => $v !== null && is_numeric($v)));
+        $aN = array_values(array_filter($amps, static fn($v) => $v !== null && is_numeric($v)));
+
+        $stat = static function (array $vals): array {
+            if (!$vals) {
+                return ['min' => null, 'max' => null, 'avg' => null];
+            }
+            $min = min($vals);
+            $max = max($vals);
+            $avg = array_sum($vals) / count($vals);
+            return [
+                'min' => round((float)$min, 3),
+                'max' => round((float)$max, 3),
+                'avg' => round((float)$avg, 3),
+            ];
+        };
+
+        return [
+            'kw' => $stat($kwN),
+            'volts' => $stat($vN),
+            'amps' => $stat($aN),
+            'outage_events' => (int)($seriesResult['meta']['outage_events'] ?? count($seriesResult['outages'] ?? [])),
+            'points' => (int)($seriesResult['meta']['points'] ?? count($s['t'] ?? [])),
+            'sample_count' => (int)($seriesResult['meta']['sample_count'] ?? 0),
+            'bucket_minutes' => (int)($seriesResult['bucket_minutes'] ?? 0),
+        ];
+    }
+
+    /**
+     * Flat rows for CSV export.
+     * @param array<string,mixed> $seriesResult
+     * @return list<array{time:string,kw:?float,watts:?float,volts:?float,amps:?float}>
+     */
+    public static function tableRows(array $seriesResult): array
+    {
+        $s = $seriesResult['series'] ?? [];
+        $t = $s['t'] ?? [];
+        $rows = [];
+        $n = count($t);
+        for ($i = 0; $i < $n; $i++) {
+            $rows[] = [
+                'time' => (string)$t[$i],
+                'kw' => $s['kw'][$i] ?? null,
+                'watts' => $s['watts'][$i] ?? null,
+                'volts' => $s['volts'][$i] ?? null,
+                'amps' => $s['amps'][$i] ?? null,
+            ];
+        }
+        return $rows;
     }
 
     /**
@@ -326,17 +448,28 @@ class PowerHistoryService
      *
      * @return array<string,mixed>
      */
-    private static function seriesFromRawPduSamples(int $pduId, int $hours, int $bucketMin): array
-    {
+    private static function seriesFromRawPduSamples(
+        int $pduId,
+        int $hours,
+        int $bucketMin,
+        ?int $fromTs = null,
+        ?int $toTs = null
+    ): array {
+        if ($fromTs === null || $toTs === null) {
+            $toTs = time();
+            $fromTs = $toTs - max(1, $hours) * 3600;
+        }
+        $fromSql = date('Y-m-d H:i:s', $fromTs);
+        $toSql = date('Y-m-d H:i:s', $toTs);
         $rows = [];
         try {
             $rows = Database::fetchAll(
                 'SELECT polled_at, watts, amps, volts, volts_ll, phases_json, outage_phases
                  FROM pdu_readings
                  WHERE pdu_id = ?
-                   AND polled_at >= DATEADD(HOUR, -' . (int)$hours . ', SYSUTCDATETIME())
+                   AND polled_at >= ? AND polled_at < ?
                  ORDER BY polled_at',
-                [$pduId]
+                [$pduId, $fromSql, $toSql]
             );
         } catch (Throwable $e) {
             try {
@@ -344,9 +477,9 @@ class PowerHistoryService
                     'SELECT polled_at, watts, amps, volts, phases_json, outage_phases
                      FROM pdu_readings
                      WHERE pdu_id = ?
-                       AND polled_at >= DATEADD(HOUR, -' . (int)$hours . ', SYSUTCDATETIME())
+                       AND polled_at >= ? AND polled_at < ?
                      ORDER BY polled_at',
-                    [$pduId]
+                    [$pduId, $fromSql, $toSql]
                 );
             } catch (Throwable $e2) {
                 $rows = [];
@@ -503,6 +636,8 @@ class PowerHistoryService
             'scope' => 'pdu',
             'scope_id' => $pduId,
             'hours' => $hours,
+            'from' => date('c', $fromTs),
+            'to' => date('c', $toTs),
             'bucket_minutes' => $bucketMin,
             'series' => $series,
             'outages' => $outages,
@@ -551,12 +686,15 @@ class PowerHistoryService
     private static function loadOutageMarkers(
         string $scope,
         ?int $scopeId,
-        int $hours,
-        int $bucketMin
+        int $bucketMin,
+        int $fromTs,
+        int $toTs
     ): array {
         $params = [];
-        $where = "r.polled_at >= DATEADD(HOUR, -{$hours}, SYSUTCDATETIME())
+        $where = "r.polled_at >= ? AND r.polled_at < ?
                   AND r.outage_phases IS NOT NULL AND LTRIM(RTRIM(r.outage_phases)) <> ''";
+        $params[] = date('Y-m-d H:i:s', $fromTs);
+        $params[] = date('Y-m-d H:i:s', $toTs);
         $join = '';
         if ($scope === 'pdu' && $scopeId) {
             $where .= ' AND r.pdu_id = ?';
@@ -676,7 +814,10 @@ class PowerHistoryService
         if ($hours <= 24 * 31) {
             return 60;
         }
-        return 360;
+        if ($hours <= 24 * 100) {
+            return 180; // 3h
+        }
+        return 360; // 6h for annual-scale
     }
 
     private static function formatBucket($bucket): string
@@ -689,28 +830,31 @@ class PowerHistoryService
         return $ts ? date('c', $ts) : $s;
     }
 
-    private static function countSamples(string $scope, ?int $scopeId, int $hours): int
+    private static function countSamplesRange(string $scope, ?int $scopeId, int $fromTs, int $toTs): int
     {
+        $fromSql = date('Y-m-d H:i:s', $fromTs);
+        $toSql = date('Y-m-d H:i:s', $toTs);
         try {
             if ($scope === 'pdu' && $scopeId) {
                 return (int)Database::fetchValue(
                     'SELECT COUNT(*) FROM pdu_readings
-                     WHERE pdu_id = ? AND polled_at >= DATEADD(HOUR, -' . (int)$hours . ', SYSUTCDATETIME())',
-                    [$scopeId]
+                     WHERE pdu_id = ? AND polled_at >= ? AND polled_at < ?',
+                    [$scopeId, $fromSql, $toSql]
                 );
             }
             if ($scope === 'zone' && $scopeId) {
                 return (int)Database::fetchValue(
                     'SELECT COUNT(*) FROM pdu_readings r
                      INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.zone_id = ? AND p.is_active = 1
-                     WHERE r.polled_at >= DATEADD(HOUR, -' . (int)$hours . ', SYSUTCDATETIME())',
-                    [$scopeId]
+                     WHERE r.polled_at >= ? AND polled_at < ?',
+                    [$scopeId, $fromSql, $toSql]
                 );
             }
             return (int)Database::fetchValue(
                 'SELECT COUNT(*) FROM pdu_readings r
                  INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.is_active = 1
-                 WHERE r.polled_at >= DATEADD(HOUR, -' . (int)$hours . ', SYSUTCDATETIME())'
+                 WHERE r.polled_at >= ? AND r.polled_at < ?',
+                [$fromSql, $toSql]
             );
         } catch (Throwable $e) {
             return 0;
