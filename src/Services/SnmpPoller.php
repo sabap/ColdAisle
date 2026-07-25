@@ -162,8 +162,15 @@ class SnmpPoller
                 : null,
         ], 'target_id = :id', [':id' => (int)$t['target_id']]);
 
-        if (!empty($t['pdu_id']) && ($got['watts'] !== null || $got['amps'] !== null || $got['phases'] !== null || !empty($got['serial_no']))) {
-            self::writePduPoll((int)$t['pdu_id'], $got['watts'], $got['amps'], $got['phases'], $got['serial_no'] ?? null);
+        if (!empty($t['pdu_id']) && ($got['watts'] !== null || $got['amps'] !== null || $got['phases'] !== null || !empty($got['serial_no']) || !empty($got['outlets']))) {
+            self::writePduPoll(
+                (int)$t['pdu_id'],
+                $got['watts'],
+                $got['amps'],
+                $got['phases'],
+                $got['serial_no'] ?? null,
+                $got['outlets'] ?? null
+            );
         }
 
         self::closeSession($session);
@@ -254,9 +261,22 @@ class SnmpPoller
         if ($siteTplId > 0) {
             $result = self::pollPduFromSiteTemplate($pdu, $siteTplId);
             $nPhase = is_array($result['phases'] ?? null) ? count($result['phases']) : 0;
+            // Count only L1/L2/L3 for phase message (meta keys _ll/_device/_ps)
+            if (is_array($result['phases'] ?? null)) {
+                $nPhase = 0;
+                foreach (['L1', 'L2', 'L3'] as $lab) {
+                    if (isset($result['phases'][$lab])) {
+                        $nPhase++;
+                    }
+                }
+            }
+            $nOut = is_array($result['outlets'] ?? null) ? count($result['outlets']) : 0;
             $msg = 'Polled via site OID template (' . $result['ok'] . ' metric(s)';
             if ($nPhase > 0) {
                 $msg .= ', ' . $nPhase . ' phase(s)';
+            }
+            if ($nOut > 0) {
+                $msg .= ', ' . $nOut . ' outlet(s)';
             }
             $msg .= ').';
             return [
@@ -265,6 +285,7 @@ class SnmpPoller
                 'watts' => $result['watts'],
                 'amps' => $result['amps'],
                 'phases' => $result['phases'],
+                'outlets' => $result['outlets'] ?? null,
             ];
         }
 
@@ -291,6 +312,11 @@ class SnmpPoller
         $oidMap = json_decode((string)($tpl['oid_map'] ?? '{}'), true) ?: [];
         if (!$oidMap) {
             throw new RuntimeException('Site OID template has an empty OID map.');
+        }
+        // Cap outlet walk from inventory (optional map key outlet_max also works)
+        $nOut = (int)($pdu['num_outlets'] ?? 0);
+        if ($nOut > 0 && !isset($oidMap['outlet_max'])) {
+            $oidMap['outlet_max'] = (string)max(1, min(128, $nOut + 4));
         }
 
         $creds = SnmpDiscover::credsFromPdu($pdu);
@@ -325,13 +351,15 @@ class SnmpPoller
             $got['watts'],
             $got['amps'],
             $got['phases'],
-            $got['serial_no'] ?? null
+            $got['serial_no'] ?? null,
+            $got['outlets'] ?? null
         );
 
         return [
             'watts' => $got['watts'],
             'amps' => $got['amps'],
             'phases' => $got['phases'],
+            'outlets' => $got['outlets'] ?? null,
             'serial_no' => $got['serial_no'] ?? null,
             'ok' => $got['ok'],
             'failed' => $got['failed'],
@@ -339,15 +367,17 @@ class SnmpPoller
     }
 
     /**
-     * Persist device-total + optional multi-phase snapshot on a PDU.
+     * Persist device-total + optional multi-phase / per-outlet snapshots on a PDU.
      * @param array<string,mixed>|null $phases
+     * @param array<string,mixed>|null $outlets
      */
     private static function writePduPoll(
         int $pduId,
         ?float $watts,
         ?float $amps,
         ?array $phases,
-        ?string $serialNo = null
+        ?string $serialNo = null,
+        ?array $outlets = null
     ): void {
         $row = [
             'last_poll_at' => date('Y-m-d H:i:s'),
@@ -358,11 +388,22 @@ class SnmpPoller
             $row['last_poll_phases'] = $phases
                 ? json_encode($phases, JSON_UNESCAPED_SLASHES)
                 : null;
+            $row['last_poll_outlets'] = $outlets
+                ? json_encode($outlets, JSON_UNESCAPED_SLASHES)
+                : null;
             Database::update('pdus', $row, 'pdu_id = :id', [':id' => $pduId]);
         } catch (Throwable $e) {
             // Column may not exist until Schema::ensure runs
-            unset($row['last_poll_phases']);
-            Database::update('pdus', $row, 'pdu_id = :id', [':id' => $pduId]);
+            unset($row['last_poll_phases'], $row['last_poll_outlets']);
+            try {
+                $row['last_poll_phases'] = $phases
+                    ? json_encode($phases, JSON_UNESCAPED_SLASHES)
+                    : null;
+                Database::update('pdus', $row, 'pdu_id = :id', [':id' => $pduId]);
+            } catch (Throwable $e2) {
+                unset($row['last_poll_phases']);
+                Database::update('pdus', $row, 'pdu_id = :id', [':id' => $pduId]);
+            }
         }
 
         // Fill empty serial from SNMP (never overwrite a value already set)
@@ -441,10 +482,12 @@ class SnmpPoller
      *   phase1_pf_x100, phase1_peak_amps_x10, phase1_load_state, …
      * L–L: phase_l12_volts, phase_l23_volts, phase_l31_volts
      * Device: watts, amps, va, pf_x1000, ps1_status, ps2_status, ps_alarm, phase_rated_amps, serial_no
+     * Outlets (table bases, walked .1…N): outlet_amps_x10, outlet_watts_hundredths_kw,
+     *   outlet_name, outlet_state
      * Scales: see applyMetricScale().
      *
      * @param callable|null $onMetric function(string $metric, mixed $raw, ?float $num): void
-     * @return array{watts:?float,amps:?float,phases:?array,serial_no:?string,ok:int,failed:int,last_error:?string}
+     * @return array{watts:?float,amps:?float,phases:?array,outlets:?array,serial_no:?string,ok:int,failed:int,last_error:?string}
      */
     private static function collectOidMap($session, array $oidMap, ?callable $onMetric = null): array
     {
@@ -479,10 +522,14 @@ class SnmpPoller
             if (!is_string($oid) || !preg_match('/^\d/', ltrim($oid, '.'))) {
                 continue;
             }
+            $metricKey = strtolower(trim((string)$metric));
+            // Outlet table bases are walked separately (not single-instance GETs)
+            if (preg_match('/^outlet_(amps|watts|power|current|name|state)\b/', $metricKey)) {
+                continue;
+            }
             try {
                 $raw = self::get($session, ltrim($oid, '.'));
                 $num = self::toNumber($raw);
-                $metricKey = strtolower(trim((string)$metric));
                 $num = self::applyMetricScale($metricKey, $num);
                 if ($onMetric) {
                     $onMetric((string)$metric, $raw, $num);
@@ -539,6 +586,9 @@ class SnmpPoller
                 $lastErr = $e->getMessage();
             }
         }
+
+        // Per-outlet table walks (APC rPDU2OutletMeteredStatus* bases)
+        $outletsOut = self::collectOutletTables($session, $oidMap, $ok, $failed, $lastErr);
 
         $phasesOut = null;
         if ($phaseBag || $ll || $deviceVa !== null || $devicePf !== null
@@ -630,11 +680,129 @@ class SnmpPoller
             'watts' => $watts,
             'amps' => $amps,
             'phases' => $phasesOut,
+            'outlets' => $outletsOut,
             'serial_no' => $serialNo,
             'ok' => $ok,
             'failed' => $failed,
             'last_error' => $lastErr,
         ];
+    }
+
+    /**
+     * Walk outlet table column bases: outlet_amps_x10, outlet_watts_hundredths_kw,
+     * outlet_name, outlet_state → { "1": {amps, watts, name, state}, … }.
+     *
+     * Index style: probe base.1 then base.1.1 (APC module.outlet).
+     *
+     * @return array<string,array<string,mixed>>|null
+     */
+    private static function collectOutletTables(
+        $session,
+        array $oidMap,
+        int &$ok,
+        int &$failed,
+        ?string &$lastErr
+    ): ?array {
+        /** @var array<string,array{oid:string,scale_key:string}> $columns */
+        $columns = [];
+        foreach ($oidMap as $metric => $oid) {
+            if (!is_string($oid) || !preg_match('/^\d/', ltrim($oid, '.'))) {
+                continue;
+            }
+            $key = strtolower(trim((string)$metric));
+            if (!preg_match('/^outlet_(amps|watts|power|current|name|state)\b/', $key, $m)) {
+                continue;
+            }
+            $field = strtolower($m[1]);
+            if ($field === 'power' || $field === 'watts') {
+                $field = 'watts';
+            } elseif ($field === 'current' || $field === 'amps') {
+                $field = 'amps';
+            }
+            $columns[$field] = [
+                'oid' => rtrim(ltrim($oid, '.'), '.'),
+                'scale_key' => $key,
+            ];
+        }
+        if (!$columns) {
+            return null;
+        }
+
+        $probeOid = $columns['amps']['oid']
+            ?? $columns['watts']['oid']
+            ?? $columns['state']['oid']
+            ?? $columns['name']['oid'];
+        $style = self::probeOutletIndexStyle($session, $probeOid);
+        if ($style === null) {
+            return null;
+        }
+
+        $max = 48;
+        // Optional hint from inventory size via map meta key (numeric string)
+        if (isset($oidMap['outlet_max']) && is_numeric($oidMap['outlet_max'])) {
+            $max = max(1, min(128, (int)$oidMap['outlet_max']));
+        }
+
+        require_once __DIR__ . '/SnmpDiscover.php';
+        $byNum = [];
+        $miss = 0;
+        for ($i = 1; $i <= $max; $i++) {
+            $suffix = $style === 'module' ? ('.1.' . $i) : ('.' . $i);
+            $row = ['num' => $i];
+            $got = false;
+            foreach ($columns as $field => $col) {
+                try {
+                    $raw = self::get($session, $col['oid'] . $suffix);
+                    $got = true;
+                    $ok++;
+                    if ($field === 'name') {
+                        $name = SnmpDiscover::cleanSerialValue($raw);
+                        if ($name === null && is_string($raw)) {
+                            $name = trim(trim($raw), " \t\"'");
+                        }
+                        $row['name'] = $name !== '' ? $name : null;
+                    } elseif ($field === 'state') {
+                        $row['state'] = self::toNumber($raw);
+                    } else {
+                        $num = self::applyMetricScale($col['scale_key'], self::toNumber($raw));
+                        $row[$field] = $num;
+                    }
+                } catch (Throwable $e) {
+                    $failed++;
+                    $lastErr = $e->getMessage();
+                }
+            }
+            if (!$got) {
+                $miss++;
+                // Stop after first full miss (tables are contiguous)
+                if ($i === 1) {
+                    return null;
+                }
+                break;
+            }
+            $miss = 0;
+            $byNum[(string)$i] = $row;
+        }
+
+        return $byNum ?: null;
+    }
+
+    /** @return 'simple'|'module'|null */
+    private static function probeOutletIndexStyle($session, string $baseOid): ?string
+    {
+        $baseOid = rtrim(ltrim($baseOid, '.'), '.');
+        try {
+            self::get($session, $baseOid . '.1');
+            return 'simple';
+        } catch (Throwable $e) {
+            // continue
+        }
+        try {
+            self::get($session, $baseOid . '.1.1');
+            return 'module';
+        } catch (Throwable $e) {
+            return null;
+        }
     }
 
     /**

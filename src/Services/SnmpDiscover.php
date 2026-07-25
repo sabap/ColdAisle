@@ -995,6 +995,10 @@ class SnmpDiscover
         foreach (self::proposeDeviceAndLlKeys($candidates) as $k => $oid) {
             $map[$k] = $oid;
         }
+        // Per-outlet table bases (walked .1…N by SnmpPoller)
+        foreach (self::proposeOutletMapKeys($candidates) as $k => $oid) {
+            $map[$k] = $oid;
+        }
 
         $pick = static function (array $c) use (&$watts, &$wattsScore, &$amps, &$ampsX10): void {
             $oid = $c['oid'];
@@ -1264,6 +1268,159 @@ class SnmpDiscover
 
         foreach ($best as $key => $pair) {
             $out[$key] = $pair[1];
+        }
+        return $out;
+    }
+
+    /**
+     * Per-outlet table column bases for SnmpPoller::collectOutletTables.
+     * Candidates are usually instance OIDs (…column.1 or …column.1.N); strip index → base.
+     *
+     * Keys: outlet_amps_x10, outlet_watts_hundredths_kw, outlet_name, outlet_state
+     *
+     * @param list<array{oid:string,name?:?string,hint?:string,score?:int,numeric?:?float}> $candidates
+     * @return array<string,string>
+     */
+    private static function proposeOutletMapKeys(array $candidates): array
+    {
+        $best = []; // field => [score, baseOid]
+
+        $consider = static function (string $field, string $baseOid, int $score) use (&$best): void {
+            if ($baseOid === '') {
+                return;
+            }
+            if (!isset($best[$field]) || $score > $best[$field][0]) {
+                $best[$field] = [$score, $baseOid];
+            }
+        };
+
+        // Known APC rPDU2OutletMeteredStatus* column bases (PowerNet)
+        $apcBases = [
+            'name' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.3',
+            'state' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.5',
+            'amps' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.6',
+            'watts' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.7',
+        ];
+
+        foreach ($candidates as $c) {
+            $oid = (string)($c['oid'] ?? '');
+            if ($oid === '') {
+                continue;
+            }
+            $name = strtolower((string)($c['name'] ?? ''));
+            $hint = strtolower((string)($c['hint'] ?? ''));
+            $hay = $name . ' ' . $hint . ' ' . $oid;
+            $sc = (int)($c['score'] ?? 0);
+
+            // Must look like an outlet/receptacle metric (not phase totals)
+            if (!preg_match('/outlet|receptacle|socket|rpdu2outlet/', $hay)) {
+                continue;
+            }
+            if (preg_match('/config|threshold|reset|timestamp|starttime|peakpower|peakcurrent|energy|control|switched/', $hay)
+                && !preg_match('/outletmeteredstatus/', $hay)
+            ) {
+                // Still allow APC metered status columns even if "status" alone matched poorly
+                if (!preg_match('/outletmeteredstatus(current|power|name|state)/', $hay)
+                    && !preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.9\.4\.3\.1\.[3567]/', $oid)
+                ) {
+                    continue;
+                }
+            }
+
+            // Strip trailing instance: .N or .module.N → column base
+            $base = $oid;
+            if (preg_match('/^(.+)\.1\.\d+$/', $oid, $m)) {
+                $base = $m[1]; // module.outlet style leaf
+            } elseif (preg_match('/^(.+)\.(\d+)$/', $oid, $m)) {
+                $base = $m[1];
+            }
+
+            $field = null;
+            $bonus = 0;
+            if (preg_match('/outletmeteredstatuscurrent|statuscurrent|outlet.*current|(?<![a-z])current(?![a-z])/', $hay)
+                && !preg_match('/peak|max|watt|power|voltage|name|state/', $hay)
+            ) {
+                $field = 'amps';
+                $bonus = 20;
+            } elseif (preg_match('/outletmeteredstatuspower|statuspower|outlet.*power|(?<![a-z])watts?(?![a-z])/', $hay)
+                && !preg_match('/powerfactor|apparent|peak|current|voltage|name|state/', $hay)
+            ) {
+                $field = 'watts';
+                $bonus = 20;
+            } elseif (preg_match('/outletmeteredstatusname|statusname|outlet.*name/', $hay)) {
+                $field = 'name';
+                $bonus = 10;
+            } elseif (preg_match('/outletmeteredstatusstate|statusstate|outlet.*loadstate|outlet.*state/', $hay)
+                && !preg_match('/switched|control/', $hay)
+            ) {
+                $field = 'state';
+                $bonus = 10;
+            }
+
+            // APC numeric path fallback by column id
+            if ($field === null) {
+                foreach ($apcBases as $f => $apcBase) {
+                    if ($base === $apcBase || str_starts_with($oid, $apcBase . '.')) {
+                        $field = $f;
+                        $bonus = 40;
+                        $base = $apcBase;
+                        break;
+                    }
+                }
+            }
+            if ($field === null) {
+                continue;
+            }
+            if (preg_match('/rpdu2|outletmetered|1\.3\.6\.1\.4\.1\.318/', $hay . $base)) {
+                $bonus += 15;
+            }
+            $consider($field, $base, $sc + $bonus);
+        }
+
+        // If we found amps or watts on APC tree, fill sibling columns from known bases
+        $hasApc = false;
+        foreach ($best as $pair) {
+            if (str_starts_with($pair[1], '1.3.6.1.4.1.318.1.1.26.9.4.3.1.')) {
+                $hasApc = true;
+                break;
+            }
+        }
+        if ($hasApc || (isset($best['amps']) || isset($best['watts']))) {
+            foreach ($apcBases as $f => $apcBase) {
+                // Only fill siblings when at least one APC metered column was seen
+                $anyApcHit = false;
+                foreach ($best as $pair) {
+                    if (str_starts_with($pair[1], '1.3.6.1.4.1.318.1.1.26.9.')) {
+                        $anyApcHit = true;
+                        break;
+                    }
+                }
+                if (!$anyApcHit) {
+                    break;
+                }
+                if (!isset($best[$f])) {
+                    $best[$f] = [5, $apcBase];
+                }
+            }
+        }
+
+        $out = [];
+        $apc = static function (string $baseOid): bool {
+            return str_contains($baseOid, '1.3.6.1.4.1.318');
+        };
+        if (isset($best['amps'])) {
+            $oid = $best['amps'][1];
+            $out[$apc($oid) ? 'outlet_amps_x10' : 'outlet_amps'] = $oid;
+        }
+        if (isset($best['watts'])) {
+            $oid = $best['watts'][1];
+            $out[$apc($oid) ? 'outlet_watts_hundredths_kw' : 'outlet_watts'] = $oid;
+        }
+        if (isset($best['name'])) {
+            $out['outlet_name'] = $best['name'][1];
+        }
+        if (isset($best['state'])) {
+            $out['outlet_state'] = $best['state'][1];
         }
         return $out;
     }

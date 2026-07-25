@@ -519,6 +519,7 @@ CREATE TABLE pdus (
     last_poll_watts DECIMAL(12,2) NULL,
     last_poll_amps DECIMAL(10,2) NULL,
     last_poll_phases NVARCHAR(MAX) NULL, -- JSON phase snapshot {L1:{watts,amps,volts},…}
+    last_poll_outlets NVARCHAR(MAX) NULL, -- JSON outlet snapshot {"1":{amps,watts,name,state},…}
     notes NVARCHAR(MAX) NULL,
     is_active BIT NOT NULL DEFAULT 1,
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
