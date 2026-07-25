@@ -22,21 +22,33 @@
     return String(n);
   }
 
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
   /**
    * @param {HTMLElement} el
-   * @param {{t:string[], values:(number|null)[], label:string, unit:string, color?:string, fill?:string}} opts
+   * @param {{t:string[], values:(number|null)[], label:string, unit:string, color?:string}} opts
    */
   function renderLineChart(el, opts) {
     if (!el) return;
     var t = opts.t || [];
     var values = opts.values || [];
     var color = opts.color || '#38bdf8';
-    var fill = opts.fill || 'rgba(56,189,248,0.18)';
     var unit = opts.unit || '';
     var label = opts.label || '';
     var h = opts.height || (el.classList.contains('power-chart-sm') ? 88 : 180);
-    var w = el.clientWidth || el.offsetWidth || 640;
-    if (w < 120) w = 640;
+    // Prefer parent width; avoid 0 during layout
+    var w = Math.floor(el.clientWidth || el.offsetWidth || (el.parentElement && el.parentElement.clientWidth) || 640);
+    if (w < 80) w = 640;
+
+    // Skip rewrite if same width already painted (stops ResizeObserver thrash)
+    if (el._pcW === w && el._pcPainted && el.dataset.ready === '1') {
+      return;
+    }
+    el._pcW = w;
 
     var padL = 44, padR = 12, padT = 16, padB = 28;
     var plotW = Math.max(40, w - padL - padR);
@@ -49,7 +61,6 @@
       minV = minV > 0 ? minV * 0.9 : minV - 1;
       maxV = maxV > 0 ? maxV * 1.1 : maxV + 1;
     }
-    // Voltage: pad to nice band
     if (unit === 'V') {
       minV = Math.max(0, Math.floor(minV / 10) * 10 - 10);
       maxV = Math.ceil(maxV / 10) * 10 + 10;
@@ -93,7 +104,8 @@
         + ' Z';
     }
 
-    var gid = 'pg-' + Math.random().toString(36).slice(2, 9);
+    var metricKey = (el.getAttribute('data-metric') || 'm').replace(/[^a-z0-9_-]/gi, '');
+    var gid = 'pg-' + metricKey + '-' + w;
     var yTicks = 4;
     var grid = '';
     var yLabels = '';
@@ -109,7 +121,6 @@
         + '" text-anchor="end">' + lab + '</text>';
     }
 
-    // X labels: ~6 ticks
     var xLabels = '';
     if (t.length) {
       var steps = Math.min(6, t.length);
@@ -148,58 +159,90 @@
 
     el.innerHTML = head + empty + svg;
     el.dataset.ready = '1';
+    el._pcPainted = true;
   }
 
-  function escapeHtml(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+  function paintFromCache(root) {
+    var s = root._pcSeries;
+    if (!s) return;
+    var charts = root.querySelectorAll('[data-metric]');
+    charts.forEach(function (c) {
+      c.classList.remove('power-chart-loading');
+      var metric = c.getAttribute('data-metric') || 'kw';
+      var values = s[metric] || s.kw || [];
+      var unit = c.getAttribute('data-unit') || (metric === 'volts' ? 'V' : metric === 'amps' ? 'A' : 'kW');
+      var color = c.getAttribute('data-color') || (metric === 'volts' ? '#a78bfa' : '#38bdf8');
+      renderLineChart(c, {
+        t: s.t || [],
+        values: values,
+        label: c.getAttribute('data-label') || metric,
+        unit: unit,
+        color: color,
+        height: parseInt(c.getAttribute('data-height') || '0', 10) || undefined,
+      });
+    });
   }
 
   /**
-   * Load history API and paint one or more charts under a root.
-   * data-scope, data-id, data-hours on root or each chart.
+   * Load history API once; repaints use cached series (no re-fetch loop).
    */
-  async function mount(root) {
+  async function mount(root, opts) {
     if (!root) return;
+    opts = opts || {};
+    // Already have data and only a soft repaint requested
+    if (opts.repaintOnly && root._pcSeries) {
+      paintFromCache(root);
+      return;
+    }
+    // In-flight fetch — don't start another
+    if (root._pcFetching) return;
+
     var scope = root.getAttribute('data-scope') || 'site';
     var id = root.getAttribute('data-id') || '';
     var hours = parseInt(root.getAttribute('data-hours') || '24', 10) || 24;
+    var cacheKey = scope + '|' + id + '|' + hours;
+
+    // Reuse cache if same query
+    if (root._pcSeries && root._pcCacheKey === cacheKey && !opts.force) {
+      paintFromCache(root);
+      return;
+    }
+
     var base = (window.ColdAisle && window.ColdAisle.baseUrl) || '';
     var url = base.replace(/\/$/, '') + '/api/power_history.php?scope=' + encodeURIComponent(scope)
       + '&hours=' + hours + (id ? '&id=' + encodeURIComponent(id) : '');
 
     var charts = root.querySelectorAll('[data-metric]');
-    charts.forEach(function (c) {
-      c.classList.add('power-chart-loading');
-      c.innerHTML = '<div class="power-chart-empty">Loading…</div>';
-    });
+    if (!root._pcSeries) {
+      charts.forEach(function (c) {
+        c.classList.add('power-chart-loading');
+        c.innerHTML = '<div class="power-chart-empty">Loading…</div>';
+        c._pcPainted = false;
+        c._pcW = null;
+      });
+    }
 
+    root._pcFetching = true;
     try {
       var res = await fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } });
       var data = await res.json();
       if (!data || !data.ok) throw new Error((data && data.error) || 'History unavailable');
-      var s = data.series || {};
+      root._pcSeries = data.series || {};
+      root._pcCacheKey = cacheKey;
+      // Reset width locks so first paint after fetch always draws
       charts.forEach(function (c) {
-        c.classList.remove('power-chart-loading');
-        var metric = c.getAttribute('data-metric') || 'kw';
-        var values = s[metric] || s.kw || [];
-        var unit = c.getAttribute('data-unit') || (metric === 'volts' ? 'V' : metric === 'amps' ? 'A' : 'kW');
-        var color = c.getAttribute('data-color') || (metric === 'volts' ? '#a78bfa' : '#38bdf8');
-        renderLineChart(c, {
-          t: s.t || [],
-          values: values,
-          label: c.getAttribute('data-label') || metric,
-          unit: unit,
-          color: color,
-          height: parseInt(c.getAttribute('data-height') || '0', 10) || undefined,
-        });
+        c._pcW = null;
+        c._pcPainted = false;
       });
+      paintFromCache(root);
     } catch (e) {
       charts.forEach(function (c) {
         c.classList.remove('power-chart-loading');
         c.innerHTML = '<div class="power-chart-empty">' + escapeHtml(e.message || 'Failed to load') + '</div>';
+        c._pcPainted = false;
       });
+    } finally {
+      root._pcFetching = false;
     }
   }
 
@@ -207,16 +250,23 @@
     document.querySelectorAll('[data-power-history]').forEach(function (root) {
       mount(root);
     });
-    var ro;
-    if (typeof ResizeObserver !== 'undefined') {
-      ro = new ResizeObserver(function () {
+
+    // Window resize only — never full remount/fetch. Avoid ResizeObserver
+    // (innerHTML + SVG size changes re-fire RO → infinite flicker).
+    var resizeTimer = null;
+    window.addEventListener('resize', function () {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () {
         document.querySelectorAll('[data-power-history]').forEach(function (root) {
-          if (root._pcTimer) clearTimeout(root._pcTimer);
-          root._pcTimer = setTimeout(function () { mount(root); }, 200);
+          if (!root._pcSeries) return;
+          root.querySelectorAll('[data-metric]').forEach(function (c) {
+            c._pcW = null; // allow redraw at new width
+            c._pcPainted = false;
+          });
+          mount(root, { repaintOnly: true });
         });
-      });
-      document.querySelectorAll('[data-power-history]').forEach(function (r) { ro.observe(r); });
-    }
+      }, 250);
+    });
   }
 
   window.ColdAislePowerCharts = { renderLineChart: renderLineChart, mount: mount, boot: boot };
