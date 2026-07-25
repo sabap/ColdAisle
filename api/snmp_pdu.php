@@ -198,7 +198,7 @@ try {
         if ($action === 'poll_now') {
             $result = SnmpPoller::pollPduById($id);
             $fresh = Database::fetchOne(
-                'SELECT last_poll_at, last_poll_watts, last_poll_amps, snmp_site_template_id
+                'SELECT last_poll_at, last_poll_watts, last_poll_amps, last_poll_phases, snmp_site_template_id
                  FROM pdus WHERE pdu_id = ?',
                 [$id]
             );
@@ -212,12 +212,18 @@ try {
             if ($fresh && $fresh['last_poll_amps'] !== null) {
                 $bits[] = rtrim(rtrim(sprintf('%.2F', (float)$fresh['last_poll_amps']), '0'), '.') . ' A';
             }
+            $phaseJson = $fresh['last_poll_phases'] ?? null;
+            $phaseData = is_string($phaseJson) ? json_decode($phaseJson, true) : null;
+            if (is_array($phaseData) && $phaseData) {
+                $bits[] = count($phaseData) . ' phase(s)';
+            }
             App::json([
                 'ok' => true,
                 'result' => $result,
                 'last_poll_at' => $fresh['last_poll_at'] ?? null,
                 'last_poll_watts' => $fresh['last_poll_watts'] ?? null,
                 'last_poll_amps' => $fresh['last_poll_amps'] ?? null,
+                'last_poll_phases' => is_array($phaseData) ? $phaseData : null,
                 'message' => implode(' ', $bits),
             ]);
         }

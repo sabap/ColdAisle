@@ -120,70 +120,33 @@ class SnmpPoller
             $t['context_name'] ?? ''
         );
 
-        $watts = null;
-        $amps = null;
-        $ok = 0;
-        $err = 0;
-        $lastErr = null;
-
-        foreach ($oidMap as $metric => $oid) {
-            if (is_string($metric) && str_starts_with($metric, '_')) {
-                continue;
-            }
-            if ($oid === '' || $oid === null) {
-                continue;
-            }
-            if (!is_string($oid) || !preg_match('/^\d/', $oid)) {
-                continue;
-            }
+        $got = self::collectOidMap($session, $oidMap, static function (string $metric, $raw, ?float $num) use ($t): void {
             try {
-                $raw = self::get($session, $oid);
-                $num = self::toNumber($raw);
-                $metricKey = strtolower((string)$metric);
-                if ($num !== null && (str_contains($metricKey, 'amps_x10') || str_contains($metricKey, 'ampsx10'))) {
-                    $num = round($num / 10.0, 3);
-                }
                 Database::insert('snmp_readings', [
                     'target_id' => (int)$t['target_id'],
                     'metric_name' => $metric,
                     'metric_value' => $num,
                     'metric_text' => is_string($raw) ? substr($raw, 0, 255) : null,
                 ]);
-                if (stripos($metric, 'watt') !== false) {
-                    $watts = $num;
-                }
-                if (stripos($metric, 'amp') !== false) {
-                    $amps = $num;
-                }
-                $ok++;
             } catch (Throwable $e) {
-                $err++;
-                $lastErr = $e->getMessage();
-                // Soft-fail per OID — continue remaining metrics
+                // history optional
             }
-        }
+        });
 
-        if ($ok === 0) {
+        if ($got['ok'] === 0) {
             self::closeSession($session);
-            throw new RuntimeException($lastErr ?: 'All SNMP GETs failed for target');
+            throw new RuntimeException($got['last_error'] ?: 'All SNMP GETs failed for target');
         }
 
         Database::update('snmp_targets', [
             'last_success_at' => date('Y-m-d H:i:s'),
-            'last_error' => $err > 0 ? substr(($lastErr ?: 'Some OIDs failed'), 0, 500) : null,
+            'last_error' => $got['failed'] > 0
+                ? substr(($got['last_error'] ?: 'Some OIDs failed'), 0, 500)
+                : null,
         ], 'target_id = :id', [':id' => (int)$t['target_id']]);
 
-        if (!empty($t['pdu_id']) && ($watts !== null || $amps !== null)) {
-            Database::update('pdus', [
-                'last_poll_at' => date('Y-m-d H:i:s'),
-                'last_poll_watts' => $watts,
-                'last_poll_amps' => $amps,
-            ], 'pdu_id = :id', [':id' => (int)$t['pdu_id']]);
-            Database::insert('pdu_readings', [
-                'pdu_id' => (int)$t['pdu_id'],
-                'watts' => $watts,
-                'amps' => $amps,
-            ]);
+        if (!empty($t['pdu_id']) && ($got['watts'] !== null || $got['amps'] !== null || $got['phases'] !== null)) {
+            self::writePduPoll((int)$t['pdu_id'], $got['watts'], $got['amps'], $got['phases']);
         }
 
         self::closeSession($session);
@@ -230,57 +193,32 @@ class SnmpPoller
             (string)($device['snmp_v3_context'] ?? '')
         );
 
-        $watts = null;
-        $amps = null;
-        $ok = 0;
-        $failed = 0;
-        $lastErr = null;
-
-        foreach ($oidMap as $metric => $oid) {
-            if (is_string($metric) && str_starts_with($metric, '_')) {
-                continue;
-            }
-            if (!is_string($oid) || !preg_match('/^\d/', $oid)) {
-                continue;
-            }
-            try {
-                $raw = self::get($session, $oid);
-                $num = self::toNumber($raw);
-                $metricKey = strtolower((string)$metric);
-                if ($num !== null && (str_contains($metricKey, 'amps_x10') || str_contains($metricKey, 'ampsx10'))) {
-                    $num = round($num / 10.0, 3);
-                }
-                if (stripos((string)$metric, 'watt') !== false) {
-                    $watts = $num;
-                }
-                if (stripos((string)$metric, 'amp') !== false) {
-                    $amps = $num;
-                }
-                $ok++;
-            } catch (Throwable $e) {
-                $failed++;
-                $lastErr = $e->getMessage();
-            }
-        }
+        $got = self::collectOidMap($session, $oidMap);
         self::closeSession($session);
 
-        if ($ok === 0) {
-            throw new RuntimeException($lastErr ?: 'All SNMP GETs failed for device');
+        if ($got['ok'] === 0) {
+            throw new RuntimeException($got['last_error'] ?: 'All SNMP GETs failed for device');
         }
 
         Database::update('devices', [
             'snmp_last_poll_at' => date('Y-m-d H:i:s'),
-            'snmp_last_poll_watts' => $watts,
-            'snmp_last_poll_amps' => $amps,
+            'snmp_last_poll_watts' => $got['watts'],
+            'snmp_last_poll_amps' => $got['amps'],
             'snmp_fail_count' => 0,
         ], 'device_id = :id', [':id' => (int)$device['device_id']]);
 
-        return ['watts' => $watts, 'amps' => $amps, 'ok' => $ok, 'failed' => $failed];
+        return [
+            'watts' => $got['watts'],
+            'amps' => $got['amps'],
+            'phases' => $got['phases'],
+            'ok' => $got['ok'],
+            'failed' => $got['failed'],
+        ];
     }
 
     /**
      * Poll one PDU via its site OID template only (does not use snmp_targets).
-     * @return array{mode:string, message:string, watts?:?float, amps?:?float}
+     * @return array{mode:string, message:string, watts?:?float, amps?:?float, phases?:?array}
      */
     public static function pollPduById(int $pduId): array
     {
@@ -298,11 +236,18 @@ class SnmpPoller
         $siteTplId = (int)($pdu['snmp_site_template_id'] ?? 0);
         if ($siteTplId > 0) {
             $result = self::pollPduFromSiteTemplate($pdu, $siteTplId);
+            $nPhase = is_array($result['phases'] ?? null) ? count($result['phases']) : 0;
+            $msg = 'Polled via site OID template (' . $result['ok'] . ' metric(s)';
+            if ($nPhase > 0) {
+                $msg .= ', ' . $nPhase . ' phase(s)';
+            }
+            $msg .= ').';
             return [
                 'mode' => 'site_template',
-                'message' => 'Polled via site OID template (' . $result['ok'] . ' metric(s)).',
+                'message' => $msg,
                 'watts' => $result['watts'],
                 'amps' => $result['amps'],
+                'phases' => $result['phases'],
             ];
         }
 
@@ -314,7 +259,7 @@ class SnmpPoller
     /**
      * Poll a PDU using a site OID template (no snmp_targets row required).
      * @param array<string,mixed> $pdu
-     * @return array{watts:?float,amps:?float,ok:int,failed:int}
+     * @return array{watts:?float,amps:?float,phases:?array,ok:int,failed:int}
      */
     public static function pollPduFromSiteTemplate(array $pdu, int $templateId): array
     {
@@ -351,8 +296,75 @@ class SnmpPoller
             (string)($creds['context'] ?? $pdu['snmp_context'] ?? '')
         );
 
-        $watts = null;
-        $amps = null;
+        $got = self::collectOidMap($session, $oidMap);
+        self::closeSession($session);
+
+        if ($got['ok'] === 0) {
+            throw new RuntimeException($got['last_error'] ?: 'All SNMP GETs failed for PDU template poll');
+        }
+
+        self::writePduPoll((int)$pdu['pdu_id'], $got['watts'], $got['amps'], $got['phases']);
+
+        return [
+            'watts' => $got['watts'],
+            'amps' => $got['amps'],
+            'phases' => $got['phases'],
+            'ok' => $got['ok'],
+            'failed' => $got['failed'],
+        ];
+    }
+
+    /**
+     * Persist device-total + optional multi-phase snapshot on a PDU.
+     * @param array<string,array<string,?float>>|null $phases
+     */
+    private static function writePduPoll(int $pduId, ?float $watts, ?float $amps, ?array $phases): void
+    {
+        $row = [
+            'last_poll_at' => date('Y-m-d H:i:s'),
+            'last_poll_watts' => $watts,
+            'last_poll_amps' => $amps,
+        ];
+        try {
+            $row['last_poll_phases'] = $phases
+                ? json_encode($phases, JSON_UNESCAPED_SLASHES)
+                : null;
+            Database::update('pdus', $row, 'pdu_id = :id', [':id' => $pduId]);
+        } catch (Throwable $e) {
+            // Column may not exist until Schema::ensure runs
+            unset($row['last_poll_phases']);
+            Database::update('pdus', $row, 'pdu_id = :id', [':id' => $pduId]);
+        }
+
+        if ($watts !== null || $amps !== null) {
+            Database::insert('pdu_readings', [
+                'pdu_id' => $pduId,
+                'watts' => $watts,
+                'amps' => $amps,
+            ]);
+        }
+    }
+
+    /**
+     * GET each map OID and classify device totals vs phase1/2/3 metrics.
+     *
+     * Supported phase keys: phase1_watts, phase2_amps, phase3_volts, phase1_amps_x10, …
+     * Device totals: watts, amps, amps_x10 (exact key or total_/device_ prefix).
+     * If no device watts/amps but phases have them, totals are summed from phases.
+     *
+     * @param callable|null $onMetric function(string $metric, mixed $raw, ?float $num): void
+     * @return array{
+     *   watts:?float,amps:?float,
+     *   phases:?array<string,array{watts:?float,amps:?float,volts:?float}>,
+     *   ok:int,failed:int,last_error:?string
+     * }
+     */
+    private static function collectOidMap($session, array $oidMap, ?callable $onMetric = null): array
+    {
+        $deviceWatts = null;
+        $deviceAmps = null;
+        /** @var array<int,array{watts:?float,amps:?float,volts:?float}> $phaseBag */
+        $phaseBag = [];
         $ok = 0;
         $failed = 0;
         $lastErr = null;
@@ -361,21 +373,35 @@ class SnmpPoller
             if (is_string($metric) && str_starts_with($metric, '_')) {
                 continue;
             }
-            if (!is_string($oid) || !preg_match('/^\d/', $oid)) {
+            if ($oid === '' || $oid === null) {
+                continue;
+            }
+            if (!is_string($oid) || !preg_match('/^\d/', ltrim($oid, '.'))) {
                 continue;
             }
             try {
-                $raw = self::get($session, $oid);
+                $raw = self::get($session, ltrim($oid, '.'));
                 $num = self::toNumber($raw);
-                $metricKey = strtolower((string)$metric);
-                if ($num !== null && (str_contains($metricKey, 'amps_x10') || str_contains($metricKey, 'ampsx10'))) {
-                    $num = round($num / 10.0, 3);
+                $metricKey = strtolower(trim((string)$metric));
+                $num = self::applyMetricScale($metricKey, $num);
+                if ($onMetric) {
+                    $onMetric((string)$metric, $raw, $num);
                 }
-                if (stripos((string)$metric, 'watt') !== false) {
-                    $watts = $num;
-                }
-                if (stripos((string)$metric, 'amp') !== false) {
-                    $amps = $num;
+
+                // phase1_watts, phase2_amps_x10, phase3_volts, phase1_watts_tenths_kw, …
+                if (preg_match('/^phase([123])_(watts|amps|volts)\b/i', $metricKey, $pm)) {
+                    $idx = (int)$pm[1];
+                    $field = strtolower($pm[2]);
+                    if (!isset($phaseBag[$idx])) {
+                        $phaseBag[$idx] = ['watts' => null, 'amps' => null, 'volts' => null];
+                    }
+                    if ($num !== null) {
+                        $phaseBag[$idx][$field] = $num;
+                    }
+                } elseif (self::isDeviceTotalWattsKey($metricKey) && $num !== null) {
+                    $deviceWatts = $num;
+                } elseif (self::isDeviceTotalAmpsKey($metricKey) && $num !== null) {
+                    $deviceAmps = $num;
                 }
                 $ok++;
             } catch (Throwable $e) {
@@ -383,27 +409,99 @@ class SnmpPoller
                 $lastErr = $e->getMessage();
             }
         }
-        self::closeSession($session);
 
-        if ($ok === 0) {
-            throw new RuntimeException($lastErr ?: 'All SNMP GETs failed for PDU template poll');
+        $phasesOut = null;
+        if ($phaseBag) {
+            $phasesOut = [];
+            $labels = [1 => 'L1', 2 => 'L2', 3 => 'L3'];
+            ksort($phaseBag);
+            foreach ($phaseBag as $idx => $fields) {
+                if ($fields['watts'] === null && $fields['amps'] === null && $fields['volts'] === null) {
+                    continue;
+                }
+                $phasesOut[$labels[$idx] ?? ('L' . $idx)] = $fields;
+            }
+            if (!$phasesOut) {
+                $phasesOut = null;
+            }
         }
 
-        Database::update('pdus', [
-            'last_poll_at' => date('Y-m-d H:i:s'),
-            'last_poll_watts' => $watts,
-            'last_poll_amps' => $amps,
-        ], 'pdu_id = :id', [':id' => (int)$pdu['pdu_id']]);
-
-        if ($watts !== null || $amps !== null) {
-            Database::insert('pdu_readings', [
-                'pdu_id' => (int)$pdu['pdu_id'],
-                'watts' => $watts,
-                'amps' => $amps,
-            ]);
+        // Prefer explicit device totals; else sum phases for zone rollup
+        $watts = $deviceWatts;
+        $amps = $deviceAmps;
+        if ($watts === null && $phasesOut) {
+            $sum = 0.0;
+            $any = false;
+            foreach ($phasesOut as $p) {
+                if ($p['watts'] !== null) {
+                    $sum += (float)$p['watts'];
+                    $any = true;
+                }
+            }
+            if ($any) {
+                $watts = round($sum, 3);
+            }
+        }
+        if ($amps === null && $phasesOut) {
+            $sum = 0.0;
+            $any = false;
+            foreach ($phasesOut as $p) {
+                if ($p['amps'] !== null) {
+                    $sum += (float)$p['amps'];
+                    $any = true;
+                }
+            }
+            if ($any) {
+                $amps = round($sum, 3);
+            }
         }
 
-        return ['watts' => $watts, 'amps' => $amps, 'ok' => $ok, 'failed' => $failed];
+        return [
+            'watts' => $watts,
+            'amps' => $amps,
+            'phases' => $phasesOut,
+            'ok' => $ok,
+            'failed' => $failed,
+            'last_error' => $lastErr,
+        ];
+    }
+
+    private static function applyMetricScale(string $metricKey, ?float $num): ?float
+    {
+        if ($num === null) {
+            return null;
+        }
+        // tenths of kW → watts (common on some APC phase power OIDs)
+        if (str_contains($metricKey, 'tenths_kw') || str_contains($metricKey, '_dkw')) {
+            return round($num * 100.0, 3);
+        }
+        if (str_contains($metricKey, '_x100') || str_contains($metricKey, 'x100')) {
+            return round($num / 100.0, 4);
+        }
+        if (str_contains($metricKey, 'amps_x10') || str_contains($metricKey, 'ampsx10')
+            || str_ends_with($metricKey, '_x10') || str_contains($metricKey, 'x10')) {
+            // Avoid matching "x100"
+            if (!str_contains($metricKey, 'x100') && !str_contains($metricKey, '_x100')) {
+                return round($num / 10.0, 3);
+            }
+        }
+        return $num;
+    }
+
+    private static function isDeviceTotalWattsKey(string $key): bool
+    {
+        if (str_starts_with($key, 'phase')) {
+            return false;
+        }
+        return (bool)preg_match('/^(watts?|total_watts?|device_watts?|load_watts?)(?:_x10|_x100|_tenths_kw|_dkw)?$/', $key);
+    }
+
+    private static function isDeviceTotalAmpsKey(string $key): bool
+    {
+        if (str_starts_with($key, 'phase')) {
+            return false;
+        }
+        return (bool)preg_match('/^(amps?|total_amps?|device_amps?)(?:_x10|x10)?$/', $key);
     }
 
     public static function pollPdu(array $pdu): void

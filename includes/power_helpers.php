@@ -94,6 +94,54 @@ function power_wiring_label(?string $wiring, int $phases = 1): string
 }
 
 /**
+ * Decode pdus.last_poll_phases JSON into ordered L1/L2/L3 rows for UI.
+ *
+ * @return list<array{label:string,watts:?float,amps:?float,volts:?float}>|null
+ */
+function power_phase_poll_rows($json): ?array
+{
+    if ($json === null || $json === '') {
+        return null;
+    }
+    if (is_array($json)) {
+        $data = $json;
+    } else {
+        $data = json_decode((string)$json, true);
+    }
+    if (!is_array($data) || !$data) {
+        return null;
+    }
+    $rows = [];
+    foreach (['L1', 'L2', 'L3', 'A', 'B', 'C'] as $label) {
+        if (!isset($data[$label]) || !is_array($data[$label])) {
+            continue;
+        }
+        $p = $data[$label];
+        $watts = isset($p['watts']) && is_numeric($p['watts']) ? (float)$p['watts'] : null;
+        $amps = isset($p['amps']) && is_numeric($p['amps']) ? (float)$p['amps'] : null;
+        $volts = isset($p['volts']) && is_numeric($p['volts']) ? (float)$p['volts'] : null;
+        if ($watts === null && $amps === null && $volts === null) {
+            continue;
+        }
+        $rows[] = [
+            'label' => $label,
+            'watts' => $watts,
+            'amps' => $amps,
+            'volts' => $volts,
+        ];
+    }
+    return $rows ?: null;
+}
+
+function power_fmt_metric(?float $n, int $decimals = 2): string
+{
+    if ($n === null) {
+        return '—';
+    }
+    return rtrim(rtrim(sprintf('%.' . $decimals . 'F', $n), '0'), '.') ?: '0';
+}
+
+/**
  * Approx kW capacity from amps × volts × phase factor (rough planning figure).
  */
 function power_estimate_kw(?float $amps, ?int $volts, int $phases = 1): ?float

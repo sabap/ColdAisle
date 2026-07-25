@@ -716,6 +716,69 @@ if ($pduId) {
         </div>
     </div>
 
+    <?php
+    $phaseRows = power_phase_poll_rows($p['last_poll_phases'] ?? null);
+    if ($phaseRows):
+        $phaseWattsSum = 0.0;
+        $phaseWattsAny = false;
+        foreach ($phaseRows as $pr) {
+            if ($pr['watts'] !== null) {
+                $phaseWattsSum += $pr['watts'];
+                $phaseWattsAny = true;
+            }
+        }
+        ?>
+    <div class="card mb-2" id="pdu-phase-status">
+        <div class="card-header flex-between">
+            <strong>Phase status</strong>
+            <span class="text-muted" style="font-size:.85rem">
+                L1 / L2 / L3 from last SNMP poll
+                <?php if ($phaseWattsAny): ?>
+                    · sum <?= App::e(power_fmt_metric($phaseWattsSum / 1000, 3)) ?> kW
+                <?php endif; ?>
+            </span>
+        </div>
+        <div class="card-body" style="padding:0; overflow-x:auto">
+            <table class="data" style="margin:0">
+                <thead>
+                    <tr>
+                        <th>Phase</th>
+                        <th>Voltage</th>
+                        <th>Power</th>
+                        <th>Current</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($phaseRows as $pr): ?>
+                    <tr>
+                        <td><strong><?= App::e($pr['label']) ?></strong></td>
+                        <td><?= $pr['volts'] !== null ? App::e(power_fmt_metric($pr['volts'], 1)) . ' V' : '—' ?></td>
+                        <td>
+                            <?php if ($pr['watts'] !== null): ?>
+                                <?= App::e(power_fmt_metric($pr['watts'] / 1000, 3)) ?> kW
+                                <span class="text-muted" style="font-size:.8rem">(<?= App::e(power_fmt_metric($pr['watts'], 0)) ?> W)</span>
+                            <?php else: ?>
+                                —
+                            <?php endif; ?>
+                        </td>
+                        <td><?= $pr['amps'] !== null ? App::e(power_fmt_metric($pr['amps'], 2)) . ' A' : '—' ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <?php elseif ((int)($p['phases'] ?? 1) >= 2 && $canConfigSnmp): ?>
+    <div class="card mb-2">
+        <div class="card-body text-muted" style="font-size:.9rem">
+            This PDU is configured as multi-phase, but no per-phase SNMP data has been polled yet.
+            Map <code>phase1_watts</code> / <code>phase1_amps</code> / <code>phase1_volts</code> (and phase2/3)
+            in the site OID template — Discover will propose them when it sees .1/.2/.3 instances — then
+            <strong>Poll now</strong>.
+        </div>
+    </div>
+    <?php endif; ?>
+
     <?php if ($canConfigSnmp): ?>
     <div class="modal-overlay modal-overlay-glass" id="pduSnmpDiscoverModal" hidden>
         <div class="modal-panel modal-panel-glass modal-panel-glass-wide" role="dialog" aria-modal="true" aria-labelledby="pduSnmpDiscoverTitle">
