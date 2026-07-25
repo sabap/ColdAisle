@@ -1704,7 +1704,7 @@ if ($pduId) {
     .breaker-slot .bs-slot { font-family: var(--mono); font-size: .68rem; font-weight: 600; }
     .breaker-slot .bs-slot-id { font-family: var(--mono); font-size: .58rem; opacity: .9; font-weight: 600; }
     </style>
-    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=1"></script>
+    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=2"></script>
     <?php
     layout_footer();
     exit;
