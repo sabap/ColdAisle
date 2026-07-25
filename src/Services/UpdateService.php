@@ -4,6 +4,15 @@
  *
  * Flow: check API → (optional) backup → download zipball → extract over app
  * root while preserving config/config.php and storage runtime data → Schema::ensure().
+ *
+ * BACKLOG (update backup housekeeping — do not implement until requested):
+ * - Pre-update zips land in storage/backups/ (backup_YYYYMMDD_…_vX.Y.Z.zip) and will
+ *   pile up on sites that update often; also site export zips may share that folder.
+ * - Explore retention policy: keep last N backups and/or max age / max total bytes.
+ * - Settings UI or automatic prune after successful update (with safety floor: never
+ *   delete the only backup / current version snapshot).
+ * - Optional: list/download/delete backups from Settings → Updates or Backup.
+ * - Document that storage/backups is excluded from nested backup-of-backup zips.
  */
 declare(strict_types=1);
 
