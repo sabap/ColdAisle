@@ -195,7 +195,6 @@ class StorageHousekeepingService
             }
             $path = $dir . DIRECTORY_SEPARATOR . $name;
             if (is_dir($path)) {
-                // skip live staging dirs in listing (or include as kind=staging)
                 if (str_ends_with($name, '_staging') || str_contains($name, '_staging')) {
                     $out[] = [
                         'name' => $name,
@@ -203,6 +202,15 @@ class StorageHousekeepingService
                         'bytes' => self::dirSize($path),
                         'mtime' => (int)@filemtime($path),
                         'kind' => 'staging',
+                    ];
+                } elseif (preg_match('/^backup_\d{8}_\d{6}/i', $name)) {
+                    // Legacy folder fallback when ZipArchive was unavailable
+                    $out[] = [
+                        'name' => $name,
+                        'path' => $path,
+                        'bytes' => self::dirSize($path),
+                        'mtime' => (int)@filemtime($path),
+                        'kind' => 'pre_update',
                     ];
                 }
                 continue;

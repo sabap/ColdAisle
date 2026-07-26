@@ -311,6 +311,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             AuditService::log((int)$user['user_id'], $user['username'], 'update_apply', 'system', null, [
                 'version' => $result['version'] ?? null,
                 'ok' => !empty($result['ok']),
+                'backup' => isset($result['backup']) ? basename((string)$result['backup']) : null,
             ]);
             if (!empty($result['ok'])) {
                 App::flash('success', $result['message'] ?? 'Update applied.');
@@ -318,6 +319,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 App::flash('error', $result['message'] ?? 'Update failed.');
             }
             App::redirect('pages/settings.php#updates');
+        }
+
+        if ($section === 'update_backup_now') {
+            @set_time_limit(600);
+            $path = UpdateService::createBackup();
+            $bytes = is_file($path) ? (int)@filesize($path) : 0;
+            AuditService::log((int)$user['user_id'], $user['username'], 'update_backup_now', 'system', null, [
+                'file' => basename($path),
+                'bytes' => $bytes,
+            ]);
+            $sizeLabel = class_exists('StorageHousekeepingService')
+                ? StorageHousekeepingService::formatBytes($bytes)
+                : ($bytes . ' bytes');
+            App::flash(
+                'success',
+                'Recovery backup created: ' . basename($path) . ' (' . $sizeLabel . ') in storage/backups/.'
+            );
+            App::redirect('pages/settings.php#housekeeping');
         }
 
         if ($section === 'install_ca_bundle') {
@@ -460,7 +479,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         // Write config.php (for general / auth / updates / security / mail)
         // power_alerts / snmp_schedule use settings table only (redirect earlier or no config.php)
         if (!in_array($section, [
-            'update_check', 'update_apply', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
+            'update_check', 'update_apply', 'update_backup_now', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
             'power_alerts', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
         ], true)) {
             $export = var_export($config, true);
@@ -1331,6 +1350,12 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
                 <input type="hidden" name="section" value="update_check">
                 <button class="btn btn-secondary" type="submit">Check for updates</button>
             </form>
+            <form method="post" style="display:inline"
+                  onsubmit="return confirm('Create a pre-update recovery ZIP in storage/backups/ now? (Does not apply an update.)');">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="section" value="update_backup_now">
+                <button class="btn btn-secondary" type="submit">Create recovery backup</button>
+            </form>
             <?php if ($updStatus && !empty($updStatus['update_available'])): ?>
             <form method="post" style="display:inline" id="form-update-apply"
                   onsubmit="return coldAisleStartUpdate(this, '<?= App::e((string)$updStatus['latest']) ?>');">
@@ -1350,9 +1375,16 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
             </div>
         </div>
         <p class="text-muted" style="font-size:.75rem;margin:.75rem 0 0">
-            Backups are written to <code>storage/backups/</code>. Requires PHP <code>curl</code>
-            <?= extension_loaded('zip') ? ' and <code>zip</code>' : ' (and PowerShell Expand-Archive if <code>zip</code> is missing)' ?>.
+            <strong>Pre-update recovery zips</strong> (<code>backup_YYYYMMDD_…_vX.Y.Z.zip</code>) are written to
+            <code>storage/backups/</code> automatically when you use <em>Update to v…</em> above
+            (or <em>Create recovery backup</em>). Direct file copies / installer deploys do not create those zips.
+            PHP zip:
+            <?= extension_loaded('zip')
+                ? '<span class="badge badge-success">loaded</span>'
+                : '<span class="badge">missing — PowerShell fallback used</span>' ?>.
+            Requires <code>curl</code> for GitHub downloads.
             The IIS app pool needs <strong>Modify</strong> on the whole site folder (not only <code>config</code>/<code>storage</code>) for updates to replace application files.
+            See also <a href="#housekeeping">Storage housekeeping</a>.
         </p>
         <style>
             @keyframes coldaisle-indeterminate {
@@ -1519,7 +1551,11 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
             </table>
         </div>
         <?php else: ?>
-        <p class="text-muted" style="margin-top:1rem;font-size:.85rem">No backup zips in <code>storage/backups/</code> yet.</p>
+        <p class="text-muted" style="margin-top:1rem;font-size:.85rem">
+            No backup zips in <code>storage/backups/</code> yet.
+            Use <strong>Updates → Create recovery backup</strong> or <strong>Update to v…</strong>
+            (pre-update), or <strong>Site backup &amp; migration</strong> (data export).
+        </p>
         <?php endif; ?>
     </div>
 </div>
