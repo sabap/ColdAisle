@@ -5,12 +5,8 @@
  * Additive ensureColumn/ensureTable is cumulative: jumping many versions still
  * converges to latest desired shape without replaying intermediate releases.
  *
- * BACKLOG (hardening pass — do not implement until requested):
- * - Schema status / health UI: app VERSION, last ensure OK, list expected
- *   tables & columns vs live DB so severely stale installs can verify after
- *   an update without guessing.
- * - Optional schema_version / ensure-run log for ops visibility.
- * - Explicit idempotent alters for rare reshape/backfill cases (not only ADD).
+ * Deferred work (schema status UI / ensure log / rare reshapes): see BACKLOG.md
+ * “Schema status / hardening pass” — do not implement until requested.
  */
 declare(strict_types=1);
 
