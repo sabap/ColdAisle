@@ -95,17 +95,19 @@ if errorlevel 1 (
 )
 echo.
 
-echo [4/4] SQL health_cli.php (LoginTimeout=5)...
+echo [4/4] SQL health_cli.php (unbuffered, TCP probe + 5s SQL timeout)...
 if not exist "%HEALTH_PHP%" (
-  echo FAIL: health_cli.php missing - deploy ColdAisle 0.2.58+
+  echo FAIL: health_cli.php missing - deploy ColdAisle 0.2.60+
   exit /b 1
 )
-"%PHP_EXE%" -n -d extension_dir="%EXT_DIR%" -d extension=%PDO_EXT% -d max_execution_time=20 -d default_socket_timeout=5 -- "%HEALTH_PHP%"
+echo Running: "%PHP_EXE%" -n ... health_cli.php
+echo If nothing appears below, PHP is stuck before first log line - check file deploy.
+"%PHP_EXE%" -n -d extension_dir="%EXT_DIR%" -d extension=%PDO_EXT% -d output_buffering=0 -d implicit_flush=1 -d max_execution_time=25 -d default_socket_timeout=5 -- "%HEALTH_PHP%"
 set "EC=!ERRORLEVEL!"
 if not "!EC!"=="0" (
   echo.
   echo health_cli failed exit=!EC!
-  echo Check config\config.php SQL host/user and that this Windows account can reach SQL.
+  echo Check config\config.php SQL host/user; CLI identity must reach SQL.
   echo Log: %LOG_DIR%\snmp_poll_cli.log
   exit /b !EC!
 )
