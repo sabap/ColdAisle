@@ -1492,7 +1492,11 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
             <div class="form-row"><label>Keep last N backups (per kind)</label>
                 <input class="form-control" type="number" min="1" max="50" name="hk_backup_keep_count"
                        value="<?= (int)$hk['backup_keep_count'] ?>">
-                <span class="text-muted" style="font-size:.75rem">Pre-update and site-export zips counted separately. Newest of each is never deleted.</span>
+                <span class="text-muted" style="font-size:.75rem">
+                    Pre-update and site-export zips counted separately. Excess files are removed on
+                    <em>Run housekeeping now</em> even if they were created recently.
+                    Newest of each kind is always kept.
+                </span>
             </div>
             <div class="form-row"><label>Max backup age (days)</label>
                 <input class="form-control" type="number" min="0" max="3650" name="hk_backup_max_age_days"
