@@ -66,8 +66,6 @@ $log('pdo drivers: ' . implode(',', $drivers));
 
 try {
     if (in_array('sqlsrv', $drivers, true)) {
-        $dsn = "sqlsrv:Server={$server};Database={$name};Encrypt={$encrypt};TrustServerCertificate={$trust};LoginTimeout=5;LoginTimeout=5";
-        // LoginTimeout once is enough
         $dsn = "sqlsrv:Server={$server};Database={$name};Encrypt={$encrypt};TrustServerCertificate={$trust};LoginTimeout=5";
         $pdo = new PDO($dsn, $user, $pass, [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
