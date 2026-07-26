@@ -6,6 +6,9 @@ declare(strict_types=1);
 
 class SnmpPoller
 {
+    /**
+     * @return array{success:int,failed:int,skipped:int,disabled?:bool}
+     */
     public static function pollAll(): array
     {
         if (class_exists('MibService')) {
@@ -13,6 +16,21 @@ class SnmpPoller
         }
         $success = 0;
         $failed = 0;
+        $skipped = 0;
+
+        $schedulerOn = true;
+        $defaultInterval = 300;
+        if (class_exists('SnmpSchedulerService')) {
+            if (!SnmpSchedulerService::isEnabled()) {
+                return [
+                    'success' => 0,
+                    'failed' => 0,
+                    'skipped' => 0,
+                    'disabled' => true,
+                ];
+            }
+            $defaultInterval = SnmpSchedulerService::intervalSec();
+        }
 
         // 1) Explicit scheduled SNMP targets (is_enabled = scheduled)
         try {
@@ -21,6 +39,14 @@ class SnmpPoller
             $targets = [];
         }
         foreach ($targets as $t) {
+            $iv = isset($t['poll_interval_sec']) && (int)$t['poll_interval_sec'] > 0
+                ? (int)$t['poll_interval_sec']
+                : $defaultInterval;
+            $last = $t['last_success_at'] ?? null;
+            if (class_exists('SnmpSchedulerService') && !SnmpSchedulerService::isDue(is_string($last) ? $last : null, $iv)) {
+                $skipped++;
+                continue;
+            }
             try {
                 self::pollTarget($t);
                 $success++;
@@ -42,6 +68,13 @@ class SnmpPoller
                    AND ip_address IS NOT NULL AND ip_address <> \'\''
             );
             foreach ($pdus as $pdu) {
+                $last = $pdu['last_poll_at'] ?? null;
+                if (class_exists('SnmpSchedulerService')
+                    && !SnmpSchedulerService::isDue(is_string($last) ? $last : null, $defaultInterval)
+                ) {
+                    $skipped++;
+                    continue;
+                }
                 try {
                     self::pollPduFromSiteTemplate($pdu, (int)$pdu['snmp_site_template_id']);
                     $success++;
@@ -63,6 +96,13 @@ class SnmpPoller
                    AND snmp_version IS NOT NULL AND snmp_version <> \'\''
             );
             foreach ($devices as $dev) {
+                $last = $dev['snmp_last_poll_at'] ?? null;
+                if (class_exists('SnmpSchedulerService')
+                    && !SnmpSchedulerService::isDue(is_string($last) ? $last : null, $defaultInterval)
+                ) {
+                    $skipped++;
+                    continue;
+                }
                 try {
                     self::pollDevice($dev);
                     $success++;
@@ -95,7 +135,7 @@ class SnmpPoller
             }
         }
 
-        return ['success' => $success, 'failed' => $failed];
+        return ['success' => $success, 'failed' => $failed, 'skipped' => $skipped];
     }
 
     public static function pollTarget(array $t): void
