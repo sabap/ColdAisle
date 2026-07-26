@@ -1,36 +1,37 @@
 <?php
-/**
- * Lightweight CLI SQL health — no SNMP.
- * Unbuffered output so hangs show the last successful step.
- */
+// ColdAisle CLI SQL health (no SNMP). First actions write a marker file so hangs are locatable.
 declare(strict_types=1);
 
+// Absolute first action — before anything that can hang
+$__root = dirname(__DIR__);
+$__marker = $__root . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR . 'health_last_step.txt';
+@mkdir(dirname($__marker), 0775, true);
+@file_put_contents($__marker, date('c') . " entered health_cli.php pid=" . getmypid() . "\n");
+
 if (PHP_SAPI !== 'cli') {
-    fwrite(STDERR, "CLI only\n");
+    @file_put_contents($__marker, date('c') . " not cli\n", FILE_APPEND);
     exit(1);
 }
 
-// Force line-by-line output (otherwise PowerShell/cmd show nothing until PHP exits)
 @ini_set('output_buffering', '0');
 @ini_set('implicit_flush', '1');
-@ini_set('zlib.output_compression', '0');
 while (ob_get_level() > 0) {
     @ob_end_flush();
 }
 ob_implicit_flush(true);
 
-$root = dirname(__DIR__);
+$root = $__root;
+$marker = $__marker;
 
-$say = static function (string $msg) use ($root): void {
+$say = static function (string $msg) use ($root, $marker): void {
     $line = '[' . date('H:i:s') . "] {$msg}\n";
-    // fwrite is less buffered than echo in some SAPIs
+    @file_put_contents($marker, date('c') . ' ' . $msg . "\n", FILE_APPEND);
     fwrite(STDOUT, $line);
     @fflush(STDOUT);
-    $paths = [
+    foreach ([
         $root . '/storage/logs/snmp_poll_cli.log',
         (getenv('TEMP') ?: 'C:/Windows/Temp') . '/coldaisle_snmp_poll.log',
-    ];
-    foreach ($paths as $p) {
+    ] as $p) {
         $d = dirname($p);
         if (!is_dir($d)) {
             @mkdir($d, 0775, true);
@@ -39,16 +40,16 @@ $say = static function (string $msg) use ($root): void {
     }
 };
 
-$say('start pid=' . getmypid());
+$say('start');
 
 $configPath = $root . '/config/config.php';
 if (!is_file($configPath)) {
-    $say('FAIL: config/config.php missing at ' . $configPath);
+    $say('FAIL: missing ' . $configPath);
+    fwrite(STDOUT, "health=fail no config\n");
     exit(1);
 }
-$say('config file found');
+$say('config present');
 
-/** @var array $config */
 $config = require $configPath;
 $say('config loaded');
 
@@ -58,92 +59,63 @@ $port = (int)($db['port'] ?? 1433);
 $name = (string)($db['database'] ?? 'ColdAisle');
 $user = (string)($db['username'] ?? '');
 $pass = (string)($db['password'] ?? '');
-$encryptOn = !empty($db['encrypt']);
-$trustOn = !empty($db['trust_server_certificate']);
-$encrypt = $encryptOn ? 'yes' : 'no';
-$trust = $trustOn ? 'yes' : 'no';
+$encrypt = !empty($db['encrypt']) ? 'yes' : 'no';
+$trust = !empty($db['trust_server_certificate']) ? 'yes' : 'no';
 $odbcDriver = (string)($db['odbc_driver'] ?? 'ODBC Driver 18 for SQL Server');
 
-// Named instances: no ,port
 $tcpHost = $host;
-$tcpPort = $port > 0 ? $port : 1433;
-if (strpos($host, '\\') !== false) {
-    // named instance — TCP probe uses 1433 as guess only
-    $tcpPort = 1433;
-}
+$tcpPort = ($port > 0) ? $port : 1433;
 if (strpos($host, ',') !== false) {
-    $parts = explode(',', $host, 2);
-    $tcpHost = $parts[0];
-    if (isset($parts[1]) && is_numeric(trim($parts[1]))) {
-        $tcpPort = (int)trim($parts[1]);
+    [$tcpHost, $p2] = array_map('trim', explode(',', $host, 2));
+    if (is_numeric($p2)) {
+        $tcpPort = (int)$p2;
     }
 }
-
 $server = $host;
 if ($port > 0 && strpos($host, '\\') === false && strpos($host, ',') === false) {
     $server = $host . ',' . $port;
 }
 
-$authMode = ($user === '') ? 'Windows auth (this process identity)' : ('SQL auth user=' . $user);
-$say("db host={$host} server={$server} database={$name}");
-$say("encrypt={$encrypt} trust_server_certificate={$trust} odbc_driver={$odbcDriver}");
-$say("auth={$authMode}");
-$say('pdo drivers=' . implode(',', PDO::getAvailableDrivers()));
+$say("db host={$host} server={$server} database={$name} encrypt={$encrypt} trust={$trust}");
+$say(($user === '' ? 'auth=Windows (process identity)' : 'auth=SQL user=' . $user));
+$say('drivers=' . implode(',', PDO::getAvailableDrivers()));
 
-// --- TCP probe (fails in 3s if host/port blocked) ---
-$say("TCP probe {$tcpHost}:{$tcpPort} (3s)...");
+// TCP probe — 3 second hard timeout
+$say("TCP {$tcpHost}:{$tcpPort} ...");
 $errno = 0;
 $errstr = '';
-$t0 = microtime(true);
-$sock = @stream_socket_client(
-    "tcp://{$tcpHost}:{$tcpPort}",
-    $errno,
-    $errstr,
-    3.0
-);
+$sock = @stream_socket_client("tcp://{$tcpHost}:{$tcpPort}", $errno, $errstr, 3.0);
 if ($sock === false) {
-    $say("TCP FAIL after " . sprintf('%.2f', microtime(true) - $t0) . "s: [{$errno}] {$errstr}");
-    $say('SQL port is not reachable from this machine/account. Fix host/firewall/SQL TCP.');
-    echo "health=fail tcp {$tcpHost}:{$tcpPort} {$errstr}\n";
+    $say("TCP FAIL [{$errno}] {$errstr}");
+    fwrite(STDOUT, "health=fail tcp {$tcpHost}:{$tcpPort} {$errstr}\n");
     exit(1);
 }
 fclose($sock);
-$say('TCP ok in ' . sprintf('%.2f', microtime(true) - $t0) . 's');
+$say('TCP ok');
 
 $loginTimeout = 5;
+$drivers = PDO::getAvailableDrivers();
 
 try {
-    $drivers = PDO::getAvailableDrivers();
-    $pdo = null;
-
     if (in_array('sqlsrv', $drivers, true)) {
         $dsn = "sqlsrv:Server={$server};Database={$name};Encrypt={$encrypt};TrustServerCertificate={$trust};LoginTimeout={$loginTimeout}";
-        $say("PDO sqlsrv connect (LoginTimeout={$loginTimeout})...");
-        $t0 = microtime(true);
+        $say('PDO sqlsrv connecting...');
         $pdo = new PDO($dsn, $user, $pass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-        $say('PDO connected in ' . sprintf('%.2f', microtime(true) - $t0) . 's (sqlsrv)');
+        $say('PDO sqlsrv ok');
     } elseif (in_array('odbc', $drivers, true)) {
-        // MARS_Connection / retries reduced; Connection Timeout is critical for ODBC
-        $dsn = "odbc:Driver={{$odbcDriver}};"
-            . "Server={$server};"
-            . "Database={$name};"
-            . "Encrypt={$encrypt};"
-            . "TrustServerCertificate={$trust};"
-            . "Connection Timeout={$loginTimeout};"
-            . "Login Timeout={$loginTimeout};"
-            . "Connect Retry Count=1;"
-            . "Connect Retry Interval=1";
-        $say("PDO odbc connect (Connection Timeout={$loginTimeout})...");
-        $say('dsn(no secret)=' . $dsn);
-        $t0 = microtime(true);
+        $dsn = "odbc:Driver={{$odbcDriver}};Server={$server};Database={$name};"
+            . "Encrypt={$encrypt};TrustServerCertificate={$trust};"
+            . "Connection Timeout={$loginTimeout};Login Timeout={$loginTimeout};"
+            . "Connect Retry Count=0";
+        $say('PDO odbc connecting...');
+        $say('dsn=' . $dsn);
         $pdo = new PDO($dsn, $user, $pass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-        $say('PDO connected in ' . sprintf('%.2f', microtime(true) - $t0) . 's (odbc)');
+        $say('PDO odbc ok');
     } else {
-        throw new RuntimeException('No pdo_odbc or pdo_sqlsrv loaded');
+        throw new RuntimeException('no pdo_odbc/sqlsrv');
     }
 
-    $say('SELECT 1...');
-    $pdo->query('SELECT 1')->fetch();
+    $pdo->query('SELECT 1');
     $say('SELECT 1 ok');
 
     $sched = 'unknown';
@@ -152,59 +124,44 @@ try {
         $st->execute(['snmp_scheduler_enabled']);
         $row = $st->fetch(PDO::FETCH_ASSOC);
         $sched = ($row && ($row['setting_value'] ?? '') === '1') ? 'on' : 'off';
-        $say('scheduler=' . $sched);
     } catch (Throwable $e) {
-        $say('scheduler unread: ' . $e->getMessage());
+        $say('settings read: ' . $e->getMessage());
     }
 
     $summary = "health=ok scheduler={$sched}";
-    $hb = json_encode([
-        'at' => date('Y-m-d H:i:s'),
-        'ts' => time(),
-        'summary' => $summary,
-        'pid' => getmypid(),
-    ], JSON_UNESCAPED_SLASHES);
+    $hb = json_encode(['at' => date('Y-m-d H:i:s'), 'ts' => time(), 'summary' => $summary, 'pid' => getmypid()]);
     foreach ([
         $root . '/storage/logs/snmp_scheduler_heartbeat.txt',
         (getenv('TEMP') ?: 'C:/Windows/Temp') . '/coldaisle_snmp_heartbeat.txt',
     ] as $hp) {
-        $d = dirname($hp);
-        if (!is_dir($d)) {
-            @mkdir($d, 0775, true);
-        }
+        @mkdir(dirname($hp), 0775, true);
         @file_put_contents($hp, $hb);
     }
 
     try {
         $now = date('Y-m-d H:i:s');
-        foreach ([
-            'snmp_scheduler_last_run_at' => $now,
-            'snmp_scheduler_last_result' => $summary,
-        ] as $k => $val) {
+        foreach (['snmp_scheduler_last_run_at' => $now, 'snmp_scheduler_last_result' => $summary] as $k => $val) {
             $chk = $pdo->prepare('SELECT 1 FROM settings WHERE setting_key = ?');
             $chk->execute([$k]);
             if ($chk->fetch()) {
-                $up = $pdo->prepare('UPDATE settings SET setting_value = ? WHERE setting_key = ?');
-                $up->execute([$val, $k]);
+                $pdo->prepare('UPDATE settings SET setting_value = ? WHERE setting_key = ?')->execute([$val, $k]);
             } else {
-                $ins = $pdo->prepare('INSERT INTO settings (setting_key, setting_value, category) VALUES (?, ?, ?)');
-                $ins->execute([$k, $val, 'snmp']);
+                $pdo->prepare('INSERT INTO settings (setting_key, setting_value, category) VALUES (?,?,?)')
+                    ->execute([$k, $val, 'snmp']);
             }
         }
-        $say('settings heartbeat written');
+        $say('settings updated');
     } catch (Throwable $e) {
-        $say('settings write skip: ' . $e->getMessage());
+        $say('settings skip: ' . $e->getMessage());
     }
 
     fwrite(STDOUT, $summary . "\n");
-    @fflush(STDOUT);
     $say('done');
     exit(0);
 } catch (Throwable $e) {
     $msg = 'health=fail ' . $e->getMessage();
     fwrite(STDOUT, $msg . "\n");
     $say($msg);
-    $say('HINT: Web may work via app-pool identity while CLI uses your user or SYSTEM.');
-    $say('HINT: Use SQL auth in config.php for Task Scheduler (SYSTEM), or grant SYSTEM a SQL login.');
+    $say('CLI/SYSTEM SQL identity must match a login that can open the database.');
     exit(1);
 }
