@@ -1113,12 +1113,50 @@ class SnmpPoller
         string $privPass,
         string $context
     ) {
-        if (!function_exists('snmp3_get') && !function_exists('snmp2_get')) {
+        if (!function_exists('snmp3_get') && !function_exists('snmp2_get') && !class_exists('SNMP')) {
             throw new RuntimeException('PHP SNMP extension not available');
         }
 
+        $hostPort = $host . ($port !== 161 ? ':' . $port : '');
+        // Prefer SNMP class so we can set short timeouts (procedural snmp3_get can hang for minutes)
+        $timeoutUsec = 2_000_000; // 2 seconds
+        $retries = 1;
+        $snmpObj = null;
+        if (class_exists('SNMP')) {
+            try {
+                $ver = strtolower($version) === '3' ? constant('SNMP::VERSION_3') : constant('SNMP::VERSION_2c');
+                if (strtolower($version) === '1') {
+                    $ver = constant('SNMP::VERSION_1');
+                }
+                /** @var \SNMP $snmpObj */
+                $snmpObj = new \SNMP($ver, $hostPort, $user ?: 'public', $timeoutUsec, $retries);
+                if (defined('SNMP_VALUE_PLAIN')) {
+                    $snmpObj->valueretrieval = constant('SNMP_VALUE_PLAIN');
+                }
+                $snmpObj->exceptions_enabled = 0;
+                if (strtolower($version) === '3') {
+                    $secLevel = 'noAuthNoPriv';
+                    if ($authPass && $privPass) {
+                        $secLevel = 'authPriv';
+                    } elseif ($authPass) {
+                        $secLevel = 'authNoPriv';
+                    }
+                    $snmpObj->setSecurity(
+                        $secLevel,
+                        $authProto ?: 'SHA',
+                        $authPass ?: '',
+                        $privProto ?: 'AES',
+                        $privPass ?: '',
+                        $context ?: ''
+                    );
+                }
+            } catch (Throwable $e) {
+                $snmpObj = null;
+            }
+        }
+
         return [
-            'host' => $host . ($port !== 161 ? ':' . $port : ''),
+            'host' => $hostPort,
             'version' => $version,
             'user' => $user,
             'authProto' => $authProto,
@@ -1126,11 +1164,25 @@ class SnmpPoller
             'privProto' => $privProto,
             'privPass' => $privPass,
             'context' => $context,
+            'snmp' => $snmpObj,
         ];
     }
 
     private static function get(array $session, string $oid)
     {
+        $oid = ltrim($oid, '.');
+        if (!empty($session['snmp']) && $session['snmp'] instanceof \SNMP) {
+            try {
+                $result = @$session['snmp']->get($oid);
+            } catch (Throwable $e) {
+                throw new RuntimeException('SNMP GET failed for OID ' . $oid . ': ' . $e->getMessage());
+            }
+            if ($result === false) {
+                throw new RuntimeException("SNMP GET failed for OID {$oid}");
+            }
+            return $result;
+        }
+
         $host = $session['host'];
         if (($session['version'] ?? '3') === '3' && function_exists('snmp3_get')) {
             $secLevel = 'noAuthNoPriv';
@@ -1164,7 +1216,13 @@ class SnmpPoller
 
     private static function closeSession($session): void
     {
-        // procedural SNMP has no session object
+        if (is_array($session) && !empty($session['snmp']) && $session['snmp'] instanceof \SNMP) {
+            try {
+                $session['snmp']->close();
+            } catch (Throwable $e) {
+                // ignore
+            }
+        }
     }
 
     /**

@@ -772,7 +772,7 @@ layout_header('Settings', $user, 'settings');
 <?php
 $snmpCardActive = !empty($snmpSchedule['active']);
 $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
-    'active' => 'badge-success',
+    'active', 'running' => 'badge-success',
     'pending_task', 'stale' => 'badge-warning',
     default => '',
 };
