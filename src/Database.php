@@ -79,8 +79,11 @@ class Database
         $trust = $trustOn ? 'yes' : 'no';
 
         $drivers = PDO::getAvailableDrivers();
+        // LoginTimeout helps CLI/SYSTEM fail fast instead of hanging for minutes
+        $loginTimeout = isset($config['login_timeout']) ? max(1, (int)$config['login_timeout']) : 8;
+
         if (in_array('sqlsrv', $drivers, true)) {
-            $dsn = "sqlsrv:Server={$server};Encrypt={$encrypt};TrustServerCertificate={$trust}";
+            $dsn = "sqlsrv:Server={$server};Encrypt={$encrypt};TrustServerCertificate={$trust};LoginTimeout={$loginTimeout}";
             if ($includeDatabase) {
                 $dsn .= ";Database={$db}";
             }
@@ -89,7 +92,7 @@ class Database
 
         if (in_array('odbc', $drivers, true)) {
             $driverName = $config['odbc_driver'] ?? 'ODBC Driver 18 for SQL Server';
-            $dsn = "odbc:Driver={{$driverName}};Server={$server};Encrypt={$encrypt};TrustServerCertificate={$trust}";
+            $dsn = "odbc:Driver={{$driverName}};Server={$server};Encrypt={$encrypt};TrustServerCertificate={$trust};LoginTimeout={$loginTimeout}";
             if ($includeDatabase) {
                 $dsn .= ";Database={$db}";
             }

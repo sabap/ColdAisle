@@ -76,6 +76,8 @@ $earlyHb('cli enter');
 // Reduce Net-SNMP MIB-directory thrash on Windows (can delay/hang CLI startup)
 @putenv('MIBDIRS=');
 @putenv('MIBS=');
+// Light boot: skip Schema::ensure / crypto migration (CLI poll worker)
+@putenv('COLDAISLE_CLI_LIGHT=1');
 
 $earlyLog('loading App.php');
 try {

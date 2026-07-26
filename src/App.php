@@ -26,7 +26,7 @@ require_once __DIR__ . '/Services/SnmpSchedulerService.php';
 class App
 {
     /** App semver â€” keep in sync with /VERSION */
-    public const VERSION = '0.2.57';
+    public const VERSION = '0.2.58';
     /** Product name is fixed (not user-configurable). */
     public const APP_NAME = 'ColdAisle';
     public const ROOT = __DIR__ . '/..';
@@ -72,47 +72,57 @@ class App
 
         Database::configure(self::$config['database'] ?? []);
         date_default_timezone_set(self::$config['timezone'] ?? 'UTC');
-        try {
-            Schema::ensure();
-        } catch (Throwable $e) {
-            // Non-fatal: features depending on new columns degrade gracefully
-            self::log('Schema ensure: ' . $e->getMessage(), 'warning');
-        }
 
-        // App-level secret encryption (SNMP passphrases, etc.)
-        try {
-            if (Crypto::ensureAppKey()) {
-                Crypto::reset();
-                // Reload config into memory if key was just written
-                if (is_file(self::configPath())) {
-                    self::$config = require self::configPath();
-                    Crypto::reset();
-                }
+        // CLI poll worker: skip Schema/Crypto migration/Update finish — those can hang
+        // under SYSTEM or when SQL is slow; web requests keep the full bootstrap.
+        $cliLight = $isCli && (
+            getenv('COLDAISLE_CLI_LIGHT') === '1'
+            || in_array('--light', $GLOBALS['argv'] ?? [], true)
+        );
+
+        if (!$cliLight) {
+            try {
+                Schema::ensure();
+            } catch (Throwable $e) {
+                // Non-fatal: features depending on new columns degrade gracefully
+                self::log('Schema ensure: ' . $e->getMessage(), 'warning');
             }
-            if (Crypto::isAvailable()) {
-                $migrated = SettingsService::get('secrets_migration_v1', '');
-                if ($migrated !== '1') {
-                    $stats = Crypto::migratePlaintextSecrets();
-                    SettingsService::set('secrets_migration_v1', '1', 'security');
-                    if (($stats['sealed'] ?? 0) > 0) {
-                        self::log(
-                            'Encrypted ' . (int)$stats['sealed'] . ' secret field(s) at rest (skipped '
-                            . (int)$stats['skipped'] . ', errors ' . (int)$stats['errors'] . ')',
-                            'info'
-                        );
+
+            // App-level secret encryption (SNMP passphrases, etc.)
+            try {
+                if (Crypto::ensureAppKey()) {
+                    Crypto::reset();
+                    // Reload config into memory if key was just written
+                    if (is_file(self::configPath())) {
+                        self::$config = require self::configPath();
+                        Crypto::reset();
                     }
                 }
+                if (Crypto::isAvailable()) {
+                    $migrated = SettingsService::get('secrets_migration_v1', '');
+                    if ($migrated !== '1') {
+                        $stats = Crypto::migratePlaintextSecrets();
+                        SettingsService::set('secrets_migration_v1', '1', 'security');
+                        if (($stats['sealed'] ?? 0) > 0) {
+                            self::log(
+                                'Encrypted ' . (int)$stats['sealed'] . ' secret field(s) at rest (skipped '
+                                . (int)$stats['skipped'] . ', errors ' . (int)$stats['errors'] . ')',
+                                'info'
+                            );
+                        }
+                    }
+                }
+            } catch (Throwable $e) {
+                self::log('Crypto bootstrap: ' . $e->getMessage(), 'warning');
             }
-        } catch (Throwable $e) {
-            self::log('Crypto bootstrap: ' . $e->getMessage(), 'warning');
-        }
 
-        // Finish any deferred file replacements from a previous self-update
-        // (Windows/IIS often locks the script that started the update).
-        try {
-            UpdateService::applyPendingReplacements();
-        } catch (Throwable $e) {
-            self::log('Pending update apply: ' . $e->getMessage(), 'warning');
+            // Finish any deferred file replacements from a previous self-update
+            // (Windows/IIS often locks the script that started the update).
+            try {
+                UpdateService::applyPendingReplacements();
+            } catch (Throwable $e) {
+                self::log('Pending update apply: ' . $e->getMessage(), 'warning');
+            }
         }
 
         // Phase B: transport + session hardening (web only)
