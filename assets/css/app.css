@@ -1772,21 +1772,59 @@ tr.row-empty td { color: var(--muted); font-style: italic; }
   .device-img-card { flex: 1 1 220px; }
 }
 
-/* Settings feature cards (e.g. SNMP schedule inactive until Windows task + heartbeat) */
+/* Feature cards muted when off (SNMP schedule, Scheduled polling list, etc.)
+   Must override .card-header’s blue accent wash — opacity alone is too subtle. */
 .settings-feature-card.settings-feature-inactive {
-  opacity: 0.72;
-  filter: saturate(0.55);
-  border-color: rgba(148, 163, 184, 0.18);
+  border-color: rgba(100, 116, 139, 0.35);
+  background: rgba(15, 23, 42, 0.55);
 }
-.settings-feature-card.settings-feature-inactive .card-header h2 {
-  color: var(--muted, #94a3b8);
+.settings-feature-card.settings-feature-inactive .card-header {
+  background:
+    linear-gradient(
+      90deg,
+      rgba(71, 85, 105, 0.35) 0%,
+      rgba(51, 65, 85, 0.28) 50%,
+      rgba(30, 41, 59, 0.4) 100%
+    ),
+    var(--surface-2, #0f172a);
+  border-bottom-color: rgba(100, 116, 139, 0.35);
+  box-shadow: inset 3px 0 0 0 rgba(100, 116, 139, 0.55);
 }
-.settings-feature-card.settings-feature-inactive .card-body {
-  color: color-mix(in srgb, var(--text, #e2e8f0) 75%, var(--muted, #94a3b8));
+.settings-feature-card.settings-feature-inactive .card-header h2,
+.settings-feature-card.settings-feature-inactive .card-header h3 {
+  color: #94a3b8;
+}
+.settings-feature-card.settings-feature-inactive .card-body,
+.settings-feature-card.settings-feature-inactive .card-body.flush {
+  color: #94a3b8;
+}
+.settings-feature-card.settings-feature-inactive .text-muted {
+  color: #64748b !important;
+}
+.settings-feature-card.settings-feature-inactive table.data {
+  opacity: 0.78;
+}
+.settings-feature-card.settings-feature-inactive table.data th {
+  color: #94a3b8;
+}
+.settings-feature-card.settings-feature-inactive .badge-success {
+  background: #334155;
+  color: #cbd5e1;
+}
+.settings-feature-card.settings-feature-inactive .badge-info {
+  background: #334155;
+  color: #94a3b8;
+}
+.settings-feature-card.settings-feature-inactive .btn-primary {
+  background: #475569;
+  border-color: #64748b;
+  color: #e2e8f0;
+}
+.settings-feature-card.settings-feature-inactive a:not(.btn) {
+  color: #94a3b8;
 }
 .settings-feature-card.settings-feature-active {
-  opacity: 1;
-  filter: none;
+  /* default .card look */
 }
 .settings-feature-card .snmp-schedule-status-detail {
   color: var(--muted, #94a3b8);
