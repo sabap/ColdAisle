@@ -42,6 +42,21 @@ class SnmpSchedulerService
         $lastOk = (int)SettingsService::get(self::SETTING_LAST_OK, '0');
         $lastFail = (int)SettingsService::get(self::SETTING_LAST_FAIL, '0');
 
+        // File heartbeat survives SQL write issues under the task account (SYSTEM)
+        $fileHb = self::readFileHeartbeat();
+        if ($fileHb && (!empty($fileHb['at']) || !empty($fileHb['ts']))) {
+            $fileAt = isset($fileHb['at']) ? (string)$fileHb['at'] : null;
+            $fileTs = isset($fileHb['ts']) ? (int)$fileHb['ts'] : 0;
+            $dbTs = $lastRun ? (int)strtotime($lastRun) : 0;
+            if ($fileTs > $dbTs) {
+                $lastRun = $fileAt ?: date('Y-m-d H:i:s', $fileTs);
+                if (!empty($fileHb['summary'])) {
+                    $lastResult = (string)$fileHb['summary']
+                        . (str_contains((string)$fileHb['summary'], 'file') ? '' : ' (file heartbeat)');
+                }
+            }
+        }
+
         $active = false;
         $status = 'off';
         $label = 'Off';
@@ -51,23 +66,25 @@ class SnmpSchedulerService
             if ($lastRun === null) {
                 $status = 'pending_task';
                 $label = 'Waiting for Windows task';
-                $detail = 'Enabled in ColdAisle, but the poll worker has not run yet. '
-                    . 'Download and run the registration script (elevated) on the app server.';
+                $detail = 'Enabled in ColdAisle, but the poll worker has not reported yet. '
+                    . 'Confirm Task Scheduler is running, and check storage/logs/snmp_poll_cli.log '
+                    . 'on the app server (SYSTEM must reach SQL using credentials in config.php).';
             } else {
                 $ts = strtotime($lastRun);
                 $staleAfter = max($interval * 2, 600);
+                $running = is_string($lastResult) && str_starts_with($lastResult, 'running');
                 if ($ts !== false && (time() - $ts) <= $staleAfter) {
                     $active = true;
-                    $status = 'active';
-                    $label = 'Active';
-                    $detail = 'Worker last ran ' . $lastRun
+                    $status = $running ? 'running' : 'active';
+                    $label = $running ? 'Worker running' : 'Active';
+                    $detail = 'Worker last signal ' . $lastRun
                         . ($lastResult ? (' · ' . $lastResult) : '') . '.';
                 } else {
                     $status = 'stale';
                     $label = 'Task not running';
-                    $detail = 'Enabled, but last worker run was '
+                    $detail = 'Enabled, but last worker signal was '
                         . ($lastRun ?: 'never')
-                        . ' (stale). Check Task Scheduler / run the registration script again.';
+                        . ' (stale). Check Task Scheduler and storage/logs/snmp_poll_cli.log.';
                 }
             }
         }
@@ -84,6 +101,21 @@ class SnmpSchedulerService
             'status_label' => $label,
             'status_detail' => $detail,
         ];
+    }
+
+    /** @return array{at?:string,ts?:int,summary?:string,pid?:int}|null */
+    public static function readFileHeartbeat(): ?array
+    {
+        $path = App::ROOT . '/storage/logs/snmp_scheduler_heartbeat.txt';
+        if (!is_file($path)) {
+            return null;
+        }
+        $raw = @file_get_contents($path);
+        if ($raw === false || trim($raw) === '') {
+            return null;
+        }
+        $data = json_decode($raw, true);
+        return is_array($data) ? $data : null;
     }
 
     public static function isEnabled(): bool
