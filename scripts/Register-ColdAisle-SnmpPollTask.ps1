@@ -232,9 +232,10 @@ try {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 } catch { }
 
-# Point the task at run_poll_snmp.cmd (sets MIBS empty before php.exe starts).
-# Calling php.exe directly loads snmp.dll and scans missing MIB paths -> hang/spam.
-$tr = '"{0}"' -f $runCmd
+# .cmd files must be started via cmd.exe /c — a bare .cmd path often fails with
+# LastTaskResult 0x80071020 / refused and never writes logs (interactive cmd /c works).
+$cmdExe = Join-Path $env:SystemRoot 'System32\cmd.exe'
+$tr = '"{0}" /c "\"{1}\""' -f $cmdExe, $runCmd
 Write-Host "    Action: $tr" -ForegroundColor DarkGray
 $createArgs = @(
     '/Create',
@@ -252,7 +253,8 @@ $createOut | ForEach-Object { Write-Host "    $_" }
 if ($LASTEXITCODE -ne 0) {
     Write-Warning "schtasks /Create failed (exit $LASTEXITCODE). Trying PowerShell Register-ScheduledTask..."
 
-    $action = New-ScheduledTaskAction -Execute $runCmd -WorkingDirectory $SiteRoot
+    $cmdExe = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    $action = New-ScheduledTaskAction -Execute $cmdExe -Argument ('/c "' + $runCmd + '"') -WorkingDirectory $SiteRoot
     # Valid duration (not TimeSpan.MaxValue — that yields 0x80041318)
     $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) `
         -RepetitionInterval (New-TimeSpan -Minutes $TickMinutes) `
