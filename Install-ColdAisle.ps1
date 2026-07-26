@@ -77,6 +77,16 @@
     After a successful install, open the setup wizard in the default browser
     (http://localhost/setup.php or the site binding if detectable).
 
+.PARAMETER EnableSnmp
+    Enable PHP extension=snmp in php.ini and recycle IIS (for in-browser Discover).
+    The scheduled poll worker does NOT require this — it uses scripts\run_poll_snmp.cmd
+    with php -n and loads php_snmp.dll explicitly (avoids Windows Net-SNMP MIB hang).
+
+.PARAMETER RegisterSnmpTask
+    After deploy, run scripts\Register-ColdAisle-SnmpPollTask.ps1 elevated to create the
+    Task Scheduler job (cmd.exe /c run_poll_snmp.cmd every 1 minute as SYSTEM).
+    Safe before setup.php completes: the worker no-ops until config + due targets exist.
+
 .EXAMPLE
     .\Install-ColdAisle.ps1
 
@@ -85,6 +95,9 @@
 
 .EXAMPLE
     .\Install-ColdAisle.ps1 -Force -OpenSetup
+
+.EXAMPLE
+    .\Install-ColdAisle.ps1 -EnableSnmp -RegisterSnmpTask -OpenSetup
 #>
 [CmdletBinding()]
 param(
@@ -100,7 +113,9 @@ param(
     [switch]$SkipSqlsrv,
     [switch]$Force,
     [switch]$KeepDownload,
-    [switch]$OpenSetup
+    [switch]$OpenSetup,
+    [switch]$EnableSnmp,
+    [switch]$RegisterSnmpTask
 )
 
 $ErrorActionPreference = 'Stop'
@@ -258,8 +273,19 @@ function Invoke-PostInstallChecks {
         }
         if ($modOut -match 'ldap') { Write-Ok 'PHP module: ldap (LDAPS ready)' }
         else { Write-Warn 'PHP ldap not loaded - enable extension=ldap in php.ini for Active Directory' }
-        if ($modOut -match 'snmp') { Write-Ok 'PHP module: snmp (polling ready)' }
-        else { Write-Warn 'PHP snmp not loaded - enable for SNMP poll worker (optional at install)' }
+        $snmpDll = Join-Path $PhpPath 'ext\php_snmp.dll'
+        if (Test-Path $snmpDll) {
+            Write-Ok 'php_snmp.dll present (CLI poll launcher can load it)'
+        } else {
+            Write-Warn 'php_snmp.dll missing - SNMP poll/Discover will not work until PHP snmp extension package is present'
+        }
+        if ($modOut -match 'snmp') {
+            Write-Ok 'PHP module: snmp loaded in php.ini (web Discover ready)'
+        } else {
+            Write-Warn 'PHP snmp not in php.ini - OK for scheduled poll (run_poll_snmp.cmd). For web Discover: scripts\Enable-ColdAisle-Snmp.ps1 or -EnableSnmp'
+        }
+        if ($modOut -match 'zip') { Write-Ok 'PHP module: zip (backups/updates)' }
+        else { Write-Warn 'PHP zip not loaded - site backup / updates use PowerShell Compress-Archive fallback when possible' }
     }
 
     if (-not (Test-Path (Join-Path $SitePath 'setup.php'))) {
@@ -273,10 +299,32 @@ function Invoke-PostInstallChecks {
         Write-Ok 'index.php present'
     }
 
-    foreach ($dir in @('config', 'storage\logs', 'storage\uploads', 'storage\backups', 'storage\tmp')) {
+    # SNMP schedule package (must ship with every deploy)
+    $snmpPkg = @(
+        'scripts\poll_snmp.php',
+        'scripts\run_poll_snmp.cmd',
+        'scripts\health_cli.php',
+        'scripts\Register-ColdAisle-SnmpPollTask.ps1',
+        'scripts\Enable-ColdAisle-Snmp.ps1'
+    )
+    foreach ($rel in $snmpPkg) {
+        $p = Join-Path $SitePath $rel
+        if (-not (Test-Path $p)) {
+            $issues += "Missing SNMP package file: $p"
+        } else {
+            Write-Ok "SNMP package: $rel"
+        }
+    }
+
+    foreach ($dir in @('config', 'storage\logs', 'storage\uploads', 'storage\backups', 'storage\tmp', 'storage\snmp\mibs')) {
         $p = Join-Path $SitePath $dir
         if (-not (Test-Path $p)) {
-            $issues += "Missing directory: $p"
+            try {
+                New-Item -ItemType Directory -Path $p -Force | Out-Null
+                Write-Ok "Created directory: $dir"
+            } catch {
+                $issues += "Missing directory: $p"
+            }
         } else {
             Write-Ok "Directory OK: $dir"
         }
@@ -542,6 +590,27 @@ try {
         throw "Install-ColdAisle-Prereqs.ps1 exited with code $LASTEXITCODE"
     }
 
+    if ($EnableSnmp) {
+        $enableSnmp = Join-Path $SitePhysicalPath 'scripts\Enable-ColdAisle-Snmp.ps1'
+        if (-not (Test-Path -LiteralPath $enableSnmp)) {
+            Write-Warn "EnableSnmp requested but missing: $enableSnmp"
+        } else {
+            Write-Step 'Enabling PHP snmp for web Discover (-EnableSnmp)'
+            & $enableSnmp -PhpInstallPath $PhpInstallPath -SiteName $SiteName
+        }
+    }
+
+    if ($RegisterSnmpTask) {
+        $reg = Join-Path $SitePhysicalPath 'scripts\Register-ColdAisle-SnmpPollTask.ps1'
+        if (-not (Test-Path -LiteralPath $reg)) {
+            Write-Warn "RegisterSnmpTask requested but missing: $reg"
+        } else {
+            Write-Step 'Registering Windows SNMP poll task (-RegisterSnmpTask)'
+            $phpExe = Join-Path $PhpInstallPath 'php.exe'
+            & $reg -SiteRoot $SitePhysicalPath -PhpExe $phpExe
+        }
+    }
+
     $ok = Invoke-PostInstallChecks -SitePath $SitePhysicalPath -PhpPath $PhpInstallPath
 
     Write-Host ''
@@ -562,14 +631,22 @@ try {
        (or http://YOUR-SERVER/setup.php)
     3. Enter SQL connection details and create the first admin account.
     4. Delete phpinfo-test.php from the site root if present.
-    5. Optional later: Settings -> Updates for one-click upgrades.
+    5. SNMP scheduled poll (after PDUs are configured):
+         Settings -> SNMP schedule -> enable interval -> download
+         Register-ColdAisle-SnmpPollTask.ps1 (elevated once)
+         Or re-run this installer with -RegisterSnmpTask
+         Task action: cmd.exe /c ...\scripts\run_poll_snmp.cmd
+    6. Optional: Settings -> Updates for one-click upgrades.
        Donate: https://paypal.me/mattelsberry
 
   Gotchas:
     - SQL engine is NOT installed by this script.
     - Use SQL auth or Windows auth that IIS/PHP can use (app pool identity for Windows auth).
     - For LDAPS later: open outbound TCP 636 and enable PHP ldap.
-    - For SNMP polling: Task Scheduler -> php.exe scripts\poll_snmp.php
+    - Do NOT schedule bare php.exe + poll_snmp.php with full php.ini (MIB hang risk).
+      Always use scripts\run_poll_snmp.cmd (or the Register script).
+    - Web Discover needs extension=snmp (-EnableSnmp or Enable-ColdAisle-Snmp.ps1).
+      The OS poll task does not need snmp in php.ini.
     - Re-run with -Force to refresh app files (config\config.php is preserved).
 
 "@

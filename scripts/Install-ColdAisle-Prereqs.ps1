@@ -72,6 +72,14 @@
 .PARAMETER OpenSetup
     After success, open http://localhost/setup.php in the default browser.
 
+.PARAMETER EnableSnmp
+    Enable PHP extension=snmp for in-browser Discover (runs Enable-ColdAisle-Snmp.ps1).
+    Scheduled poll uses scripts\run_poll_snmp.cmd and does not require snmp in php.ini.
+
+.PARAMETER RegisterSnmpTask
+    Register Task Scheduler job via Register-ColdAisle-SnmpPollTask.ps1
+    (cmd.exe /c run_poll_snmp.cmd, 1-minute tick, SYSTEM).
+
 .EXAMPLE
     # Production server - Default Web Site -> C:\inetpub\wwwroot\ColdAisle
     .\Install-ColdAisle-Prereqs.ps1
@@ -85,6 +93,9 @@
 .EXAMPLE
     # Install stack + pull app from public GitHub (or use root Install-ColdAisle.ps1)
     .\Install-ColdAisle-Prereqs.ps1 -FromGitHub -OpenSetup
+
+.EXAMPLE
+    .\Install-ColdAisle-Prereqs.ps1 -EnableSnmp -RegisterSnmpTask
 #>
 [CmdletBinding()]
 param(
@@ -103,7 +114,9 @@ param(
     [switch]$SkipSqlsrv,
     [switch]$Force,
     [switch]$RunVerification,
-    [switch]$OpenSetup
+    [switch]$OpenSetup,
+    [switch]$EnableSnmp,
+    [switch]$RegisterSnmpTask
 )
 
 $ErrorActionPreference = 'Stop'
@@ -426,15 +439,19 @@ function Configure-PhpIni([string]$IniPath) {
         $c = Set-IniValue $c $ext -IsExtension
     }
 
-    # snmp: DLL is often present, but Net-SNMP on Windows looks for Unix MIB paths
-    # (c:/usr/share/snmp/mibs) and floods stderr. Leave disabled by default; ColdAisle
-    # treats SNMP as optional. Enable later for scripts/poll_snmp.php if needed:
-    #   extension=snmp
-    # Optionally create C:\PHP\snmp\mibs and set snmp.mib_directory.
+    # snmp: DLL is usually present in the Windows PHP zip. Leaving extension=snmp ON in
+    # php.ini can hang FastCGI / bare CLI during Net-SNMP MIB path init on Windows.
+    # Default: keep disabled for IIS. The scheduled worker uses scripts\run_poll_snmp.cmd
+    # (php -n + explicit -d extension=snmp). Web Discover: -EnableSnmp or Enable-ColdAisle-Snmp.ps1.
     $snmpDll = Join-Path $PhpInstallPath 'ext\php_snmp.dll'
     if (Test-Path $snmpDll) {
-        # Ensure any prior enable is turned off for a clean IIS/CLI startup
         $c = [regex]::Replace($c, '(?m)^\s*extension\s*=\s*"?snmp"?\s*$', ';extension=snmp')
+    }
+
+    # zip: pre-update / site backup packages (PowerShell Compress-Archive is fallback)
+    $zipDll = Join-Path $PhpInstallPath 'ext\php_zip.dll'
+    if (Test-Path $zipDll) {
+        $c = Set-IniValue $c 'zip' -IsExtension
     }
 
     # sqlsrv if present
@@ -1166,9 +1183,19 @@ function Show-Summary {
     - Firewall: allow 80/443 inbound; SQL 1433 if remote; LDAPS 636 outbound.
     - If PHP version download 404s, set -PhpVersion to a build listed on
       https://windows.php.net/download/
-    - SNMP poll later:
-        Program:  $PhpInstallPath\php.exe
-        Args:     $siteLine\scripts\poll_snmp.php
+
+  SNMP (after setup + PDUs configured):
+    - Package: scripts\poll_snmp.php, run_poll_snmp.cmd, health_cli.php,
+      Register-ColdAisle-SnmpPollTask.ps1, Enable-ColdAisle-Snmp.ps1
+    - App policy: Settings -> SNMP schedule (interval; web never elevates)
+    - OS task (elevated once):
+        .\Register-ColdAisle-SnmpPollTask.ps1 -SiteRoot '$siteLine'
+      or installer -RegisterSnmpTask
+    - Task action (do not use bare php + full php.ini):
+        Program:  $env:SystemRoot\System32\cmd.exe
+        Args:     /c "$siteLine\scripts\run_poll_snmp.cmd"
+        Trigger:  every 1 minute; worker skips targets not due
+    - Web Discover only: -EnableSnmp or .\Enable-ColdAisle-Snmp.ps1
 
 "@
 }
@@ -1197,6 +1224,38 @@ Install-PhpSqlsrvDrivers
 Deploy-ColdAisleApp
 Install-IisPhpHandler
 Write-PhpInfoTest
+
+# Ensure runtime dirs used by SNMP poll / backups exist after deploy
+if ($SitePhysicalPath) {
+    foreach ($rel in @('storage\logs', 'storage\tmp', 'storage\backups', 'storage\snmp\mibs', 'storage\uploads')) {
+        $d = Join-Path $SitePhysicalPath $rel
+        if (-not (Test-Path -LiteralPath $d)) {
+            New-Item -ItemType Directory -Path $d -Force | Out-Null
+        }
+    }
+}
+
+if ($EnableSnmp -and $SitePhysicalPath) {
+    $enableSnmp = Join-Path $SitePhysicalPath 'scripts\Enable-ColdAisle-Snmp.ps1'
+    if (Test-Path -LiteralPath $enableSnmp) {
+        Write-Step 'Enabling PHP snmp for web Discover (-EnableSnmp)'
+        & $enableSnmp -PhpInstallPath $PhpInstallPath -SiteName $SiteName
+    } else {
+        Write-Warn "EnableSnmp requested but missing: $enableSnmp"
+    }
+}
+
+if ($RegisterSnmpTask -and $SitePhysicalPath) {
+    $reg = Join-Path $SitePhysicalPath 'scripts\Register-ColdAisle-SnmpPollTask.ps1'
+    if (Test-Path -LiteralPath $reg) {
+        Write-Step 'Registering Windows SNMP poll task (-RegisterSnmpTask)'
+        $phpExe = Join-Path $PhpInstallPath 'php.exe'
+        & $reg -SiteRoot $SitePhysicalPath -PhpExe $phpExe
+    } else {
+        Write-Warn "RegisterSnmpTask requested but missing: $reg"
+    }
+}
+
 if ($RunVerification) {
     Invoke-PrereqVerification
 }

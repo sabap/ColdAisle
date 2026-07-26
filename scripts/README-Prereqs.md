@@ -7,6 +7,11 @@ All scripts are plain text — download, open in Notepad, then run elevated. Not
 | **[`Install-ColdAisle.ps1`](../Install-ColdAisle.ps1)** (repo root) | **Recommended for new servers:** download latest public release from GitHub, then install IIS/PHP/ODBC and deploy |
 | **`Install-ColdAisle-Prereqs.ps1`** (this folder) | Platform stack only (or deploy from a local tree / `-FromGitHub`) |
 | `Install-WinDCIM-Prereqs.ps1` | Legacy wrapper → calls `Install-ColdAisle-Prereqs.ps1` |
+| `poll_snmp.php` + **`run_poll_snmp.cmd`** | SNMP worker + safe Windows launcher (`php -n`, MIB env) |
+| `health_cli.php` | Fast CLI health for task registration (no snmp.dll hang) |
+| **`Register-ColdAisle-SnmpPollTask.ps1`** | Elevated: create/update OS task (`cmd.exe /c run_poll_snmp.cmd`) |
+| `Enable-ColdAisle-Snmp.ps1` | Optional: enable `extension=snmp` for **web** Discover |
+| `Fix-ColdAisle-SnmpTask.ps1` | Small repair helper if a task was registered incorrectly |
 
 ## Quick install (new machine, public GitHub)
 
@@ -102,6 +107,23 @@ Or pull the app from GitHub while using the prereq script:
 | `-SkipDeploy` | off | Use when files are already under inetpub and you only need the stack. |
 | `-PhpVersion` | `8.3.32` | Change if the zip 404s on windows.php.net. |
 | `-PhpInstallPath` | `C:\PHP` | FastCGI points here. |
+| `-EnableSnmp` | off | Enable PHP snmp for **in-browser Discover** (not required for the OS poll task). |
+| `-RegisterSnmpTask` | off | Register Task Scheduler job → `cmd.exe /c …\run_poll_snmp.cmd` every 1 min as SYSTEM. |
+
+### SNMP scheduling package
+
+The web app **never** elevates or edits Task Scheduler. Polling is:
+
+1. **Settings → SNMP schedule** — app interval + enable  
+2. Elevated once: `Register-ColdAisle-SnmpPollTask.ps1` (download from Settings, or installer `-RegisterSnmpTask`)  
+3. Task action:
+
+```text
+Program:   %SystemRoot%\System32\cmd.exe
+Arguments: /c "C:\inetpub\wwwroot\ColdAisle\scripts\run_poll_snmp.cmd"
+```
+
+Do **not** schedule bare `php.exe …\poll_snmp.php` with a full `php.ini` that loads `snmp` at process start — Windows Net-SNMP MIB init often hangs. The `.cmd` launcher uses `php -n` and loads only required extensions.
 
 ### Installer checks (gotchas covered)
 
@@ -137,6 +159,7 @@ Preflight / postflight try to catch common failures:
 | **TLS certificate** | Org-specific (AD CS, Let’s Encrypt, commercial CA) |
 | **Exact PHP patch version forever** | Default `-PhpVersion` may need updating when builds move to `/archives/` |
 | **Entra app registration** | Azure portal / Graph — tenant-specific secrets |
+| **SNMP Task Scheduler job** | Opt-in via `-RegisterSnmpTask` or Settings download of Register script (elevated) |
 
 ## Troubleshooting
 
@@ -148,3 +171,7 @@ Preflight / postflight try to catch common failures:
 | URL Rewrite failed | Install manually from [iis.net URL Rewrite](https://www.iis.net/downloads/microsoft/url-rewrite) |
 | App cannot write config | Re-run with default site path, or grant `IIS AppPool\<pool>` Modify on `config` & `storage` |
 | Wrong document root | Confirm Default Web Site physical path is `C:\inetpub\wwwroot\ColdAisle` (not plain `wwwroot`) |
+| SNMP task runs but no logs / hangs | Use `run_poll_snmp.cmd` via `cmd.exe /c`, not bare `php.exe` + `poll_snmp.php` |
+| Task LastTaskResult `0x80071020` | Re-run `Register-ColdAisle-SnmpPollTask.ps1` (registers `cmd.exe /c` launcher) |
+| Web Discover “SNMP not enabled” | `.\Enable-ColdAisle-Snmp.ps1` or installer `-EnableSnmp` (IIS only; poll task separate) |
+| SYSTEM cannot write poll log | Register script grants SYSTEM Modify on `storage\`; re-run Register script |
