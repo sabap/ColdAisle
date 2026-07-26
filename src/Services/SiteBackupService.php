@@ -132,6 +132,13 @@ class SiteBackupService
 
             self::zipDirectory($staging, $zipPath);
             App::log('Site backup created: ' . basename($zipPath), 'info');
+            if (class_exists('StorageHousekeepingService')) {
+                try {
+                    StorageHousekeepingService::run(false);
+                } catch (Throwable $e) {
+                    App::log('Housekeeping after site backup: ' . $e->getMessage(), 'warning');
+                }
+            }
             return $zipPath;
         } finally {
             self::rrmdir($staging);
