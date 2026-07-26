@@ -431,6 +431,13 @@ try {
 } catch (Throwable $e) {
     $scheduledDevices = [];
 }
+// Global schedule policy (Settings → SNMP schedule); mute this section when off
+if (!class_exists('SnmpSchedulerService')
+    && is_file(dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php')
+) {
+    require_once dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php';
+}
+$snmpScheduleOn = class_exists('SnmpSchedulerService') && SnmpSchedulerService::isEnabled();
 $devices = Database::fetchAll('SELECT device_id, label FROM devices WHERE is_active = 1 ORDER BY label');
 $pdus = Database::fetchAll(
     'SELECT pdu_id, name, ip_address, snmp_enabled, snmp_version, snmp_v3_profile_id
@@ -934,12 +941,20 @@ layout_header('SNMP Polling', $user, 'snmp');
     </div>
 </div>
 
-<div class="card" id="targets">
+<div class="card settings-feature-card <?= $snmpScheduleOn ? 'settings-feature-active' : 'settings-feature-inactive' ?>" id="targets">
     <div class="card-header flex-between">
         <h2>Scheduled polling</h2>
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+            <?php if ($snmpScheduleOn): ?>
+                <span class="badge badge-success">Scheduler on</span>
+            <?php else: ?>
+                <span class="badge">Scheduler off</span>
+            <?php endif; ?>
             <span class="text-muted" style="font-size:.85rem">
-                <?= count($scheduledPdus) + count($scheduledDevices) + count($targets) ?> job(s) · Task Scheduler / Poll all
+                <?= count($scheduledPdus) + count($scheduledDevices) + count($targets) ?> job(s)
+                <?php if ($snmpScheduleOn): ?>
+                    · worker interval in Settings
+                <?php endif; ?>
             </span>
             <?php if ($canEdit): ?>
                 <button type="button" class="btn btn-sm btn-primary" data-open-modal="modal-target">Add target</button>
@@ -948,10 +963,17 @@ layout_header('SNMP Polling', $user, 'snmp');
     </div>
     <div class="card-body" style="padding-bottom:.5rem">
         <p class="text-muted mb-0" style="font-size:.85rem">
-            Everything the SNMP scheduler will poll:
-            PDUs and devices with <strong>Scheduled poll</strong> enabled on their properties page
-            (site OID template), plus any free-standing targets added below.
-            <strong>Poll now</strong> on a PDU/device uses the site template only and does not require a target row.
+            <?php if (!$snmpScheduleOn): ?>
+                <strong>Site scheduled polling is disabled</strong> in
+                <a href="<?= App::e(App::url('pages/settings.php#snmp-schedule')) ?>">Settings → SNMP schedule</a>.
+                Jobs listed below will not run until the scheduler is enabled (and the Windows task is registered).
+                <strong>Poll now</strong> on a PDU/device still works.
+            <?php else: ?>
+                Everything the SNMP scheduler will poll:
+                PDUs and devices with <strong>Scheduled poll</strong> enabled on their properties page
+                (site OID template), plus any free-standing targets added below.
+                <strong>Poll now</strong> on a PDU/device uses the site template only and does not require a target row.
+            <?php endif; ?>
         </p>
     </div>
     <div class="card-body flush">
