@@ -26,7 +26,7 @@ require_once __DIR__ . '/Services/SnmpSchedulerService.php';
 class App
 {
     /** App semver â€” keep in sync with /VERSION */
-    public const VERSION = '0.2.56';
+    public const VERSION = '0.2.57';
     /** Product name is fixed (not user-configurable). */
     public const APP_NAME = 'ColdAisle';
     public const ROOT = __DIR__ . '/..';
