@@ -83,16 +83,27 @@ if (-not (Test-Path -LiteralPath $SiteRoot)) {
 }
 
 $pollScript = Join-Path $SiteRoot 'scripts\poll_snmp.php'
+$runCmd = Join-Path $SiteRoot 'scripts\run_poll_snmp.cmd'
 if (-not (Test-Path -LiteralPath $pollScript)) {
     $altRoot = [System.IO.Path]::GetFullPath((Join-Path $SiteRoot '..'))
     $altScript = Join-Path $altRoot 'scripts\poll_snmp.php'
+    $altCmd = Join-Path $altRoot 'scripts\run_poll_snmp.cmd'
     if (Test-Path -LiteralPath $altScript) {
         $SiteRoot = $altRoot
         $pollScript = $altScript
+        $runCmd = $altCmd
     }
 }
 if (-not (Test-Path -LiteralPath $pollScript)) {
     throw "poll_snmp.php not found under: $SiteRoot\scripts\"
+}
+if (-not (Test-Path -LiteralPath $runCmd)) {
+    throw "run_poll_snmp.cmd not found under: $SiteRoot\scripts\ (deploy ColdAisle 0.2.55+)"
+}
+# Local empty MIB dir so Net-SNMP does not scan c:/usr/share/snmp/mibs
+$mibDir = Join-Path $SiteRoot 'storage\snmp\mibs'
+if (-not (Test-Path -LiteralPath $mibDir)) {
+    New-Item -ItemType Directory -Path $mibDir -Force | Out-Null
 }
 
 if ($PhpExe -match '^__COLDAISLE_' -or -not (Test-Path -LiteralPath $PhpExe)) {
@@ -111,6 +122,7 @@ if ($PhpExe -match '^__COLDAISLE_' -or -not (Test-Path -LiteralPath $PhpExe)) {
 Write-Host "PHP:       $PhpExe" -ForegroundColor Cyan
 Write-Host "SiteRoot:  $SiteRoot" -ForegroundColor Cyan
 Write-Host "Script:    $pollScript" -ForegroundColor Cyan
+Write-Host "Launcher:  $runCmd" -ForegroundColor Cyan
 Write-Host "Task:      $TaskName" -ForegroundColor Cyan
 Write-Host "Tick:      every $TickMinutes minute(s)" -ForegroundColor Cyan
 Write-Host "App interval hint (Settings): __COLDAISLE_INTERVAL_HINT__ seconds" -ForegroundColor DarkGray
@@ -153,8 +165,9 @@ if (-not $SkipHealthCheck) {
         Write-Host "==> ColdAisle health (poll_snmp.php --health, timeout ${HealthTimeoutSec}s)..." -ForegroundColor Cyan
         Clear-Content -LiteralPath $outFile -ErrorAction SilentlyContinue
         Clear-Content -LiteralPath $errFile -ErrorAction SilentlyContinue
-        $p2 = Start-Process -FilePath $PhpExe `
-            -ArgumentList @('-d', 'max_execution_time=15', '--', $pollScript, '--health') `
+        # Use .cmd launcher so MIBS=/snmp.mib_directory are set before PHP loads snmp.dll
+        $p2 = Start-Process -FilePath $runCmd `
+            -ArgumentList @('--health') `
             -WorkingDirectory $SiteRoot `
             -NoNewWindow -PassThru `
             -RedirectStandardOutput $outFile `
@@ -211,10 +224,9 @@ try {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 } catch { }
 
-# schtasks is more reliable than PowerShell cmdlets on some Server builds.
-# Limit PHP runtime so Task Scheduler does not sit in Running forever.
-# /SC MINUTE /MO n = every n minutes; /RU SYSTEM; /RL HIGHEST
-$tr = '"{0}" -d max_execution_time=240 -d default_socket_timeout=3 -- "{1}"' -f $PhpExe, $pollScript
+# Point the task at run_poll_snmp.cmd (sets MIBS empty before php.exe starts).
+# Calling php.exe directly loads snmp.dll and scans missing MIB paths -> hang/spam.
+$tr = '"{0}"' -f $runCmd
 Write-Host "    Action: $tr" -ForegroundColor DarkGray
 $createArgs = @(
     '/Create',
@@ -232,8 +244,7 @@ $createOut | ForEach-Object { Write-Host "    $_" }
 if ($LASTEXITCODE -ne 0) {
     Write-Warning "schtasks /Create failed (exit $LASTEXITCODE). Trying PowerShell Register-ScheduledTask..."
 
-    $arg = '-- "' + ($pollScript -replace '"', '\"') + '"'
-    $action = New-ScheduledTaskAction -Execute $PhpExe -Argument $arg -WorkingDirectory $SiteRoot
+    $action = New-ScheduledTaskAction -Execute $runCmd -WorkingDirectory $SiteRoot
     # Valid duration (not TimeSpan.MaxValue — that yields 0x80041318)
     $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) `
         -RepetitionInterval (New-TimeSpan -Minutes $TickMinutes) `
@@ -317,9 +328,9 @@ Write-Host "  $env:TEMP\coldaisle_snmp_poll.log"
 Write-Host "  $env:TEMP\coldaisle_snmp_heartbeat.txt"
 Write-Host "  C:\Windows\Temp\coldaisle_snmp_poll.log   (SYSTEM often uses this TEMP)"
 Write-Host ""
-Write-Host "Manual run as current user (compare with SYSTEM task):"
-Write-Host "  & '$PhpExe' -d max_execution_time=60 -- '$pollScript' --health"
-Write-Host "  & '$PhpExe' -d max_execution_time=120 -- '$pollScript'"
+Write-Host "Manual run (use the .cmd launcher - avoids MIB spam/hang):"
+Write-Host "  cmd /c `"$runCmd`" --health"
+Write-Host "  cmd /c `"$runCmd`""
 Write-Host ""
 Write-Host "Remove later:"
 Write-Host "  .\Register-ColdAisle-SnmpPollTask.ps1 -Unregister"
