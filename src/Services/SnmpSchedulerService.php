@@ -106,16 +106,33 @@ class SnmpSchedulerService
     /** @return array{at?:string,ts?:int,summary?:string,pid?:int}|null */
     public static function readFileHeartbeat(): ?array
     {
-        $path = App::ROOT . '/storage/logs/snmp_scheduler_heartbeat.txt';
-        if (!is_file($path)) {
-            return null;
+        $root = realpath(App::ROOT) ?: App::ROOT;
+        $candidates = [
+            $root . '/storage/logs/snmp_scheduler_heartbeat.txt',
+            (getenv('TEMP') ?: (getenv('TMP') ?: 'C:/Windows/Temp')) . '/coldaisle_snmp_heartbeat.txt',
+            $root . '/storage/tmp/snmp_scheduler_heartbeat.txt',
+        ];
+        $best = null;
+        $bestTs = 0;
+        foreach ($candidates as $path) {
+            if (!is_file($path)) {
+                continue;
+            }
+            $raw = @file_get_contents($path);
+            if ($raw === false || trim($raw) === '') {
+                continue;
+            }
+            $data = json_decode($raw, true);
+            if (!is_array($data)) {
+                continue;
+            }
+            $ts = isset($data['ts']) ? (int)$data['ts'] : (isset($data['at']) ? (int)strtotime((string)$data['at']) : 0);
+            if ($ts >= $bestTs) {
+                $bestTs = $ts;
+                $best = $data;
+            }
         }
-        $raw = @file_get_contents($path);
-        if ($raw === false || trim($raw) === '') {
-            return null;
-        }
-        $data = json_decode($raw, true);
-        return is_array($data) ? $data : null;
+        return $best;
     }
 
     public static function isEnabled(): bool

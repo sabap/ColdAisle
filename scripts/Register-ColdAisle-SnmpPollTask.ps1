@@ -185,17 +185,37 @@ if (-not $SkipHealthCheck) {
 }
 
 Write-Host ""
+Write-Host "==> Ensuring SYSTEM can write storage logs..." -ForegroundColor Cyan
+$storagePaths = @(
+    (Join-Path $SiteRoot 'storage'),
+    (Join-Path $SiteRoot 'storage\logs'),
+    (Join-Path $SiteRoot 'storage\tmp')
+)
+foreach ($sp in $storagePaths) {
+    if (-not (Test-Path -LiteralPath $sp)) {
+        New-Item -ItemType Directory -Path $sp -Force | Out-Null
+    }
+    # Grant SYSTEM modify (task runs as SYSTEM)
+    & icacls.exe $sp /grant '*S-1-5-18:(OI)(CI)M' /T /C /Q 2>$null | Out-Null
+}
+Write-Host "    Granted SYSTEM modify on storage\, storage\logs\, storage\tmp\" -ForegroundColor DarkGray
+
+Write-Host ""
 Write-Host "==> Registering scheduled task..." -ForegroundColor Cyan
 
 # Remove existing definition so we do not keep a half-broken task
+try {
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+} catch { }
 try {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 } catch { }
 
 # schtasks is more reliable than PowerShell cmdlets on some Server builds.
+# Limit PHP runtime so Task Scheduler does not sit in Running forever.
 # /SC MINUTE /MO n = every n minutes; /RU SYSTEM; /RL HIGHEST
-# Quote paths; use -- so php treats the script path as a file.
-$tr = '"{0}" -- "{1}"' -f $PhpExe, $pollScript
+$tr = '"{0}" -d max_execution_time=240 -d default_socket_timeout=3 -- "{1}"' -f $PhpExe, $pollScript
+Write-Host "    Action: $tr" -ForegroundColor DarkGray
 $createArgs = @(
     '/Create',
     '/TN', $TaskName,
@@ -290,9 +310,16 @@ Write-Host "  2. Each PDU: Scheduled poll ON (site template + IP)"
 Write-Host "  3. Wait 1-2 minutes; Settings should show Active"
 Write-Host "  4. If still refused: open task Properties > Conditions and clear power/idle checks"
 Write-Host ""
-Write-Host "Logs on server:"
+Write-Host "Logs (check these if Settings still says Waiting):"
 Write-Host "  $SiteRoot\storage\logs\snmp_poll_cli.log"
 Write-Host "  $SiteRoot\storage\logs\snmp_scheduler_heartbeat.txt"
+Write-Host "  $env:TEMP\coldaisle_snmp_poll.log"
+Write-Host "  $env:TEMP\coldaisle_snmp_heartbeat.txt"
+Write-Host "  C:\Windows\Temp\coldaisle_snmp_poll.log   (SYSTEM often uses this TEMP)"
+Write-Host ""
+Write-Host "Manual run as current user (compare with SYSTEM task):"
+Write-Host "  & '$PhpExe' -d max_execution_time=60 -- '$pollScript' --health"
+Write-Host "  & '$PhpExe' -d max_execution_time=120 -- '$pollScript'"
 Write-Host ""
 Write-Host "Remove later:"
 Write-Host "  .\Register-ColdAisle-SnmpPollTask.ps1 -Unregister"
