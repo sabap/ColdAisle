@@ -348,6 +348,80 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             exit;
         }
 
+        if ($section === 'housekeeping_save') {
+            if (!class_exists('StorageHousekeepingService')) {
+                require_once dirname(__DIR__) . '/src/Services/StorageHousekeepingService.php';
+            }
+            $s = StorageHousekeepingService::saveFromPost($_POST);
+            AuditService::log((int)$user['user_id'], $user['username'], 'housekeeping_save', 'system', null, [
+                'auto' => $s['auto_enabled'],
+                'keep' => $s['backup_keep_count'],
+            ]);
+            App::flash('success', 'Storage housekeeping settings saved.');
+            App::redirect('pages/settings.php#housekeeping');
+        }
+
+        if ($section === 'housekeeping_run') {
+            if (!class_exists('StorageHousekeepingService')) {
+                require_once dirname(__DIR__) . '/src/Services/StorageHousekeepingService.php';
+            }
+            @set_time_limit(300);
+            $result = StorageHousekeepingService::run(true);
+            AuditService::log((int)$user['user_id'], $user['username'], 'housekeeping_run', 'system', null, [
+                'deleted' => count($result['deleted'] ?? []),
+                'freed' => $result['freed_bytes'] ?? 0,
+            ]);
+            App::flash('success', $result['message'] ?? 'Housekeeping finished.');
+            App::redirect('pages/settings.php#housekeeping');
+        }
+
+        if ($section === 'housekeeping_delete_backup') {
+            if (!class_exists('StorageHousekeepingService')) {
+                require_once dirname(__DIR__) . '/src/Services/StorageHousekeepingService.php';
+            }
+            $name = basename((string)($_POST['backup_name'] ?? ''));
+            $dir = realpath(App::ROOT . '/storage/backups');
+            $path = $dir ? realpath($dir . DIRECTORY_SEPARATOR . $name) : false;
+            // Require path strictly under backups dir (trailing separator avoids prefix tricks)
+            $dirPrefix = $dir !== false ? rtrim($dir, "\\/") . DIRECTORY_SEPARATOR : '';
+            $pathOk = $dir !== false && $path !== false
+                && (str_starts_with($path, $dirPrefix) || strcasecmp($path, $dir) === 0);
+            if ($name === '' || $name === '.' || $name === '..' || !$pathOk) {
+                throw new RuntimeException('Invalid backup file.');
+            }
+            if (is_dir($path)) {
+                // only allow deleting staging dirs manually
+                if (!str_contains($name, 'staging')) {
+                    throw new RuntimeException('Refusing to delete non-staging directory.');
+                }
+            } elseif (!is_file($path)) {
+                throw new RuntimeException('Backup not found.');
+            }
+            if (is_file($path)) {
+                if (!@unlink($path)) {
+                    throw new RuntimeException('Could not delete ' . $name);
+                }
+            } else {
+                // staging dir — best effort
+                if (class_exists('StorageHousekeepingService')) {
+                    // use reflection-free simple recursive delete via service run on tmp only — manual:
+                    $it = new RecursiveIteratorIterator(
+                        new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
+                        RecursiveIteratorIterator::CHILD_FIRST
+                    );
+                    foreach ($it as $f) {
+                        $f->isDir() ? @rmdir($f->getPathname()) : @unlink($f->getPathname());
+                    }
+                    @rmdir($path);
+                }
+            }
+            AuditService::log((int)$user['user_id'], $user['username'], 'housekeeping_delete_backup', 'system', null, [
+                'file' => $name,
+            ]);
+            App::flash('success', 'Deleted ' . $name);
+            App::redirect('pages/settings.php#housekeeping');
+        }
+
         if ($section === 'test_ldaps') {
             try {
                 $saved = is_array($config['auth']['ldaps'] ?? null) ? $config['auth']['ldaps'] : [];
@@ -387,7 +461,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         // power_alerts / snmp_schedule use settings table only (redirect earlier or no config.php)
         if (!in_array($section, [
             'update_check', 'update_apply', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
-            'power_alerts', 'snmp_schedule',
+            'power_alerts', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
         ], true)) {
             $export = var_export($config, true);
             $php = "<?php\n/** ColdAisle configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
@@ -460,6 +534,20 @@ $snmpSchedule = class_exists('SnmpSchedulerService')
         'last_ok' => 0,
         'last_fail' => 0,
     ];
+if (!class_exists('StorageHousekeepingService')
+    && is_file(dirname(__DIR__) . '/src/Services/StorageHousekeepingService.php')
+) {
+    require_once dirname(__DIR__) . '/src/Services/StorageHousekeepingService.php';
+}
+$hk = class_exists('StorageHousekeepingService')
+    ? StorageHousekeepingService::settings()
+    : null;
+$hkSummary = class_exists('StorageHousekeepingService')
+    ? StorageHousekeepingService::storageSummary()
+    : null;
+$hkBackups = class_exists('StorageHousekeepingService')
+    ? StorageHousekeepingService::listBackups()
+    : [];
 $updCfg = UpdateService::config();
 $caStatus = UpdateService::caBundleStatus();
 $ldapCaStatus = method_exists('LdapAuth', 'enterpriseCaStatus')
@@ -1324,10 +1412,118 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
         <p class="hint text-muted" style="margin-top:.75rem">
             Files are also stored under <code>storage/backups/</code>. Keep backups private —
             they contain password hashes and encrypted SNMP secrets (and <code>app_key</code> to decrypt them).
+            Retention is controlled under <a href="#housekeeping">Storage housekeeping</a>.
             <?= extension_loaded('zip') ? '' : ' PHP <code>zip</code> extension recommended (PowerShell Compress-Archive used as fallback).' ?>
         </p>
     </div>
 </div>
+
+<?php if ($hk !== null): ?>
+<div class="card" id="housekeeping">
+    <div class="card-header flex-between">
+        <h2>Storage housekeeping</h2>
+        <?php if (!empty($hk['auto_enabled'])): ?>
+            <span class="badge badge-success">Auto on</span>
+        <?php else: ?>
+            <span class="badge">Auto off</span>
+        <?php endif; ?>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="margin-top:0;font-size:.9rem">
+            Prune old <strong>pre-update</strong> and <strong>site export</strong> zips under
+            <code>storage/backups/</code>, stale <code>storage/tmp/</code> work dirs, and oversized logs.
+            Newest backup of each kind is always kept. Runs after updates/exports when auto is on,
+            and occasionally from the SNMP poll worker (at most every 12 hours).
+        </p>
+        <?php if ($hkSummary): ?>
+        <p style="font-size:.9rem;margin:.25rem 0 1rem">
+            <strong>Now:</strong>
+            <?= (int)$hkSummary['backups_count'] ?> backup file(s)
+            (<?= App::e(StorageHousekeepingService::formatBytes((int)$hkSummary['backups_bytes'])) ?>)
+            · tmp <?= App::e(StorageHousekeepingService::formatBytes((int)$hkSummary['tmp_bytes'])) ?>
+            · logs <?= App::e(StorageHousekeepingService::formatBytes((int)$hkSummary['log_bytes'])) ?>
+            <?php if (!empty($hk['last_run_at'])): ?>
+                <br><span class="text-muted">Last run <?= App::e((string)$hk['last_run_at']) ?>
+                <?php if (!empty($hk['last_result'])): ?> — <?= App::e((string)$hk['last_result']) ?><?php endif; ?></span>
+            <?php endif; ?>
+        </p>
+        <?php endif; ?>
+
+        <form method="post" class="form-grid">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="housekeeping_save">
+            <div class="form-row full"><label>
+                <input type="checkbox" name="hk_auto_enabled" value="1"
+                    <?= !empty($hk['auto_enabled']) ? 'checked' : '' ?>>
+                Run automatically after updates / site exports, and periodically from the SNMP worker
+            </label></div>
+            <div class="form-row"><label>Keep last N backups (per kind)</label>
+                <input class="form-control" type="number" min="1" max="50" name="hk_backup_keep_count"
+                       value="<?= (int)$hk['backup_keep_count'] ?>">
+                <span class="text-muted" style="font-size:.75rem">Pre-update and site-export zips counted separately. Newest of each is never deleted.</span>
+            </div>
+            <div class="form-row"><label>Max backup age (days)</label>
+                <input class="form-control" type="number" min="0" max="3650" name="hk_backup_max_age_days"
+                       value="<?= (int)$hk['backup_max_age_days'] ?>">
+                <span class="text-muted" style="font-size:.75rem">0 = no age limit (count only). Age never removes the newest file of a kind.</span>
+            </div>
+            <div class="form-row"><label>Temp file max age (hours)</label>
+                <input class="form-control" type="number" min="1" max="720" name="hk_tmp_max_age_hours"
+                       value="<?= (int)$hk['tmp_max_age_hours'] ?>">
+            </div>
+            <div class="form-row"><label>Log max size (MB)</label>
+                <input class="form-control" type="number" min="0.1" max="500" step="0.1" name="hk_log_max_mb"
+                       value="<?= App::e((string)round(((int)$hk['log_max_bytes']) / (1024 * 1024), 1)) ?>">
+                <span class="text-muted" style="font-size:.75rem">Rotate app.log / snmp_poll_cli.log / snmp_mib_noise.log when larger.</span>
+            </div>
+            <div class="form-row"><label>Rotated log max age (days)</label>
+                <input class="form-control" type="number" min="0" max="3650" name="hk_log_max_age_days"
+                       value="<?= (int)$hk['log_max_age_days'] ?>">
+            </div>
+            <div class="form-row full" style="display:flex;flex-wrap:wrap;gap:.5rem">
+                <button class="btn btn-primary" type="submit">Save housekeeping</button>
+            </div>
+        </form>
+        <form method="post" style="margin-top:.75rem" onsubmit="return confirm('Run housekeeping now? Old backups beyond retention will be deleted.');">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="housekeeping_run">
+            <button class="btn btn-secondary" type="submit">Run housekeeping now</button>
+        </form>
+
+        <?php if ($hkBackups): ?>
+        <h3 style="font-size:.95rem;margin:1.25rem 0 .5rem">Backups on disk</h3>
+        <div class="table-wrap">
+            <table class="data">
+                <thead>
+                <tr><th>File</th><th>Kind</th><th>Size</th><th>Modified</th><th></th></tr>
+                </thead>
+                <tbody>
+                <?php foreach ($hkBackups as $b): ?>
+                    <tr>
+                        <td style="font-size:.85rem;word-break:break-all"><code><?= App::e($b['name']) ?></code></td>
+                        <td><span class="badge"><?= App::e($b['kind']) ?></span></td>
+                        <td><?= App::e(StorageHousekeepingService::formatBytes((int)$b['bytes'])) ?></td>
+                        <td style="font-size:.85rem"><?= $b['mtime'] ? App::e(date('Y-m-d H:i', (int)$b['mtime'])) : '—' ?></td>
+                        <td class="actions">
+                            <form method="post" style="display:inline"
+                                  onsubmit="return confirm('Permanently delete <?= App::e(addslashes($b['name'])) ?>?');">
+                                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                                <input type="hidden" name="section" value="housekeeping_delete_backup">
+                                <input type="hidden" name="backup_name" value="<?= App::e($b['name']) ?>">
+                                <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php else: ?>
+        <p class="text-muted" style="margin-top:1rem;font-size:.85rem">No backup zips in <code>storage/backups/</code> yet.</p>
+        <?php endif; ?>
+    </div>
+</div>
+<?php endif; ?>
 
 <div class="card">
     <div class="card-header"><h2>Environment</h2></div>

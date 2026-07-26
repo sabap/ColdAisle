@@ -226,6 +226,19 @@ try {
             $earlyLog('digest post: ' . $e->getMessage());
         }
     }
+
+    // Occasional storage prune (at most every 12h when auto-enabled)
+    if (class_exists('StorageHousekeepingService')) {
+        try {
+            $hk = StorageHousekeepingService::maybeRunScheduled();
+            if (is_array($hk) && !empty($hk['message'])) {
+                $earlyLog('housekeeping: ' . $hk['message']);
+            }
+        } catch (Throwable $e) {
+            $earlyLog('housekeeping: ' . $e->getMessage());
+        }
+    }
+
     exit($fail > 0 && $ok === 0 ? 2 : 0);
 } catch (Throwable $e) {
     $msg = 'error: ' . $e->getMessage();

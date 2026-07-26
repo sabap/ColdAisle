@@ -5,14 +5,8 @@
  * Flow: check API → (optional) backup → download zipball → extract over app
  * root while preserving config/config.php and storage runtime data → Schema::ensure().
  *
- * BACKLOG (update backup housekeeping — do not implement until requested):
- * - Pre-update zips land in storage/backups/ (backup_YYYYMMDD_…_vX.Y.Z.zip) and will
- *   pile up on sites that update often; also site export zips may share that folder.
- * - Explore retention policy: keep last N backups and/or max age / max total bytes.
- * - Settings UI or automatic prune after successful update (with safety floor: never
- *   delete the only backup / current version snapshot).
- * - Optional: list/download/delete backups from Settings → Updates or Backup.
- * - Document that storage/backups is excluded from nested backup-of-backup zips.
+ * Pre-update zips: storage/backups/backup_YYYYMMDD_…_vX.Y.Z.zip
+ * Housekeeping: StorageHousekeepingService (Settings → Storage housekeeping).
  */
 declare(strict_types=1);
 
@@ -354,6 +348,18 @@ class UpdateService
                 $msg .= ', some files deferred until next page load (Windows file lock)';
             }
             $msg .= ').';
+
+            // Prune old pre-update zips / tmp after a successful apply
+            if (class_exists('StorageHousekeepingService')) {
+                try {
+                    $hk = StorageHousekeepingService::run(false);
+                    if (!empty($hk['deleted'])) {
+                        $msg .= ' Housekeeping: ' . $hk['message'];
+                    }
+                } catch (Throwable $e) {
+                    App::log('Housekeeping after update: ' . $e->getMessage(), 'warning');
+                }
+            }
 
             return [
                 'ok' => true,
