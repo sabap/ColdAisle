@@ -3,7 +3,6 @@
 # Download from Settings -> SNMP schedule and run elevated on the app server.
 #
 # Prefer a 1-minute OS tick. Enable/disable and poll interval live in ColdAisle Settings.
-# Health check is lightweight (no full SNMP poll) and never blocks registration.
 #
 # Examples:
 #   .\Register-ColdAisle-SnmpPollTask.ps1
@@ -52,9 +51,23 @@ function Stop-ProcessTree([int]$ProcessId) {
     try { Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue } catch { }
 }
 
+function Stop-HungPhpNear([string]$PhpExePath) {
+    Get-Process php -ErrorAction SilentlyContinue | ForEach-Object {
+        $pathOk = $false
+        try { $pathOk = ($_.Path -and ($_.Path -ieq $PhpExePath)) } catch { $pathOk = $true }
+        if ($pathOk) {
+            Write-Host "    Stopping hung php.exe PID $($_.Id)..." -ForegroundColor Yellow
+            try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch { }
+        }
+    }
+}
+
 Assert-Admin
 
 if ($Unregister) {
+    try {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    } catch { }
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Write-Host "Removed scheduled task '$TaskName' (if it existed)." -ForegroundColor Green
     exit 0
@@ -102,13 +115,24 @@ Write-Host "Task:      $TaskName" -ForegroundColor Cyan
 Write-Host "Tick:      every $TickMinutes minute(s)" -ForegroundColor Cyan
 Write-Host "App interval hint (Settings): __COLDAISLE_INTERVAL_HINT__ seconds" -ForegroundColor DarkGray
 
+# Clear stuck state that causes 0x800710E0 (request refused)
+Write-Host ""
+Write-Host "==> Clearing stuck task / hung PHP (if any)..." -ForegroundColor Cyan
+try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue } catch { }
+Stop-HungPhpNear -PhpExePath $PhpExe
+# Drop lock file from a killed worker
+$lockPath = Join-Path $SiteRoot 'storage\tmp\snmp_poll.lock'
+if (Test-Path -LiteralPath $lockPath) {
+    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    Write-Host "    Removed leftover snmp_poll.lock" -ForegroundColor DarkGray
+}
+
 if (-not $SkipHealthCheck) {
     Write-Host ""
     Write-Host "==> Quick PHP check..." -ForegroundColor Cyan
     $outFile = [System.IO.Path]::GetTempFileName()
     $errFile = [System.IO.Path]::GetTempFileName()
     try {
-        # 1) Prove php.exe starts (no extensions heavy path)
         $p1 = Start-Process -FilePath $PhpExe `
             -ArgumentList @('-r', 'echo "php-ok";') `
             -NoNewWindow -PassThru `
@@ -126,7 +150,6 @@ if (-not $SkipHealthCheck) {
             }
         }
 
-        # 2) Optional ColdAisle --health (boot + SQL). May hang on broken SQL; time-boxed.
         Write-Host "==> ColdAisle health (poll_snmp.php --health, timeout ${HealthTimeoutSec}s)..." -ForegroundColor Cyan
         Clear-Content -LiteralPath $outFile -ErrorAction SilentlyContinue
         Clear-Content -LiteralPath $errFile -ErrorAction SilentlyContinue
@@ -138,7 +161,7 @@ if (-not $SkipHealthCheck) {
             -RedirectStandardError $errFile
         $finished = $p2.WaitForExit($HealthTimeoutSec * 1000)
         if (-not $finished) {
-            Write-Warning "Health check timed out after ${HealthTimeoutSec}s (often SQL/network under CLI). Killing PHP and continuing to register the task."
+            Write-Warning "Health check timed out after ${HealthTimeoutSec}s. Killing PHP and continuing."
             Stop-ProcessTree -ProcessId $p2.Id
         } else {
             foreach ($line in @(Get-Content -LiteralPath $outFile -ErrorAction SilentlyContinue)) {
@@ -150,7 +173,7 @@ if (-not $SkipHealthCheck) {
             if ($p2.ExitCode -eq 0) {
                 Write-Host "    [OK] ColdAisle health passed." -ForegroundColor Green
             } else {
-                Write-Warning "Health exit code $($p2.ExitCode). Task will still be registered; check config/SQL for the SYSTEM account later."
+                Write-Warning "Health exit code $($p2.ExitCode). Task will still be registered."
             }
         }
     } finally {
@@ -164,44 +187,96 @@ if (-not $SkipHealthCheck) {
 Write-Host ""
 Write-Host "==> Registering scheduled task..." -ForegroundColor Cyan
 
-# Quote path for spaces. Do NOT use [TimeSpan]::MaxValue for RepetitionDuration
-# (Task Scheduler rejects P99999999DT23H59M59S with 0x80041318).
-$arg = '-- "' + ($pollScript -replace '"', '\"') + '"'
-$action = New-ScheduledTaskAction -Execute $PhpExe -Argument $arg -WorkingDirectory $SiteRoot
-
-# Indefinite-style: long but valid duration (~10 years)
-$repInterval = New-TimeSpan -Minutes $TickMinutes
-$repDuration = New-TimeSpan -Days 3650
-$start = (Get-Date).Date.AddMinutes((Get-Date).Minute + 1)
-if ($start -lt (Get-Date)) { $start = (Get-Date).AddMinutes(1) }
-
-$trigger = New-ScheduledTaskTrigger -Once -At $start `
-    -RepetitionInterval $repInterval `
-    -RepetitionDuration $repDuration
-
-$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
-    -MultipleInstances IgnoreNew
-
+# Remove existing definition so we do not keep a half-broken task
 try {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 } catch { }
 
-Register-ScheduledTask -TaskName $TaskName `
-    -Action $action `
-    -Trigger $trigger `
-    -Principal $principal `
-    -Settings $settings `
-    -Description 'ColdAisle SNMP poll worker (scripts/poll_snmp.php). Policy (enable/interval) is in ColdAisle Settings.' `
-    -Force | Out-Null
+# schtasks is more reliable than PowerShell cmdlets on some Server builds.
+# /SC MINUTE /MO n = every n minutes; /RU SYSTEM; /RL HIGHEST
+# Quote paths; use -- so php treats the script path as a file.
+$tr = '"{0}" -- "{1}"' -f $PhpExe, $pollScript
+$createArgs = @(
+    '/Create',
+    '/TN', $TaskName,
+    '/TR', $tr,
+    '/SC', 'MINUTE',
+    '/MO', "$TickMinutes",
+    '/RU', 'SYSTEM',
+    '/RL', 'HIGHEST',
+    '/F'
+)
+
+$createOut = & schtasks.exe @createArgs 2>&1
+$createOut | ForEach-Object { Write-Host "    $_" }
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "schtasks /Create failed (exit $LASTEXITCODE). Trying PowerShell Register-ScheduledTask..."
+
+    $arg = '-- "' + ($pollScript -replace '"', '\"') + '"'
+    $action = New-ScheduledTaskAction -Execute $PhpExe -Argument $arg -WorkingDirectory $SiteRoot
+    # Valid duration (not TimeSpan.MaxValue — that yields 0x80041318)
+    $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) `
+        -RepetitionInterval (New-TimeSpan -Minutes $TickMinutes) `
+        -RepetitionDuration (New-TimeSpan -Days 3650)
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    # Avoid power/idle/network conditions that produce 0x800710E0 on servers/VMs
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
+        -MultipleInstances IgnoreNew `
+        -Compatibility Win8
+    # Explicitly clear restrictive conditions when the API allows
+    try { $settings.DisallowStartIfOnBatteries = $false } catch { }
+    try { $settings.StopIfGoingOnBatteries = $false } catch { }
+    try { $settings.RunOnlyIfIdle = $false } catch { }
+    try { $settings.IdleSettings.StopOnIdleEnd = $false } catch { }
+    try { $settings.RunOnlyIfNetworkAvailable = $false } catch { }
+    try { $settings.DisallowDemandStart = $false } catch { }
+    try { $settings.Enabled = $true } catch { }
+
+    Register-ScheduledTask -TaskName $TaskName `
+        -Action $action `
+        -Trigger $trigger `
+        -Principal $principal `
+        -Settings $settings `
+        -Description 'ColdAisle SNMP poll worker (scripts/poll_snmp.php). Policy in ColdAisle Settings.' `
+        -Force | Out-Null
+}
+
+# Ensure enabled (disabled tasks often return 0x800710E0)
+try { Enable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null } catch {
+    & schtasks.exe /Change /TN $TaskName /ENABLE | Out-Null
+}
 
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if (-not $task) {
-    throw "Task '$TaskName' was not created. Try: schtasks /Create (see script comments) or re-run with -SkipHealthCheck."
+    throw "Task '$TaskName' was not created."
+}
+
+Write-Host "    Task State: $($task.State)" -ForegroundColor Cyan
+
+# Demand-start once so Last Run Result is not left stale
+Write-Host "==> Starting task once (demand start)..." -ForegroundColor Cyan
+try {
+    Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    Start-Sleep -Seconds 3
+    $info = Get-ScheduledTaskInfo -TaskName $TaskName
+    $code = $info.LastTaskResult
+    $hex = ('0x{0:X8}' -f [uint32]$code)
+    Write-Host "    LastTaskResult: $code ($hex)" -ForegroundColor $(if ($code -eq 0 -or $code -eq 267009) { 'Green' } else { 'Yellow' })
+    if ($code -eq 0x800710E0 -or $code -eq -2147020576) {
+        Write-Warning @"
+Last result is still 0x800710E0 (request refused). Common fixes:
+  1. Task Scheduler -> task Properties -> Conditions: uncheck ALL power/idle/network boxes
+  2. General tab: Run whether user is logged on or not; Run with highest privileges; user SYSTEM
+  3. End any stuck instance; kill hung php.exe; delete storage\tmp\snmp_poll.lock
+  4. Re-run this script with -SkipHealthCheck
+"@
+    }
+} catch {
+    Write-Warning "Start-ScheduledTask: $($_.Exception.Message)"
 }
 
 Write-Host ""
@@ -213,13 +288,11 @@ Write-Host "Next:" -ForegroundColor Cyan
 Write-Host "  1. ColdAisle > Settings > SNMP schedule > Enable + Save"
 Write-Host "  2. Each PDU: Scheduled poll ON (site template + IP)"
 Write-Host "  3. Wait 1-2 minutes; Settings should show Active"
+Write-Host "  4. If still refused: open task Properties > Conditions and clear power/idle checks"
 Write-Host ""
-Write-Host "Verify:"
-Write-Host "  Get-ScheduledTask -TaskName '$TaskName'"
-Write-Host "  Get-ScheduledTaskInfo -TaskName '$TaskName'"
-Write-Host ""
-Write-Host "Manual full poll (may be slow if devices are unreachable):"
-Write-Host "  & '$PhpExe' -- '$pollScript'"
+Write-Host "Logs on server:"
+Write-Host "  $SiteRoot\storage\logs\snmp_poll_cli.log"
+Write-Host "  $SiteRoot\storage\logs\snmp_scheduler_heartbeat.txt"
 Write-Host ""
 Write-Host "Remove later:"
 Write-Host "  .\Register-ColdAisle-SnmpPollTask.ps1 -Unregister"
