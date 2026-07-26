@@ -1,18 +1,24 @@
 @echo off
 setlocal EnableExtensions
 
-REM ColdAisle SNMP poll launcher for Task Scheduler + manual CLI.
-REM Must silence Net-SNMP BEFORE php.exe starts (snmp.dll loads at process init).
+REM ColdAisle SNMP poll launcher (Task Scheduler + manual CLI).
+REM Net-SNMP on Windows PHP prints "Cannot find module (IP-MIB)" when the
+REM extension loads. Those messages are harmless for numeric-OID polling but
+REM flood the console and can confuse Task Scheduler / PowerShell.
+REM
+REM This launcher:
+REM   1) Points Net-SNMP at a local empty mib dir + snmp.conf
+REM   2) Runs php with snmp.mib_directory set
+REM   3) Sends Net-SNMP stderr noise to storage\logs\snmp_mib_noise.log
+REM      (stdout stays visible: health=ok, Success/Failed counts, etc.)
 REM
 REM   run_poll_snmp.cmd
 REM   run_poll_snmp.cmd --health
 
-REM --- Net-SNMP: do not load default MIB set ---------------------------------
-set "MIBS=none"
+REM Clear default MIB load list (empty = do not request IP-MIB etc. by name)
+set "MIBS="
 set "MIBDIRS="
-set "SNMP_PERSISTENT_DIR="
 
-REM Site root = parent of scripts\
 set "SITE_ROOT=%~dp0.."
 for %%I in ("%SITE_ROOT%") do set "SITE_ROOT=%%~fI"
 
@@ -22,27 +28,22 @@ if not exist "%POLL_PHP%" (
   exit /b 1
 )
 
-REM Config + empty mib dir for Net-SNMP / PHP snmp.mib_directory
 set "SNMP_HOME=%SITE_ROOT%\storage\snmp"
 set "MIB_DIR=%SNMP_HOME%\mibs"
 set "SNMP_CONF=%SNMP_HOME%\snmp.conf"
 if not exist "%SNMP_HOME%" mkdir "%SNMP_HOME%" >nul 2>&1
 if not exist "%MIB_DIR%" mkdir "%MIB_DIR%" >nul 2>&1
+if not exist "C:\usr\share\snmp\mibs" mkdir "C:\usr\share\snmp\mibs" >nul 2>&1
 
-REM Ensure snmp.conf exists with "mibs none"
 if not exist "%SNMP_CONF%" (
-  >"%SNMP_CONF%" echo mibs none
+  >"%SNMP_CONF%" echo mibdirs %MIB_DIR:\=/%
 )
 
-REM Net-SNMP reads snmp.conf from SNMPCONFPATH (directory, not file)
 set "SNMPCONFPATH=%SNMP_HOME%"
 set "MIBDIRS=%MIB_DIR%"
 
-REM Forward-slash path for Net-SNMP / PHP (avoids backslash escape issues)
 set "MIB_DIR_UNIX=%MIB_DIR:\=/%"
-set "SNMP_HOME_UNIX=%SNMP_HOME:\=/%"
 
-REM Find php.exe
 set "PHP_EXE="
 if exist "C:\PHP\php.exe" set "PHP_EXE=C:\PHP\php.exe"
 if not defined PHP_EXE if exist "C:\php\php.exe" set "PHP_EXE=C:\php\php.exe"
@@ -57,7 +58,7 @@ if not defined PHP_EXE (
 )
 :have_php
 if not defined PHP_EXE (
-  echo ERROR: php.exe not found. Install PHP or edit run_poll_snmp.cmd
+  echo ERROR: php.exe not found.
   exit /b 1
 )
 
@@ -67,13 +68,12 @@ set "LOG_DIR=%SITE_ROOT%\storage\logs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
 set "MIB_NOISE=%LOG_DIR%\snmp_mib_noise.log"
 
-REM php.ini override at process start + drop Net-SNMP stderr noise (MIB not found).
-REM stdout is preserved so Task Scheduler / health checks still see results.
-"%PHP_EXE%" ^
-  -d max_execution_time=240 ^
-  -d default_socket_timeout=3 ^
-  -d snmp.mib_directory="%MIB_DIR_UNIX%" ^
-  -- "%POLL_PHP%" %* 2>>"%MIB_NOISE%"
+REM Timestamp separator in noise log (optional, ignore errors)
+>>"%MIB_NOISE%" echo ----- %DATE% %TIME% -----
+
+REM IMPORTANT: stderr (2) goes to the noise log so PowerShell/console stay clean.
+REM stdout (1) is not redirected so you still see health=ok / Success: N
+"%PHP_EXE%" -d max_execution_time=240 -d default_socket_timeout=3 -d snmp.mib_directory="%MIB_DIR_UNIX%" -- "%POLL_PHP%" %* 2>>"%MIB_NOISE%"
 
 set "EC=%ERRORLEVEL%"
 endlocal & exit /b %EC%
