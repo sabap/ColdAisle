@@ -493,30 +493,110 @@ class UpdateService
         return $work;
     }
 
+    /**
+     * Full-app recovery zip under storage/backups/backup_YYYYMMDD_HHMMSS_vX.Y.Z.zip
+     * Always produces a real .zip (ZipArchive, or PowerShell Compress-Archive on Windows).
+     * Called at the start of applyUpdate(); also available from Settings for a dry-run test.
+     */
     public static function createBackup(): string
     {
         $dir = App::ROOT . '/storage/backups';
-        if (!is_dir($dir) && !mkdir($dir, 0755, true) && !is_dir($dir)) {
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
             throw new RuntimeException('Cannot create storage/backups for pre-update backup.');
         }
+        $dirReal = realpath($dir);
+        if ($dirReal === false) {
+            throw new RuntimeException('storage/backups is not readable.');
+        }
+
         $name = 'backup_' . date('Ymd_His') . '_v' . self::installedVersion() . '.zip';
-        $path = $dir . DIRECTORY_SEPARATOR . $name;
+        $path = $dirReal . DIRECTORY_SEPARATOR . $name;
 
-        if (!class_exists('ZipArchive')) {
-            // Fallback: copy tree to a folder (no zip)
-            $folder = $dir . DIRECTORY_SEPARATOR . pathinfo($name, PATHINFO_FILENAME);
-            self::copyTreeLimited(App::ROOT, $folder, true);
-            return $folder;
-        }
-
-        $zip = new ZipArchive();
-        if ($zip->open($path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
-            throw new RuntimeException('Could not create backup zip.');
-        }
         $root = realpath(App::ROOT);
         if ($root === false) {
             throw new RuntimeException('Invalid application root.');
         }
+
+        $filesAdded = 0;
+        if (class_exists('ZipArchive')) {
+            $filesAdded = self::zipAppTreeZipArchive($root, $path);
+        } elseif (PHP_OS_FAMILY === 'Windows') {
+            $filesAdded = self::zipAppTreePowerShell($root, $path);
+        } else {
+            throw new RuntimeException(
+                'PHP zip extension is required for pre-update backups (ZipArchive not loaded).'
+            );
+        }
+
+        if (!is_file($path)) {
+            throw new RuntimeException('Pre-update backup zip was not created at ' . $path);
+        }
+        $size = (int)@filesize($path);
+        if ($size < 200) {
+            @unlink($path);
+            throw new RuntimeException(
+                'Pre-update backup zip is empty or too small (' . $size . ' bytes). '
+                . 'Check PHP zip extension and Modify permission on storage/backups.'
+            );
+        }
+        if ($filesAdded < 5) {
+            // zip may still be valid; warn in log but keep if size is reasonable
+            App::log(
+                'Pre-update backup has only ' . $filesAdded . ' file entries: ' . basename($path),
+                'warning'
+            );
+        }
+
+        App::log(
+            'Pre-update backup created: ' . basename($path)
+            . ' (' . self::formatBytes($size) . ', ~' . $filesAdded . ' files)',
+            'info'
+        );
+
+        return $path;
+    }
+
+    /** Paths excluded from pre-update recovery zips (runtime / recursive). */
+    private static function shouldSkipBackupPath(string $relNorm): bool
+    {
+        $relNorm = ltrim(str_replace('\\', '/', $relNorm), '/');
+        if ($relNorm === '' || $relNorm === '.') {
+            return true;
+        }
+        // Never nest previous backups / work dirs
+        if ($relNorm === 'storage/backups' || str_starts_with($relNorm, 'storage/backups/')) {
+            return true;
+        }
+        if ($relNorm === 'storage/tmp' || str_starts_with($relNorm, 'storage/tmp/')) {
+            return true;
+        }
+        if ($relNorm === 'storage/logs' || str_starts_with($relNorm, 'storage/logs/')) {
+            return true;
+        }
+        if ($relNorm === '.git' || str_starts_with($relNorm, '.git/')) {
+            return true;
+        }
+        // Deferred update leftovers
+        if (str_ends_with($relNorm, self::PENDING_SUFFIX)) {
+            return true;
+        }
+        return false;
+    }
+
+    /** @return int files added */
+    private static function zipAppTreeZipArchive(string $root, string $zipPath): int
+    {
+        if (is_file($zipPath)) {
+            @unlink($zipPath);
+        }
+        $zip = new ZipArchive();
+        $open = $zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+        if ($open !== true) {
+            throw new RuntimeException('Could not create backup zip (ZipArchive open failed: ' . (string)$open . ').');
+        }
+
+        $filesAdded = 0;
+        $rootLen = strlen($root);
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
             RecursiveIteratorIterator::SELF_FIRST
@@ -524,20 +604,109 @@ class UpdateService
         foreach ($iterator as $file) {
             /** @var SplFileInfo $file */
             $full = $file->getPathname();
-            $rel = substr($full, strlen($root) + 1);
-            $relNorm = str_replace('\\', '/', $rel);
-            // Skip previous backups and huge upload blobs in backup of backup
-            if (str_starts_with($relNorm, 'storage/backups/')) {
+            // realpath can fail for some reparse points; keep raw path
+            $rel = substr($full, $rootLen + 1);
+            if ($rel === false || $rel === '') {
                 continue;
             }
+            $relNorm = str_replace('\\', '/', $rel);
+            if (self::shouldSkipBackupPath($relNorm)) {
+                continue;
+            }
+
             if ($file->isDir()) {
                 $zip->addEmptyDir($relNorm);
-            } else {
-                $zip->addFile($full, $relNorm);
+            } elseif ($file->isFile() && $file->isReadable()) {
+                // addFile streams at close; skip unreadable/locked files rather than abort.
+                if ($zip->addFile($full, $relNorm)) {
+                    $filesAdded++;
+                }
             }
         }
-        $zip->close();
-        return $path;
+        if (!$zip->close()) {
+            @unlink($zipPath);
+            throw new RuntimeException('Could not finalize backup zip (ZipArchive::close failed).');
+        }
+        return $filesAdded;
+    }
+
+    /**
+     * Stage filtered tree then Compress-Archive (when ZipArchive unavailable).
+     * @return int approximate file count
+     */
+    private static function zipAppTreePowerShell(string $root, string $zipPath): int
+    {
+        $staging = self::makeWorkDir('prebak');
+        try {
+            $filesAdded = 0;
+            $rootLen = strlen($root);
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::SELF_FIRST
+            );
+            foreach ($iterator as $file) {
+                /** @var SplFileInfo $file */
+                $full = $file->getPathname();
+                $rel = substr($full, $rootLen + 1);
+                if ($rel === false || $rel === '') {
+                    continue;
+                }
+                $relNorm = str_replace('\\', '/', $rel);
+                if (self::shouldSkipBackupPath($relNorm)) {
+                    continue;
+                }
+                $target = $staging . DIRECTORY_SEPARATOR . $rel;
+                if ($file->isDir()) {
+                    if (!is_dir($target) && !@mkdir($target, 0755, true) && !is_dir($target)) {
+                        throw new RuntimeException('Cannot stage backup dir: ' . $relNorm);
+                    }
+                } elseif ($file->isFile()) {
+                    $parent = dirname($target);
+                    if (!is_dir($parent) && !@mkdir($parent, 0755, true) && !is_dir($parent)) {
+                        throw new RuntimeException('Cannot stage backup parent for: ' . $relNorm);
+                    }
+                    if (@copy($full, $target)) {
+                        $filesAdded++;
+                    }
+                }
+            }
+
+            if (is_file($zipPath)) {
+                @unlink($zipPath);
+            }
+            $cmd = 'powershell.exe -NoProfile -NonInteractive -Command '
+                . escapeshellarg(
+                    'Compress-Archive -Path ' . escapeshellarg($staging . '\\*')
+                    . ' -DestinationPath ' . escapeshellarg($zipPath) . ' -Force'
+                );
+            $out = [];
+            $code = 1;
+            exec($cmd, $out, $code);
+            if ($code !== 0 || !is_file($zipPath)) {
+                throw new RuntimeException(
+                    'PowerShell Compress-Archive failed for pre-update backup'
+                    . ($out ? (': ' . implode(' ', $out)) : '.')
+                    . ' Enable PHP extension=zip for more reliable backups.'
+                );
+            }
+            return $filesAdded;
+        } finally {
+            self::rrmdir($staging);
+        }
+    }
+
+    private static function formatBytes(int $bytes): string
+    {
+        if (class_exists('StorageHousekeepingService')) {
+            return StorageHousekeepingService::formatBytes($bytes);
+        }
+        if ($bytes < 1024) {
+            return $bytes . ' B';
+        }
+        if ($bytes < 1024 * 1024) {
+            return round($bytes / 1024, 1) . ' KB';
+        }
+        return round($bytes / (1024 * 1024), 2) . ' MB';
     }
 
     /** @param array<string,mixed> $result */
