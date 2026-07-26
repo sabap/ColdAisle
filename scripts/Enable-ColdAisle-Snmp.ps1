@@ -213,15 +213,17 @@ Write-Host @"
 
 ================================================================
   Done. Next in ColdAisle:
-    1. Hard-refresh the SNMP page (Ctrl+F5) — the warning should clear.
+    1. Hard-refresh the SNMP page (Ctrl+F5) - the warning should clear.
        If it remains: recycle the app pool again or run iisreset.
     2. Configure SNMPv3 profiles / Discover OIDs / Poll now.
-    3. For scheduled polling, Task Scheduler:
-         Program:  $phpExe
-         Args:     <site>\scripts\poll_snmp.php
+    3. Scheduled polling: Settings -> SNMP schedule -> download
+       Register-ColdAisle-SnmpPollTask.ps1 (uses scripts\run_poll_snmp.cmd).
+       Do NOT point Task Scheduler at php.exe poll_snmp.php directly
+       (Net-SNMP MIB path spam can hang the worker on Windows).
 
-  Note: "Created directory: c:/usr" messages from php.exe are normal
-  Net-SNMP noise on Windows and can be ignored.
+  Optional php.ini: snmp.mib_directory = <site>\storage\snmp\mibs
+  (empty local folder). "Cannot find module (IP-MIB)" on CLI is common
+  without that; use run_poll_snmp.cmd for scheduled/CLI polls.
 ================================================================
 
 "@
