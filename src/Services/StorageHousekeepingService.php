@@ -107,9 +107,11 @@ class StorageHousekeepingService
         }
 
         $deleted = [];
+        $failed = [];
         $freed = 0;
         $stats = [
             'backups_deleted' => 0,
+            'backups_failed' => 0,
             'tmp_deleted' => 0,
             'logs_rotated' => 0,
             'logs_deleted' => 0,
@@ -117,8 +119,10 @@ class StorageHousekeepingService
 
         $r1 = self::pruneBackups($cfg['backup_keep_count'], $cfg['backup_max_age_days']);
         $deleted = array_merge($deleted, $r1['deleted']);
+        $failed = array_merge($failed, $r1['failed'] ?? []);
         $freed += $r1['freed_bytes'];
         $stats['backups_deleted'] = count($r1['deleted']);
+        $stats['backups_failed'] = count($r1['failed'] ?? []);
         $kept = $r1['kept'];
 
         $r2 = self::pruneTmp($cfg['tmp_max_age_hours']);
@@ -133,13 +137,19 @@ class StorageHousekeepingService
         $stats['logs_deleted'] = count($r3['deleted']);
 
         $msg = sprintf(
-            'Deleted %d item(s), freed %s (backups=%d tmp=%d log_ops=%d).',
+            'Deleted %d item(s), freed %s (backups=%d retention_slots=%d tmp=%d log_ops=%d).',
             count($deleted),
             self::formatBytes($freed),
             $stats['backups_deleted'],
+            $kept,
             $stats['tmp_deleted'],
             $stats['logs_rotated'] + $stats['logs_deleted']
         );
+        if ($failed) {
+            $msg .= ' Failed to delete ' . count($failed) . ' item(s) (permission/lock?): '
+                . implode(', ', array_slice($failed, 0, 5))
+                . (count($failed) > 5 ? '…' : '');
+        }
 
         try {
             SettingsService::set(self::KEY_LAST_RUN, date('Y-m-d H:i:s'), self::CAT);
@@ -155,6 +165,7 @@ class StorageHousekeepingService
         return [
             'ok' => true,
             'deleted' => $deleted,
+            'failed' => $failed,
             'kept' => $kept,
             'freed_bytes' => $freed,
             'message' => $msg,
@@ -297,27 +308,38 @@ class StorageHousekeepingService
     }
 
     /**
-     * @return array{deleted:list<string>,freed_bytes:int,kept:int}
+     * Retention rules (per kind: pre_update / site_export / other):
+     * - Always keep the newest file of each kind
+     * - Keep the newest $keepCount items by mtime
+     * - Beyond keepCount: delete immediately (count rule wins over "recent" protection)
+     * - Within keepCount: delete only if older than $maxAgeDays (max age; 0 = off)
+     * - Grace: skip only files younger than 30s (likely still being written)
+     * Also removes abandoned *_staging dirs and legacy folder backups.
+     *
+     * @return array{deleted:list<string>,freed_bytes:int,kept:int,failed:list<string>}
      */
     private static function pruneBackups(int $keepCount, int $maxAgeDays): array
     {
         $dir = self::backupsDir();
         $deleted = [];
+        $failed = [];
         $freed = 0;
         $kept = 0;
         if (!is_dir($dir)) {
-            return ['deleted' => $deleted, 'freed_bytes' => 0, 'kept' => $kept];
+            return ['deleted' => $deleted, 'freed_bytes' => 0, 'kept' => $kept, 'failed' => $failed];
         }
 
+        $dirReal = realpath($dir) ?: $dir;
         $now = time();
-        $minAgeProtect = 3600; // never touch files newer than 1 hour
+        // Only block deletes of files that may still be mid-write (not a 1-hour blanket).
+        $writeGraceSec = 30;
 
         // Remove abandoned staging dirs older than 6 hours
-        foreach (scandir($dir) ?: [] as $name) {
+        foreach (scandir($dirReal) ?: [] as $name) {
             if ($name === '.' || $name === '..') {
                 continue;
             }
-            $path = $dir . DIRECTORY_SEPARATOR . $name;
+            $path = $dirReal . DIRECTORY_SEPARATOR . $name;
             if (!is_dir($path)) {
                 continue;
             }
@@ -330,73 +352,122 @@ class StorageHousekeepingService
                 if (self::rrmdir($path)) {
                     $deleted[] = $name . '/';
                     $freed += $sz;
+                } else {
+                    $failed[] = $name . '/';
                 }
             }
         }
 
-        $files = [];
-        foreach (scandir($dir) ?: [] as $name) {
-            if ($name === '.' || $name === '..') {
+        // Collect zip files and legacy folder backups (backup_YYYYMMDD_HHMMSS*)
+        $items = [];
+        foreach (scandir($dirReal) ?: [] as $name) {
+            if ($name === '.' || $name === '..' || $name === '.gitkeep') {
                 continue;
             }
-            $path = $dir . DIRECTORY_SEPARATOR . $name;
+            $path = $dirReal . DIRECTORY_SEPARATOR . $name;
+            $kind = self::classifyBackupName($name);
+            if (is_dir($path)) {
+                // Legacy folder-style pre-update backups only
+                if (!preg_match('/^backup_\d{8}_\d{6}/i', $name)) {
+                    continue;
+                }
+                $kind = 'pre_update';
+                $items[] = [
+                    'name' => $name,
+                    'path' => $path,
+                    'mtime' => (int)@filemtime($path),
+                    'bytes' => self::dirSize($path),
+                    'kind' => $kind,
+                    'is_dir' => true,
+                ];
+                continue;
+            }
             if (!is_file($path)) {
                 continue;
             }
-            $kind = self::classifyBackupName($name);
             if (!in_array($kind, ['pre_update', 'site_export', 'other'], true)) {
                 continue;
             }
-            if (!preg_match('/\.(zip|ZIP)$/', $name) && $kind === 'other') {
+            if ($kind === 'other' && !preg_match('/\.(zip|ZIP)$/', $name)) {
                 continue;
             }
-            $files[] = [
+            if (!preg_match('/\.(zip|ZIP)$/', $name) && $kind !== 'other') {
+                // pre_update / site_export should be zips; allow anyway if named correctly
+            }
+            $items[] = [
                 'name' => $name,
                 'path' => $path,
                 'mtime' => (int)@filemtime($path),
                 'bytes' => (int)@filesize($path),
                 'kind' => $kind,
+                'is_dir' => false,
             ];
         }
 
         // Group by kind; sort newest first
         $byKind = ['pre_update' => [], 'site_export' => [], 'other' => []];
-        foreach ($files as $f) {
+        foreach ($items as $f) {
+            if (!isset($byKind[$f['kind']])) {
+                $byKind[$f['kind']] = [];
+            }
             $byKind[$f['kind']][] = $f;
         }
         foreach ($byKind as $k => &$list) {
-            usort($list, static fn($a, $b) => $b['mtime'] <=> $a['mtime']);
+            usort($list, static function ($a, $b) {
+                $cmp = $b['mtime'] <=> $a['mtime'];
+                if ($cmp !== 0) {
+                    return $cmp;
+                }
+                // Stable tie-break by name so count pruning is deterministic
+                return strcmp((string)$b['name'], (string)$a['name']);
+            });
         }
         unset($list);
 
         foreach ($byKind as $kind => $list) {
             $kept += min($keepCount, count($list));
             foreach ($list as $i => $f) {
-                $age = $now - $f['mtime'];
-                if ($age < $minAgeProtect) {
-                    continue; // active write protection
+                // Always keep the single newest of this kind
+                if ($i === 0) {
+                    continue;
                 }
+
+                $mtime = (int)$f['mtime'];
+                $age = $mtime > 0 ? ($now - $mtime) : PHP_INT_MAX;
                 $overCount = $i >= $keepCount;
                 $overAge = $maxAgeDays > 0 && $age > ($maxAgeDays * 86400);
-                // Safety: never delete index 0 (newest) via age alone if it's the only one
-                // — age can delete newest only if keep_count allows and there is a newer... 
-                // Newest is index 0; overCount is false for i < keepCount.
-                // Age-based delete of newest (i=0) is allowed only if keep_count is 0 — we force keep>=1
-                // so newest of each kind always kept by count rule unless overAge AND i >= 1?
-                // Spec: max age applies to older files; always keep newest of each kind.
-                if ($i === 0) {
-                    continue; // always keep newest of each kind
+
+                if (!$overCount && !$overAge) {
+                    continue; // within keep window and not over age
                 }
-                if ($overCount || $overAge) {
-                    if (@unlink($f['path'])) {
-                        $deleted[] = $f['name'];
-                        $freed += $f['bytes'];
-                    }
+
+                // Count rule always wins (fixes "55 recent backups never deleted").
+                // Age rule: still respect a short write-grace so we don't yank an in-progress zip.
+                if ($age >= 0 && $age < $writeGraceSec) {
+                    continue;
+                }
+
+                $ok = false;
+                if (!empty($f['is_dir'])) {
+                    $ok = self::rrmdir($f['path']);
+                } else {
+                    $ok = @unlink($f['path']);
+                }
+                if ($ok) {
+                    $deleted[] = $f['name'] . (!empty($f['is_dir']) ? '/' : '');
+                    $freed += (int)$f['bytes'];
+                } else {
+                    $failed[] = $f['name'];
                 }
             }
         }
 
-        return ['deleted' => $deleted, 'freed_bytes' => $freed, 'kept' => $kept];
+        return [
+            'deleted' => $deleted,
+            'freed_bytes' => $freed,
+            'kept' => $kept,
+            'failed' => $failed,
+        ];
     }
 
     /**
