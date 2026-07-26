@@ -16,6 +16,9 @@ if (PHP_SAPI !== 'cli') {
     exit(1);
 }
 
+$argvList = $argv ?? [];
+$healthOnly = in_array('--health', $argvList, true) || in_array('-h', $argvList, true);
+
 require_once dirname(__DIR__) . '/src/App.php';
 App::boot();
 
@@ -24,9 +27,29 @@ if (!App::isInstalled()) {
     exit(1);
 }
 
+// Fast path for task registration smoke tests (no SNMP GETs)
+if ($healthOnly) {
+    try {
+        Database::fetchValue('SELECT 1');
+        $en = class_exists('SnmpSchedulerService') && SnmpSchedulerService::isEnabled() ? 'on' : 'off';
+        echo "health=ok scheduler={$en}\n";
+        exit(0);
+    } catch (Throwable $e) {
+        fwrite(STDERR, 'health=fail ' . $e->getMessage() . "\n");
+        exit(1);
+    }
+}
+
 require_once dirname(__DIR__) . '/src/Services/SnmpPoller.php';
 if (is_file(dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php')) {
     require_once dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php';
+}
+
+// Avoid multi-hour hangs when many PDUs are unreachable (CLI max)
+@ini_set('max_execution_time', '900');
+@ini_set('default_socket_timeout', '5');
+if (function_exists('snmp_set_valueretrieval')) {
+    // keep defaults; timeouts are SNMP-session specific below when available
 }
 
 echo '[' . date('c') . "] Starting SNMP poll...\n";

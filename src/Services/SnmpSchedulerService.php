@@ -152,7 +152,9 @@ class SnmpSchedulerService
         if ($raw === false) {
             throw new RuntimeException('Could not read registration script.');
         }
-        $siteRoot = str_replace('/', '\\', App::ROOT);
+        $root = realpath(App::ROOT) ?: App::ROOT;
+        // App::ROOT is src/.. — normalize to real site path without \src\..
+        $siteRoot = str_replace('/', '\\', $root);
         $phpGuess = 'C:\\PHP\\php.exe';
         foreach (['C:\\PHP\\php.exe', 'C:\\php\\php.exe'] as $c) {
             if (is_file($c)) {
