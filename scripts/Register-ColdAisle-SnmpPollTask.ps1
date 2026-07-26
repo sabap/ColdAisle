@@ -100,10 +100,18 @@ if (-not (Test-Path -LiteralPath $pollScript)) {
 if (-not (Test-Path -LiteralPath $runCmd)) {
     throw "run_poll_snmp.cmd not found under: $SiteRoot\scripts\ (deploy ColdAisle 0.2.55+)"
 }
-# Local empty MIB dir so Net-SNMP does not scan c:/usr/share/snmp/mibs
+# Local empty MIB dir + Net-SNMP conf (mibs none). Also pre-create the Unix-style
+# path many Windows php_snmp builds hard-code, so they do not thrash on missing dirs.
 $mibDir = Join-Path $SiteRoot 'storage\snmp\mibs'
-if (-not (Test-Path -LiteralPath $mibDir)) {
-    New-Item -ItemType Directory -Path $mibDir -Force | Out-Null
+$snmpHome = Join-Path $SiteRoot 'storage\snmp'
+$snmpConf = Join-Path $snmpHome 'snmp.conf'
+foreach ($d in @($snmpHome, $mibDir, 'C:\usr\share\snmp\mibs', 'C:\usr\share\snmp')) {
+    if (-not (Test-Path -LiteralPath $d)) {
+        New-Item -ItemType Directory -Path $d -Force | Out-Null
+    }
+}
+if (-not (Test-Path -LiteralPath $snmpConf)) {
+    Set-Content -Path $snmpConf -Value "mibs none`r`n" -Encoding ASCII
 }
 
 if ($PhpExe -match '^__COLDAISLE_' -or -not (Test-Path -LiteralPath $PhpExe)) {
