@@ -2,7 +2,11 @@
 /**
  * ColdAisle SNMP poll worker — run via Windows Task Scheduler
  *
- * Example (every 5 minutes):
+ * Register the task with scripts/Register-ColdAisle-SnmpPollTask.ps1
+ * (download from Settings → SNMP schedule). Prefer a 1-minute tick;
+ * enable/disable and poll interval are controlled in the web UI.
+ *
+ * Example:
  *   php C:\inetpub\wwwroot\ColdAisle\scripts\poll_snmp.php
  */
 declare(strict_types=1);
@@ -21,10 +25,20 @@ if (!App::isInstalled()) {
 }
 
 require_once dirname(__DIR__) . '/src/Services/SnmpPoller.php';
+if (is_file(dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php')) {
+    require_once dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php';
+}
 
 echo '[' . date('c') . "] Starting SNMP poll...\n";
 try {
-    // Flush digests whose hold window elapsed before this cycle (e.g. last run queued)
+    if (class_exists('SnmpSchedulerService') && !SnmpSchedulerService::isEnabled()) {
+        $msg = 'Scheduler disabled in Settings (no work).';
+        echo $msg . "\n";
+        SnmpSchedulerService::recordRun(0, 0, $msg);
+        exit(0);
+    }
+
+    // Flush digests whose hold window elapsed before this cycle
     if (class_exists('PowerAlertService')) {
         $pre = PowerAlertService::flushDigestsIfDue(false);
         if (!empty($pre['flushed'])) {
@@ -33,17 +47,42 @@ try {
     }
 
     $result = SnmpPoller::pollAll();
-    echo "Success: {$result['success']}, Failed: {$result['failed']}\n";
+    if (!empty($result['disabled'])) {
+        $msg = 'Scheduler disabled in Settings (no work).';
+        echo $msg . "\n";
+        if (class_exists('SnmpSchedulerService')) {
+            SnmpSchedulerService::recordRun(0, 0, $msg);
+        }
+        exit(0);
+    }
 
-    // After polling, flush if hold already elapsed (long cycles); otherwise next run will
+    $ok = (int)($result['success'] ?? 0);
+    $fail = (int)($result['failed'] ?? 0);
+    $skip = (int)($result['skipped'] ?? 0);
+    echo "Success: {$ok}, Failed: {$fail}, Skipped (not due): {$skip}\n";
+
+    if (class_exists('SnmpSchedulerService')) {
+        SnmpSchedulerService::recordRun(
+            $ok,
+            $fail,
+            "ok={$ok} fail={$fail} skip={$skip}"
+        );
+    }
+
     if (class_exists('PowerAlertService')) {
         $post = PowerAlertService::flushDigestsIfDue(false);
         if (!empty($post['flushed'])) {
             echo "Power digest (post): {$post['pdu_count']} PDU(s), {$post['alert_count']} condition(s)\n";
         }
     }
-    exit($result['failed'] > 0 && $result['success'] === 0 ? 2 : 0);
+    exit($fail > 0 && $ok === 0 ? 2 : 0);
 } catch (Throwable $e) {
     fwrite(STDERR, 'Error: ' . $e->getMessage() . "\n");
+    if (class_exists('SnmpSchedulerService')) {
+        try {
+            SnmpSchedulerService::recordRun(0, 1, 'error: ' . substr($e->getMessage(), 0, 200));
+        } catch (Throwable $ignored) {
+        }
+    }
     exit(1);
 }

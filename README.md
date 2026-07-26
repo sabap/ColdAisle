@@ -164,14 +164,22 @@ Always available after install. Managed under **Users**.
 
 ## SNMP poll schedule (Task Scheduler)
 
+ColdAisle **does not** create or edit Windows tasks from the web UI.
+
+1. **Settings → SNMP schedule** — enable polling and set the interval (app policy).
+2. Download **Register-ColdAisle-SnmpPollTask.ps1** from that page and run it **elevated** on the app server (one-time).
+3. Prefer a **1-minute** OS tick; the worker skips targets that are not due yet.
+4. Per PDU/device: turn **Scheduled poll** on (needs site OID template + IP).
+
+Manual equivalent:
+
 ```text
-Program:  C:\php\php.exe
+Program:   C:\PHP\php.exe
 Arguments: C:\inetpub\wwwroot\ColdAisle\scripts\poll_snmp.php
-Trigger:  Every 5 minutes
+Trigger:   Every 1 minute (recommended)
 ```
 
-Run whether user is logged on; use an account that can read `config\config.php`.
-
+Run whether user is logged on (SYSTEM is fine if it can read `config\config.php` and reach SQL).
 ## Directory layout
 
 ```text

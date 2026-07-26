@@ -11,6 +11,28 @@ $user = App::requirePermission('manage_settings');
 $configPath = App::configPath();
 $config = App::config();
 
+// Authenticated download of Windows task registration script (no OS elevation from web)
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET'
+    && ($_GET['download'] ?? '') === 'snmp_poll_task'
+) {
+    try {
+        if (!class_exists('SnmpSchedulerService')) {
+            require_once dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php';
+        }
+        $body = SnmpSchedulerService::renderedRegistrationScript();
+        $fname = 'Register-ColdAisle-SnmpPollTask.ps1';
+        header('Content-Type: application/octet-stream');
+        header('Content-Disposition: attachment; filename="' . $fname . '"');
+        header('Content-Length: ' . (string)strlen($body));
+        header('X-Content-Type-Options: nosniff');
+        echo $body;
+        exit;
+    } catch (Throwable $e) {
+        App::flash('error', $e->getMessage());
+        App::redirect('pages/settings.php#snmp-schedule');
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? '')) {
     try {
         $section = $_POST['section'] ?? 'general';
@@ -155,6 +177,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             PowerAlertService::saveSettingsFromPost($_POST);
             App::flash('success', 'Power alert settings saved.');
             App::redirect('pages/settings.php#power-alerts');
+        }
+
+        if ($section === 'snmp_schedule') {
+            if (!class_exists('SnmpSchedulerService')) {
+                require_once dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php';
+            }
+            $saved = SnmpSchedulerService::saveFromPost($_POST);
+            AuditService::log((int)$user['user_id'], $user['username'], 'snmp_scheduler_save', 'system', null, $saved);
+            App::flash(
+                'success',
+                $saved['enabled']
+                    ? ('Scheduled SNMP polling enabled · interval ' . $saved['interval_sec'] . 's. Register the Windows task if status is not Active.')
+                    : 'Scheduled SNMP polling disabled in ColdAisle (Windows task may still tick; worker will no-op).'
+            );
+            App::redirect('pages/settings.php#snmp-schedule');
         }
 
         if ($section === 'test_mail') {
@@ -347,10 +384,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         }
 
         // Write config.php (for general / auth / updates / security / mail)
-        // power_alerts uses settings table only (redirects earlier)
+        // power_alerts / snmp_schedule use settings table only (redirect earlier or no config.php)
         if (!in_array($section, [
             'update_check', 'update_apply', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
-            'power_alerts',
+            'power_alerts', 'snmp_schedule',
         ], true)) {
             $export = var_export($config, true);
             $php = "<?php\n/** ColdAisle configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
@@ -370,6 +407,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#security';
     } elseif ($secPost === 'export_site_backup') {
         $redirHash = '#backup';
+    } elseif ($secPost === 'snmp_schedule') {
+        $redirHash = '#snmp-schedule';
     } elseif ($secPost === 'ldaps') {
         $redirHash = '#ldaps';
     } elseif ($secPost === 'mail' || $secPost === 'test_mail') {
@@ -401,6 +440,25 @@ $powerAlerts = class_exists('PowerAlertService')
     : [
         'enabled' => false, 'email' => '', 'warn_pct' => 75.0, 'crit_pct' => 90.0,
         'cooldown_min' => 60, 'hold_sec' => 120, 'util' => true, 'load_state' => true, 'ps' => true,
+    ];
+if (!class_exists('SnmpSchedulerService')
+    && is_file(dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php')
+) {
+    require_once dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php';
+}
+$snmpSchedule = class_exists('SnmpSchedulerService')
+    ? SnmpSchedulerService::status()
+    : [
+        'enabled' => false,
+        'interval_sec' => 300,
+        'active' => false,
+        'status' => 'unavailable',
+        'status_label' => 'Unavailable',
+        'status_detail' => 'SnmpSchedulerService not deployed on this host.',
+        'last_run_at' => null,
+        'last_result' => null,
+        'last_ok' => 0,
+        'last_fail' => 0,
     ];
 $updCfg = UpdateService::config();
 $caStatus = UpdateService::caBundleStatus();
@@ -710,6 +768,153 @@ layout_header('Settings', $user, 'settings');
         </div>
     </div>
 </div>
+
+<?php
+$snmpCardActive = !empty($snmpSchedule['active']);
+$snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
+    'active' => 'badge-success',
+    'pending_task', 'stale' => 'badge-warning',
+    default => '',
+};
+?>
+<div class="card settings-feature-card <?= $snmpCardActive ? 'settings-feature-active' : 'settings-feature-inactive' ?>"
+     id="snmp-schedule" data-snmp-active="<?= $snmpCardActive ? '1' : '0' ?>">
+    <div class="card-header flex-between">
+        <h2>SNMP schedule</h2>
+        <span class="badge <?= App::e($snmpBadgeClass) ?>" id="snmpScheduleBadge">
+            <?= App::e((string)$snmpSchedule['status_label']) ?>
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size:.9rem;margin-top:0">
+            Control <strong>whether</strong> scheduled polling runs and <strong>how often</strong> each enrolled
+            PDU/device is polled. ColdAisle never changes Windows Task Scheduler from the browser
+            (that would require elevating the web process). A short OS tick runs
+            <code>scripts/poll_snmp.php</code>; this page sets policy the worker reads.
+        </p>
+        <?php if (!class_exists('SnmpSchedulerService')): ?>
+            <p class="alert alert-error">SnmpSchedulerService is not deployed. Update ColdAisle to enable this section.</p>
+        <?php else: ?>
+        <p class="snmp-schedule-status-detail" style="font-size:.88rem;margin:.25rem 0 1rem">
+            <?= App::e((string)$snmpSchedule['status_detail']) ?>
+        </p>
+        <form method="post" class="form-grid" id="snmpScheduleForm">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="snmp_schedule">
+
+            <div class="form-row full">
+                <label class="snmp-schedule-toggle-label" style="display:flex;align-items:center;gap:.65rem;cursor:pointer">
+                    <input type="checkbox" name="snmp_scheduler_enabled" value="1" id="snmpSchedulerEnabled"
+                        <?= !empty($snmpSchedule['enabled']) ? 'checked' : '' ?>>
+                    <span>Enable scheduled SNMP polling</span>
+                </label>
+            </div>
+
+            <div class="form-row"><label>Default poll interval (seconds)</label>
+                <input class="form-control" type="number" min="60" max="86400" step="30"
+                       name="snmp_scheduler_interval_sec" id="snmpSchedulerInterval"
+                       value="<?= (int)$snmpSchedule['interval_sec'] ?>">
+                <span class="text-muted" style="font-size:.75rem">
+                    Minimum 60. Applies to PDUs/devices with Scheduled poll on.
+                    Classic SNMP targets can override via their own interval.
+                </span>
+            </div>
+            <div class="form-row"><label>Last worker run</label>
+                <input class="form-control" type="text" readonly
+                       value="<?= App::e($snmpSchedule['last_run_at'] ?? '— never —') ?>">
+            </div>
+            <?php if (!empty($snmpSchedule['last_result'])): ?>
+            <div class="form-row full"><label>Last result</label>
+                <input class="form-control" type="text" readonly value="<?= App::e((string)$snmpSchedule['last_result']) ?>">
+            </div>
+            <?php endif; ?>
+
+            <div class="form-row full" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+                <button class="btn btn-primary" type="submit">Save SNMP schedule</button>
+                <a class="btn btn-secondary" href="<?= App::e(App::url('pages/settings.php?download=snmp_poll_task')) ?>">
+                    Download task script (.ps1)
+                </a>
+                <button type="button" class="btn btn-ghost btn-sm" id="snmpShowTaskHelp">Windows task help</button>
+            </div>
+        </form>
+        <?php endif; ?>
+    </div>
+</div>
+
+<div id="snmp_task_modal" class="ldaps-modal" hidden aria-hidden="true">
+    <div class="ldaps-modal-backdrop" data-snmp-task-close></div>
+    <div class="ldaps-modal-panel" role="dialog" aria-modal="true" aria-labelledby="snmp_task_title">
+        <div class="ldaps-modal-head">
+            <h3 id="snmp_task_title">Register Windows SNMP poll task</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-snmp-task-close aria-label="Close">✕</button>
+        </div>
+        <div class="ldaps-modal-body" style="font-size:.9rem">
+            <p style="margin-top:0">
+                Enabling schedule in ColdAisle only sets policy. On the <strong>application server</strong>,
+                an administrator must register a Task Scheduler job that invokes the CLI worker
+                (fixed short tick; intervals stay in Settings).
+            </p>
+            <ol style="padding-left:1.2rem;margin:.5rem 0 1rem">
+                <li>Download <code>Register-ColdAisle-SnmpPollTask.ps1</code> (paths for this site are filled in).</li>
+                <li>Copy it to the server if needed.</li>
+                <li>Open <strong>elevated</strong> PowerShell (Run as administrator).</li>
+                <li>If scripts are blocked: <code>Set-ExecutionPolicy -Scope Process Bypass</code></li>
+                <li>Run: <code>.\Register-ColdAisle-SnmpPollTask.ps1</code></li>
+                <li>Save this form with schedule <strong>enabled</strong>, then wait 1–2 minutes —
+                    status should become <strong>Active</strong>.</li>
+            </ol>
+            <p class="text-muted" style="font-size:.8rem;margin-bottom:0">
+                The web app never elevates or calls <code>schtasks</code>. To remove the task later:
+                <code>.\Register-ColdAisle-SnmpPollTask.ps1 -Unregister</code>
+            </p>
+        </div>
+        <div class="ldaps-modal-foot" style="display:flex;flex-wrap:wrap;gap:.5rem">
+            <a class="btn btn-primary" href="<?= App::e(App::url('pages/settings.php?download=snmp_poll_task')) ?>">
+                Download .ps1
+            </a>
+            <button type="button" class="btn btn-secondary" data-snmp-task-close>Close</button>
+        </div>
+    </div>
+</div>
+<script>
+(function () {
+    var modal = document.getElementById('snmp_task_modal');
+    var en = document.getElementById('snmpSchedulerEnabled');
+    var help = document.getElementById('snmpShowTaskHelp');
+    if (!modal) return;
+    function openModal() {
+        modal.hidden = false;
+        modal.setAttribute('aria-hidden', 'false');
+        document.body.classList.add('modal-open');
+    }
+    function closeModal() {
+        modal.hidden = true;
+        modal.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('modal-open');
+    }
+    modal.querySelectorAll('[data-snmp-task-close]').forEach(function (el) {
+        el.addEventListener('click', closeModal);
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !modal.hidden) closeModal();
+    });
+    if (help) help.addEventListener('click', openModal);
+    if (en) {
+        var wasOn = en.checked;
+        en.addEventListener('change', function () {
+            if (en.checked && !wasOn) {
+                openModal();
+            }
+            wasOn = en.checked;
+            var card = document.getElementById('snmp-schedule');
+            if (card && !en.checked) {
+                card.classList.add('settings-feature-inactive');
+                card.classList.remove('settings-feature-active');
+            }
+        });
+    }
+})();
+</script>
 
 <div class="card" id="power-alerts">
     <div class="card-header flex-between">
