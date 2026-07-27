@@ -75,6 +75,47 @@ Historical note commits:
 
 ---
 
+### 3. Site backup to SMB share
+
+| Field | Value |
+|-------|--------|
+| **Status** | open |
+| **Requested** | 2026-07-27 (user) |
+| **Source** | `BACKLOG.md` |
+| **Priority** | nice-to-have (ops / DR) |
+
+**Goal:** Copy (or write) site backup packages to a network **SMB** share, not only local `storage/backups/` + browser download.
+
+**Desired UX (v1 sketch — confirm when implementing)**
+
+1. **Settings → Site backup & migration** (or Storage housekeeping): configure UNC path (e.g. `\\fileserver\backups\ColdAisle`), optional domain credentials, and whether remote copy runs on manual export and/or after successful pre-update backup.  
+2. **Run / export** still builds the existing site package (or pre-update zip); then copy to the share.  
+3. Clear success/failure message (path + error if access denied / offline).  
+4. Optional: list recent remote copies or last successful remote write timestamp.
+
+**Implementer notes**
+
+- Reuse `SiteBackupService` / existing zip layout; prefer “build local then copy” over writing the zip stream straight to UNC (easier retry + housekeeping).  
+- Windows: UNC via PHP/`copy` if the IIS app pool (or scheduled worker identity) has share permissions; otherwise document service account / credential store carefully (never put share passwords in the downloadable backup package).  
+- Align retention with `StorageHousekeepingService` (local keep-N); remote retention may be share-admin policy or a simple “keep last N on share” option.  
+- Web app must not require interactive elevation; credential prompts at save-settings time only if needed.  
+- User wrote “SBM share” — treat as **SMB** (Windows file share / CIFS).
+
+**Out of scope (unless asked later)**
+
+- Non-SMB targets (S3, Azure Blob, SFTP)  
+- Full image / bare-metal backup of the IIS host  
+- Continuous replication / always-on sync  
+
+**Acceptance (when built)**
+
+- [ ] Admin can set SMB UNC (and credentials if required) and save securely  
+- [ ] Manual site backup can land on the share when configured  
+- [ ] Failure is visible (permissions, path missing) without corrupting local backup  
+- [ ] Works under typical IIS app-pool / SYSTEM poll identities with documented NTFS+share ACLs  
+
+---
+
 ## Completed (keep for audit; do not re-implement)
 
 ### Update / backup housekeeping
