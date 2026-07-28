@@ -303,6 +303,58 @@ $formModal = !empty($formModal);
     <div class="form-row power-snmp-v3" style="display:none"><label>Context</label>
         <input class="form-control" name="snmp_context" id="power_snmp_context"
                value="<?= App::e($edit['snmp_context'] ?? '') ?>"></div>
+
+    <?php
+    $siteOidTemplates = $siteOidTemplates ?? [];
+    $curSiteTplId = (int)($edit['snmp_site_template_id'] ?? 0);
+    ?>
+    <div class="form-row full power-snmp-any" style="display:none">
+        <label>OID map (site template)</label>
+        <select class="form-control" name="snmp_site_template_id" id="power_snmp_site_template_id">
+            <option value="">— None (Discover later or assign on SNMP page) —</option>
+            <?php foreach ($siteOidTemplates as $st):
+                $stId = (int)$st['template_id'];
+                $stLabel = (string)($st['name'] ?? ('Template #' . $stId));
+                $keyCount = 0;
+                if (isset($st['map_keys'])) {
+                    $keyCount = (int)$st['map_keys'];
+                } elseif (!empty($st['oid_map'])) {
+                    $m = is_array($st['oid_map'])
+                        ? $st['oid_map']
+                        : (json_decode((string)$st['oid_map'], true) ?: []);
+                    $keyCount = is_array($m) ? count($m) : 0;
+                }
+                ?>
+                <option value="<?= $stId ?>" <?= $curSiteTplId === $stId ? 'selected' : '' ?>>
+                    <?= App::e($stLabel) ?>
+                    <?php if ($keyCount > 0): ?> · <?= $keyCount ?> OIDs<?php endif; ?>
+                    <?php if (!empty($st['vendor']) || !empty($st['model'])): ?>
+                        (<?= App::e(trim(($st['vendor'] ?? '') . ' ' . ($st['model'] ?? ''))) ?>)
+                    <?php endif; ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+        <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+            Site OID templates power <strong>Poll now</strong> and the scheduled worker
+            (phase/outlet metrics). Create them via <em>Discover OIDs</em> on a live PDU
+            or manage under <a href="<?= App::e(App::url('pages/snmp.php')) ?>">SNMP</a>.
+            <?php if (!$siteOidTemplates): ?>
+                <br><strong>No site templates yet</strong> — run Discover on a sample PDU first, then re-open this form.
+            <?php endif; ?>
+        </p>
+    </div>
+    <div class="form-row full power-snmp-any" style="display:none">
+        <label>
+            <input type="checkbox" name="snmp_auto_poll" value="1" id="power_snmp_auto_poll"
+                <?= !empty($edit['snmp_auto_poll']) ? 'checked' : '' ?>>
+            Include in scheduled SNMP poll
+        </label>
+        <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+            Requires an OID template above, IP/credentials, and the Windows poll task
+            (Settings → SNMP schedule).
+        </p>
+    </div>
+
     <div class="form-row full"><label>Notes</label>
         <textarea class="form-control" name="notes" rows="2"><?= App::e($edit['notes'] ?? '') ?></textarea></div>
     <?php if ($formModal): ?>
@@ -432,6 +484,16 @@ $formModal = !empty($formModal);
     if (tplSel) {
         tplSel.addEventListener('change', function () {
             applyPduTemplate(tplSel.value);
+        });
+    }
+    // Selecting an OID site template implies SNMP should be on
+    var siteTplSel = root.querySelector('#power_snmp_site_template_id');
+    if (siteTplSel && snmpEn) {
+        siteTplSel.addEventListener('change', function () {
+            if (siteTplSel.value && !snmpEn.checked) {
+                snmpEn.checked = true;
+                snmpEn.dispatchEvent(new Event('change'));
+            }
         });
     }
     function toggleScope() {
