@@ -164,7 +164,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             $applyTplId = (int)($_POST['pdu_template_id'] ?? 0);
             $tplOutlets = [];
             $tplFields = [];
-            if ($action === 'add_pdu' && $applyTplId > 0) {
+            // Create or edit: when a PDU template id is posted, load map/outlets for merge + inventory
+            if ($applyTplId > 0) {
                 try {
                     $tplRow = Database::fetchOne(
                         'SELECT * FROM pdu_templates WHERE template_id = ? AND is_active = 1',
@@ -175,9 +176,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                         $tplOutlets = json_decode((string)($tplRow['outlets_json'] ?? '[]'), true) ?: [];
                         if ($numOutlets < 1 && !empty($tplFields['num_outlets'])) {
                             $numOutlets = max(0, min(128, (int)$tplFields['num_outlets']));
-                        }
-                        if (!$tplOutlets && $numOutlets < 1 && is_array($tplOutlets)) {
-                            // keep 0
                         }
                         if ($numOutlets < 1 && $tplOutlets) {
                             $numOutlets = count($tplOutlets);
@@ -196,7 +194,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                         if (!isset($_POST['snmp_auto_poll']) && !empty($tplFields['snmp_auto_poll'])) {
                             $_POST['snmp_auto_poll'] = '1';
                         }
-                        // Fill common SNMP profile fields from template if empty on form
                         foreach (['snmp_version', 'snmp_port', 'snmp_v3_profile_id', 'snmp_v3_sec_level'] as $sk) {
                             if ((!isset($_POST[$sk]) || $_POST[$sk] === '' || $_POST[$sk] === '0')
                                 && isset($tplFields[$sk]) && $tplFields[$sk] !== '' && $tplFields[$sk] !== null
@@ -204,10 +201,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                                 $_POST[$sk] = (string)$tplFields[$sk];
                             }
                         }
+                    } else {
+                        $applyTplId = 0;
                     }
                 } catch (Throwable $e) {
                     $tplFields = [];
                     $tplOutlets = [];
+                    $applyTplId = 0;
                 }
             }
             $breakerLayout = power_normalize_breaker_layout($_POST['breaker_layout'] ?? 'odd_right_even_left');
@@ -375,9 +375,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 if ($outputMode === 'outlets' && $numOutlets < 1) {
                     unset($row['num_outlets']);
                 }
+                if ($applyTplId > 0) {
+                    $row['pdu_template_id'] = $applyTplId;
+                }
                 Database::update('pdus', $row, 'pdu_id = :id', [':id' => $pid]);
+                // When a template was chosen on edit, sync outlet inventory like create
+                if ($applyTplId > 0 && $outputMode === 'outlets' && $numOutlets > 0) {
+                    power_sync_outlet_inventory($pid, $numOutlets, 'C13', null);
+                    if ($tplOutlets) {
+                        power_apply_outlet_defs($pid, $tplOutlets, true);
+                    }
+                }
                 power_sync_zone_voltage($zoneId, $elec, $scope);
-                App::flash('success', 'PDU updated.');
+                $msg = 'PDU updated.';
+                if ($applyTplId > 0) {
+                    $msg = 'PDU updated from template'
+                        . ($outputMode === 'outlets' && $numOutlets > 0
+                            ? ' (' . $numOutlets . ' outlet inventory row(s)).'
+                            : '.');
+                }
+                App::flash('success', $msg);
                 App::redirect('pages/power_pdus.php?id=' . $pid);
             }
 
@@ -385,7 +402,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             if ($outputMode === 'outlets' && $numOutlets < 1) {
                 $row['num_outlets'] = 0;
             }
-            if ($action === 'add_pdu' && $applyTplId > 0) {
+            if ($applyTplId > 0) {
                 $row['pdu_template_id'] = $applyTplId;
             }
             $pid = Database::insert('pdus', $row);
