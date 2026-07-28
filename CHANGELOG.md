@@ -19,6 +19,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.2.77] - 2026-07-28
+
+### Bug fixes
+
+- **Update available → Release notes** now opens `CHANGELOG.md` on GitHub (readable notes) instead of the tag/assets-only page when no formal GitHub Release body exists. Notes are also loaded from the changelog when the release body is empty, and shown under Settings → Updates.
+
+---
+
 ## [0.2.76] - 2026-07-28
 
 ### New features

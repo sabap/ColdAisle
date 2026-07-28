@@ -54,6 +54,31 @@ class UpdateService
         return 'https://github.com/' . self::GITHUB_OWNER . '/' . self::GITHUB_REPO;
     }
 
+    /**
+     * Human-readable release notes page (CHANGELOG on GitHub).
+     * Prefer this over /releases/tag/… when only git tags exist (that page shows assets only).
+     */
+    public static function changelogUrl(?string $version = null): string
+    {
+        // main branch always has the full history; tags before 0.2.76 may lack CHANGELOG.md
+        $url = self::githubUrl() . '/blob/main/CHANGELOG.md';
+        $v = $version !== null && $version !== '' ? ltrim($version, 'vV') : '';
+        if ($v !== '' && preg_match('/^\d+\.\d+\.\d+/', $v)) {
+            // GitHub heading anchor for "## [0.2.76] - YYYY-MM-DD" is typically "0276---…"
+            // Date-agnostic fragment often fails; link to file (user lands on changelog).
+            // Also try tag-specific blob when browsing that version’s tree.
+            $url = self::githubUrl() . '/blob/main/CHANGELOG.md';
+        }
+        return $url;
+    }
+
+    /** GitHub release or tag page (may lack notes body if no formal Release was published). */
+    public static function releasePageUrl(string $version): string
+    {
+        $v = ltrim($version, 'vV');
+        return self::githubUrl() . '/releases/tag/v' . rawurlencode($v);
+    }
+
     public static function installedVersion(): string
     {
         $path = App::ROOT . '/VERSION';
@@ -69,7 +94,7 @@ class UpdateService
     /**
      * @return array{
      *   ok:bool,current:string,latest:?string,update_available:bool,
-     *   release_name:?string,html_url:?string,notes:?string,
+     *   release_name:?string,html_url:?string,notes_url:?string,notes:?string,
      *   published_at:?string,checked_at:string,cached:bool,error?:string
      * }
      */
@@ -87,6 +112,7 @@ class UpdateService
                 'update_available' => false,
                 'release_name' => null,
                 'html_url' => null,
+                'notes_url' => null,
                 'notes' => null,
                 'published_at' => null,
                 'checked_at' => $now,
@@ -99,6 +125,13 @@ class UpdateService
             $cached = self::cachedStatus();
             if ($cached !== null) {
                 $cached['cached'] = true;
+                // Older cache entries may lack notes_url
+                if (empty($cached['notes_url']) && !empty($cached['latest'])) {
+                    $cached['notes_url'] = self::changelogUrl((string)$cached['latest']);
+                }
+                if (empty($cached['html_url']) && !empty($cached['notes_url'])) {
+                    $cached['html_url'] = $cached['notes_url'];
+                }
                 return $cached;
             }
         }
@@ -124,7 +157,7 @@ class UpdateService
                 $tag = ltrim((string)$release['tag_name'], 'vV');
                 $name = (string)($release['name'] ?? $release['tag_name']);
                 $html = (string)($release['html_url'] ?? '');
-                $notes = (string)($release['body'] ?? '');
+                $notes = trim((string)($release['body'] ?? ''));
                 $published = (string)($release['published_at'] ?? $release['created_at'] ?? '');
             } else {
                 $tags = self::githubGetJson(
@@ -163,10 +196,41 @@ class UpdateService
                     throw new RuntimeException('No version tags found on the repository. Push a tag like v0.2.0 first.');
                 }
                 $tag = $best;
-                $html = 'https://github.com/' . rawurlencode((string)$cfg['github_owner'])
-                    . '/' . rawurlencode((string)$cfg['github_repo']) . '/releases/tag/v' . $tag;
-                $notes = '';
-                $published = null;
+                // Optional: formal Release object for this tag (may still have empty body)
+                $byTag = self::githubGetJson(
+                    "https://api.github.com/repos/{$owner}/{$repo}/releases/tags/v{$tag}",
+                    $token,
+                    true
+                );
+                if (is_array($byTag) && empty($byTag['message']) && !empty($byTag['html_url'])) {
+                    $html = (string)$byTag['html_url'];
+                    $notes = trim((string)($byTag['body'] ?? ''));
+                    $published = (string)($byTag['published_at'] ?? $byTag['created_at'] ?? '');
+                    if (!empty($byTag['name'])) {
+                        $name = (string)$byTag['name'];
+                    }
+                } else {
+                    $html = self::releasePageUrl($tag);
+                    $notes = '';
+                    $published = null;
+                }
+            }
+
+            // When GitHub Release body is empty (tags-only workflow), load notes from CHANGELOG.md
+            if ($notes === '' && $tag !== null) {
+                $fromCl = self::fetchChangelogSection($tag, $token);
+                if ($fromCl !== null && $fromCl !== '') {
+                    $notes = $fromCl;
+                }
+            }
+
+            // "Release notes" link must open readable notes — not the assets-only tag page
+            $notesUrl = self::changelogUrl($tag);
+            if ($notes === '' || strlen(trim(strip_tags($notes))) < 8) {
+                // Prefer CHANGELOG when GitHub release body is empty / assets-only
+                $html = $notesUrl;
+            } elseif ($html === null || $html === '') {
+                $html = $notesUrl;
             }
 
             $available = version_compare($tag, $current, '>');
@@ -177,7 +241,8 @@ class UpdateService
                 'update_available' => $available,
                 'release_name' => $name,
                 'html_url' => $html,
-                'notes' => $notes,
+                'notes_url' => $notesUrl,
+                'notes' => $notes !== '' ? $notes : null,
                 'published_at' => $published,
                 'checked_at' => $now,
                 'cached' => false,
@@ -192,6 +257,7 @@ class UpdateService
                 'update_available' => false,
                 'release_name' => null,
                 'html_url' => null,
+                'notes_url' => self::changelogUrl(null),
                 'notes' => null,
                 'published_at' => null,
                 'checked_at' => $now,
@@ -201,6 +267,39 @@ class UpdateService
             // Cache failures briefly so the dashboard does not hammer GitHub
             self::storeCache($result);
             return $result;
+        }
+    }
+
+    /**
+     * Extract one version section from CHANGELOG.md on GitHub (main branch).
+     */
+    private static function fetchChangelogSection(string $version, string $token): ?string
+    {
+        $v = ltrim($version, 'vV');
+        $owner = rawurlencode(self::GITHUB_OWNER);
+        $repo = rawurlencode(self::GITHUB_REPO);
+        $url = "https://raw.githubusercontent.com/{$owner}/{$repo}/main/CHANGELOG.md";
+        try {
+            $raw = self::httpRequest($url, $token, false, true);
+            if ($raw === null || $raw === '') {
+                return null;
+            }
+            // ## [0.2.76] - 2026-07-28  … until next ## [
+            $q = preg_quote($v, '/');
+            if (!preg_match(
+                '/^## \[' . $q . '\][^\n]*\n(.*?)(?=^## \[|\z)/ms',
+                $raw,
+                $m
+            )) {
+                return null;
+            }
+            $section = trim($m[1]);
+            // Drop trailing --- separators
+            $section = preg_replace('/\n---\s*$/', '', $section) ?? $section;
+            $section = trim($section);
+            return $section !== '' ? $section : null;
+        } catch (Throwable $e) {
+            return null;
         }
     }
 

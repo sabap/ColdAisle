@@ -112,11 +112,21 @@ layout_header('Dashboard', $user, 'dashboard');
 ?>
 
 <?php if ($dashUpdate && !empty($dashUpdate['update_available'])): ?>
+<?php
+    $dashNotesHref = (string)($dashUpdate['notes_url']
+        ?? $dashUpdate['html_url']
+        ?? (class_exists('UpdateService')
+            ? UpdateService::changelogUrl((string)($dashUpdate['latest'] ?? ''))
+            : 'https://github.com/sabap/ColdAisle/blob/main/CHANGELOG.md'));
+?>
 <div class="alert alert-info" style="margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
     <div>
         <strong>ColdAisle update available:</strong>
         v<?= App::e((string)$dashUpdate['latest']) ?>
         <span class="text-muted">(running v<?= App::e((string)$dashUpdate['current']) ?>)</span>
+        <?php if ($dashNotesHref !== ''): ?>
+            · <a href="<?= App::e($dashNotesHref) ?>" target="_blank" rel="noopener">Release notes</a>
+        <?php endif; ?>
     </div>
     <a class="btn btn-sm btn-primary" href="<?= App::e(App::url('pages/settings.php#updates')) ?>">Review &amp; update</a>
 </div>
