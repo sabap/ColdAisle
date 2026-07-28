@@ -12,6 +12,7 @@ All scripts are plain text — download, open in Notepad, then run elevated. Not
 | **`Register-ColdAisle-SnmpPollTask.ps1`** | Elevated: create/update OS task (`cmd.exe /c run_poll_snmp.cmd`) |
 | `Enable-ColdAisle-Snmp.ps1` | Optional: enable `extension=snmp` for **web** Discover |
 | `Fix-ColdAisle-SnmpTask.ps1` | Small repair helper if a task was registered incorrectly |
+| **`Release-ColdAisle.ps1`** | Cut a version: promote CHANGELOG [Unreleased] → tag/push/GitHub Release notes |
 
 ## Quick install (new machine, public GitHub)
 

@@ -5,7 +5,8 @@ Primary platform: **IIS + PHP + Microsoft SQL Server** on Windows (with a clean 
 
 Formerly known as **WinDCIM**. Built as a modern replacement path for environments that outgrew or cannot maintain Linux-based [openDCIM](https://github.com/opendcim/openDCIM), with first-class support for local accounts, **LDAPS**, and **Microsoft Entra ID (Azure AD) SSO**.
 
-**Current version:** see [`VERSION`](VERSION).
+**Current version:** see [`VERSION`](VERSION).  
+**Release notes:** [`CHANGELOG.md`](CHANGELOG.md) (New features · Enhancements · Bug fixes).
 
 ## Support / donate
 
@@ -24,6 +25,8 @@ Admins can check for new versions and apply them from **Settings → Updates** a
 3. **Storage housekeeping** (Settings) prunes old pre-update / site-export zips, temp work dirs, and oversized logs (keep-last-N + max age).
 
 Dashboard shows a banner when an update is available (if auto-check is enabled).
+
+Each tagged release should have categorized notes in [`CHANGELOG.md`](CHANGELOG.md) and on [GitHub Releases](https://github.com/sabap/ColdAisle/releases). Maintainers: add bullets under **[Unreleased]** while coding, then run [`scripts/Release-ColdAisle.ps1`](scripts/Release-ColdAisle.ps1) (see [docs/RELEASING.md](docs/RELEASING.md)).
 
 ## Features
 
