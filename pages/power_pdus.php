@@ -1054,22 +1054,78 @@ if ($pduId) {
         </div>
     </div>
 
+    <?php
+    // Which phase graphs to offer: template OID keys and/or last poll snapshot
+    $tplOidMap = [];
+    if ($pduSiteTplId > 0) {
+        try {
+            $tplMapRow = Database::fetchOne(
+                'SELECT oid_map FROM snmp_site_oid_templates WHERE template_id = ?',
+                [$pduSiteTplId]
+            );
+            if ($tplMapRow) {
+                $tplOidMap = json_decode((string)($tplMapRow['oid_map'] ?? '{}'), true) ?: [];
+            }
+        } catch (Throwable $e) {
+            $tplOidMap = [];
+        }
+    }
+    $phaseSnapEarly = power_phase_poll_decode($p['last_poll_phases'] ?? null);
+    $phaseRowsEarly = $phaseSnapEarly['rows'] ?? [];
+    $hasPhaseVoltsOid = false;
+    $hasPhaseLoadOid = false;
+    foreach (array_keys($tplOidMap) as $mk) {
+        $mk = strtolower((string)$mk);
+        if (preg_match('/^phase[123]_volts/', $mk) || preg_match('/^phase_l\d\d_volts/', $mk)) {
+            $hasPhaseVoltsOid = true;
+        }
+        if (preg_match('/^phase[123]_load_state/', $mk)) {
+            $hasPhaseLoadOid = true;
+        }
+    }
+    $hasPhaseVoltsSnap = false;
+    $hasPhaseLoadSnap = false;
+    foreach ($phaseRowsEarly as $pr) {
+        if (($pr['volts'] ?? null) !== null) {
+            $hasPhaseVoltsSnap = true;
+        }
+        if (($pr['load_state'] ?? null) !== null) {
+            $hasPhaseLoadSnap = true;
+        }
+    }
+    // Show chart containers when template/snapshot suggests data; JS still hides if history empty
+    $showPhaseVoltsChart = $hasPhaseVoltsOid || $hasPhaseVoltsSnap;
+    $showPhaseLoadChart = $hasPhaseLoadOid || $hasPhaseLoadSnap || !$showPhaseVoltsChart;
+    // Avg L–N volts: hide when we only have load_state (older strips)
+    $showAvgVoltsChart = $hasPhaseVoltsOid || $hasPhaseVoltsSnap
+        || (isset($p['last_poll_volts']) && $p['last_poll_volts'] !== null && $p['last_poll_volts'] !== '');
+    ?>
     <!-- 24h PDU history -->
     <div class="card power-history-wide mb-2" data-power-history data-scope="pdu" data-id="<?= (int)$pduId ?>" data-hours="24">
         <div class="card-header flex-between">
             <h2 style="margin:0;font-size:1.05rem">Last 24 hours</h2>
-            <span class="text-muted" style="font-size:.8rem">SNMP samples · outage markers · per-phase V when available</span>
+            <span class="text-muted" style="font-size:.8rem">
+                SNMP samples · outage markers
+                · charts shown only when data is available
+            </span>
         </div>
         <div class="card-body power-history-body">
             <div class="power-outage-summary" data-outage-summary hidden></div>
-            <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Output (usage)" data-color="#38bdf8" data-height="180"></div>
-            <div class="power-chart" data-metric="volts" data-unit="V" data-label="Input voltage (avg L–N)" data-color="#a78bfa" data-height="140"></div>
-            <div class="power-chart" data-metric="phase_volts" data-unit="V" data-label="Phase voltages L1 / L2 / L3" data-color="#94a3b8" data-height="160"></div>
+            <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Output (usage)" data-color="#38bdf8" data-height="180" data-hide-empty="0"></div>
+            <?php if ($showAvgVoltsChart): ?>
+            <div class="power-chart" data-metric="volts" data-unit="V" data-label="Input voltage (avg L–N)" data-color="#a78bfa" data-height="140" data-hide-empty="1"></div>
+            <?php endif; ?>
+            <?php if ($showPhaseVoltsChart): ?>
+            <div class="power-chart" data-metric="phase_volts" data-unit="V" data-label="Phase voltages L1 / L2 / L3" data-color="#94a3b8" data-height="160" data-hide-empty="1"></div>
+            <?php endif; ?>
+            <?php if ($showPhaseLoadChart): ?>
+            <div class="power-chart" data-metric="phase_load_state" data-unit="state" data-label="Phase load state L1 / L2 / L3" data-color="#f59e0b" data-height="140" data-hide-empty="1" title="1=low · 2=normal · 3=near overload · 4=overload"></div>
+            <?php endif; ?>
         </div>
     </div>
 
     <?php
-    $phaseSnap = power_phase_poll_decode($p['last_poll_phases'] ?? null);
+    $phaseSnap = $phaseSnapEarly ?? power_phase_poll_decode($p['last_poll_phases'] ?? null);
     $phaseRows = $phaseSnap['rows'] ?? [];
     if ($phaseSnap && ($phaseRows || !empty($phaseSnap['ll']) || !empty($phaseSnap['device']) || !empty($phaseSnap['ps']))):
         $phaseWattsSum = 0.0;
@@ -1078,6 +1134,7 @@ if ($pduId) {
         $showPf = false;
         $showPeak = false;
         $showState = false;
+        $showVoltsCol = false;
         $ratedAmps = isset($phaseSnap['device']['rated_amps']) ? (float)$phaseSnap['device']['rated_amps'] : null;
         foreach ($phaseRows as $pr) {
             if ($pr['watts'] !== null) {
@@ -1095,6 +1152,9 @@ if ($pduId) {
             }
             if ($pr['load_state'] !== null) {
                 $showState = true;
+            }
+            if ($pr['volts'] !== null) {
+                $showVoltsCol = true;
             }
         }
         $showUtil = $ratedAmps !== null && $ratedAmps > 0;
@@ -1121,7 +1181,7 @@ if ($pduId) {
                 <thead>
                     <tr>
                         <th>Phase</th>
-                        <th>Voltage</th>
+                        <?php if ($showVoltsCol): ?><th>Voltage</th><?php endif; ?>
                         <th>Power</th>
                         <?php if ($showVa): ?><th>Apparent</th><?php endif; ?>
                         <?php if ($showPf): ?><th>PF</th><?php endif; ?>
@@ -1140,7 +1200,9 @@ if ($pduId) {
                     ?>
                     <tr>
                         <td><strong><?= App::e($pr['label']) ?></strong></td>
-                        <td><?= $pr['volts'] !== null ? App::e(power_fmt_metric($pr['volts'], 1)) . ' V' : '—' ?></td>
+                        <?php if ($showVoltsCol): ?>
+                            <td><?= $pr['volts'] !== null ? App::e(power_fmt_metric($pr['volts'], 1)) . ' V' : '—' ?></td>
+                        <?php endif; ?>
                         <td>
                             <?php if ($pr['watts'] !== null): ?>
                                 <?= App::e(power_fmt_metric($pr['watts'] / 1000, 3)) ?> kW
@@ -2241,7 +2303,7 @@ if ($pduId) {
     .breaker-slot .bs-slot { font-family: var(--mono); font-size: .68rem; font-weight: 600; }
     .breaker-slot .bs-slot-id { font-family: var(--mono); font-size: .58rem; opacity: .9; font-weight: 600; }
     </style>
-    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=4"></script>
+    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=5"></script>
     <?php
     layout_footer();
     exit;

@@ -19,6 +19,24 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.2.79] - 2026-07-28
+
+### New features
+
+- PDU history: **phase load-state** L1/L2/L3 chart (for older APC rPDU units that only report load state).
+- Catalog seed template **APC rPDU 3-phase load state (AP786x typical)** with phase load-state OIDs.
+
+### Enhancements
+
+- Phase voltage / avg voltage charts **hide when no voltage data** is available (template OIDs or history samples).
+- Phase status table shows voltage column only when volts are present; load-state-only phases still appear (AP7862/AP7864).
+
+### Bug fixes
+
+- `power_phase_poll_decode` no longer drops phases that only have `load_state`.
+
+---
+
 ## [0.2.78] - 2026-07-28
 
 ### Bug fixes

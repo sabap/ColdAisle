@@ -152,8 +152,10 @@ function power_phase_poll_decode($json): ?array
         $pf = $num($p['pf'] ?? null);
         $peak = $num($p['peak_amps'] ?? null);
         $loadState = $num($p['load_state'] ?? null);
+        // Older APC rPDU (e.g. AP786x) may only report load_state per phase
         if ($watts === null && $amps === null && $volts === null
             && $va === null && $pf === null && $peak === null
+            && $loadState === null
         ) {
             continue;
         }
