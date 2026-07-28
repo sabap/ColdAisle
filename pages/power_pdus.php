@@ -2335,11 +2335,22 @@ layout_header('PDU Management', $user, 'power_pdus');
         </div>
     </div>
     <div class="card-body flush">
-        <table class="data">
+        <div class="table-wrap pdu-list-wrap">
+        <table class="data pdu-list-table">
             <thead>
             <tr>
-                <th>Name</th><th>Scope</th><th>Output</th><th>Phases</th><th>In → Out</th>
-                <th>Location</th><th>Zone</th><th>Amps</th><th>Load</th><th>SNMP</th><th class="col-actions"></th>
+                <th>Name</th>
+                <th>IP</th>
+                <th>Scope</th>
+                <th>Output</th>
+                <th>Phases</th>
+                <th>In → Out</th>
+                <th>Location</th>
+                <th>Zone</th>
+                <th>Amps</th>
+                <th>Load</th>
+                <th>SNMP</th>
+                <th class="col-actions"></th>
             </tr>
             </thead>
             <tbody>
@@ -2362,21 +2373,24 @@ layout_header('PDU Management', $user, 'power_pdus');
                 if (!empty($p['row_name'])) {
                     $loc[] = 'Row ' . $p['row_name'];
                 }
+                $ip = trim((string)($p['ip_address'] ?? ''));
+                $om = power_normalize_output_mode($p['output_mode'] ?? 'outlets');
+                $outShort = $om === 'breakers'
+                    ? ((int)($p['num_breaker_slots'] ?? 0) . ' brk')
+                    : ((int)($p['num_outlets'] ?? 0) . ' out');
                 ?>
                 <tr>
-                    <td><a href="?id=<?= (int)$p['pdu_id'] ?>"><strong><?= App::e($p['name']) ?></strong></a></td>
+                    <td class="pdu-col-name"><a href="?id=<?= (int)$p['pdu_id'] ?>"><strong><?= App::e($p['name']) ?></strong></a></td>
+                    <td class="pdu-col-ip mono"><?= $ip !== '' ? App::e($ip) : '<span class="text-muted">—</span>' ?></td>
                     <td><span class="badge"><?= App::e($p['pdu_scope'] ?? 'rack') ?></span></td>
                     <td>
-                        <?php $om = power_normalize_output_mode($p['output_mode'] ?? 'outlets'); ?>
-                        <span class="badge <?= $om === 'breakers' ? 'badge-warning' : '' ?>">
-                            <?= $om === 'breakers'
-                                ? ('Breakers · ' . (int)($p['num_breaker_slots'] ?? 0) . ' slots')
-                                : ((int)($p['num_outlets'] ?? 0) . ' outlets') ?>
+                        <span class="badge <?= $om === 'breakers' ? 'badge-warning' : '' ?>" title="<?= App::e($om === 'breakers' ? 'Breakers' : 'Outlets') ?>">
+                            <?= App::e($outShort) ?>
                         </span>
                     </td>
                     <td><span class="badge badge-info"><?= App::e(power_wiring_label($p['phase_wiring'] ?? null, (int)($p['phases'] ?? 1))) ?></span></td>
-                    <td style="font-size:.85rem"><?= App::e($voltLabel) ?></td>
-                    <td>
+                    <td class="pdu-col-volts"><?= App::e($voltLabel) ?></td>
+                    <td class="pdu-col-loc">
                         <?php if (!empty($p['cabinet_id'])): ?>
                             <a href="<?= App::e(App::url('pages/cabinets.php?id=' . (int)$p['cabinet_id'])) ?>">
                                 <?= App::e(implode(' · ', $loc) ?: '—') ?>
@@ -2385,7 +2399,7 @@ layout_header('PDU Management', $user, 'power_pdus');
                             <?= App::e(implode(' · ', $loc) ?: '—') ?>
                         <?php endif; ?>
                     </td>
-                    <td>
+                    <td class="pdu-col-zone">
                         <?php if (!empty($p['zone_id'])): ?>
                             <a href="<?= App::e(App::url('pages/power_zones.php?id=' . (int)$p['zone_id'])) ?>">
                                 <?= App::e($p['zone_name'] ?? '—') ?>
@@ -2404,7 +2418,7 @@ layout_header('PDU Management', $user, 'power_pdus');
             <?php endforeach; ?>
             <?php if (!$pdus): ?>
                 <tr>
-                    <td colspan="11" class="text-muted">
+                    <td colspan="12" class="text-muted">
                         No PDUs yet.
                         <?php if ($canEditPdu): ?>
                             Use <strong>Add PDU</strong> to create one.
@@ -2414,8 +2428,65 @@ layout_header('PDU Management', $user, 'power_pdus');
             <?php endif; ?>
             </tbody>
         </table>
+        </div>
     </div>
 </div>
+<style>
+/* Compact All PDUs table — keep IP visible without forcing page horizontal scroll */
+.pdu-list-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+}
+.pdu-list-table {
+    width: 100%;
+    table-layout: auto;
+    font-size: 0.8125rem; /* ~13px if root 16px — slightly under default body */
+}
+.pdu-list-table th,
+.pdu-list-table td {
+    padding: 0.4rem 0.45rem;
+    vertical-align: middle;
+}
+.pdu-list-table .badge {
+    font-size: 0.7rem;
+    padding: 0.12rem 0.35rem;
+}
+.pdu-list-table .btn-sm {
+    font-size: 0.75rem;
+    padding: 0.2rem 0.45rem;
+}
+.pdu-list-table .pdu-col-ip {
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+}
+.pdu-list-table .mono {
+    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+    font-size: 0.78rem;
+}
+.pdu-list-table .pdu-col-name {
+    max-width: 10rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pdu-list-table .pdu-col-loc,
+.pdu-list-table .pdu-col-zone {
+    max-width: 7.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pdu-list-table .pdu-col-volts {
+    white-space: nowrap;
+    font-size: 0.78rem;
+}
+.pdu-list-table .col-actions {
+    width: 1%;
+    white-space: nowrap;
+}
+</style>
 
 <?php if ($canEditPdu): ?>
 <div class="app-modal" id="modal-add-pdu" hidden aria-hidden="true">
