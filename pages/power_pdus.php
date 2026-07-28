@@ -218,6 +218,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                     // profile table missing — keep form values
                 }
             }
+            // Site OID template (Discover map) — required for Poll now / scheduler
+            $siteTplId = (int)($_POST['snmp_site_template_id'] ?? 0);
+            if ($siteTplId > 0) {
+                try {
+                    $stOk = Database::fetchOne(
+                        'SELECT template_id FROM snmp_site_oid_templates WHERE template_id = ? AND is_active = 1',
+                        [$siteTplId]
+                    );
+                    if (!$stOk) {
+                        $siteTplId = 0;
+                    }
+                } catch (Throwable $e) {
+                    $siteTplId = 0;
+                }
+            }
+            $snmpEnabled = !empty($_POST['snmp_enabled']) ? 1 : 0;
+            if ($siteTplId > 0) {
+                $snmpEnabled = 1; // template implies SNMP on
+            }
+            $snmpAutoPoll = (!empty($_POST['snmp_auto_poll']) && $siteTplId > 0) ? 1 : 0;
+
             $row = array_merge([
                 'cabinet_id' => $_POST['cabinet_id'] !== '' ? (int)$_POST['cabinet_id'] : null,
                 'row_id' => $_POST['row_id'] !== '' ? (int)$_POST['row_id'] : null,
@@ -241,7 +262,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'breaker_columns' => $outputMode === 'breakers' ? $breakerColumns : null,
                 'rated_amps' => $_POST['rated_amps'] !== '' ? (float)$_POST['rated_amps'] : null,
                 'input_type' => $_POST['input_type'] !== '' ? $_POST['input_type'] : null,
-                'snmp_enabled' => !empty($_POST['snmp_enabled']) ? 1 : 0,
+                'snmp_enabled' => $snmpEnabled,
                 'snmp_version' => $_POST['snmp_version'] ?? '2c',
                 'snmp_port' => (int)($_POST['snmp_port'] ?? 161),
                 'snmp_community' => $_POST['snmp_community'] !== '' ? $_POST['snmp_community'] : null,
@@ -253,6 +274,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'snmp_context' => $snmpContext,
                 'snmp_v3_sec_level' => $snmpSecLevel,
                 'snmp_v3_profile_id' => $profileId,
+                'snmp_site_template_id' => $siteTplId > 0 ? $siteTplId : null,
+                'snmp_auto_poll' => $snmpAutoPoll,
                 'notes' => trim($_POST['notes'] ?? '') !== '' ? trim($_POST['notes']) : null,
             ], $elec);
 
@@ -1451,6 +1474,15 @@ if ($pduId) {
     } catch (Throwable $e) {
         $pduTemplates = [];
     }
+    $siteOidTemplates = [];
+    try {
+        $siteOidTemplates = Database::fetchAll(
+            'SELECT template_id, name, vendor, model, oid_map
+             FROM snmp_site_oid_templates WHERE is_active = 1 ORDER BY name'
+        );
+    } catch (Throwable $e) {
+        $siteOidTemplates = [];
+    }
     $mountLabel = ($p['mount_style'] ?? '') === 'u_mounted'
         ? ('U-mounted' . (!empty($p['position_u']) ? ' @ U' . (int)$p['position_u'] : '')
             . (!empty($p['u_height']) ? ' · ' . (int)$p['u_height'] . 'U' : ''))
@@ -2191,6 +2223,15 @@ try {
     );
 } catch (Throwable $e) {
     $pduTemplates = [];
+}
+$siteOidTemplates = [];
+try {
+    $siteOidTemplates = Database::fetchAll(
+        'SELECT template_id, name, vendor, model, oid_map
+         FROM snmp_site_oid_templates WHERE is_active = 1 ORDER BY name'
+    );
+} catch (Throwable $e) {
+    $siteOidTemplates = [];
 }
 
 layout_header('PDU Management', $user, 'power_pdus');
