@@ -53,6 +53,7 @@ class AuthManager
         'power' => 'view_power',
         'power_zones' => 'view_power',
         'power_pdus' => 'view_power',
+        'power_pdu_templates' => 'view_power',
         'cables' => 'view_cables',
         'snmp' => 'view_snmp',
         'disposals' => 'view_disposals',

@@ -669,6 +669,15 @@ CREATE TABLE pdu_templates (
 );
 GO
 
+-- Link PDUs to inventory template (bulk apply); additive if pdus already exists
+IF EXISTS (SELECT * FROM sys.tables WHERE name = 'pdus')
+   AND NOT EXISTS (
+       SELECT 1 FROM sys.columns
+       WHERE object_id = OBJECT_ID(N'dbo.pdus') AND name = 'pdu_template_id'
+   )
+ALTER TABLE pdus ADD pdu_template_id INT NULL;
+GO
+
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'snmp_targets')
 CREATE TABLE snmp_targets (
     target_id INT IDENTITY(1,1) PRIMARY KEY,

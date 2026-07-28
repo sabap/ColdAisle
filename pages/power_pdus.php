@@ -385,6 +385,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             if ($outputMode === 'outlets' && $numOutlets < 1) {
                 $row['num_outlets'] = 0;
             }
+            if ($action === 'add_pdu' && $applyTplId > 0) {
+                $row['pdu_template_id'] = $applyTplId;
+            }
             $pid = Database::insert('pdus', $row);
             if ($outputMode === 'outlets') {
                 if ($numOutlets > 0) {
@@ -935,7 +938,8 @@ if ($pduId) {
                     <input type="hidden" name="action" value="save_pdu_template">
                     <input type="hidden" name="pdu_id" value="<?= $pduId ?>">
                     <input type="hidden" name="overwrite" id="pduTplOverwrite" value="0">
-                    <button class="btn btn-secondary" type="submit" title="Save electrical + outlet layout as a reusable template (Vendor+Model)">
+                    <button class="btn btn-secondary" type="submit"
+                            title="Save electrical + outlet layout + site OID map as a reusable template (Vendor+Model)">
                         Create PDU template
                     </button>
                 </form>
