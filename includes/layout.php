@@ -72,7 +72,7 @@ function layout_header(string $title, array $user, string $active = ''): void
                 'settings' => ['Settings', 'pages/settings.php', '⚙'],
             ];
             $devicesActive = in_array($active, ['devices', 'device_templates'], true);
-            $powerActive = in_array($active, ['power', 'power_zones', 'power_pdus'], true);
+            $powerActive = in_array($active, ['power', 'power_zones', 'power_pdus', 'power_pdu_templates'], true);
             foreach ($nav as $key => [$label, $href, $icon]):
                 if (!AuthManager::canViewNav($user, $key)) {
                     continue;
@@ -107,6 +107,10 @@ function layout_header(string $title, array $user, string $active = ''): void
                     <a class="nav-item nav-sub <?= $active === 'power_pdus' ? 'active' : '' ?>"
                        href="<?= App::e(App::url('pages/power_pdus.php')) ?>">
                         <span class="nav-icon"></span><span>PDUs</span>
+                    </a>
+                    <a class="nav-item nav-sub <?= $active === 'power_pdu_templates' ? 'active' : '' ?>"
+                       href="<?= App::e(App::url('pages/power_pdu_templates.php')) ?>">
+                        <span class="nav-icon"></span><span>PDU Templates</span>
                     </a>
                 <?php endif; ?>
             <?php endforeach; ?>

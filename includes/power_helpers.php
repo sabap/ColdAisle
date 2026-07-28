@@ -815,3 +815,276 @@ function power_pdu_template_display_name(?string $vendor, ?string $model, ?strin
     }
     return $fallback !== null && trim($fallback) !== '' ? trim($fallback) : 'PDU template';
 }
+
+/**
+ * Build fields_json + outlets_json from the PDU template editor POST.
+ *
+ * @return array{fields:array<string,mixed>,outlets:list<array<string,mixed>>,vendor:?string,model:?string,name:string,notes:?string}
+ */
+function power_pdu_template_payload_from_post(array $post): array
+{
+    $vendor = trim((string)($post['vendor'] ?? $post['manufacturer'] ?? ''));
+    $model = trim((string)($post['model'] ?? ''));
+    $name = trim((string)($post['name'] ?? ''));
+    if ($name === '') {
+        $name = power_pdu_template_display_name($vendor, $model);
+    }
+    $fields = [];
+    if ($vendor !== '') {
+        $fields['manufacturer'] = $vendor;
+    }
+    if ($model !== '') {
+        $fields['model'] = $model;
+    }
+    $boolKeys = ['snmp_enabled', 'snmp_auto_poll', 'sync_zone_voltage'];
+    $intKeys = [
+        'u_height', 'phases', 'input_voltage', 'input_voltage_ln', 'output_voltage', 'output_voltage_ln',
+        'rated_volts', 'num_outlets', 'num_breaker_slots', 'breaker_columns', 'snmp_port',
+        'snmp_v3_profile_id', 'snmp_site_template_id',
+    ];
+    $floatKeys = ['rated_amps'];
+    $strKeys = [
+        'pdu_scope', 'mount_style', 'phase_wiring', 'input_type', 'output_mode',
+        'breaker_layout', 'snmp_version', 'snmp_v3_sec_level', 'notes',
+    ];
+    foreach ($boolKeys as $k) {
+        if (array_key_exists($k, $post)) {
+            $fields[$k] = !empty($post[$k]) ? 1 : 0;
+        }
+    }
+    foreach ($intKeys as $k) {
+        if (!array_key_exists($k, $post) || $post[$k] === '' || $post[$k] === null) {
+            continue;
+        }
+        $v = (int)$post[$k];
+        if ($v === 0 && in_array($k, ['snmp_site_template_id', 'snmp_v3_profile_id'], true)) {
+            continue;
+        }
+        $fields[$k] = $v;
+    }
+    foreach ($floatKeys as $k) {
+        if (!array_key_exists($k, $post) || $post[$k] === '' || $post[$k] === null) {
+            continue;
+        }
+        $fields[$k] = (float)$post[$k];
+    }
+    foreach ($strKeys as $k) {
+        if (!array_key_exists($k, $post)) {
+            continue;
+        }
+        $v = trim((string)$post[$k]);
+        if ($v === '') {
+            continue;
+        }
+        $fields[$k] = $v;
+    }
+    if (!empty($fields['output_mode'])) {
+        $fields['output_mode'] = power_normalize_output_mode((string)$fields['output_mode']);
+    }
+    if (!empty($fields['breaker_layout'])) {
+        $fields['breaker_layout'] = power_normalize_breaker_layout((string)$fields['breaker_layout']);
+    }
+    if (isset($fields['phases'])) {
+        $fields['phases'] = max(1, min(3, (int)$fields['phases']));
+    }
+    if (isset($fields['num_outlets'])) {
+        $fields['num_outlets'] = max(0, min(128, (int)$fields['num_outlets']));
+    }
+    if (empty($fields['snmp_site_template_id'])) {
+        unset($fields['snmp_auto_poll']);
+    }
+
+    // Outlets: parallel arrays outlet_number[], outlet_type[], rated_amps[], label[]
+    $outletDefs = [];
+    $nums = $post['outlet_number'] ?? null;
+    if (is_array($nums)) {
+        $types = is_array($post['outlet_type'] ?? null) ? $post['outlet_type'] : [];
+        $amps = is_array($post['outlet_rated_amps'] ?? null) ? $post['outlet_rated_amps'] : [];
+        $labs = is_array($post['outlet_label'] ?? null) ? $post['outlet_label'] : [];
+        foreach ($nums as $i => $nRaw) {
+            $n = (int)$nRaw;
+            if ($n < 1) {
+                continue;
+            }
+            $def = ['outlet_number' => $n];
+            $t = trim((string)($types[$i] ?? ''));
+            if ($t !== '') {
+                $def['outlet_type'] = $t;
+            }
+            $a = $amps[$i] ?? '';
+            if ($a !== '' && $a !== null && is_numeric($a)) {
+                $def['rated_amps'] = (float)$a;
+            }
+            $lab = trim((string)($labs[$i] ?? ''));
+            if ($lab !== '' && $lab !== ('Outlet ' . $n)) {
+                $def['label'] = $lab;
+            }
+            $outletDefs[] = $def;
+        }
+        usort($outletDefs, static fn($a, $b) => $a['outlet_number'] <=> $b['outlet_number']);
+        if ($outletDefs && empty($fields['num_outlets'])) {
+            $fields['num_outlets'] = count($outletDefs);
+        }
+    }
+
+    $notes = trim((string)($post['template_notes'] ?? $post['notes_template'] ?? ''));
+    if ($notes === '' && isset($fields['notes'])) {
+        // keep fields notes as PDU notes field; template-level notes separate
+    }
+
+    return [
+        'fields' => $fields,
+        'outlets' => $outletDefs,
+        'vendor' => $vendor !== '' ? $vendor : null,
+        'model' => $model !== '' ? $model : null,
+        'name' => $name,
+        'notes' => $notes !== '' ? $notes : null,
+    ];
+}
+
+/**
+ * PDUs considered "using" this inventory template (explicit link, or legacy vendor+model match).
+ *
+ * @return list<array<string,mixed>>
+ */
+function power_pdu_template_linked_pdus(int $templateId, ?string $vendor = null, ?string $model = null): array
+{
+    if ($templateId < 1) {
+        return [];
+    }
+    try {
+        $rows = Database::fetchAll(
+            'SELECT pdu_id, name, manufacturer, model, ip_address, pdu_template_id, is_active
+             FROM pdus
+             WHERE is_active = 1 AND pdu_template_id = ?
+             ORDER BY name',
+            [$templateId]
+        );
+    } catch (Throwable $e) {
+        // column may not exist until Schema::ensure
+        $rows = [];
+    }
+    $byId = [];
+    foreach ($rows as $r) {
+        $byId[(int)$r['pdu_id']] = $r;
+    }
+    $vendor = trim((string)$vendor);
+    $model = trim((string)$model);
+    if ($vendor !== '' && $model !== '') {
+        try {
+            $legacy = Database::fetchAll(
+                'SELECT pdu_id, name, manufacturer, model, ip_address, pdu_template_id, is_active
+                 FROM pdus
+                 WHERE is_active = 1
+                   AND manufacturer = ? AND model = ?
+                   AND (pdu_template_id IS NULL OR pdu_template_id = 0 OR pdu_template_id = ?)
+                 ORDER BY name',
+                [$vendor, $model, $templateId]
+            );
+            foreach ($legacy as $r) {
+                $byId[(int)$r['pdu_id']] = $r;
+            }
+        } catch (Throwable $e) {
+            try {
+                $legacy = Database::fetchAll(
+                    'SELECT pdu_id, name, manufacturer, model, ip_address, is_active
+                     FROM pdus
+                     WHERE is_active = 1 AND manufacturer = ? AND model = ?
+                     ORDER BY name',
+                    [$vendor, $model]
+                );
+                foreach ($legacy as $r) {
+                    $byId[(int)$r['pdu_id']] = $r;
+                }
+            } catch (Throwable $e2) {
+                // ignore
+            }
+        }
+    }
+    return array_values($byId);
+}
+
+/**
+ * Apply template fields to a PDU row (never touches name, serial, IP, placement, secrets).
+ *
+ * @param array<string,mixed> $fields
+ * @param list<array<string,mixed>> $outletDefs
+ * @return array{updated:bool,outlets:int}
+ */
+function power_pdu_template_apply_to_pdu(
+    int $pduId,
+    int $templateId,
+    array $fields,
+    array $outletDefs = [],
+    bool $forceOutlets = true
+): array {
+    if ($pduId < 1) {
+        return ['updated' => false, 'outlets' => 0];
+    }
+    $allowed = array_flip(power_pdu_template_static_keys());
+    $row = [];
+    foreach ($fields as $k => $v) {
+        if (!isset($allowed[$k])) {
+            continue;
+        }
+        if (in_array($k, ['name', 'serial_no', 'ip_address', 'cabinet_id', 'row_id', 'zone_id', 'position_u'], true)) {
+            continue;
+        }
+        $row[$k] = $v;
+    }
+    $row['pdu_template_id'] = $templateId;
+    if (isset($row['manufacturer']) && $row['manufacturer'] === '') {
+        $row['manufacturer'] = null;
+    }
+    if (isset($row['model']) && $row['model'] === '') {
+        $row['model'] = null;
+    }
+    if (array_key_exists('snmp_site_template_id', $row)) {
+        $tid = (int)$row['snmp_site_template_id'];
+        $row['snmp_site_template_id'] = $tid > 0 ? $tid : null;
+        if ($tid > 0) {
+            $row['snmp_enabled'] = 1;
+        }
+    }
+    if (array_key_exists('snmp_v3_profile_id', $row)) {
+        $pid = (int)$row['snmp_v3_profile_id'];
+        $row['snmp_v3_profile_id'] = $pid > 0 ? $pid : null;
+    }
+    if (isset($row['output_mode'])) {
+        $row['output_mode'] = power_normalize_output_mode((string)$row['output_mode']);
+    }
+    if (isset($row['breaker_layout'])) {
+        $row['breaker_layout'] = power_normalize_breaker_layout((string)$row['breaker_layout']);
+    }
+
+    $updated = false;
+    if ($row) {
+        try {
+            Database::update('pdus', $row, 'pdu_id = :id', [':id' => $pduId]);
+            $updated = true;
+        } catch (Throwable $e) {
+            // Retry without pdu_template_id if column missing
+            unset($row['pdu_template_id']);
+            if ($row) {
+                Database::update('pdus', $row, 'pdu_id = :id', [':id' => $pduId]);
+                $updated = true;
+            }
+        }
+    }
+
+    $outletN = 0;
+    $mode = power_normalize_output_mode((string)($fields['output_mode'] ?? 'outlets'));
+    if ($mode === 'outlets') {
+        $num = (int)($fields['num_outlets'] ?? 0);
+        if ($num < 1 && $outletDefs) {
+            $num = count($outletDefs);
+        }
+        if ($num > 0) {
+            power_sync_outlet_inventory($pduId, $num, 'C13', null);
+            if ($outletDefs) {
+                $outletN = power_apply_outlet_defs($pduId, $outletDefs, $forceOutlets);
+            }
+        }
+    }
+    return ['updated' => $updated, 'outlets' => $outletN];
+}

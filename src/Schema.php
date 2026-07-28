@@ -179,6 +179,8 @@ class Schema
                 'snmp_site_template_id' => 'INT NULL',
                 // Include in SNMP scheduler (poll_snmp.php) when a site template is assigned
                 'snmp_auto_poll' => 'BIT NOT NULL CONSTRAINT DF_pdus_snmp_auto DEFAULT 0',
+                // Inventory template this PDU was created from / is linked to (bulk apply target)
+                'pdu_template_id' => 'INT NULL',
                 // Last multi-phase snapshot JSON: { "L1": {watts,amps,volts}, "L2":…, "L3":… }
                 'last_poll_phases' => 'NVARCHAR(MAX) NULL',
                 // Last per-outlet snapshot JSON: { "1": {amps,watts,name,state}, … }
