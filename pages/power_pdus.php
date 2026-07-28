@@ -1093,12 +1093,14 @@ if ($pduId) {
             $hasPhaseLoadSnap = true;
         }
     }
-    // Show chart containers when template/snapshot suggests data; JS still hides if history empty
+    // Voltage charts only when template/snapshot suggests volts (JS still hides if history empty)
     $showPhaseVoltsChart = $hasPhaseVoltsOid || $hasPhaseVoltsSnap;
-    $showPhaseLoadChart = $hasPhaseLoadOid || $hasPhaseLoadSnap || !$showPhaseVoltsChart;
-    // Avg L–N volts: hide when we only have load_state (older strips)
     $showAvgVoltsChart = $hasPhaseVoltsOid || $hasPhaseVoltsSnap
         || (isset($p['last_poll_volts']) && $p['last_poll_volts'] !== null && $p['last_poll_volts'] !== '');
+    // Missing SNMP metrics in Phase status table
+    $phaseNa = static function (): string {
+        return '<span class="text-muted snmp-metric-na" title="The PDU&#39;s SNMP does not report this metric" style="cursor:help">N/A</span>';
+    };
     ?>
     <!-- 24h PDU history -->
     <div class="card power-history-wide mb-2" data-power-history data-scope="pdu" data-id="<?= (int)$pduId ?>" data-hours="24">
@@ -1106,7 +1108,7 @@ if ($pduId) {
             <h2 style="margin:0;font-size:1.05rem">Last 24 hours</h2>
             <span class="text-muted" style="font-size:.8rem">
                 SNMP samples · outage markers
-                · charts shown only when data is available
+                · voltage charts only when reported
             </span>
         </div>
         <div class="card-body power-history-body">
@@ -1117,9 +1119,6 @@ if ($pduId) {
             <?php endif; ?>
             <?php if ($showPhaseVoltsChart): ?>
             <div class="power-chart" data-metric="phase_volts" data-unit="V" data-label="Phase voltages L1 / L2 / L3" data-color="#94a3b8" data-height="160" data-hide-empty="1"></div>
-            <?php endif; ?>
-            <?php if ($showPhaseLoadChart): ?>
-            <div class="power-chart" data-metric="phase_load_state" data-unit="state" data-label="Phase load state L1 / L2 / L3" data-color="#f59e0b" data-height="140" data-hide-empty="1" title="1=low · 2=normal · 3=near overload · 4=overload"></div>
             <?php endif; ?>
         </div>
     </div>
@@ -1133,8 +1132,6 @@ if ($pduId) {
         $showVa = false;
         $showPf = false;
         $showPeak = false;
-        $showState = false;
-        $showVoltsCol = false;
         $ratedAmps = isset($phaseSnap['device']['rated_amps']) ? (float)$phaseSnap['device']['rated_amps'] : null;
         foreach ($phaseRows as $pr) {
             if ($pr['watts'] !== null) {
@@ -1150,13 +1147,10 @@ if ($pduId) {
             if ($pr['peak_amps'] !== null) {
                 $showPeak = true;
             }
-            if ($pr['load_state'] !== null) {
-                $showState = true;
-            }
-            if ($pr['volts'] !== null) {
-                $showVoltsCol = true;
-            }
         }
+        // Always show core columns; missing values render as N/A with tooltip
+        $showVoltsCol = true;
+        $showState = true;
         $showUtil = $ratedAmps !== null && $ratedAmps > 0;
         ?>
     <div class="card mb-2" id="pdu-phase-status">
@@ -1201,25 +1195,35 @@ if ($pduId) {
                     <tr>
                         <td><strong><?= App::e($pr['label']) ?></strong></td>
                         <?php if ($showVoltsCol): ?>
-                            <td><?= $pr['volts'] !== null ? App::e(power_fmt_metric($pr['volts'], 1)) . ' V' : '—' ?></td>
+                            <td><?= $pr['volts'] !== null
+                                ? App::e(power_fmt_metric($pr['volts'], 1)) . ' V'
+                                : $phaseNa() ?></td>
                         <?php endif; ?>
                         <td>
                             <?php if ($pr['watts'] !== null): ?>
                                 <?= App::e(power_fmt_metric($pr['watts'] / 1000, 3)) ?> kW
                                 <span class="text-muted" style="font-size:.8rem">(<?= App::e(power_fmt_metric($pr['watts'], 0)) ?> W)</span>
                             <?php else: ?>
-                                —
+                                <?= $phaseNa() ?>
                             <?php endif; ?>
                         </td>
                         <?php if ($showVa): ?>
-                            <td><?= $pr['va'] !== null ? App::e(power_fmt_metric($pr['va'] / 1000, 3)) . ' kVA' : '—' ?></td>
+                            <td><?= $pr['va'] !== null
+                                ? App::e(power_fmt_metric($pr['va'] / 1000, 3)) . ' kVA'
+                                : $phaseNa() ?></td>
                         <?php endif; ?>
                         <?php if ($showPf): ?>
-                            <td><?= $pr['pf'] !== null ? App::e(power_fmt_metric($pr['pf'], 2)) : '—' ?></td>
+                            <td><?= $pr['pf'] !== null
+                                ? App::e(power_fmt_metric($pr['pf'], 2))
+                                : $phaseNa() ?></td>
                         <?php endif; ?>
-                        <td><?= $pr['amps'] !== null ? App::e(power_fmt_metric($pr['amps'], 2)) . ' A' : '—' ?></td>
+                        <td><?= $pr['amps'] !== null
+                            ? App::e(power_fmt_metric($pr['amps'], 2)) . ' A'
+                            : $phaseNa() ?></td>
                         <?php if ($showPeak): ?>
-                            <td><?= $pr['peak_amps'] !== null ? App::e(power_fmt_metric($pr['peak_amps'], 2)) . ' A' : '—' ?></td>
+                            <td><?= $pr['peak_amps'] !== null
+                                ? App::e(power_fmt_metric($pr['peak_amps'], 2)) . ' A'
+                                : $phaseNa() ?></td>
                         <?php endif; ?>
                         <?php if ($showUtil): ?>
                             <td>
@@ -1227,12 +1231,14 @@ if ($pduId) {
                                     <span class="badge badge-<?= App::e($utilClass) ?>"><?= App::e(power_fmt_metric($utilPct, 1)) ?>%</span>
                                     <span class="text-muted" style="font-size:.75rem">/ <?= App::e(power_fmt_metric($ratedAmps, 0)) ?> A</span>
                                 <?php else: ?>
-                                    —
+                                    <?= $phaseNa() ?>
                                 <?php endif; ?>
                             </td>
                         <?php endif; ?>
                         <?php if ($showState): ?>
-                            <td><?= App::e(power_phase_load_state_label($pr['load_state'])) ?></td>
+                            <td><?= $pr['load_state'] !== null
+                                ? App::e(power_phase_load_state_label($pr['load_state']))
+                                : $phaseNa() ?></td>
                         <?php endif; ?>
                     </tr>
                 <?php endforeach; ?>

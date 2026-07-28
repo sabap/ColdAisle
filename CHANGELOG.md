@@ -19,6 +19,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.2.80] - 2026-07-28
+
+### Enhancements
+
+- Phase status table: missing metrics show **N/A** with tooltip *“The PDU's SNMP does not report this metric”* (instead of a dash).
+- Removed the separate **phase load-state** history graph; load state remains in the Phase status table.
+
+---
+
 ## [0.2.79] - 2026-07-28
 
 ### New features
