@@ -727,7 +727,9 @@ function power_pdu_template_static_keys(): array
         'rated_volts', 'sync_zone_voltage',
         'input_type', 'rated_amps',
         'output_mode', 'num_outlets', 'num_breaker_slots', 'breaker_layout', 'breaker_columns',
+        // SNMP profile (not secrets) + site OID map used by Poll now / scheduler
         'snmp_enabled', 'snmp_version', 'snmp_port', 'snmp_v3_profile_id', 'snmp_v3_sec_level',
+        'snmp_site_template_id', 'snmp_auto_poll',
         'notes',
     ];
 }
@@ -750,10 +752,29 @@ function power_pdu_template_payload_from_pdu(array $pdu, ?array $outlets = null)
         if ($v === null || $v === '') {
             continue;
         }
+        // Normalize ints for template ids / flags
+        if (in_array($k, ['snmp_site_template_id', 'snmp_v3_profile_id', 'snmp_port', 'snmp_auto_poll', 'snmp_enabled'], true)) {
+            $fields[$k] = (int)$v;
+            if ($fields[$k] === 0 && in_array($k, ['snmp_site_template_id', 'snmp_v3_profile_id'], true)) {
+                unset($fields[$k]);
+            }
+            continue;
+        }
         $fields[$k] = $v;
     }
-    // Never keep placement / identity
-    unset($fields['name'], $fields['serial_no'], $fields['ip_address']);
+    // Never keep placement / identity / host-specific secrets
+    unset(
+        $fields['name'],
+        $fields['serial_no'],
+        $fields['ip_address'],
+        $fields['snmp_community'],
+        $fields['snmp_auth_passphrase'],
+        $fields['snmp_priv_passphrase']
+    );
+    // OID map without site template is incomplete for scheduled poll — leave flag only if map present
+    if (empty($fields['snmp_site_template_id'])) {
+        unset($fields['snmp_auto_poll']);
+    }
 
     $outletDefs = [];
     if (is_array($outlets)) {

@@ -66,6 +66,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             $outletsJson = $payload['outlets']
                 ? json_encode($payload['outlets'], JSON_UNESCAPED_SLASHES)
                 : null;
+            $oidTplId = (int)($payload['fields']['snmp_site_template_id'] ?? 0);
+            $oidTplLabel = '';
+            if ($oidTplId > 0) {
+                try {
+                    $oidRow = Database::fetchOne(
+                        'SELECT name FROM snmp_site_oid_templates WHERE template_id = ?',
+                        [$oidTplId]
+                    );
+                    $oidTplLabel = $oidRow ? (string)$oidRow['name'] : ('#' . $oidTplId);
+                } catch (Throwable $e) {
+                    $oidTplLabel = '#' . $oidTplId;
+                }
+            }
 
             $existing = null;
             try {
@@ -116,7 +129,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                     'is_active' => 1,
                 ], 'template_id = :id', [':id' => (int)$existing['template_id']]);
                 unset($_SESSION['pdu_template_overwrite']);
-                App::flash('success', 'Overwrote PDU template "' . $name . '".');
+                $msg = 'Overwrote PDU template "' . $name . '".';
+                if ($oidTplLabel !== '') {
+                    $msg .= ' Includes OID map "' . $oidTplLabel . '".';
+                } else {
+                    $msg .= ' No site OID template on this PDU — assign one (Edit or Discover) and re-save the template if you need polling.';
+                }
+                App::flash('success', $msg);
             } else {
                 Database::insert('pdu_templates', [
                     'name' => $name,
@@ -126,7 +145,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                     'outlets_json' => $outletsJson,
                     'is_active' => 1,
                 ]);
-                App::flash('success', 'Created PDU template "' . $name . '". Apply it when adding new PDUs.');
+                $msg = 'Created PDU template "' . $name . '". Apply it when adding new PDUs.';
+                if ($oidTplLabel !== '') {
+                    $msg .= ' Includes OID map "' . $oidTplLabel . '".';
+                } else {
+                    $msg .= ' No site OID template on this PDU — assign Discover/OID map first for poll-ready templates.';
+                }
+                App::flash('success', $msg);
             }
             App::redirect('pages/power_pdus.php?id=' . $pid);
         }
@@ -156,6 +181,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                         }
                         if ($numOutlets < 1 && $tplOutlets) {
                             $numOutlets = count($tplOutlets);
+                        }
+                        // Bundle site OID template + poll flag from PDU template when form left blank
+                        if ((int)($_POST['snmp_site_template_id'] ?? 0) < 1
+                            && !empty($tplFields['snmp_site_template_id'])
+                        ) {
+                            $_POST['snmp_site_template_id'] = (string)(int)$tplFields['snmp_site_template_id'];
+                        }
+                        if (empty($_POST['snmp_enabled'])
+                            && (!empty($tplFields['snmp_enabled']) || !empty($tplFields['snmp_site_template_id']))
+                        ) {
+                            $_POST['snmp_enabled'] = '1';
+                        }
+                        if (!isset($_POST['snmp_auto_poll']) && !empty($tplFields['snmp_auto_poll'])) {
+                            $_POST['snmp_auto_poll'] = '1';
+                        }
+                        // Fill common SNMP profile fields from template if empty on form
+                        foreach (['snmp_version', 'snmp_port', 'snmp_v3_profile_id', 'snmp_v3_sec_level'] as $sk) {
+                            if ((!isset($_POST[$sk]) || $_POST[$sk] === '' || $_POST[$sk] === '0')
+                                && isset($tplFields[$sk]) && $tplFields[$sk] !== '' && $tplFields[$sk] !== null
+                            ) {
+                                $_POST[$sk] = (string)$tplFields[$sk];
+                            }
                         }
                     }
                 } catch (Throwable $e) {
