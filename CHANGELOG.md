@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to **ColdAisle** are documented here.
 
@@ -16,6 +16,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 ### Enhancements
 
 ### Bug fixes
+
+---
+
+## [0.2.78] - 2026-07-28
+
+### Bug fixes
+
+- **Critical:** remove UTF-8 BOM from `src/App.php` introduced by the release script (Windows `Set-Content -Encoding UTF8`). BOM caused a fatal error (`strict_types declaration must be the very first statement`) and took sites offline after update. Release script now writes UTF-8 without BOM.
 
 ---
 

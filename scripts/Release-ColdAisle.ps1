@@ -253,21 +253,31 @@ if ($newCl -eq $cl) {
     throw 'Failed to rewrite CHANGELOG.md Unreleased section.'
 }
 
-Set-Content -Path $changelogPath -Value $newCl -Encoding UTF8 -NoNewline
-# Ensure trailing newline
-Add-Content -Path $changelogPath -Value '' -Encoding UTF8
+# Write UTF-8 *without* BOM — Windows PowerShell's Set-Content -Encoding UTF8
+# adds EF BB BF, which breaks PHP (strict_types must be the first statement).
+function Write-Utf8NoBom([string]$Path, [string]$Content) {
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    if (-not $Content.EndsWith("`n")) {
+        $Content += "`n"
+    }
+    # Normalize to LF for PHP/repo consistency
+    $Content = $Content -replace "`r`n", "`n"
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8)
+}
 
-Set-Content -Path $versionPath -Value "$Version`n" -Encoding ascii -NoNewline
+Write-Utf8NoBom -Path $changelogPath -Content $newCl
+Write-Utf8NoBom -Path $versionPath -Content "$Version`n"
 
 $app = Get-Content -Path $appPath -Raw -Encoding UTF8
+# Strip BOM if present when reading
+if ($app.Length -gt 0 -and [int][char]$app[0] -eq 0xFEFF) {
+    $app = $app.Substring(1)
+}
 if ($app -notmatch "public const VERSION = '[^']+'") {
     throw 'Could not find App::VERSION constant.'
 }
 $app2 = [regex]::Replace($app, "public const VERSION = '[^']+'", "public const VERSION = '$Version'")
-Set-Content -Path $appPath -Value $app2 -Encoding UTF8 -NoNewline
-if (-not $app2.EndsWith("`n")) {
-    Add-Content -Path $appPath -Value '' -Encoding UTF8
-}
+Write-Utf8NoBom -Path $appPath -Content $app2
 
 Write-Host "==> Files updated: CHANGELOG.md, VERSION, src/App.php" -ForegroundColor Green
 

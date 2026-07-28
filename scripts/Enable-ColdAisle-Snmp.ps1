@@ -1,4 +1,4 @@
-﻿#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Enable the PHP SNMP extension for ColdAisle (Windows IIS + PHP FastCGI).

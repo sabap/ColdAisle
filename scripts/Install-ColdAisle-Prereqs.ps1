@@ -1,4 +1,4 @@
-﻿#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Installs IIS + PHP (NTS/FastCGI) prerequisites for ColdAisle on Windows Server / Windows 10+.
