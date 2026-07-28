@@ -162,6 +162,20 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
 .form-control:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.25); }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
 .form-grid .full { grid-column: 1 / -1; }
+/* Fixed 3-column layout (PDU add/edit modal and similar dense forms) */
+.form-grid.form-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (max-width: 900px) {
+  .form-grid.form-grid-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .form-grid.form-grid-3 {
+    grid-template-columns: 1fr;
+  }
+}
 .form-actions { display: flex; gap: .75rem; margin-top: 1rem; flex-wrap: wrap; }
 
 /* Cards & metrics */
