@@ -20,6 +20,63 @@ $formModal = !empty($formModal);
         <input type="hidden" name="pdu_id" value="<?= (int)($edit['pdu_id'] ?? 0) ?>">
     <?php endif; ?>
 
+    <?php
+    $pduTemplates = $pduTemplates ?? [];
+    $formNumBreakerSlots = max(1, (int)($edit['num_breaker_slots'] ?? 42));
+    $formNumOutlets = max(0, (int)($edit['num_outlets'] ?? 0));
+    ?>
+    <?php if (!$isUpdate && $pduTemplates):
+        $siteOidById = [];
+        foreach ($siteOidTemplates ?? [] as $st) {
+            $siteOidById[(int)$st['template_id']] = (string)($st['name'] ?? '');
+        }
+        ?>
+    <div class="form-row full pdu-tpl-picker">
+        <h4 class="mt-0" style="margin-bottom:.35rem;font-size:.95rem;color:var(--muted)">Apply PDU template</h4>
+        <select class="form-control" id="power_apply_pdu_template" data-templates="<?= App::e(json_encode(array_map(static function ($t) use ($siteOidById) {
+            $fields = json_decode((string)($t['fields_json'] ?? '{}'), true) ?: [];
+            $outlets = json_decode((string)($t['outlets_json'] ?? '[]'), true) ?: [];
+            $oidId = (int)($fields['snmp_site_template_id'] ?? 0);
+            return [
+                'template_id' => (int)$t['template_id'],
+                'name' => (string)$t['name'],
+                'vendor' => (string)($t['vendor'] ?? ''),
+                'model' => (string)($t['model'] ?? ''),
+                'fields' => $fields,
+                'outlets' => $outlets,
+                'oid_template_id' => $oidId,
+                'oid_template_name' => $oidId > 0 ? ($siteOidById[$oidId] ?? ('#' . $oidId)) : '',
+            ];
+        }, $pduTemplates), JSON_UNESCAPED_SLASHES)) ?>">
+            <option value="">— None (manual) —</option>
+            <?php foreach ($pduTemplates as $pt):
+                $ptFields = json_decode((string)($pt['fields_json'] ?? '{}'), true) ?: [];
+                $ptOidId = (int)($ptFields['snmp_site_template_id'] ?? 0);
+                $ptOidName = $ptOidId > 0 ? ($siteOidById[$ptOidId] ?? '') : '';
+                ?>
+                <option value="<?= (int)$pt['template_id'] ?>">
+                    <?= App::e($pt['name']) ?>
+                    <?php if (!empty($pt['model'])): ?>
+                        · <?= App::e((string)$pt['model']) ?>
+                    <?php endif; ?>
+                    <?php if ($ptOidName !== ''): ?>
+                        · OID: <?= App::e($ptOidName) ?>
+                    <?php elseif ($ptOidId > 0): ?>
+                        · OID #<?= $ptOidId ?>
+                    <?php else: ?>
+                        · no OID map
+                    <?php endif; ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+        <p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">
+            Fills electrical layout, SNMP options, <strong>site OID map</strong>, and outlet inventory.
+            Name, IP, serial, and placement stay blank. Template-filled fields are shown subdued until you edit them.
+        </p>
+        <input type="hidden" name="pdu_template_id" id="power_pdu_template_id" value="">
+    </div>
+    <?php endif; ?>
+
     <div class="form-row"><label>Name</label>
         <input class="form-control" name="name" required value="<?= App::e($edit['name'] ?? '') ?>"></div>
     <div class="form-row"><label>Vendor</label>
@@ -143,66 +200,6 @@ $formModal = !empty($formModal);
         <input class="form-control" type="number" step="0.1" name="rated_amps" value="<?= App::e((string)($edit['rated_amps'] ?? '30')) ?>"></div>
     <div class="form-row"><label>IP address</label>
         <input class="form-control" name="ip_address" value="<?= App::e($edit['ip_address'] ?? '') ?>"></div>
-
-    <?php
-    $pduTemplates = $pduTemplates ?? [];
-    $formNumBreakerSlots = max(1, (int)($edit['num_breaker_slots'] ?? 42));
-    // Hidden seed for updates / template apply (not shown on create for outlets mode)
-    $formNumOutlets = max(0, (int)($edit['num_outlets'] ?? 0));
-    ?>
-    <?php if (!$isUpdate && $pduTemplates):
-        $siteOidById = [];
-        foreach ($siteOidTemplates ?? [] as $st) {
-            $siteOidById[(int)$st['template_id']] = (string)($st['name'] ?? '');
-        }
-        ?>
-    <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">PDU template</h4></div>
-    <div class="form-row full">
-        <label>Apply PDU template</label>
-        <select class="form-control" id="power_apply_pdu_template" data-templates="<?= App::e(json_encode(array_map(static function ($t) use ($siteOidById) {
-            $fields = json_decode((string)($t['fields_json'] ?? '{}'), true) ?: [];
-            $outlets = json_decode((string)($t['outlets_json'] ?? '[]'), true) ?: [];
-            $oidId = (int)($fields['snmp_site_template_id'] ?? 0);
-            return [
-                'template_id' => (int)$t['template_id'],
-                'name' => (string)$t['name'],
-                'vendor' => (string)($t['vendor'] ?? ''),
-                'model' => (string)($t['model'] ?? ''),
-                'fields' => $fields,
-                'outlets' => $outlets,
-                'oid_template_id' => $oidId,
-                'oid_template_name' => $oidId > 0 ? ($siteOidById[$oidId] ?? ('#' . $oidId)) : '',
-            ];
-        }, $pduTemplates), JSON_UNESCAPED_SLASHES)) ?>">
-            <option value="">— None (manual) —</option>
-            <?php foreach ($pduTemplates as $pt):
-                $ptFields = json_decode((string)($pt['fields_json'] ?? '{}'), true) ?: [];
-                $ptOidId = (int)($ptFields['snmp_site_template_id'] ?? 0);
-                $ptOidName = $ptOidId > 0 ? ($siteOidById[$ptOidId] ?? '') : '';
-                ?>
-                <option value="<?= (int)$pt['template_id'] ?>">
-                    <?= App::e($pt['name']) ?>
-                    <?php if (!empty($pt['model'])): ?>
-                        · <?= App::e((string)$pt['model']) ?>
-                    <?php endif; ?>
-                    <?php if ($ptOidName !== ''): ?>
-                        · OID: <?= App::e($ptOidName) ?>
-                    <?php elseif ($ptOidId > 0): ?>
-                        · OID #<?= $ptOidId ?>
-                    <?php else: ?>
-                        · no OID map
-                    <?php endif; ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
-            Fills electrical layout, SNMP options, <strong>site OID map</strong>, and outlet inventory.
-            Name, IP, serial, and placement stay blank for you to set.
-            Re-save a template from a PDU that already has Discover/OID assigned to bundle the map.
-        </p>
-        <input type="hidden" name="pdu_template_id" id="power_pdu_template_id" value="">
-    </div>
-    <?php endif; ?>
 
     <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Distribution outputs</h4></div>
     <div class="form-row"><label>Output type</label>
@@ -472,54 +469,151 @@ $formModal = !empty($formModal);
             tplCatalog = JSON.parse(tplSel.getAttribute('data-templates') || '[]') || [];
         }
     } catch (e) { tplCatalog = []; }
-    function setFormVal(name, val) {
-        var el = root.querySelector('[name="' + name + '"]');
+    var tplFilledEls = [];
+    function clearTplFilledMarks() {
+        tplFilledEls.forEach(function (el) {
+            el.classList.remove('tpl-filled');
+            el.removeAttribute('data-tpl-filled');
+        });
+        tplFilledEls = [];
+        root.classList.remove('pdu-form-from-template');
+    }
+    function markTplFilled(el) {
         if (!el) return;
+        el.classList.add('tpl-filled');
+        el.setAttribute('data-tpl-filled', '1');
+        if (tplFilledEls.indexOf(el) < 0) tplFilledEls.push(el);
+    }
+    function setFormVal(name, val, fromTemplate) {
+        var el = root.querySelector('[name="' + name + '"]');
+        if (!el) return null;
         if (el.type === 'checkbox') {
             el.checked = !!val && val !== '0' && val !== 0;
-            return;
+        } else {
+            el.value = val == null ? '' : String(val);
         }
-        el.value = val == null ? '' : String(val);
+        if (fromTemplate) markTplFilled(el);
+        return el;
+    }
+    // SNMPv3 profile → fill non-secret fields (passphrases applied server-side on save)
+    var snmpProf = root.querySelector('#power_snmp_v3_profile_id');
+    function applySnmpProfileFromSelect(fromTemplate) {
+        if (!snmpProf) return;
+        var opt = snmpProf.options[snmpProf.selectedIndex];
+        if (!opt || !opt.value) return;
+        var setVal = function (sel, v) {
+            var el = root.querySelector(sel);
+            if (el && v != null && v !== '') {
+                el.value = v;
+                if (fromTemplate) markTplFilled(el);
+            }
+        };
+        setVal('#power_snmp_security_name', opt.getAttribute('data-user'));
+        setVal('#power_snmp_v3_sec_level', opt.getAttribute('data-level'));
+        setVal('#power_snmp_auth_protocol', opt.getAttribute('data-auth-proto'));
+        setVal('#power_snmp_priv_protocol', opt.getAttribute('data-priv-proto'));
+        setVal('#power_snmp_context', opt.getAttribute('data-context') || '');
+        var ap = root.querySelector('#power_snmp_auth_passphrase');
+        var pp = root.querySelector('#power_snmp_priv_passphrase');
+        if (ap) { ap.value = ''; ap.placeholder = 'Applied from profile on save'; if (fromTemplate) markTplFilled(ap); }
+        if (pp) { pp.value = ''; pp.placeholder = 'Applied from profile on save'; if (fromTemplate) markTplFilled(pp); }
+        if (snmpVer) {
+            snmpVer.value = '3';
+            if (fromTemplate) markTplFilled(snmpVer);
+        }
+        toggleSnmp();
     }
     function applyPduTemplate(tid) {
-        var t = tplCatalog.find(function (x) { return String(x.template_id) === String(tid); });
+        clearTplFilledMarks();
         if (tplIdInp) tplIdInp.value = tid || '';
+        if (!tid) return;
+        var t = tplCatalog.find(function (x) { return String(x.template_id) === String(tid); });
         if (!t || !t.fields) return;
         var f = t.fields;
-        // Enable SNMP first so OID/template fields are not disabled
+        root.classList.add('pdu-form-from-template');
+        // Enable SNMP first so OID/profile fields are visible and not disabled
         var needsSnmp = !!(f.snmp_enabled || f.snmp_site_template_id || f.snmp_v3_profile_id);
         if (needsSnmp && snmpEn) {
             snmpEn.checked = true;
-            snmpEn.dispatchEvent(new Event('change'));
+            markTplFilled(snmpEn);
+            toggleSnmp();
+        }
+        // Version before profile so v3 fields show
+        if (f.snmp_v3_profile_id && snmpVer) {
+            snmpVer.value = '3';
+            markTplFilled(snmpVer);
+            toggleSnmp();
+        } else if (f.snmp_version != null) {
+            setFormVal('snmp_version', f.snmp_version, true);
+            toggleSnmp();
         }
         Object.keys(f).forEach(function (k) {
             // never overwrite identity / placement on apply
             if (['name', 'serial_no', 'ip_address', 'cabinet_id', 'row_id', 'zone_id', 'position_u'].indexOf(k) >= 0) return;
-            setFormVal(k, f[k]);
+            // profile filled after select is set
+            if (k === 'snmp_v3_profile_id') return;
+            setFormVal(k, f[k], true);
         });
         if (f.num_outlets != null) {
             var nOut = root.querySelector('#power_num_outlets') || root.querySelector('input[name="num_outlets"]');
-            if (nOut) nOut.value = String(f.num_outlets);
+            if (nOut) {
+                nOut.value = String(f.num_outlets);
+                markTplFilled(nOut);
+            }
         }
-        // Explicit OID map apply (site template) — drives Poll now / scheduler
         if (f.snmp_site_template_id) {
-            setFormVal('snmp_site_template_id', f.snmp_site_template_id);
+            setFormVal('snmp_site_template_id', f.snmp_site_template_id, true);
         }
         if (f.snmp_auto_poll != null) {
-            setFormVal('snmp_auto_poll', f.snmp_auto_poll);
+            setFormVal('snmp_auto_poll', f.snmp_auto_poll, true);
         }
-        if (snmpEn) snmpEn.dispatchEvent(new Event('change'));
-        if (snmpVer) snmpVer.dispatchEvent(new Event('change'));
-        if (phases) phases.dispatchEvent(new Event('change'));
-        if (outMode) outMode.dispatchEvent(new Event('change'));
-        if (scope) scope.dispatchEvent(new Event('change'));
-        if (mount) mount.dispatchEvent(new Event('change'));
+        // Select profile then populate SNMPv3 fields from option data-* attributes
+        if (f.snmp_v3_profile_id && snmpProf) {
+            snmpProf.value = String(f.snmp_v3_profile_id);
+            markTplFilled(snmpProf);
+            applySnmpProfileFromSelect(true);
+        }
+        // Refresh dependent UI without overwriting template voltages (isUpdate false would preset)
+        if (phases) {
+            // refresh wiring options without electrical presets when from template
+            var prevApplying = applyingPreset;
+            applyingPreset = true;
+            refreshWiringOptions(false);
+            applyingPreset = prevApplying;
+            // re-apply wiring/phases from template after option rebuild
+            if (f.phase_wiring) setFormVal('phase_wiring', f.phase_wiring, true);
+            if (f.phases != null) setFormVal('phases', f.phases, true);
+            togglePhaseFields(false);
+            // restore voltages from template
+            ['input_voltage', 'input_voltage_ln', 'output_voltage', 'output_voltage_ln'].forEach(function (k) {
+                if (f[k] != null && f[k] !== '') setFormVal(k, f[k], true);
+            });
+        }
+        if (snmpEn) toggleSnmp();
+        if (outMode) toggleOutputMode();
+        if (scope) toggleScope();
+        if (mount) toggleMount();
     }
     if (tplSel) {
         tplSel.addEventListener('change', function () {
             applyPduTemplate(tplSel.value);
         });
     }
+    // Clear subdued style when user edits a template-filled control
+    root.addEventListener('input', function (e) {
+        var el = e.target;
+        if (el && el.getAttribute('data-tpl-filled')) {
+            el.classList.remove('tpl-filled');
+            el.removeAttribute('data-tpl-filled');
+        }
+    });
+    root.addEventListener('change', function (e) {
+        var el = e.target;
+        if (el && el.getAttribute('data-tpl-filled') && el.id !== 'power_apply_pdu_template') {
+            el.classList.remove('tpl-filled');
+            el.removeAttribute('data-tpl-filled');
+        }
+    });
     // Selecting an OID site template implies SNMP should be on
     var siteTplSel = root.querySelector('#power_snmp_site_template_id');
     if (siteTplSel && snmpEn) {
@@ -611,28 +705,9 @@ $formModal = !empty($formModal);
     if (wiring) wiring.addEventListener('change', function () { togglePhaseFields(true); });
     if (inLl) inLl.addEventListener('change', deriveLn);
 
-    // SNMPv3 profile → fill non-secret fields (passphrases applied server-side on save)
-    var snmpProf = root.querySelector('#power_snmp_v3_profile_id');
     if (snmpProf) {
         snmpProf.addEventListener('change', function () {
-            var opt = snmpProf.options[snmpProf.selectedIndex];
-            if (!opt || !opt.value) return;
-            var setVal = function (sel, v) {
-                var el = root.querySelector(sel);
-                if (el && v != null && v !== '') el.value = v;
-            };
-            setVal('#power_snmp_security_name', opt.getAttribute('data-user'));
-            setVal('#power_snmp_v3_sec_level', opt.getAttribute('data-level'));
-            setVal('#power_snmp_auth_protocol', opt.getAttribute('data-auth-proto'));
-            setVal('#power_snmp_priv_protocol', opt.getAttribute('data-priv-proto'));
-            setVal('#power_snmp_context', opt.getAttribute('data-context') || '');
-            // Clear visible pass fields — profile secrets applied on save from DB
-            var ap = root.querySelector('#power_snmp_auth_passphrase');
-            var pp = root.querySelector('#power_snmp_priv_passphrase');
-            if (ap) { ap.value = ''; ap.placeholder = 'Applied from profile on save'; }
-            if (pp) { pp.value = ''; pp.placeholder = 'Applied from profile on save'; }
-            if (snmpVer) snmpVer.value = '3';
-            toggleSnmp();
+            applySnmpProfileFromSelect(false);
         });
     }
 
@@ -642,3 +717,27 @@ $formModal = !empty($formModal);
     toggleSnmp();
 })();
 </script>
+<style>
+/* Template-applied fields: subdued until the user edits them */
+#<?= App::e($formId) ?> .form-control.tpl-filled,
+#<?= App::e($formId) ?> select.tpl-filled,
+#<?= App::e($formId) ?> textarea.tpl-filled {
+    background: rgba(100, 116, 139, 0.18);
+    border-color: rgba(148, 163, 184, 0.45);
+    color: var(--muted, #94a3b8);
+}
+#<?= App::e($formId) ?> .tpl-filled:focus {
+    color: inherit;
+    background: var(--surface, #0f172a);
+    border-color: var(--accent, #3b82f6);
+}
+#<?= App::e($formId) ?> input[type="checkbox"].tpl-filled {
+    accent-color: #64748b;
+    opacity: 0.85;
+}
+#<?= App::e($formId) ?> .pdu-tpl-picker {
+    margin-bottom: 0.35rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border, #334155);
+}
+</style>
