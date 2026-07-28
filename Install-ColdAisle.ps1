@@ -1,4 +1,4 @@
-﻿#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Install ColdAisle on Windows (IIS + PHP + ODBC) and deploy the latest release from GitHub.
