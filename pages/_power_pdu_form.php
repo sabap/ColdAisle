@@ -150,13 +150,19 @@ $formModal = !empty($formModal);
     // Hidden seed for updates / template apply (not shown on create for outlets mode)
     $formNumOutlets = max(0, (int)($edit['num_outlets'] ?? 0));
     ?>
-    <?php if (!$isUpdate && $pduTemplates): ?>
+    <?php if (!$isUpdate && $pduTemplates):
+        $siteOidById = [];
+        foreach ($siteOidTemplates ?? [] as $st) {
+            $siteOidById[(int)$st['template_id']] = (string)($st['name'] ?? '');
+        }
+        ?>
     <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">PDU template</h4></div>
     <div class="form-row full">
         <label>Apply PDU template</label>
-        <select class="form-control" id="power_apply_pdu_template" data-templates="<?= App::e(json_encode(array_map(static function ($t) {
+        <select class="form-control" id="power_apply_pdu_template" data-templates="<?= App::e(json_encode(array_map(static function ($t) use ($siteOidById) {
             $fields = json_decode((string)($t['fields_json'] ?? '{}'), true) ?: [];
             $outlets = json_decode((string)($t['outlets_json'] ?? '[]'), true) ?: [];
+            $oidId = (int)($fields['snmp_site_template_id'] ?? 0);
             return [
                 'template_id' => (int)$t['template_id'],
                 'name' => (string)$t['name'],
@@ -164,20 +170,35 @@ $formModal = !empty($formModal);
                 'model' => (string)($t['model'] ?? ''),
                 'fields' => $fields,
                 'outlets' => $outlets,
+                'oid_template_id' => $oidId,
+                'oid_template_name' => $oidId > 0 ? ($siteOidById[$oidId] ?? ('#' . $oidId)) : '',
             ];
         }, $pduTemplates), JSON_UNESCAPED_SLASHES)) ?>">
             <option value="">— None (manual) —</option>
-            <?php foreach ($pduTemplates as $pt): ?>
+            <?php foreach ($pduTemplates as $pt):
+                $ptFields = json_decode((string)($pt['fields_json'] ?? '{}'), true) ?: [];
+                $ptOidId = (int)($ptFields['snmp_site_template_id'] ?? 0);
+                $ptOidName = $ptOidId > 0 ? ($siteOidById[$ptOidId] ?? '') : '';
+                ?>
                 <option value="<?= (int)$pt['template_id'] ?>">
                     <?= App::e($pt['name']) ?>
                     <?php if (!empty($pt['model'])): ?>
                         · <?= App::e((string)$pt['model']) ?>
                     <?php endif; ?>
+                    <?php if ($ptOidName !== ''): ?>
+                        · OID: <?= App::e($ptOidName) ?>
+                    <?php elseif ($ptOidId > 0): ?>
+                        · OID #<?= $ptOidId ?>
+                    <?php else: ?>
+                        · no OID map
+                    <?php endif; ?>
                 </option>
             <?php endforeach; ?>
         </select>
         <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
-            Fills electrical / SNMP profile / outlet layout. Name, IP, serial, and placement stay blank for you to set.
+            Fills electrical layout, SNMP options, <strong>site OID map</strong>, and outlet inventory.
+            Name, IP, serial, and placement stay blank for you to set.
+            Re-save a template from a PDU that already has Discover/OID assigned to bundle the map.
         </p>
         <input type="hidden" name="pdu_template_id" id="power_pdu_template_id" value="">
     </div>
@@ -465,6 +486,12 @@ $formModal = !empty($formModal);
         if (tplIdInp) tplIdInp.value = tid || '';
         if (!t || !t.fields) return;
         var f = t.fields;
+        // Enable SNMP first so OID/template fields are not disabled
+        var needsSnmp = !!(f.snmp_enabled || f.snmp_site_template_id || f.snmp_v3_profile_id);
+        if (needsSnmp && snmpEn) {
+            snmpEn.checked = true;
+            snmpEn.dispatchEvent(new Event('change'));
+        }
         Object.keys(f).forEach(function (k) {
             // never overwrite identity / placement on apply
             if (['name', 'serial_no', 'ip_address', 'cabinet_id', 'row_id', 'zone_id', 'position_u'].indexOf(k) >= 0) return;
@@ -473,6 +500,13 @@ $formModal = !empty($formModal);
         if (f.num_outlets != null) {
             var nOut = root.querySelector('#power_num_outlets') || root.querySelector('input[name="num_outlets"]');
             if (nOut) nOut.value = String(f.num_outlets);
+        }
+        // Explicit OID map apply (site template) — drives Poll now / scheduler
+        if (f.snmp_site_template_id) {
+            setFormVal('snmp_site_template_id', f.snmp_site_template_id);
+        }
+        if (f.snmp_auto_poll != null) {
+            setFormVal('snmp_auto_poll', f.snmp_auto_poll);
         }
         if (snmpEn) snmpEn.dispatchEvent(new Event('change'));
         if (snmpVer) snmpVer.dispatchEvent(new Event('change'));
