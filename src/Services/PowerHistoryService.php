@@ -186,7 +186,8 @@ class PowerHistoryService
      * @return array{
      *   ok:bool,scope:string,scope_id:?int,hours:int,bucket_minutes:int,
      *   series:array{t:list<string>,watts:list<?float>,kw:list<?float>,volts:list<?float>,amps:list<?float>,
-     *     phase_volts?:array{L1:list<?float>,L2:list<?float>,L3:list<?float>}},
+     *     phase_volts?:array{L1:list<?float>,L2:list<?float>,L3:list<?float>},
+     *     phase_load_state?:array{L1:list<?float>,L2:list<?float>,L3:list<?float>}},
      *   outages:list<array{t:string,phases:list<string>,label:string,count:int}>,
      *   meta:array<string,mixed>
      * }
@@ -486,7 +487,7 @@ class PowerHistoryService
             }
         }
 
-        /** @var array<int,array{w:list<float>,a:list<float>,v:list<float>,L1:list<float>,L2:list<float>,L3:list<float>,out:array}> $buckets */
+        /** @var array<int,array{w:list<float>,a:list<float>,v:list<float>,L1:list<float>,L2:list<float>,L3:list<float>,S1:list<float>,S2:list<float>,S3:list<float>,out:array}> $buckets */
         $buckets = [];
         foreach ($rows as $r) {
             $ts = strtotime((string)($r['polled_at'] ?? ''));
@@ -498,6 +499,7 @@ class PowerHistoryService
                 $buckets[$bKey] = [
                     'w' => [], 'a' => [], 'v' => [],
                     'L1' => [], 'L2' => [], 'L3' => [],
+                    'S1' => [], 'S2' => [], 'S3' => [],
                     'out' => [],
                 ];
             }
@@ -519,6 +521,10 @@ class PowerHistoryService
                         $vv = (float)$json[$lab]['volts'];
                         $phaseV[$lab] = $vv;
                         $buckets[$bKey][$lab][] = $vv;
+                    }
+                    if (isset($json[$lab]['load_state']) && is_numeric($json[$lab]['load_state'])) {
+                        $sk = 'S' . substr($lab, 1); // S1/S2/S3
+                        $buckets[$bKey][$sk][] = (float)$json[$lab]['load_state'];
                     }
                 }
             }
@@ -555,6 +561,9 @@ class PowerHistoryService
         $L1 = [];
         $L2 = [];
         $L3 = [];
+        $S1 = [];
+        $S2 = [];
+        $S3 = [];
         $outages = [];
 
         foreach ($buckets as $bKey => $b) {
@@ -569,6 +578,10 @@ class PowerHistoryService
             $L1[] = $b['L1'] ? round(array_sum($b['L1']) / count($b['L1']), 2) : null;
             $L2[] = $b['L2'] ? round(array_sum($b['L2']) / count($b['L2']), 2) : null;
             $L3[] = $b['L3'] ? round(array_sum($b['L3']) / count($b['L3']), 2) : null;
+            // Mode-ish: round average load_state enum to nearest int for display
+            $S1[] = $b['S1'] ? (float)(int)round(array_sum($b['S1']) / count($b['S1'])) : null;
+            $S2[] = $b['S2'] ? (float)(int)round(array_sum($b['S2']) / count($b['S2'])) : null;
+            $S3[] = $b['S3'] ? (float)(int)round(array_sum($b['S3']) / count($b['S3'])) : null;
 
             if ($b['out']) {
                 $phases = [];
@@ -599,16 +612,33 @@ class PowerHistoryService
             }
         }
 
-        // Continuous lines when some buckets lack voltage but earlier ones had it
+        // Continuous lines when some buckets lack a metric but earlier ones had it
         $volts = self::carryForward($volts);
         $L1 = self::carryForward($L1);
         $L2 = self::carryForward($L2);
         $L3 = self::carryForward($L3);
+        $S1 = self::carryForward($S1);
+        $S2 = self::carryForward($S2);
+        $S3 = self::carryForward($S3);
 
         $hasPhase = false;
         foreach (array_merge($L1, $L2, $L3) as $pv) {
             if ($pv !== null) {
                 $hasPhase = true;
+                break;
+            }
+        }
+        $hasLoadState = false;
+        foreach (array_merge($S1, $S2, $S3) as $sv) {
+            if ($sv !== null) {
+                $hasLoadState = true;
+                break;
+            }
+        }
+        $hasAvgVolts = false;
+        foreach ($volts as $vv) {
+            if ($vv !== null) {
+                $hasAvgVolts = true;
                 break;
             }
         }
@@ -622,6 +652,9 @@ class PowerHistoryService
         ];
         if ($hasPhase) {
             $series['phase_volts'] = ['L1' => $L1, 'L2' => $L2, 'L3' => $L3];
+        }
+        if ($hasLoadState) {
+            $series['phase_load_state'] = ['L1' => $S1, 'L2' => $S2, 'L3' => $S3];
         }
 
         $outagePhases = [];
@@ -647,6 +680,8 @@ class PowerHistoryService
                 'outage_events' => count($outages),
                 'outage_phases' => array_keys($outagePhases),
                 'has_phase_volts' => $hasPhase,
+                'has_phase_load_state' => $hasLoadState,
+                'has_avg_volts' => $hasAvgVolts,
             ],
         ];
     }

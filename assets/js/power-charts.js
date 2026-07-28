@@ -19,7 +19,23 @@
     if (unit === 'kW') return (Math.abs(n) >= 10 ? n.toFixed(1) : n.toFixed(2)) + ' kW';
     if (unit === 'V') return n.toFixed(0) + ' V';
     if (unit === 'A') return n.toFixed(1) + ' A';
+    if (unit === 'state') {
+      var labels = { 1: 'low', 2: 'normal', 3: 'near OL', 4: 'overload' };
+      var i = Math.round(n);
+      return labels[i] != null ? labels[i] + ' (' + i + ')' : String(i);
+    }
     return String(n);
+  }
+
+  function multiSeriesHasData(obj) {
+    if (!obj) return false;
+    return ['L1', 'L2', 'L3'].some(function (lab) {
+      return (obj[lab] || []).some(function (v) { return v != null && !isNaN(v); });
+    });
+  }
+
+  function valuesHaveData(arr) {
+    return (arr || []).some(function (v) { return v != null && !isNaN(v); });
   }
 
   function escapeHtml(s) {
@@ -89,6 +105,10 @@
     if (unit === 'V') {
       minV = Math.max(0, Math.floor(minV / 10) * 10 - 10);
       maxV = Math.ceil(maxV / 10) * 10 + 10;
+    } else if (unit === 'state') {
+      // APC load-state enum ~1–4
+      minV = 0;
+      maxV = 5;
     } else {
       minV = Math.max(0, minV * 0.92);
       maxV = maxV * 1.08 || 1;
@@ -252,24 +272,58 @@
     var s = root._pcSeries;
     if (!s) return;
     var outages = root._pcOutages || [];
+    var meta = root._pcMeta || {};
     var charts = root.querySelectorAll('[data-metric]');
     charts.forEach(function (c) {
       c.classList.remove('power-chart-loading');
       var metric = c.getAttribute('data-metric') || 'kw';
-      var values = s[metric] || s.kw || [];
+      var values = s[metric] || [];
       var unit = c.getAttribute('data-unit') || (metric === 'volts' ? 'V' : metric === 'amps' ? 'A' : 'kW');
       var color = c.getAttribute('data-color') || (metric === 'volts' ? '#a78bfa' : '#38bdf8');
       var showOutages = c.getAttribute('data-outages') !== '0';
       var seriesExtra = null;
-      if (metric === 'phase_volts' && s.phase_volts) {
-        seriesExtra = s.phase_volts;
-        // Use L1 as primary for scale fallback values
-        values = s.phase_volts.L1 || [];
-        unit = 'V';
+      var hasData = false;
+
+      if (metric === 'phase_volts') {
+        if (s.phase_volts && multiSeriesHasData(s.phase_volts)) {
+          seriesExtra = s.phase_volts;
+          values = s.phase_volts.L1 || [];
+          unit = 'V';
+          hasData = true;
+        }
+      } else if (metric === 'phase_load_state') {
+        if (s.phase_load_state && multiSeriesHasData(s.phase_load_state)) {
+          seriesExtra = s.phase_load_state;
+          values = s.phase_load_state.L1 || [];
+          unit = 'state';
+          hasData = true;
+        }
+      } else if (metric === 'volts') {
+        values = s.volts || [];
+        hasData = valuesHaveData(values);
+        // Also hide avg V when meta says no voltage samples
+        if (meta.has_avg_volts === false) hasData = false;
+      } else if (metric === 'kw' || metric === 'watts') {
+        values = s[metric] || s.kw || [];
+        hasData = valuesHaveData(values);
+      } else {
+        hasData = valuesHaveData(values) || (seriesExtra && multiSeriesHasData(seriesExtra));
       }
-      // Prefer outage markers on voltage charts
+
+      // Optional charts: hide when no data (older APCs without phase volts, etc.)
+      var hideIfEmpty = c.getAttribute('data-hide-empty') !== '0';
+      if (hideIfEmpty && !hasData && metric !== 'kw') {
+        c.style.display = 'none';
+        c.setAttribute('hidden', 'hidden');
+        c.dataset.ready = '0';
+        return;
+      }
+      c.style.display = '';
+      c.removeAttribute('hidden');
+
+      // Prefer outage markers on usage chart
       if (metric === 'kw' && c.getAttribute('data-outages') == null) {
-        showOutages = true; // also mark usage chart so outages are visible
+        showOutages = true;
       }
       renderLineChart(c, {
         t: s.t || [],
