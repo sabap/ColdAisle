@@ -13,7 +13,7 @@ $preZone = (int)($edit['zone_id'] ?? ($filterZone ?? 0));
 $formId = $formId ?? 'addPduForm';
 $formModal = !empty($formModal);
 ?>
-<form method="post" class="form-grid" id="<?= App::e($formId) ?>">
+<form method="post" class="form-grid form-grid-3" id="<?= App::e($formId) ?>">
     <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
     <input type="hidden" name="action" value="<?= App::e($formAction) ?>">
     <?php if ($isUpdate): ?>
@@ -79,6 +79,9 @@ $formModal = !empty($formModal);
 
     <div class="form-row"><label>Name</label>
         <input class="form-control" name="name" required value="<?= App::e($edit['name'] ?? '') ?>"></div>
+    <div class="form-row"><label>IP address</label>
+        <input class="form-control" name="ip_address" value="<?= App::e($edit['ip_address'] ?? '') ?>"
+               placeholder="e.g. 10.1.2.50" autocomplete="off"></div>
     <div class="form-row"><label>Vendor</label>
         <input class="form-control" name="manufacturer" placeholder="APC, Raritan, ServerTech…"
                value="<?= App::e($edit['manufacturer'] ?? '') ?>"></div>
@@ -198,8 +201,6 @@ $formModal = !empty($formModal);
     </div>
     <div class="form-row"><label>AMP rating (feed)</label>
         <input class="form-control" type="number" step="0.1" name="rated_amps" value="<?= App::e((string)($edit['rated_amps'] ?? '30')) ?>"></div>
-    <div class="form-row"><label>IP address</label>
-        <input class="form-control" name="ip_address" value="<?= App::e($edit['ip_address'] ?? '') ?>"></div>
 
     <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Distribution outputs</h4></div>
     <div class="form-row"><label>Output type</label>
