@@ -1272,12 +1272,23 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
 
         <?php if ($updStatus): ?>
             <?php if (!empty($updStatus['update_available'])): ?>
+                <?php
+                $notesHref = (string)($updStatus['notes_url']
+                    ?? $updStatus['html_url']
+                    ?? UpdateService::changelogUrl((string)($updStatus['latest'] ?? '')));
+                $notesBody = trim((string)($updStatus['notes'] ?? ''));
+                ?>
                 <div class="alert alert-info" style="margin-bottom:1rem">
                     <strong>Update available:</strong>
                     v<?= App::e((string)$updStatus['latest']) ?>
                     (you have v<?= App::e((string)$updStatus['current']) ?>)
-                    <?php if (!empty($updStatus['html_url'])): ?>
-                        · <a href="<?= App::e((string)$updStatus['html_url']) ?>" target="_blank" rel="noopener">Release notes</a>
+                    <?php if ($notesHref !== ''): ?>
+                        · <a href="<?= App::e($notesHref) ?>" target="_blank" rel="noopener">Release notes</a>
+                    <?php endif; ?>
+                    <?php if ($notesBody !== ''): ?>
+                        <div class="update-notes" style="margin-top:.65rem;font-size:.88rem;max-height:14rem;overflow:auto;white-space:pre-wrap;opacity:.95">
+<?= App::e($notesBody) ?>
+                        </div>
                     <?php endif; ?>
                 </div>
             <?php elseif (!empty($updStatus['ok'])): ?>
