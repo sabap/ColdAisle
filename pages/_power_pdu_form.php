@@ -25,14 +25,17 @@ $formModal = !empty($formModal);
     $formNumBreakerSlots = max(1, (int)($edit['num_breaker_slots'] ?? 42));
     $formNumOutlets = max(0, (int)($edit['num_outlets'] ?? 0));
     ?>
-    <?php if (!$isUpdate && $pduTemplates):
+    <?php if ($pduTemplates):
         $siteOidById = [];
         foreach ($siteOidTemplates ?? [] as $st) {
             $siteOidById[(int)$st['template_id']] = (string)($st['name'] ?? '');
         }
+        $curPduTplId = (int)($edit['pdu_template_id'] ?? 0);
         ?>
     <div class="form-row full pdu-tpl-picker">
-        <h4 class="mt-0" style="margin-bottom:.35rem;font-size:.95rem;color:var(--muted)">Apply PDU template</h4>
+        <h4 class="mt-0" style="margin-bottom:.35rem;font-size:.95rem;color:var(--muted)">
+            <?= $isUpdate ? 'Apply PDU template' : 'Apply PDU template' ?>
+        </h4>
         <select class="form-control" id="power_apply_pdu_template" data-templates="<?= App::e(json_encode(array_map(static function ($t) use ($siteOidById) {
             $fields = json_decode((string)($t['fields_json'] ?? '{}'), true) ?: [];
             $outlets = json_decode((string)($t['outlets_json'] ?? '[]'), true) ?: [];
@@ -48,13 +51,14 @@ $formModal = !empty($formModal);
                 'oid_template_name' => $oidId > 0 ? ($siteOidById[$oidId] ?? ('#' . $oidId)) : '',
             ];
         }, $pduTemplates), JSON_UNESCAPED_SLASHES)) ?>">
-            <option value="">— None (manual) —</option>
+            <option value=""><?= $isUpdate ? '— Keep current / no change —' : '— None (manual) —' ?></option>
             <?php foreach ($pduTemplates as $pt):
                 $ptFields = json_decode((string)($pt['fields_json'] ?? '{}'), true) ?: [];
                 $ptOidId = (int)($ptFields['snmp_site_template_id'] ?? 0);
                 $ptOidName = $ptOidId > 0 ? ($siteOidById[$ptOidId] ?? '') : '';
+                $ptId = (int)$pt['template_id'];
                 ?>
-                <option value="<?= (int)$pt['template_id'] ?>">
+                <option value="<?= $ptId ?>" <?= $curPduTplId === $ptId ? 'selected' : '' ?>>
                     <?= App::e($pt['name']) ?>
                     <?php if (!empty($pt['model'])): ?>
                         · <?= App::e((string)$pt['model']) ?>
@@ -66,14 +70,21 @@ $formModal = !empty($formModal);
                     <?php else: ?>
                         · no OID map
                     <?php endif; ?>
+                    <?php if ($curPduTplId === $ptId): ?> · linked<?php endif; ?>
                 </option>
             <?php endforeach; ?>
         </select>
         <p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">
-            Fills electrical layout, SNMP options, <strong>site OID map</strong>, and outlet inventory.
-            Name, IP, serial, and placement stay blank. Template-filled fields are shown subdued until you edit them.
+            <?php if ($isUpdate): ?>
+                Choose a template to fill electrical layout, SNMP options, <strong>site OID map</strong>, and outlet inventory on this PDU.
+                Name, IP, serial, and placement are not overwritten. Save the form to apply.
+            <?php else: ?>
+                Fills electrical layout, SNMP options, <strong>site OID map</strong>, and outlet inventory.
+                Name, IP, serial, and placement stay blank. Template-filled fields are shown subdued until you edit them.
+            <?php endif; ?>
         </p>
-        <input type="hidden" name="pdu_template_id" id="power_pdu_template_id" value="">
+        <input type="hidden" name="pdu_template_id" id="power_pdu_template_id"
+               value="<?= $curPduTplId > 0 ? (int)$curPduTplId : '' ?>">
     </div>
     <?php endif; ?>
 
@@ -461,10 +472,11 @@ $formModal = !empty($formModal);
         if (nBrk && (!nBrk.value || parseInt(nBrk.value, 10) < 1)) nBrk.value = '42';
     }
 
-    // Apply inventory template → form fields (create only)
+    // Apply inventory template → form fields (create + edit)
     var tplSel = root.querySelector('#power_apply_pdu_template');
     var tplIdInp = root.querySelector('#power_pdu_template_id');
     var tplCatalog = [];
+    var initialTplId = tplIdInp && tplIdInp.value ? String(tplIdInp.value) : '';
     try {
         if (tplSel && tplSel.getAttribute('data-templates')) {
             tplCatalog = JSON.parse(tplSel.getAttribute('data-templates') || '[]') || [];
@@ -524,7 +536,13 @@ $formModal = !empty($formModal);
         }
         toggleSnmp();
     }
-    function applyPduTemplate(tid) {
+    function applyPduTemplate(tid, opts) {
+        opts = opts || {};
+        // On edit, re-selecting the already-linked template without force only updates the hidden id
+        if (isUpdate && !opts.force && tid && initialTplId && String(tid) === String(initialTplId) && !opts.fromChange) {
+            if (tplIdInp) tplIdInp.value = tid;
+            return;
+        }
         clearTplFilledMarks();
         if (tplIdInp) tplIdInp.value = tid || '';
         if (!tid) return;
@@ -574,18 +592,15 @@ $formModal = !empty($formModal);
             markTplFilled(snmpProf);
             applySnmpProfileFromSelect(true);
         }
-        // Refresh dependent UI without overwriting template voltages (isUpdate false would preset)
+        // Refresh dependent UI without overwriting template voltages
         if (phases) {
-            // refresh wiring options without electrical presets when from template
             var prevApplying = applyingPreset;
             applyingPreset = true;
             refreshWiringOptions(false);
             applyingPreset = prevApplying;
-            // re-apply wiring/phases from template after option rebuild
             if (f.phase_wiring) setFormVal('phase_wiring', f.phase_wiring, true);
             if (f.phases != null) setFormVal('phases', f.phases, true);
             togglePhaseFields(false);
-            // restore voltages from template
             ['input_voltage', 'input_voltage_ln', 'output_voltage', 'output_voltage_ln'].forEach(function (k) {
                 if (f[k] != null && f[k] !== '') setFormVal(k, f[k], true);
             });
@@ -597,7 +612,8 @@ $formModal = !empty($formModal);
     }
     if (tplSel) {
         tplSel.addEventListener('change', function () {
-            applyPduTemplate(tplSel.value);
+            // User chose a template (or cleared) — always apply fields when a template is selected
+            applyPduTemplate(tplSel.value, { force: true, fromChange: true });
         });
     }
     // Clear subdued style when user edits a template-filled control
