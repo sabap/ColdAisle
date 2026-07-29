@@ -254,7 +254,7 @@ layout_header('Dashboard', $user, 'dashboard');
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=3"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=4"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const el = document.getElementById('dashboard-3d');
@@ -262,7 +262,14 @@ document.addEventListener('DOMContentLoaded', function () {
         const cabinets = JSON.parse(el.dataset.cabinets || '[]');
         const pdus = JSON.parse(el.dataset.pdus || '[]');
         const rooms = JSON.parse(el.dataset.rooms || '[]');
-        ColdAisle3D.mount(el, { cabinets: cabinets, pdus: pdus, rooms: rooms, interactive: true });
+        // Front faces only on dashboard — rear doubles load and is rarely visible room-wide
+        ColdAisle3D.mount(el, {
+            cabinets: cabinets,
+            pdus: pdus,
+            rooms: rooms,
+            interactive: true,
+            textureFaces: 'front',
+        });
     }
 });
 </script>

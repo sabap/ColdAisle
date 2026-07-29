@@ -2676,6 +2676,7 @@
         pdus: floorPdus,
         rooms: room ? [room] : [],
         interactive: true,
+        textureFaces: 'both',
       });
     }
 
