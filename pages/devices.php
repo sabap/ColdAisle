@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
+require_once dirname(__DIR__) . '/includes/power_helpers.php';
 App::boot();
 $user = App::requirePermission('view_devices');
 
@@ -90,14 +91,26 @@ try {
     $templates = Database::fetchAll(
         'SELECT t.template_id, t.model, t.device_type, t.manufacturer_id, t.u_height,
                 t.weight_kg, t.watts, t.num_power_ports, t.num_data_ports, t.snmp_template,
-                m.name AS manufacturer_name
+                t.power_supplies_json, m.name AS manufacturer_name
          FROM device_templates t
          LEFT JOIN manufacturers m ON m.manufacturer_id = t.manufacturer_id
          WHERE t.is_active = 1
          ORDER BY m.name, t.model'
     );
 } catch (Throwable $e) {
-    $templates = [];
+    try {
+        $templates = Database::fetchAll(
+            'SELECT t.template_id, t.model, t.device_type, t.manufacturer_id, t.u_height,
+                    t.weight_kg, t.watts, t.num_power_ports, t.num_data_ports, t.snmp_template,
+                    m.name AS manufacturer_name
+             FROM device_templates t
+             LEFT JOIN manufacturers m ON m.manufacturer_id = t.manufacturer_id
+             WHERE t.is_active = 1
+             ORDER BY m.name, t.model'
+        );
+    } catch (Throwable $e2) {
+        $templates = [];
+    }
 }
 
 function device_empty_to_null($v)
@@ -144,7 +157,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         'back_side' => $backSide,
         'weight_kg' => $_POST['weight_kg'] !== '' ? (float)$_POST['weight_kg'] : null,
         'num_data_ports' => $_POST['num_data_ports'] !== '' ? (int)$_POST['num_data_ports'] : null,
-        'num_power_ports' => $_POST['num_power_ports'] !== '' ? (int)$_POST['num_power_ports'] : null,
+        // num_power_ports retired — power is modeled via device_power_supplies
         'template_id' => $_POST['template_id'] !== '' ? (int)$_POST['template_id'] : null,
         'parent_device_id' => $_POST['parent_device_id'] !== '' ? (int)$_POST['parent_device_id'] : null,
         'manufacture_date' => device_empty_to_null($_POST['manufacture_date'] ?? null),
@@ -345,9 +358,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 );
                 $did = $row ? (int)$row['device_id'] : 0;
             }
-            // Auto-create ports from counts
+            // Auto-create data ports from count (power uses device_power_supplies)
             $dp = (int)($data['num_data_ports'] ?? 0);
-            $pp = (int)($data['num_power_ports'] ?? 0);
             for ($i = 1; $i <= $dp; $i++) {
                 Database::insert('device_ports', [
                     'device_id' => $did,
@@ -357,14 +369,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                     'media_type' => 'RJ45',
                 ]);
             }
-            for ($i = 1; $i <= $pp; $i++) {
-                Database::insert('device_ports', [
-                    'device_id' => $did,
-                    'port_type' => 'power',
-                    'port_number' => $i,
-                    'label' => 'PSU' . $i,
-                    'media_type' => 'C14',
-                ]);
+            // Create PSUs from template (name / watts / connector; no PDU map yet)
+            $psuDefs = [];
+            $tid = (int)($data['template_id'] ?? 0);
+            if ($tid > 0) {
+                try {
+                    $tplRow = Database::fetchOne('SELECT * FROM device_templates WHERE template_id = ?', [$tid]);
+                    if ($tplRow) {
+                        $psuDefs = power_template_psu_defs($tplRow);
+                    }
+                } catch (Throwable $e) {
+                    $psuDefs = [];
+                }
+            }
+            if ($psuDefs) {
+                try {
+                    power_create_device_psus($did, $psuDefs);
+                } catch (Throwable $e) {
+                    App::log('Create device PSUs: ' . $e->getMessage(), 'error');
+                }
             }
             AuditService::log((int)$user['user_id'], $user['username'], 'create', 'device', $did);
             App::flash('success', 'Device created.');
@@ -539,10 +562,7 @@ if ($action === 'new' || $id) {
         }
     }
 
-    $nemaTypes = [
-        'C13', 'C14', 'C19', 'C20', '5-15P', '5-20P', 'L5-20P', 'L5-30P',
-        'L6-20P', 'L6-30P', 'L14-30P', 'IEC 60309', 'Other',
-    ];
+    $nemaTypes = power_device_connector_types();
 
     $snmpProfiles = [];
     try {
@@ -621,13 +641,8 @@ if ($action === 'new' || $id) {
         $mountLabel = $half
             ? (!empty($device['back_side']) ? 'Half-depth · Rear' : 'Half-depth · Front')
             : 'Full depth';
-        $powerPorts = array_values(array_filter($ports, static fn($p) => ($p['port_type'] ?? '') === 'power'));
         $dataPorts = array_values(array_filter($ports, static fn($p) => ($p['port_type'] ?? '') === 'data'));
-        $numPower = max(
-            (int)($device['num_power_ports'] ?? 0),
-            count($powerSupplies),
-            count($powerPorts)
-        );
+        $numPower = count($powerSupplies);
         $numData = max(
             (int)($device['num_data_ports'] ?? 0),
             count($dataPortLinks) ?: count($dataPorts)
@@ -776,7 +791,7 @@ if ($action === 'new' || $id) {
                             </dd></div>
                             <div><dt>Wattage draw</dt><dd><?= $device['nominal_watts'] !== null && $device['nominal_watts'] !== '' ? App::e((string)$device['nominal_watts']) . ' W' : '—' ?></dd></div>
                             <div><dt>Data ports</dt><dd><?= (int)($device['num_data_ports'] ?? count($dataPorts)) ?></dd></div>
-                            <div><dt>Power connections</dt><dd><?= (int)($device['num_power_ports'] ?? max(count($powerSupplies), count($powerPorts))) ?></dd></div>
+                            <div><dt>Power supplies</dt><dd><?= count($powerSupplies) ?></dd></div>
                         </dl>
                     </div>
                 </div>
@@ -862,10 +877,10 @@ if ($action === 'new' || $id) {
                 </div>
 
                 <div class="card view-pane">
-                    <div class="card-header"><h2>Power connections</h2></div>
+                    <div class="card-header"><h2>Power supplies</h2></div>
                     <div class="card-body flush">
                         <?php if ($numPower <= 0): ?>
-                            <p class="text-muted" style="padding:1rem;margin:0">No power connections defined. Set “Number of Power ports” when editing.</p>
+                            <p class="text-muted" style="padding:1rem;margin:0">No power supplies defined. Add them when editing the device (or apply a template with PSUs).</p>
                         <?php else: ?>
                             <table class="data">
                                 <thead>
@@ -875,17 +890,15 @@ if ($action === 'new' || $id) {
                                 </tr>
                                 </thead>
                                 <tbody>
-                                <?php for ($i = 0; $i < $numPower; $i++):
-                                    $ps = $powerSupplies[$i] ?? null;
-                                    $pp = $powerPorts[$i] ?? null;
-                                    $name = $ps['name'] ?? ($pp['label'] ?? ('PSU-' . ($i + 1)));
+                                <?php foreach ($powerSupplies as $i => $ps):
+                                    $name = $ps['name'] ?? ('PSU-' . ($i + 1));
                                     $watts = $ps['watts'] ?? null;
-                                    $conn = $ps['connector_type'] ?? ($pp['media_type'] ?? null);
+                                    $conn = $ps['connector_type'] ?? null;
                                     $pduName = $ps['pdu_name'] ?? null;
                                     $pduIdLink = !empty($ps['pdu_id']) ? (int)$ps['pdu_id'] : 0;
                                     $plug = $ps['outlet_number'] ?? null;
                                     ?>
-                                    <tr class="<?= $ps || $pp ? '' : 'row-empty' ?>">
+                                    <tr>
                                         <td><?= $i + 1 ?></td>
                                         <td><?= App::e($name) ?></td>
                                         <td><?= $watts !== null && $watts !== '' ? App::e((string)$watts) . ' W' : '—' ?></td>
@@ -899,7 +912,7 @@ if ($action === 'new' || $id) {
                                         ?></td>
                                         <td><?= $plug !== null && $plug !== '' ? '#' . App::e((string)$plug) : '—' ?></td>
                                     </tr>
-                                <?php endfor; ?>
+                                <?php endforeach; ?>
                                 </tbody>
                             </table>
                         <?php endif; ?>
@@ -1458,9 +1471,9 @@ if ($action === 'new' || $id) {
             <input type="hidden" name="device_id" value="<?= (int)$device['device_id'] ?>">
         <?php endif; ?>
 
-        <!-- Location (derived + cabinet) -->
+        <!-- Physical properties (location + size / weight / ports) -->
         <div class="card">
-            <div class="card-header"><h2>Location</h2></div>
+            <div class="card-header"><h2>Physical properties</h2></div>
             <div class="card-body form-grid">
                 <div class="form-row"><label>DC Name <span class="view-derived">(from cabinet)</span></label>
                     <input class="form-control" id="loc_dc" readonly value="<?= App::e($loc['dc_name']) ?>" placeholder="(from cabinet)"></div>
@@ -1498,6 +1511,19 @@ if ($action === 'new' || $id) {
                 <div class="form-row"><label>Height (U)</label>
                     <input class="form-control" type="number" name="u_height" min="1" max="60"
                            value="<?= (int)($device['u_height'] ?? 1) ?>"></div>
+                <div class="form-row"><label>Weight (kg)</label>
+                    <input class="form-control" type="number" step="0.01" name="weight_kg"
+                           value="<?= App::e((string)($device['weight_kg'] ?? '')) ?>"></div>
+                <div class="form-row"><label>Nominal power (W)</label>
+                    <input class="form-control" type="number" step="0.1" name="nominal_watts"
+                           value="<?= App::e((string)($device['nominal_watts'] ?? '')) ?>"></div>
+                <div class="form-row"><label>Number of data ports</label>
+                    <input class="form-control" type="number" min="0" name="num_data_ports"
+                           value="<?= App::e((string)($device['num_data_ports'] ?? ($device ? count(array_filter($ports, fn($p) => ($p['port_type'] ?? '') === 'data')) : '0'))) ?>">
+                    <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                        On create, data interface rows are auto-created from this count.
+                    </p>
+                </div>
             </div>
         </div>
 
@@ -1521,7 +1547,9 @@ if ($action === 'new' || $id) {
                 <div class="form-row"><label>Device Template</label>
                     <select class="form-control" name="template_id" id="template_id">
                         <option value="">— None —</option>
-                        <?php foreach ($templates as $t): ?>
+                        <?php foreach ($templates as $t):
+                            $tplPsuN = count(power_template_psu_defs($t));
+                            ?>
                             <option value="<?= (int)$t['template_id'] ?>"
                                 data-type="<?= App::e($t['device_type'] ?? '') ?>"
                                 data-model="<?= App::e($t['model'] ?? '') ?>"
@@ -1530,7 +1558,7 @@ if ($action === 'new' || $id) {
                                 data-weight="<?= App::e((string)($t['weight_kg'] ?? '')) ?>"
                                 data-watts="<?= App::e((string)($t['watts'] ?? '')) ?>"
                                 data-dataports="<?= (int)($t['num_data_ports'] ?? 0) ?>"
-                                data-powerports="<?= (int)($t['num_power_ports'] ?? 0) ?>"
+                                data-psus="<?= $tplPsuN ?>"
                                 data-snmp="<?= App::e($t['snmp_template'] ?? '') ?>"
                                 <?= (int)($device['template_id'] ?? 0) === (int)$t['template_id'] ? 'selected' : '' ?>>
                                 <?= App::e(trim(($t['manufacturer_name'] ?? '') . ' ' . ($t['model'] ?? '') . ' (' . ($t['device_type'] ?? '') . ')')) ?>
@@ -1538,7 +1566,8 @@ if ($action === 'new' || $id) {
                         <?php endforeach; ?>
                     </select>
                     <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
-                        Selecting a template fills type, model, U height, weight, wattage, ports, and SNMP version.
+                        Selecting a template fills type, model, U height, weight, wattage, data ports, and SNMP.
+                        On create, template power supplies are added automatically (map to PDU outlets after the device is in a cabinet).
                         <a href="<?= App::e(App::url('pages/device_templates.php')) ?>">Manage templates</a>
                     </p>
                 </div>
@@ -1581,31 +1610,6 @@ if ($action === 'new' || $id) {
                 <div class="form-row"><label>Mgmt IP</label>
                     <input class="form-control" name="mgmt_ip"
                            value="<?= App::e($device['mgmt_ip'] ?? '') ?>"></div>
-            </div>
-        </div>
-
-        <!-- Physical / power / ports -->
-        <div class="card">
-            <div class="card-header"><h2>Physical &amp; power</h2></div>
-            <div class="card-body form-grid">
-                <div class="form-row"><label>Weight (kg)</label>
-                    <input class="form-control" type="number" step="0.01" name="weight_kg"
-                           value="<?= App::e((string)($device['weight_kg'] ?? '')) ?>"></div>
-                <div class="form-row"><label>Power (Wattage)</label>
-                    <input class="form-control" type="number" step="0.1" name="nominal_watts"
-                           value="<?= App::e((string)($device['nominal_watts'] ?? '')) ?>"></div>
-                <div class="form-row"><label>Number of Data ports</label>
-                    <input class="form-control" type="number" min="0" name="num_data_ports"
-                           value="<?= App::e((string)($device['num_data_ports'] ?? ($device ? count(array_filter($ports, fn($p) => $p['port_type'] === 'data')) : '4'))) ?>"></div>
-                <div class="form-row"><label>Number of Power ports</label>
-                    <input class="form-control" type="number" min="0" name="num_power_ports"
-                           value="<?= App::e((string)($device['num_power_ports'] ?? ($device ? count(array_filter($ports, fn($p) => $p['port_type'] === 'power')) : '2'))) ?>"></div>
-                <?php if (!$device): ?>
-                    <p class="text-muted form-row full" style="font-size:.8rem;margin:0">
-                        On create, data/power ports are auto-created from these counts.
-                        After create, add Power Supply line items to map watts/NEMA to PDU outlets.
-                    </p>
-                <?php endif; ?>
             </div>
         </div>
 
@@ -1939,23 +1943,26 @@ if ($action === 'new' || $id) {
         </div>
     <?php endif; ?>
 
-    <?php if ($device && $ports): ?>
+    <?php
+    $dataPortsEdit = $device
+        ? array_values(array_filter($ports, static fn($p) => ($p['port_type'] ?? '') === 'data'))
+        : [];
+    if ($device && $dataPortsEdit): ?>
         <div class="card">
-            <div class="card-header"><h2>Interface labels (Power &amp; Data)</h2></div>
+            <div class="card-header"><h2>Data interface labels</h2></div>
             <div class="card-body flush">
                 <table class="data">
                     <thead>
-                    <tr><th>Type</th><th>#</th><th>Label</th><th>Media</th><th>Speed</th><th>Notes</th><th></th></tr>
+                    <tr><th>#</th><th>Label</th><th>Media</th><th>Speed</th><th>Notes</th><th></th></tr>
                     </thead>
                     <tbody>
-                    <?php foreach ($ports as $p): ?>
+                    <?php foreach ($dataPortsEdit as $p): ?>
                         <tr>
                             <form method="post">
                                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                                 <input type="hidden" name="action" value="update_port">
                                 <input type="hidden" name="port_id" value="<?= (int)$p['port_id'] ?>">
                                 <input type="hidden" name="device_id" value="<?= (int)$device['device_id'] ?>">
-                                <td><span class="badge <?= $p['port_type'] === 'power' ? 'badge-warning' : 'badge-info' ?>"><?= App::e($p['port_type']) ?></span></td>
                                 <td><?= (int)$p['port_number'] ?></td>
                                 <td><input class="form-control" name="label" value="<?= App::e($p['label']) ?>" style="min-width:100px"></td>
                                 <td><input class="form-control" name="media_type" value="<?= App::e($p['media_type']) ?>" style="min-width:80px"></td>
@@ -2123,7 +2130,6 @@ if ($action === 'new' || $id) {
                 var weight = opt.getAttribute('data-weight') || '';
                 var watts = opt.getAttribute('data-watts') || '';
                 var dp = opt.getAttribute('data-dataports') || '0';
-                var pp = opt.getAttribute('data-powerports') || '0';
                 var snmp = opt.getAttribute('data-snmp') || '';
                 if (type) setVal('device_type', type);
                 if (model) setVal('model', model);
@@ -2132,7 +2138,6 @@ if ($action === 'new' || $id) {
                 setVal('weight_kg', weight);
                 setVal('nominal_watts', watts);
                 setVal('num_data_ports', dp);
-                setVal('num_power_ports', pp);
                 if (snmp) setVal('snmp_version', snmp);
             });
         }
@@ -2193,7 +2198,7 @@ if ($action === 'new' || $id) {
                 }, $p['outlets'] ?? []),
             ];
         }, $cabinetPdus), JSON_UNESCAPED_UNICODE) ?>;
-        var nemaTypes = <?= json_encode($nemaTypes) ?>;
+        var nemaTypes = <?= json_encode(power_device_connector_types()) ?>;
 
         /** Free outlets for a PDU, plus the currently selected one (if remapping). */
         function psuOutletOptions(pduId, selectedOutletId, currentPsuId) {

@@ -103,9 +103,8 @@ try {
             'is_active' => 1,
         ]);
 
-        // Auto-create ports if counts provided
+        // Auto-create data ports if count provided (power uses device_power_supplies)
         $dataPorts = (int)($data['num_data_ports'] ?? 0);
-        $powerPorts = (int)($data['num_power_ports'] ?? 0);
         for ($i = 1; $i <= $dataPorts; $i++) {
             Database::insert('device_ports', [
                 'device_id' => $id,
@@ -115,14 +114,31 @@ try {
                 'media_type' => $data['data_media'] ?? 'RJ45',
             ]);
         }
-        for ($i = 1; $i <= $powerPorts; $i++) {
-            Database::insert('device_ports', [
-                'device_id' => $id,
-                'port_type' => 'power',
-                'port_number' => $i,
-                'label' => 'PSU' . $i,
-                'media_type' => $data['power_media'] ?? 'C14',
-            ]);
+
+        // PSUs from explicit payload or device template
+        require_once dirname(__DIR__) . '/includes/power_helpers.php';
+        $psuDefs = [];
+        if (!empty($data['power_supplies']) && is_array($data['power_supplies'])) {
+            $psuDefs = power_normalize_psu_defs($data['power_supplies']);
+        } elseif (!empty($data['template_id'])) {
+            try {
+                $tplRow = Database::fetchOne(
+                    'SELECT * FROM device_templates WHERE template_id = ?',
+                    [(int)$data['template_id']]
+                );
+                if ($tplRow) {
+                    $psuDefs = power_template_psu_defs($tplRow);
+                }
+            } catch (Throwable $e) {
+                $psuDefs = [];
+            }
+        }
+        if ($psuDefs) {
+            try {
+                power_create_device_psus($id, $psuDefs);
+            } catch (Throwable $e) {
+                App::log('API create device PSUs: ' . $e->getMessage(), 'error');
+            }
         }
 
         $dev = Database::fetchOne('SELECT * FROM devices WHERE device_id = ?', [$id]);

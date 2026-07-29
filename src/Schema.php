@@ -282,6 +282,9 @@ class Schema
                 )"
             );
 
+            // Device templates: structured PSU defs (name/watts/connector) — PDU map is per-device
+            self::ensureColumn('device_templates', 'power_supplies_json', 'NVARCHAR(MAX) NULL');
+
             // Disposal / decommission workflow
             self::ensureTable(
                 'disposal_vendors',
