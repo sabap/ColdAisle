@@ -29,7 +29,10 @@ function layout_header(string $title, array $user, string $active = ''): void
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="<?= App::e($csrf) ?>">
     <title><?= App::e($title) ?> · <?= App::e($appName) ?></title>
-    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=33">
+    <link rel="icon" href="<?= App::e(App::url('assets/img/favicon.svg')) ?>" type="image/svg+xml">
+    <link rel="icon" href="<?= App::e(App::url('assets/img/favicon-32.png')) ?>" type="image/png" sizes="32x32">
+    <link rel="apple-touch-icon" href="<?= App::e(App::url('assets/img/favicon-180.png')) ?>" sizes="180x180">
+    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=34">
     <script>
     window.ColdAisle = { baseUrl: <?= json_encode(App::baseUrl()) ?>, csrf: <?= json_encode($csrf) ?> };
     window.WINDCIM = window.ColdAisle; // legacy alias
@@ -48,7 +51,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     <?php endif; ?>
     <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand">
-            <span class="brand-icon">⚡</span>
+            <img class="brand-logo" src="<?= App::e(App::url('assets/img/logo.svg')) ?>" width="36" height="36" alt="">
             <div>
                 <strong><?= App::e($appName) ?></strong>
                 <?php if ($org): ?><small><?= App::e($org) ?></small><?php endif; ?>

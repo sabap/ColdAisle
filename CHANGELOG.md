@@ -19,6 +19,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.2.82] - 2026-07-29
+
+### New features
+
+- **Brand mark & favicon:** icy snowflake + circuit/bit motif; SVG logo and favicon wired into app shell, login, and setup.
+
+---
+
 ## [0.2.81] - 2026-07-29
 
 ### Bug fixes

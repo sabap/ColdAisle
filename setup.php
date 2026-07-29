@@ -407,6 +407,8 @@ function req_badge(bool $ok): string
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>ColdAisle Setup</title>
+    <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="assets/img/favicon-32.png" type="image/png" sizes="32x32">
     <link rel="stylesheet" href="assets/css/app.css">
     <style>
         body.setup-body { background: linear-gradient(145deg, #0f172a 0%, #1e293b 50%, #0f172a 100%); min-height: 100vh; }
@@ -437,6 +439,7 @@ function req_badge(bool $ok): string
         .btn-row { display: flex; gap: .75rem; margin-top: 1.5rem; flex-wrap: wrap; }
         .hint { font-size: .8rem; color: var(--muted); margin-top: .25rem; }
         .logo-setup { text-align: center; margin-bottom: 1.5rem; }
+        .logo-setup img { width: 64px; height: 64px; border-radius: 14px; margin-bottom: .65rem; box-shadow: 0 0 0 1px rgba(56,189,248,.3); }
         .logo-setup h1 { margin: 0; font-size: 1.75rem; letter-spacing: -0.02em; }
         .logo-setup p { color: var(--muted); margin: .35rem 0 0; }
     </style>
@@ -444,7 +447,8 @@ function req_badge(bool $ok): string
 <body class="setup-body">
 <div class="setup-wrap">
     <div class="logo-setup">
-        <h1>⚡ ColdAisle</h1>
+        <img src="assets/img/logo.svg" width="64" height="64" alt="">
+        <h1>ColdAisle</h1>
         <p>Data Center Infrastructure Management — Setup Wizard</p>
     </div>
 
