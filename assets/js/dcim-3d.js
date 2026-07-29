@@ -22,18 +22,25 @@
     return (base ? base + '/' : '') + url.replace(/^\//, '');
   }
 
+  // Deduplicate loads: many devices share one template faceplate URL
+  var imageCache = Object.create(null);
+
   function loadImage(url) {
-    return new Promise(function (resolve) {
-      if (!url) {
-        resolve(null);
-        return;
-      }
+    if (!url) {
+      return Promise.resolve(null);
+    }
+    var key = absUrl(url);
+    if (Object.prototype.hasOwnProperty.call(imageCache, key)) {
+      return imageCache[key];
+    }
+    imageCache[key] = new Promise(function (resolve) {
       var img = new Image();
       // Same-origin media.php (session cookie) — do not set crossOrigin or canvas taints / auth fails
       img.onload = function () { resolve(img); };
       img.onerror = function () { resolve(null); };
-      img.src = absUrl(url);
+      img.src = key;
     });
+    return imageCache[key];
   }
 
   function drawCover(ctx, img, x, y, w, h) {
@@ -73,10 +80,10 @@
    */
   function buildFaceTexture(cab, face) {
     var units = Math.max(1, Number(cab.u_height) || 42);
-    // Scale so U height has reasonable texels; width follows 19/1.75 ratio
-    var pxPerU = 32;
+    // Keep face textures modest — small (.sm) faceplates + low texel density is enough at room scale
+    var pxPerU = 16;
     var h = Math.max(64, Math.round(units * pxPerU));
-    var w = Math.max(64, Math.round(h * (19 / (units * 1.75))));
+    var w = Math.max(48, Math.round(h * (19 / (units * 1.75))));
 
     var canvas = document.createElement('canvas');
     canvas.width = w;

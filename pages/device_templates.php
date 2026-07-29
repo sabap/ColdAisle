@@ -35,14 +35,9 @@ function tpl_empty($v)
     return $v;
 }
 
-function media_url(?string $rel): string
+function media_url(?string $rel, string $variant = 'full'): string
 {
-    if (!$rel) {
-        return '';
-    }
-    $rel = ltrim(str_replace('\\', '/', $rel), '/');
-    // stored as templates/12/front.jpg under storage/uploads
-    return App::url('media.php?f=' . rawurlencode($rel));
+    return ImageUpload::mediaUrl($rel, $variant === 'sm' ? ImageUpload::VARIANT_SM : 'full');
 }
 
 // ---- Manufacturer quick-add ----
@@ -174,9 +169,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             $rel = 'templates/' . $tid . '/' . basename($result['path']);
             Database::update('device_templates', [$field => $rel], 'template_id = :id', [':id' => $tid]);
         }
-        // Clear pictures if requested
+        // Clear pictures if requested (full + .sm companions)
         foreach (['front_picture', 'rear_picture'] as $field) {
             if (!empty($_POST['clear_' . $field])) {
+                $old = Database::fetchOne(
+                    'SELECT ' . $field . ' AS p FROM device_templates WHERE template_id = ?',
+                    [$tid]
+                );
+                if (!empty($old['p'])) {
+                    ImageUpload::deleteWithVariants((string)$old['p']);
+                }
                 Database::update('device_templates', [$field => null], 'template_id = :id', [':id' => $tid]);
             }
         }
@@ -486,8 +488,9 @@ layout_header('Device Templates', $user, 'device_templates');
                     <tr>
                         <td style="width:64px">
                             <?php if (!empty($t['front_picture'])): ?>
-                                <img src="<?= App::e(media_url($t['front_picture'])) ?>" alt=""
-                                     style="width:48px;height:48px;object-fit:contain;background:#0f172a;border-radius:4px">
+                                <img src="<?= App::e(media_url($t['front_picture'], 'sm')) ?>" alt=""
+                                     style="width:48px;height:48px;object-fit:contain;background:#0f172a;border-radius:4px"
+                                     loading="lazy">
                             <?php else: ?>
                                 <span class="text-muted">—</span>
                             <?php endif; ?>
