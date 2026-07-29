@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.2.86] - 2026-07-29
+
+### Bug fixes
+
 - **OpenDCIM live connection:** retry flaky TLS/network failures (Windows PHP curl/stream), clearer error hints, and keep API key/connection fields in the browser session so re-Test does not silently send a blank key.
 
 ---
-
 ## [0.2.85] - 2026-07-29
 
 ### New features
