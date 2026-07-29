@@ -285,6 +285,20 @@ class Schema
             // Device templates: structured PSU defs (name/watts/connector) — PDU map is per-device
             self::ensureColumn('device_templates', 'power_supplies_json', 'NVARCHAR(MAX) NULL');
 
+            // External import identity map (OpenDCIM, etc.) — re-run safe merges
+            self::ensureTable(
+                'import_id_map',
+                "CREATE TABLE import_id_map (
+                    map_id INT IDENTITY(1,1) PRIMARY KEY,
+                    source NVARCHAR(40) NOT NULL,
+                    entity_type NVARCHAR(40) NOT NULL,
+                    source_id NVARCHAR(80) NOT NULL,
+                    local_id INT NOT NULL,
+                    updated_at DATETIME2 NOT NULL CONSTRAINT DF_import_id_map_upd DEFAULT SYSUTCDATETIME(),
+                    CONSTRAINT UQ_import_id_map UNIQUE (source, entity_type, source_id)
+                )"
+            );
+
             // Disposal / decommission workflow
             self::ensureTable(
                 'disposal_vendors',
