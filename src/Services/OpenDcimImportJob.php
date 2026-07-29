@@ -59,7 +59,13 @@ class OpenDcimImportJob
         $data['updated_at'] = date('c');
         $path = self::path($jobId);
         $tmp = $path . '.tmp';
-        file_put_contents($tmp, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($json === false) {
+            // Drop huge log if encode fails
+            $data['log'] = array_slice($data['log'] ?? [], -50);
+            $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
+        }
+        file_put_contents($tmp, $json);
         @rename($tmp, $path);
     }
 
@@ -70,7 +76,6 @@ class OpenDcimImportJob
             if ($k === 'log_append' && is_string($v)) {
                 $cur['log'] = $cur['log'] ?? [];
                 $cur['log'][] = $v;
-                // keep last 400 lines
                 if (count($cur['log']) > 400) {
                     $cur['log'] = array_slice($cur['log'], -400);
                 }
@@ -81,24 +86,62 @@ class OpenDcimImportJob
         self::write($jobId, $cur);
     }
 
+    /** Locate a CLI php.exe (not php-cgi under IIS). */
+    public static function findPhpCli(): string
+    {
+        $candidates = [];
+        if (defined('PHP_BINARY') && PHP_BINARY !== '') {
+            $bin = PHP_BINARY;
+            $candidates[] = $bin;
+            // php-cgi.exe → php.exe in same folder
+            $dir = dirname($bin);
+            $candidates[] = $dir . DIRECTORY_SEPARATOR . 'php.exe';
+            $candidates[] = $dir . DIRECTORY_SEPARATOR . 'php';
+        }
+        $candidates[] = 'C:\\PHP\\php.exe';
+        $candidates[] = 'C:\\php\\php.exe';
+        $candidates[] = 'php';
+        foreach ($candidates as $c) {
+            if ($c === 'php') {
+                return 'php';
+            }
+            if (is_file($c) && stripos($c, 'cgi') === false) {
+                return $c;
+            }
+        }
+        return defined('PHP_BINARY') ? PHP_BINARY : 'php';
+    }
+
     /**
-     * Spawn CLI worker (Windows-friendly). Falls back to same-process if spawn fails.
+     * Spawn CLI worker detached (Windows-friendly). Returns true if spawn command was issued.
      */
     public static function spawnWorker(string $jobId): bool
     {
-        $php = defined('PHP_BINARY') && PHP_BINARY !== '' ? PHP_BINARY : 'php';
+        $php = self::findPhpCli();
         $script = App::ROOT . DIRECTORY_SEPARATOR . 'scripts' . DIRECTORY_SEPARATOR . 'opendcim_import_job.php';
         if (!is_file($script)) {
             return false;
         }
-        $cmd = escapeshellarg($php) . ' ' . escapeshellarg($script) . ' ' . escapeshellarg($jobId);
+        $logFile = self::dir() . DIRECTORY_SEPARATOR . $jobId . '.worker.log';
+        $cmd = escapeshellarg($php) . ' -d max_execution_time=0 -d memory_limit=512M '
+            . escapeshellarg($script) . ' ' . escapeshellarg($jobId);
+
         if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-            // Detach so IIS request can return immediately
-            $full = 'cmd /c start /B "" ' . $cmd . ' >NUL 2>&1';
+            // Redirect worker stdout/stderr for diagnosis; detach with start /B
+            $full = 'cmd /c start /B "" ' . $cmd . ' > ' . escapeshellarg($logFile) . ' 2>&1';
+            self::patch($jobId, [
+                'log_append' => 'Spawning worker: ' . $php,
+                'worker_log' => $logFile,
+            ]);
             pclose(popen($full, 'r'));
             return true;
         }
-        $full = $cmd . ' > /dev/null 2>&1 &';
+
+        $full = $cmd . ' > ' . escapeshellarg($logFile) . ' 2>&1 &';
+        self::patch($jobId, [
+            'log_append' => 'Spawning worker: ' . $php,
+            'worker_log' => $logFile,
+        ]);
         exec($full);
         return true;
     }

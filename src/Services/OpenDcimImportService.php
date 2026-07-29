@@ -2037,8 +2037,19 @@ class OpenDcimImportService
      */
     private function importTemplateImages(array $templates): void
     {
-        if (!class_exists('ImageUpload')) {
-            require_once dirname(__DIR__) . '/Services/ImageUpload.php';
+        try {
+            if (!class_exists('ImageUpload')) {
+                require_once dirname(__DIR__) . '/Services/ImageUpload.php';
+            }
+        } catch (Throwable $e) {
+            $this->log('WARN ImageUpload not available: ' . $e->getMessage());
+            return;
+        }
+
+        if ($this->client->isOfflineCache()) {
+            $this->log('Template images: offline mode — skipped (need live openDCIM /pictures/)');
+            $this->bump('image_skipped_offline');
+            return;
         }
 
         $this->log('Importing template images…');
@@ -2046,70 +2057,82 @@ class OpenDcimImportService
         foreach ($templates as $t) {
             $front = trim((string)($t['FrontPictureFile'] ?? ''));
             $rear = trim((string)($t['RearPictureFile'] ?? ''));
-            if ($front === '' && $rear === '') {
-                continue;
+            if ($front !== '' || $rear !== '') {
+                $withPics++;
             }
-            $withPics++;
         }
         $this->log("  templates with pictures: $withPics");
 
+        $n = 0;
         foreach ($templates as $t) {
-            $srcId = (string)($t['TemplateID'] ?? '');
-            $localId = $this->resolveLocalId('template', $srcId);
-            if (!$localId || $localId >= 1000000) {
-                continue;
-            }
-
-            $uHeight = max(1, (int)($t['Height'] ?? 1));
-            $front = trim((string)($t['FrontPictureFile'] ?? ''));
-            $rear = trim((string)($t['RearPictureFile'] ?? ''));
-            if ($front === '' && $rear === '') {
-                continue;
-            }
-
-            if ($this->isDryRun()) {
-                if ($front !== '') {
-                    $this->bump('image_front_would_import');
+            $n++;
+            try {
+                $srcId = (string)($t['TemplateID'] ?? '');
+                $localId = $this->resolveLocalId('template', $srcId);
+                if (!$localId || $localId >= 1000000) {
+                    continue;
                 }
-                if ($rear !== '') {
-                    $this->bump('image_rear_would_import');
+
+                $uHeight = max(1, (int)($t['Height'] ?? 1));
+                $front = trim((string)($t['FrontPictureFile'] ?? ''));
+                $rear = trim((string)($t['RearPictureFile'] ?? ''));
+                if ($front === '' && $rear === '') {
+                    continue;
                 }
-                continue;
-            }
 
-            // Skip if already has pictures (unless empty)
-            $existing = Database::fetchOne(
-                'SELECT front_picture, rear_picture FROM device_templates WHERE template_id = ?',
-                [$localId]
-            );
-            $updates = [];
-
-            if ($front !== '' && empty($existing['front_picture'])) {
-                $rel = $this->fetchAndStoreTemplateImage($localId, $front, 'front', $uHeight);
-                if ($rel) {
-                    $updates['front_picture'] = $rel;
-                    $this->bump('image_front_import');
-                } else {
-                    $this->bump('image_front_fail');
+                if ($this->isDryRun()) {
+                    if ($front !== '') {
+                        $this->bump('image_front_would_import');
+                    }
+                    if ($rear !== '') {
+                        $this->bump('image_rear_would_import');
+                    }
+                    continue;
                 }
-            } elseif ($front !== '' && !empty($existing['front_picture'])) {
-                $this->bump('image_front_exists');
-            }
 
-            if ($rear !== '' && empty($existing['rear_picture'])) {
-                $rel = $this->fetchAndStoreTemplateImage($localId, $rear, 'rear', $uHeight);
-                if ($rel) {
-                    $updates['rear_picture'] = $rel;
-                    $this->bump('image_rear_import');
-                } else {
-                    $this->bump('image_rear_fail');
+                $existing = Database::fetchOne(
+                    'SELECT front_picture, rear_picture FROM device_templates WHERE template_id = ?',
+                    [$localId]
+                );
+                $updates = [];
+
+                if ($front !== '' && empty($existing['front_picture'])) {
+                    $rel = $this->fetchAndStoreTemplateImage($localId, $front, 'front', $uHeight);
+                    if ($rel) {
+                        $updates['front_picture'] = $rel;
+                        $this->bump('image_front_import');
+                    } else {
+                        $this->bump('image_front_fail');
+                    }
+                } elseif ($front !== '' && !empty($existing['front_picture'])) {
+                    $this->bump('image_front_exists');
                 }
-            } elseif ($rear !== '' && !empty($existing['rear_picture'])) {
-                $this->bump('image_rear_exists');
-            }
 
-            if ($updates) {
-                Database::update('device_templates', $updates, 'template_id = :id', [':id' => $localId]);
+                if ($rear !== '' && empty($existing['rear_picture'])) {
+                    $rel = $this->fetchAndStoreTemplateImage($localId, $rear, 'rear', $uHeight);
+                    if ($rel) {
+                        $updates['rear_picture'] = $rel;
+                        $this->bump('image_rear_import');
+                    } else {
+                        $this->bump('image_rear_fail');
+                    }
+                } elseif ($rear !== '' && !empty($existing['rear_picture'])) {
+                    $this->bump('image_rear_exists');
+                }
+
+                if ($updates) {
+                    Database::update('device_templates', $updates, 'template_id = :id', [':id' => $localId]);
+                }
+
+                if ($n % 25 === 0) {
+                    $this->log("  image progress: $n / " . count($templates));
+                    if (function_exists('gc_collect_cycles')) {
+                        gc_collect_cycles();
+                    }
+                }
+            } catch (Throwable $e) {
+                $this->log('WARN template image: ' . $e->getMessage());
+                $this->bump('image_error');
             }
         }
     }
@@ -2125,10 +2148,10 @@ class OpenDcimImportService
             return null;
         }
 
-        $bytes = $this->client->downloadBinary('/pictures/' . rawurlencode($filename));
-        // Some installs store without URL-encoding or under drawings/
-        if ($bytes === null) {
-            $bytes = $this->client->downloadBinary('/pictures/' . $filename);
+        // Prefer unencoded path first (openDCIM serves /pictures/Name.png)
+        $bytes = $this->client->downloadBinary('/pictures/' . $filename);
+        if ($bytes === null && preg_match('/[^A-Za-z0-9._-]/', $filename)) {
+            $bytes = $this->client->downloadBinary('/pictures/' . rawurlencode($filename));
         }
         if ($bytes === null) {
             $bytes = $this->client->downloadBinary('/drawings/' . $filename);
