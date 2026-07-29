@@ -29,7 +29,7 @@ try {
 }
 
 $uUsed = (int) Database::fetchValue(
-    'SELECT ISNULL(SUM(u_height),0) FROM devices WHERE is_active = 1 AND cabinet_id IS NOT NULL AND position_u IS NOT NULL'
+    'SELECT ISNULL(SUM(u_height),0) FROM devices WHERE is_active = 1 AND cabinet_id IS NOT NULL AND position_u IS NOT NULL AND parent_device_id IS NULL'
 );
 $uTotal = (int) Database::fetchValue('SELECT ISNULL(SUM(u_height),0) FROM cabinets WHERE is_active = 1');
 $uPct = $uTotal > 0 ? round(100 * $uUsed / $uTotal, 1) : 0;
@@ -56,7 +56,7 @@ $cabinets3d = Database::fetchAll(
             c.u_height, c.width_mm, c.depth_mm, c.color_hex,
             r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth,
             (SELECT COUNT(*) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1) AS device_count,
-            (SELECT ISNULL(SUM(d.u_height),0) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1 AND d.position_u IS NOT NULL) AS u_used
+            (SELECT ISNULL(SUM(d.u_height),0) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1 AND d.position_u IS NOT NULL AND d.parent_device_id IS NULL) AS u_used
      FROM cabinets c
      INNER JOIN rooms r ON r.room_id = c.room_id
      WHERE c.is_active = 1

@@ -325,18 +325,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         // U conflict check
         if ($data['cabinet_id'] && $data['position_u'] !== null) {
             $exclude = !empty($_POST['device_id']) ? (int)$_POST['device_id'] : 0;
-            $others = Database::fetchAll(
-                'SELECT device_id, label, position_u, u_height FROM devices
-                 WHERE cabinet_id = ? AND is_active = 1 AND position_u IS NOT NULL' .
-                ($exclude ? ' AND device_id <> ' . $exclude : ''),
-                [$data['cabinet_id']]
-            );
-            $end = $data['position_u'] + $data['u_height'] - 1;
-            foreach ($others as $o) {
-                $os = (int)$o['position_u'];
-                $oe = $os + (int)$o['u_height'] - 1;
-                if ($data['position_u'] <= $oe && $end >= $os) {
-                    throw new RuntimeException("U-space conflict with {$o['label']}");
+            // Chassis children: position_u is slot # — do not check against rack U map
+            $isChild = !empty($data['parent_device_id']);
+            if (!$isChild) {
+                $others = Database::fetchAll(
+                    'SELECT device_id, label, position_u, u_height FROM devices
+                     WHERE cabinet_id = ? AND is_active = 1 AND position_u IS NOT NULL
+                       AND parent_device_id IS NULL' .
+                    ($exclude ? ' AND device_id <> ' . $exclude : ''),
+                    [$data['cabinet_id']]
+                );
+                $end = $data['position_u'] + $data['u_height'] - 1;
+                foreach ($others as $o) {
+                    $os = (int)$o['position_u'];
+                    $oe = $os + (int)$o['u_height'] - 1;
+                    if ($data['position_u'] <= $oe && $end >= $os) {
+                        throw new RuntimeException("U-space conflict with {$o['label']}");
+                    }
                 }
             }
         }
@@ -455,7 +460,8 @@ if ($action === 'new' || $id) {
                         ct.first_name AS contact_first,
                         ct.last_name AS contact_last,
                         ct.email AS contact_email,
-                        pd.label AS parent_label
+                        pd.label AS parent_label,
+                        pd.position_u AS parent_position_u
                  FROM devices d
                  LEFT JOIN device_templates t ON t.template_id = d.template_id
                  LEFT JOIN departments dep ON dep.department_id = d.department_id
@@ -636,11 +642,40 @@ if ($action === 'new' || $id) {
         $statusLabel = $deviceStatuses[$device['status'] ?? ''] ?? ($device['status'] ?? '—');
         $posU = $device['position_u'] !== null ? (int)$device['position_u'] : null;
         $uH = max(1, (int)($device['u_height'] ?? 1));
-        $uRange = $posU !== null ? ('U' . $posU . '–' . ($posU + $uH - 1)) : '—';
-        $half = !empty($device['half_depth']);
-        $mountLabel = $half
-            ? (!empty($device['back_side']) ? 'Half-depth · Rear' : 'Half-depth · Front')
-            : 'Full depth';
+        if (!empty($device['parent_device_id'])) {
+            $parentU = $device['parent_position_u'] !== null && $device['parent_position_u'] !== ''
+                ? (int)$device['parent_position_u'] : null;
+            if ($parentU !== null && $posU !== null) {
+                $uRange = 'U' . $parentU . '-' . $posU . ' (chassis slot)';
+            } elseif ($posU !== null) {
+                $uRange = 'Slot ' . $posU . ' (in chassis)';
+            } else {
+                $uRange = 'Chassis child';
+            }
+            $mountLabel = 'Child of chassis';
+        } else {
+            $uRange = $posU !== null ? ('U' . $posU . '–' . ($posU + $uH - 1)) : '—';
+            $half = !empty($device['half_depth']);
+            $mountLabel = $half
+                ? (!empty($device['back_side']) ? 'Half-depth · Rear' : 'Half-depth · Front')
+                : 'Full depth';
+        }
+        // Child devices of this chassis (blades / modules)
+        $childDevices = [];
+        try {
+            $childDevices = Database::fetchAll(
+                'SELECT d.device_id, d.label, d.position_u, d.primary_ip, d.mgmt_ip, d.manufacturer, d.model,
+                        t.model AS tpl_model, m.name AS tpl_manufacturer
+                 FROM devices d
+                 LEFT JOIN device_templates t ON t.template_id = d.template_id
+                 LEFT JOIN manufacturers m ON m.manufacturer_id = t.manufacturer_id
+                 WHERE d.parent_device_id = ? AND d.is_active = 1
+                 ORDER BY d.position_u, d.label',
+                [$id]
+            );
+        } catch (Throwable $e) {
+            $childDevices = [];
+        }
         $dataPorts = array_values(array_filter($ports, static fn($p) => ($p['port_type'] ?? '') === 'data'));
         $numPower = count($powerSupplies);
         $numData = max(
@@ -795,6 +830,55 @@ if ($action === 'new' || $id) {
                         </dl>
                     </div>
                 </div>
+
+                <?php if ($childDevices): ?>
+                <div class="card view-pane">
+                    <div class="card-header"><h2>Child devices (<?= count($childDevices) ?>)</h2></div>
+                    <div class="card-body flush">
+                        <table class="data cabinet-device-table">
+                            <thead>
+                            <tr>
+                                <th>Slot</th>
+                                <th>Name</th>
+                                <th>Make</th>
+                                <th>Model</th>
+                                <th>IP</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <?php
+                            $parentUForKids = $device['position_u'] !== null ? (int)$device['position_u'] : null;
+                            foreach ($childDevices as $ch):
+                                $slot = $ch['position_u'] !== null ? (int)$ch['position_u'] : null;
+                                $slotLabel = ($parentUForKids !== null && $slot !== null)
+                                    ? ('U' . $parentUForKids . '-' . $slot)
+                                    : ($slot !== null ? (string)$slot : '—');
+                                $chMake = trim((string)($ch['manufacturer'] ?? '')) !== ''
+                                    ? (string)$ch['manufacturer']
+                                    : (string)($ch['tpl_manufacturer'] ?? '');
+                                $chModel = trim((string)($ch['model'] ?? '')) !== ''
+                                    ? (string)$ch['model']
+                                    : (string)($ch['tpl_model'] ?? '');
+                                $chIp = trim((string)($ch['primary_ip'] ?? ''));
+                                if ($chIp === '') {
+                                    $chIp = trim((string)($ch['mgmt_ip'] ?? ''));
+                                }
+                                ?>
+                                <tr class="cabinet-device-child">
+                                    <td class="cabinet-device-slot"><?= App::e($slotLabel) ?></td>
+                                    <td>
+                                        <a href="<?= App::e(App::url('pages/devices.php?id=' . (int)$ch['device_id'])) ?>"><?= App::e($ch['label']) ?></a>
+                                    </td>
+                                    <td><?= $chMake !== '' ? App::e($chMake) : '—' ?></td>
+                                    <td><?= $chModel !== '' ? App::e($chModel) : '—' ?></td>
+                                    <td><?= $chIp !== '' ? App::e($chIp) : '—' ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <?php endif; ?>
 
                 <div class="card view-pane">
                     <div class="card-header"><h2>Asset tracking</h2></div>
@@ -2422,7 +2506,8 @@ if ($action === 'new' || $id) {
 // ---- List ----
 $q = trim($_GET['q'] ?? '');
 $sql = 'SELECT d.*, c.name AS cabinet_name, dc.name AS dc_name, cr.name AS row_name, z.name AS zone_name,
-               dep.name AS department_name, dep.color_hex AS department_color
+               dep.name AS department_name, dep.color_hex AS department_color,
+               pd.position_u AS parent_position_u, pd.label AS parent_label
         FROM devices d
         LEFT JOIN cabinets c ON c.cabinet_id = d.cabinet_id
         LEFT JOIN rooms r ON r.room_id = c.room_id
@@ -2430,6 +2515,7 @@ $sql = 'SELECT d.*, c.name AS cabinet_name, dc.name AS dc_name, cr.name AS row_n
         LEFT JOIN cabinet_rows cr ON cr.row_id = c.row_id
         LEFT JOIN power_zones z ON z.zone_id = cr.zone_id
         LEFT JOIN departments dep ON dep.department_id = d.department_id
+        LEFT JOIN devices pd ON pd.device_id = d.parent_device_id
         WHERE d.is_active = 1';
 $params = [];
 if ($q !== '') {
@@ -2501,7 +2587,24 @@ layout_header('Devices', $user, 'devices');
                         </td>
                         <td><?= App::e($d['dc_name'] ?? '—') ?></td>
                         <td><?= App::e($d['cabinet_name'] ?? '—') ?></td>
-                        <td><?= $d['position_u'] !== null ? (int)$d['position_u'] . '–' . ((int)$d['position_u'] + (int)$d['u_height'] - 1) : '—' ?></td>
+                        <td><?php
+                            if (!empty($d['parent_device_id'])) {
+                                $pu = $d['parent_position_u'] !== null && $d['parent_position_u'] !== ''
+                                    ? (int)$d['parent_position_u'] : null;
+                                $slot = $d['position_u'] !== null ? (int)$d['position_u'] : null;
+                                if ($pu !== null && $slot !== null) {
+                                    echo App::e('U' . $pu . '-' . $slot);
+                                } elseif ($slot !== null) {
+                                    echo App::e('slot ' . $slot);
+                                } else {
+                                    echo '—';
+                                }
+                            } else {
+                                echo $d['position_u'] !== null
+                                    ? App::e((int)$d['position_u'] . '–' . ((int)$d['position_u'] + (int)$d['u_height'] - 1))
+                                    : '—';
+                            }
+                        ?></td>
                         <td><?= App::e($d['primary_ip'] ?? '—') ?></td>
                         <td><span class="badge badge-info"><?= App::e($deviceStatuses[$d['status']] ?? $d['status']) ?></span></td>
                     </tr>
