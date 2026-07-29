@@ -582,6 +582,20 @@ try {
 // Fixed public donation link (not user-configurable)
 $paypalUrl = 'https://paypal.me/mattelsberry';
 
+$localDatacenters = [];
+try {
+    $localDatacenters = Database::fetchAll(
+        'SELECT datacenter_id, name FROM datacenters WHERE is_active = 1 ORDER BY name'
+    );
+} catch (Throwable $e) {
+    $localDatacenters = [];
+}
+$opendcimCfg = is_array($config['opendcim'] ?? null) ? $config['opendcim'] : [];
+$opendcimOfflineDir = App::ROOT . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'tmp'
+    . DIRECTORY_SEPARATOR . 'opendcim_probe';
+$opendcimOfflineReady = is_dir($opendcimOfflineDir)
+    && is_file($opendcimOfflineDir . DIRECTORY_SEPARATOR . 'api_v1_device.json');
+
 layout_header('Settings', $user, 'settings');
 ?>
 
@@ -1254,6 +1268,127 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
     </div>
 </div>
 
+<div class="card" id="opendcim-import">
+    <div class="card-header flex-between">
+        <h2>OpenDCIM migration</h2>
+        <span class="badge">Mode A · keep floor plan</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size:.9rem;margin-top:0">
+            Import inventory from openDCIM into this ColdAisle site.
+            <strong>Mode A</strong> merges into an existing data center and
+            <strong>never overwrites</strong> cabinet floor positions you already arranged.
+            Use <em>Test connection</em>, then <em>Preview</em> for a full breakdown, then
+            <em>Run migration</em> when ready.
+        </p>
+
+        <div class="form-grid" id="opendcimForm">
+            <div class="form-row full">
+                <label>Source</label>
+                <div style="display:flex;flex-wrap:wrap;gap:1rem;align-items:center">
+                    <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer">
+                        <input type="radio" name="od_source" value="live" id="od_src_live"
+                            <?= $opendcimOfflineReady ? '' : 'checked' ?>>
+                        Live openDCIM API
+                    </label>
+                    <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer">
+                        <input type="radio" name="od_source" value="offline" id="od_src_offline"
+                            <?= $opendcimOfflineReady ? 'checked' : '' ?>
+                            <?= $opendcimOfflineReady ? '' : 'disabled' ?>>
+                        Offline JSON dumps
+                        <?php if ($opendcimOfflineReady): ?>
+                            <span class="text-muted" style="font-size:.78rem">(probe cache ready)</span>
+                        <?php else: ?>
+                            <span class="text-muted" style="font-size:.78rem">(no dumps found)</span>
+                        <?php endif; ?>
+                    </label>
+                </div>
+            </div>
+
+            <div id="od_live_fields" class="form-row full" style="display:contents">
+                <div class="form-row"><label>openDCIM base URL</label>
+                    <input class="form-control" id="od_base_url" type="url"
+                           placeholder="https://dcim.example.org"
+                           value="<?= App::e((string)($opendcimCfg['base_url'] ?? '')) ?>"></div>
+                <div class="form-row"><label>UserID</label>
+                    <input class="form-control" id="od_user_id" autocomplete="off"
+                           placeholder="dcim"
+                           value="<?= App::e((string)($opendcimCfg['user_id'] ?? '')) ?>"></div>
+                <div class="form-row"><label>API key</label>
+                    <input class="form-control" id="od_api_key" type="password" autocomplete="new-password"
+                           placeholder="Paste API key from openDCIM User Administration"
+                           value=""></div>
+                <div class="form-row"><label>DNS resolve (optional)</label>
+                    <input class="form-control" id="od_resolve" placeholder="hostname:10.x.x.x"
+                           value=""></div>
+                <div class="form-row full">
+                    <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer">
+                        <input type="checkbox" id="od_insecure" value="1"
+                            <?= array_key_exists('tls_verify', $opendcimCfg) && empty($opendcimCfg['tls_verify']) ? 'checked' : 'checked' ?>>
+                        Skip TLS certificate verify (lab / private IP)
+                    </label>
+                </div>
+            </div>
+
+            <div class="form-row"><label>Merge into ColdAisle data center</label>
+                <select class="form-control" id="od_target_dc">
+                    <option value="">— Match by name (Mode A default) —</option>
+                    <?php foreach ($localDatacenters as $ldc): ?>
+                        <option value="<?= (int)$ldc['datacenter_id'] ?>">
+                            #<?= (int)$ldc['datacenter_id'] ?> · <?= App::e((string)$ldc['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <span class="text-muted" style="font-size:.75rem">
+                    If openDCIM DC names differ, pick the local data center explicitly.
+                </span>
+            </div>
+            <div class="form-row"><label>OpenDCIM data center ID (optional)</label>
+                <input class="form-control" id="od_dc_filter" placeholder="e.g. 1 (leave blank for all)">
+            </div>
+            <div class="form-row full" style="display:flex;flex-wrap:wrap;gap:1rem">
+                <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer">
+                    <input type="checkbox" id="od_include_disposed" value="1"> Include disposed devices
+                </label>
+                <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer">
+                    <input type="checkbox" id="od_include_ports" value="1" checked> Import data ports
+                </label>
+                <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer">
+                    <input type="checkbox" id="od_include_power" value="1" checked> Import CDUs / power maps
+                </label>
+            </div>
+
+            <div class="form-row full" style="display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.5rem">
+                <button type="button" class="btn btn-secondary" id="od_btn_test">Test connection</button>
+                <button type="button" class="btn btn-secondary" id="od_btn_preview">Preview migration</button>
+                <button type="button" class="btn btn-primary" id="od_btn_run">Run migration</button>
+            </div>
+            <p class="text-muted" style="font-size:.78rem;margin:.5rem 0 0">
+                Prep on openDCIM: User Administration → full rights (except Disable) → generate API key if needed.
+                Preview is a dry-run (no writes). Run migration commits Mode A changes.
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- OpenDCIM migration feedback modal -->
+<div id="od_import_modal" class="ldaps-modal" hidden aria-hidden="true">
+    <div class="ldaps-modal-backdrop" data-od-close></div>
+    <div class="ldaps-modal-panel ldaps-pending" role="dialog" aria-modal="true" aria-labelledby="od_import_title"
+         style="max-width:42rem;width:min(42rem,96vw)">
+        <div class="ldaps-modal-head">
+            <h3 id="od_import_title">OpenDCIM migration</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-od-close aria-label="Close">✕</button>
+        </div>
+        <div id="od_import_body" class="ldaps-modal-body" style="max-height:min(70vh,32rem);overflow:auto"></div>
+        <div class="ldaps-modal-foot" style="display:flex;flex-wrap:wrap;gap:.5rem;justify-content:flex-end">
+            <button type="button" class="btn btn-secondary" data-od-close id="od_modal_close_btn">Close</button>
+            <button type="button" class="btn btn-secondary" id="od_modal_preview_btn" hidden>Preview again</button>
+            <button type="button" class="btn btn-primary" id="od_modal_run_btn" hidden>Run migration</button>
+        </div>
+    </div>
+</div>
+
 <div class="card" id="updates">
     <div class="card-header flex-between">
         <h2>Updates</h2>
@@ -1815,6 +1950,300 @@ function settingsTestPendingHtml(msg, sub) {
         }).finally(function () {
             btn.disabled = false;
         });
+    });
+})();
+
+// OpenDCIM migration wizard (test → preview → run) with modal feedback
+(function () {
+    var modal = document.getElementById('od_import_modal');
+    var body = document.getElementById('od_import_body');
+    var title = document.getElementById('od_import_title');
+    var panel = modal && modal.querySelector('.ldaps-modal-panel');
+    var btnTest = document.getElementById('od_btn_test');
+    var btnPreview = document.getElementById('od_btn_preview');
+    var btnRun = document.getElementById('od_btn_run');
+    var modalRun = document.getElementById('od_modal_run_btn');
+    var modalPreview = document.getElementById('od_modal_preview_btn');
+    var pollTimer = null;
+    var lastPreviewOk = false;
+
+    if (!modal || !body || !btnTest) return;
+
+    function openModal() {
+        modal.hidden = false;
+        modal.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+    }
+    function closeModal() {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        modal.hidden = true;
+        modal.setAttribute('aria-hidden', 'true');
+        if (!document.querySelector('.ldaps-modal:not([hidden]), .app-modal:not([hidden])')) {
+            document.body.style.overflow = '';
+        }
+    }
+    modal.querySelectorAll('[data-od-close]').forEach(function (el) {
+        el.addEventListener('click', closeModal);
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !modal.hidden) closeModal();
+    });
+
+    function setPanelState(state) {
+        if (!panel) return;
+        panel.classList.remove('ldaps-pass', 'ldaps-fail', 'ldaps-pending');
+        if (state === 'ok') panel.classList.add('ldaps-pass');
+        else if (state === 'err') panel.classList.add('ldaps-fail');
+        else panel.classList.add('ldaps-pending');
+    }
+
+    function esc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function collectPayload() {
+        var offline = document.getElementById('od_src_offline') && document.getElementById('od_src_offline').checked;
+        var p = {
+            source: offline ? 'offline' : 'live',
+            include_disposed: !!(document.getElementById('od_include_disposed') || {}).checked,
+            include_ports: !!(document.getElementById('od_include_ports') || {}).checked,
+            include_power: !!(document.getElementById('od_include_power') || {}).checked,
+            insecure: !!(document.getElementById('od_insecure') || {}).checked
+        };
+        var tdc = (document.getElementById('od_target_dc') || {}).value || '';
+        if (tdc) p.target_datacenter_id = parseInt(tdc, 10);
+        var dcf = ((document.getElementById('od_dc_filter') || {}).value || '').trim();
+        if (dcf) p.opendcim_dc_id = dcf;
+        if (offline) {
+            p.cache_dir = <?= json_encode($opendcimOfflineDir, JSON_UNESCAPED_SLASHES) ?>;
+        } else {
+            p.base_url = ((document.getElementById('od_base_url') || {}).value || '').trim();
+            p.user_id = ((document.getElementById('od_user_id') || {}).value || '').trim();
+            p.api_key = ((document.getElementById('od_api_key') || {}).value || '').trim();
+            p.resolve = ((document.getElementById('od_resolve') || {}).value || '').trim();
+        }
+        return p;
+    }
+
+    function toggleSource() {
+        var offline = document.getElementById('od_src_offline') && document.getElementById('od_src_offline').checked;
+        var live = document.getElementById('od_live_fields');
+        if (!live) return;
+        live.querySelectorAll('input').forEach(function (el) {
+            el.disabled = !!offline;
+        });
+    }
+    document.querySelectorAll('input[name=od_source]').forEach(function (r) {
+        r.addEventListener('change', toggleSource);
+    });
+    toggleSource();
+
+    function renderPending(msg) {
+        setPanelState('pending');
+        if (title) title.textContent = 'OpenDCIM migration';
+        if (modalRun) modalRun.hidden = true;
+        if (modalPreview) modalPreview.hidden = true;
+        body.innerHTML = '<p class="text-muted" style="margin:0">' + esc(msg || 'Working…') + '</p>'
+            + '<div style="margin-top:1rem;height:.4rem;background:rgba(148,163,184,.2);border-radius:4px;overflow:hidden">'
+            + '<div id="od_prog_bar" style="height:100%;width:8%;background:var(--accent,#38bdf8);transition:width .3s"></div></div>'
+            + '<pre id="od_log" style="margin:1rem 0 0;font-size:.78rem;max-height:14rem;overflow:auto;white-space:pre-wrap;background:rgba(15,23,42,.35);padding:.65rem;border-radius:6px"></pre>';
+    }
+
+    function setProgress(pct, msg, logLines) {
+        var bar = document.getElementById('od_prog_bar');
+        if (bar) bar.style.width = Math.max(5, Math.min(100, pct || 0)) + '%';
+        if (msg) {
+            var p = body.querySelector('p.text-muted');
+            if (p) p.textContent = msg;
+        }
+        var pre = document.getElementById('od_log');
+        if (pre && logLines && logLines.length) {
+            pre.textContent = logLines.slice(-80).join('\n');
+            pre.scrollTop = pre.scrollHeight;
+        }
+    }
+
+    function statsTable(stats) {
+        if (!stats || !Object.keys(stats).length) return '<p class="text-muted">No stats.</p>';
+        var keys = Object.keys(stats).sort();
+        var html = '<table class="data" style="font-size:.85rem"><thead><tr><th>Action</th><th>Count</th></tr></thead><tbody>';
+        keys.forEach(function (k) {
+            html += '<tr><td>' + esc(k) + '</td><td><strong>' + esc(stats[k]) + '</strong></td></tr>';
+        });
+        html += '</tbody></table>';
+        return html;
+    }
+
+    function renderTest(result) {
+        var ok = !!(result && result.ok);
+        setPanelState(ok ? 'ok' : 'err');
+        if (title) title.textContent = ok ? 'Connection OK' : 'Connection failed';
+        var counts = (result && result.counts) || {};
+        var html = '<p style="margin-top:0">' + esc(ok ? 'Reached openDCIM and read inventory counts.' : 'Could not fully connect.') + '</p>';
+        html += '<p class="text-muted" style="font-size:.85rem">Base: ' + esc((result && result.base_url) || '—') + '</p>';
+        html += '<table class="data" style="font-size:.85rem"><thead><tr><th>Resource</th><th>Count</th></tr></thead><tbody>';
+        Object.keys(counts).forEach(function (k) {
+            var n = counts[k];
+            html += '<tr><td>' + esc(k) + '</td><td>' + (n < 0 ? '<span class="text-danger">error</span>' : esc(n)) + '</td></tr>';
+        });
+        html += '</tbody></table>';
+        if (result && result.errors && result.errors.length) {
+            html += '<ul style="margin:.75rem 0 0;padding-left:1.2rem;font-size:.85rem">';
+            result.errors.forEach(function (e) { html += '<li>' + esc(e) + '</li>'; });
+            html += '</ul>';
+        }
+        body.innerHTML = html;
+        if (modalPreview) modalPreview.hidden = !ok;
+        if (modalRun) modalRun.hidden = true;
+        lastPreviewOk = false;
+    }
+
+    function renderPreview(job) {
+        var res = (job && job.result) || {};
+        var stats = res.stats || job.stats || {};
+        var plan = res.plan || {};
+        var summary = res.summary || {};
+        var errs = res.errors || [];
+        setPanelState(job.state === 'error' ? 'err' : 'ok');
+        if (title) title.textContent = 'Migration preview (no changes written)';
+        var html = '<p style="margin-top:0">Dry-run breakdown of what Mode A would do. Review before running.</p>';
+
+        if (summary.devices) {
+            html += '<h4 style="margin:1rem 0 .35rem;font-size:.95rem">Source inventory</h4>';
+            html += '<ul style="margin:0;padding-left:1.2rem;font-size:.88rem">';
+            html += '<li>Devices: <strong>' + esc(summary.devices.total) + '</strong> ('
+                + esc(summary.devices.cdu || 0) + ' CDUs)</li>';
+            html += '<li>Cabinets: <strong>' + esc((summary.cabinets && summary.cabinets.total) || 0) + '</strong></li>';
+            html += '<li>Templates: <strong>' + esc(summary.templates || 0) + '</strong></li>';
+            html += '</ul>';
+        }
+
+        if (plan.datacenters && plan.datacenters.length) {
+            html += '<h4 style="margin:1rem 0 .35rem;font-size:.95rem">Data center merge</h4>';
+            html += '<table class="data" style="font-size:.85rem"><thead><tr><th>OpenDCIM</th><th>Action</th><th>Local target</th></tr></thead><tbody>';
+            plan.datacenters.forEach(function (dc) {
+                html += '<tr><td>' + esc(dc.opendcim_name) + ' (#' + esc(dc.opendcim_id) + ')</td>'
+                    + '<td>' + esc(dc.action) + '</td>'
+                    + '<td>' + esc(dc.local_name || dc.note || '—') + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            html += '<p class="text-muted" style="font-size:.78rem;margin:.35rem 0 0">Floor plan: existing cabinet positions are preserved.</p>';
+        }
+
+        html += '<h4 style="margin:1rem 0 .35rem;font-size:.95rem">Planned changes</h4>';
+        html += statsTable(stats);
+
+        if (errs && errs.length) {
+            html += '<h4 style="margin:1rem 0 .35rem;font-size:.95rem">Warnings / errors</h4><ul style="font-size:.85rem">';
+            errs.forEach(function (e) { html += '<li>' + esc(e) + '</li>'; });
+            html += '</ul>';
+        }
+
+        body.innerHTML = html;
+        lastPreviewOk = job.state === 'done';
+        if (modalRun) modalRun.hidden = !lastPreviewOk;
+        if (modalPreview) modalPreview.hidden = false;
+    }
+
+    function renderImportDone(job) {
+        var res = (job && job.result) || {};
+        var stats = res.stats || job.stats || {};
+        var errs = res.errors || [];
+        var ok = job.state === 'done' && (!errs || !errs.length);
+        setPanelState(ok ? 'ok' : 'err');
+        if (title) title.textContent = ok ? 'Migration complete' : 'Migration finished with issues';
+        var html = '<p style="margin-top:0">' + esc(job.message || '') + '</p>';
+        html += statsTable(stats);
+        if (errs && errs.length) {
+            html += '<ul style="margin-top:1rem;font-size:.85rem">';
+            errs.forEach(function (e) { html += '<li>' + esc(e) + '</li>'; });
+            html += '</ul>';
+        }
+        if (job.error) {
+            html += '<p class="text-danger" style="font-size:.9rem">' + esc(job.error) + '</p>';
+        }
+        body.innerHTML = html;
+        if (modalRun) modalRun.hidden = true;
+        if (modalPreview) modalPreview.hidden = false;
+    }
+
+    function pollJob(jobId, kind) {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(function () {
+            ColdAisle.api('api/opendcim_import.php?job_id=' + encodeURIComponent(jobId))
+                .then(function (data) {
+                    var job = data.job || {};
+                    setProgress(job.percent || 0, job.message || '', job.log || []);
+                    if (job.state === 'done' || job.state === 'error') {
+                        clearInterval(pollTimer);
+                        pollTimer = null;
+                        if (kind === 'preview') renderPreview(job);
+                        else renderImportDone(job);
+                    }
+                })
+                .catch(function (err) {
+                    clearInterval(pollTimer);
+                    pollTimer = null;
+                    setPanelState('err');
+                    body.innerHTML = '<p class="text-danger">Status poll failed: ' + esc(err.message || err) + '</p>';
+                });
+        }, 1200);
+    }
+
+    function startJob(action) {
+        var payload = collectPayload();
+        payload.action = action;
+        openModal();
+        renderPending(action === 'preview' ? 'Building preview (dry-run)…' : 'Running migration…');
+        ColdAisle.api('api/opendcim_import.php', { method: 'POST', body: payload })
+            .then(function (data) {
+                if (data.job && (data.job.state === 'done' || data.job.state === 'error')) {
+                    if (action === 'preview') renderPreview(data.job);
+                    else renderImportDone(data.job);
+                    return;
+                }
+                var jobId = data.job_id || (data.job && data.job.job_id);
+                if (!jobId) throw new Error('No job id returned');
+                setProgress((data.job && data.job.percent) || 10, (data.job && data.job.message) || 'Running…', (data.job && data.job.log) || []);
+                pollJob(jobId, action);
+            })
+            .catch(function (err) {
+                setPanelState('err');
+                if (title) title.textContent = 'Request failed';
+                body.innerHTML = '<p class="text-danger">' + esc(err.message || err) + '</p>';
+                if (modalRun) modalRun.hidden = true;
+            });
+    }
+
+    btnTest.addEventListener('click', function () {
+        var payload = collectPayload();
+        payload.action = 'test';
+        openModal();
+        renderPending('Testing connection…');
+        ColdAisle.api('api/opendcim_import.php', { method: 'POST', body: payload })
+            .then(function (data) {
+                if (data.result) renderTest(data.result);
+                else if (data.error) throw new Error(data.error);
+                else renderTest({ ok: !!data.ok, counts: {}, base_url: '' });
+            })
+            .catch(function (err) {
+                setPanelState('err');
+                if (title) title.textContent = 'Connection failed';
+                body.innerHTML = '<p class="text-danger">' + esc(err.message || err) + '</p>';
+            });
+    });
+
+    if (btnPreview) btnPreview.addEventListener('click', function () { startJob('preview'); });
+    if (btnRun) btnRun.addEventListener('click', function () {
+        if (!confirm('Run Mode A migration into the selected ColdAisle data center?\n\nExisting cabinet floor positions will not be overwritten.\nThis writes to the database.')) return;
+        startJob('import');
+    });
+    if (modalPreview) modalPreview.addEventListener('click', function () { startJob('preview'); });
+    if (modalRun) modalRun.addEventListener('click', function () {
+        if (!confirm('Commit this migration to the database now?')) return;
+        startJob('import');
     });
 })();
 </script>

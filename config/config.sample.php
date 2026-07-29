@@ -85,4 +85,15 @@ return [
         'timeout' => 30,
         'verify_peer' => true,
     ],
+    // OpenDCIM import (scripts/opendcim_import.php). Prefer CLI flags / env in lab.
+    // Mode A (default): merge into existing DC by name; never overwrite cabinet floor positions.
+    'opendcim' => [
+        'base_url' => 'https://dcim.example.org',
+        'user_id' => 'dcim',
+        'api_key' => '',
+        'tls_verify' => false, // private IP / self-signed lab
+        'timeout' => 90,
+        // Optional DNS override: hostname => IP
+        // 'resolve' => ['dcim.example.org' => '10.254.254.252'],
+    ],
 ];
