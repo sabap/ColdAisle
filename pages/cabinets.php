@@ -145,12 +145,12 @@ if ($id) {
         }
     }
 
+    // Small variants for elevation strips (full-res reserved for device detail)
+    if (!class_exists('ImageUpload')) {
+        require_once dirname(__DIR__) . '/src/Services/ImageUpload.php';
+    }
     $mediaUrl = static function (?string $rel): string {
-        if (!$rel) {
-            return '';
-        }
-        $rel = ltrim(str_replace('\\', '/', $rel), '/');
-        return App::url('media.php?f=' . rawurlencode($rel));
+        return ImageUpload::mediaUrl($rel, ImageUpload::VARIANT_SM);
     };
 
     $deviceImage = static function (array $d, string $face) use ($mediaUrl): string {
@@ -1176,12 +1176,12 @@ if ($rowId) {
     );
     $facing = $sortCabinetsFrontView($rowCabs);
 
+    if (!class_exists('ImageUpload')) {
+        require_once dirname(__DIR__) . '/src/Services/ImageUpload.php';
+    }
+    // Row view: small faceplate variants only
     $mediaUrl = static function (?string $rel): string {
-        if (!$rel) {
-            return '';
-        }
-        $rel = ltrim(str_replace('\\', '/', $rel), '/');
-        return App::url('media.php?f=' . rawurlencode($rel));
+        return ImageUpload::mediaUrl($rel, ImageUpload::VARIANT_SM);
     };
 
     // Load devices per cabinet for front elevations

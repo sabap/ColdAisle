@@ -44,6 +44,10 @@ class Cabinet3dData
              ORDER BY d.cabinet_id, d.position_u"
         );
 
+        if (!class_exists('ImageUpload')) {
+            require_once dirname(__DIR__) . '/Services/ImageUpload.php';
+        }
+
         $byCab = [];
         foreach ($devices as $d) {
             $cid = (int)$d['cabinet_id'];
@@ -55,8 +59,9 @@ class Cabinet3dData
                 'half_depth' => !empty($d['half_depth']) ? 1 : 0,
                 'back_side' => !empty($d['back_side']) ? 1 : 0,
                 'device_type' => $d['device_type'] ?? 'server',
-                'front_image' => self::mediaUrl($d['front_picture'] ?? null),
-                'rear_image' => self::mediaUrl($d['rear_picture'] ?? null),
+                // .sm variants for 3D face textures (full-res stays on device detail)
+                'front_image' => self::mediaUrlSm($d['front_picture'] ?? null),
+                'rear_image' => self::mediaUrlSm($d['rear_picture'] ?? null),
             ];
         }
 
@@ -79,12 +84,12 @@ class Cabinet3dData
         return $cabinets;
     }
 
-    private static function mediaUrl(?string $rel): ?string
+    private static function mediaUrlSm(?string $rel): ?string
     {
         if ($rel === null || trim($rel) === '') {
             return null;
         }
-        $rel = ltrim(str_replace('\\', '/', $rel), '/');
-        return App::url('media.php?f=' . rawurlencode($rel));
+        $url = ImageUpload::mediaUrl($rel, ImageUpload::VARIANT_SM);
+        return $url !== '' ? $url : null;
     }
 }
