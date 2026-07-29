@@ -1025,6 +1025,28 @@ table.data .actions { white-space: nowrap; }
 .rack-device.type-storage { background: linear-gradient(90deg, #4c1d95, #7c3aed); }
 .rack-device.type-chassis { background: linear-gradient(90deg, #334155, #64748b); }
 .rack-device.type-router { background: linear-gradient(90deg, #0e7490, #06b6d4); }
+
+/* Cabinet / chassis: parent row + nested child (blade/module) rows */
+.cabinet-device-table .cabinet-device-parent.has-children > td {
+  border-bottom-color: transparent;
+}
+.cabinet-device-table .cabinet-device-child td {
+  background: rgba(148, 163, 184, 0.08);
+  font-size: 0.88rem;
+  color: var(--text, #e2e8f0);
+}
+.cabinet-device-table .cabinet-device-child td:first-child {
+  padding-left: 1.35rem;
+}
+.cabinet-device-table .cabinet-device-slot {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.8rem;
+  color: var(--muted, #94a3b8);
+  white-space: nowrap;
+}
+.cabinet-device-table .cabinet-device-child a {
+  font-weight: 500;
+}
 button.rack-device.rack-pdu-btn {
   border: 0;
   cursor: pointer;

@@ -9,7 +9,7 @@ App::json([
         'devices' => (int) Database::fetchValue("SELECT COUNT(*) FROM devices WHERE is_active = 1 AND status <> 'disposed'"),
         'pdus' => (int) Database::fetchValue('SELECT COUNT(*) FROM pdus WHERE is_active = 1'),
         'open_disposals' => (int) Database::fetchValue("SELECT COUNT(*) FROM disposals WHERE status IN ('pending','approved','in_progress')"),
-        'u_used' => (int) Database::fetchValue('SELECT ISNULL(SUM(u_height),0) FROM devices WHERE is_active = 1 AND position_u IS NOT NULL'),
+        'u_used' => (int) Database::fetchValue('SELECT ISNULL(SUM(u_height),0) FROM devices WHERE is_active = 1 AND position_u IS NOT NULL AND parent_device_id IS NULL'),
         'u_total' => (int) Database::fetchValue('SELECT ISNULL(SUM(u_height),0) FROM cabinets WHERE is_active = 1'),
         'power_kw' => (float) Database::fetchValue('SELECT ISNULL(SUM(last_poll_watts),0)/1000.0 FROM pdus WHERE is_active = 1'),
     ],

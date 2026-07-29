@@ -30,6 +30,7 @@ class Cabinet3dData
 
         // Embed validated ints — ODBC binding of IN (?) lists can type-clash on SQL Server
         $idList = implode(',', array_map('intval', $ids));
+        // Exclude chassis children (blades/modules): their position_u is a slot #, not rack U
         $devices = Database::fetchAll(
             "SELECT d.device_id, d.cabinet_id, d.label, d.position_u, d.u_height,
                     d.half_depth, d.back_side, d.device_type,
@@ -38,6 +39,7 @@ class Cabinet3dData
              LEFT JOIN device_templates t ON t.template_id = d.template_id
              WHERE d.is_active = 1
                AND d.position_u IS NOT NULL
+               AND d.parent_device_id IS NULL
                AND d.cabinet_id IN ({$idList})
              ORDER BY d.cabinet_id, d.position_u"
         );

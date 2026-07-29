@@ -8,9 +8,12 @@ $user = AuthManager::user();
 
 function device_u_conflict(int $cabinetId, int $positionU, int $uHeight, ?int $excludeId = null): ?string
 {
+    // Only rack-mounted devices (parent_device_id NULL) consume U space.
+    // Chassis children use position_u as slot number.
     $devices = Database::fetchAll(
         'SELECT device_id, label, position_u, u_height FROM devices
-         WHERE cabinet_id = ? AND is_active = 1 AND position_u IS NOT NULL' .
+         WHERE cabinet_id = ? AND is_active = 1 AND position_u IS NOT NULL
+           AND parent_device_id IS NULL' .
         ($excludeId ? ' AND device_id <> ' . (int)$excludeId : ''),
         [$cabinetId]
     );
@@ -71,7 +74,9 @@ try {
         $positionU = isset($data['position_u']) && $data['position_u'] !== '' ? (int)$data['position_u'] : null;
         $uHeight = max(1, (int)($data['u_height'] ?? 1));
 
-        if ($cabinetId && $positionU !== null) {
+        $parentId = !empty($data['parent_device_id']) ? (int)$data['parent_device_id'] : null;
+        // Rack U conflict only for top-level devices (not chassis blades/modules)
+        if ($cabinetId && $positionU !== null && !$parentId) {
             $conflict = device_u_conflict($cabinetId, $positionU, $uHeight);
             if ($conflict) {
                 App::json(['error' => $conflict], 409);
@@ -180,8 +185,11 @@ try {
         $checkCab = $cabinetId ?? ($existing['cabinet_id'] ? (int)$existing['cabinet_id'] : null);
         $checkPos = $positionU !== null ? $positionU : ($existing['position_u'] !== null ? (int)$existing['position_u'] : null);
         $checkU = $uHeight ?? (int)$existing['u_height'];
+        $isChild = !empty($existing['parent_device_id'])
+            || (array_key_exists('parent_device_id', $fields) && !empty($fields['parent_device_id']));
 
-        if ($checkCab && $checkPos !== null) {
+        // Chassis children use slot numbers — skip rack U conflict
+        if ($checkCab && $checkPos !== null && !$isChild) {
             $conflict = device_u_conflict($checkCab, $checkPos, $checkU, $id);
             if ($conflict) {
                 App::json(['error' => $conflict], 409);

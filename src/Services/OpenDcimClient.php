@@ -100,7 +100,7 @@ class OpenDcimClient
     }
 
     /**
-     * Download a binary asset (e.g. /pictures/Dell_Front.png). Returns raw bytes or null.
+     * Download a binary asset (e.g. /assets/pictures/Dell_Front.png). Returns raw bytes or null.
      */
     public function downloadBinary(string $path): ?string
     {
@@ -110,7 +110,10 @@ class OpenDcimClient
             $base = basename(urldecode($path));
             $candidates = [
                 $local,
+                $this->cacheDir . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'pictures' . DIRECTORY_SEPARATOR . $base,
                 $this->cacheDir . DIRECTORY_SEPARATOR . 'pictures' . DIRECTORY_SEPARATOR . $base,
+                $this->cacheDir . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'drawings' . DIRECTORY_SEPARATOR . $base,
+                $this->cacheDir . DIRECTORY_SEPARATOR . 'drawings' . DIRECTORY_SEPARATOR . $base,
                 $this->cacheDir . DIRECTORY_SEPARATOR . $base,
             ];
             foreach ($candidates as $f) {

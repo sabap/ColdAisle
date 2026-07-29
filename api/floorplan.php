@@ -299,7 +299,7 @@ try {
             cr.name AS row_name,
             cr.zone_id AS row_zone_id,
             (SELECT COUNT(*) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1) AS device_count,
-            (SELECT ISNULL(SUM(d.u_height),0) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1 AND d.position_u IS NOT NULL) AS u_used
+            (SELECT ISNULL(SUM(d.u_height),0) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1 AND d.position_u IS NOT NULL AND d.parent_device_id IS NULL) AS u_used
          FROM cabinets c
          LEFT JOIN cabinet_rows cr ON cr.row_id = c.row_id
          WHERE c.room_id = ? AND c.is_active = 1

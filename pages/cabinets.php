@@ -22,21 +22,47 @@ if ($id) {
         App::flash('error', 'Cabinet not found.');
         App::redirect('pages/cabinets.php');
     }
-    // Devices + template images for front/rear faces (+ department color for outline)
+    // Devices + template images for front/rear faces (+ department color for outline).
+    // Child devices (parent_device_id set) use position_u as chassis slot, not rack U —
+    // they must not draw in the elevation (only the parent chassis does).
     $devices = Database::fetchAll(
         'SELECT d.*,
                 t.front_picture AS tpl_front,
                 t.rear_picture AS tpl_rear,
                 t.model AS tpl_model,
+                m.name AS tpl_manufacturer,
                 dep.name AS department_name,
                 dep.color_hex AS department_color
          FROM devices d
          LEFT JOIN device_templates t ON t.template_id = d.template_id
+         LEFT JOIN manufacturers m ON m.manufacturer_id = t.manufacturer_id
          LEFT JOIN departments dep ON dep.department_id = d.department_id
          WHERE d.cabinet_id = ? AND d.is_active = 1
-         ORDER BY d.position_u DESC',
+         ORDER BY
+            CASE WHEN d.parent_device_id IS NULL THEN 0 ELSE 1 END,
+            CASE WHEN d.parent_device_id IS NULL THEN d.position_u ELSE NULL END DESC,
+            d.parent_device_id,
+            d.position_u',
         [$id]
     );
+
+    // Rack-mounted devices only (no blades / modules in chassis)
+    $rackDevices = array_values(array_filter(
+        $devices,
+        static fn(array $d): bool => empty($d['parent_device_id'])
+    ));
+    $childrenByParent = [];
+    foreach ($devices as $d) {
+        $pid = (int)($d['parent_device_id'] ?? 0);
+        if ($pid > 0) {
+            $childrenByParent[$pid][] = $d;
+        }
+    }
+    // Sort children by chassis slot (position_u)
+    foreach ($childrenByParent as &$kids) {
+        usort($kids, static fn($a, $b) => ((int)($a['position_u'] ?? 0)) <=> ((int)($b['position_u'] ?? 0)));
+    }
+    unset($kids);
 
     // PDUs for this cabinet (U-mounted shown in elevation; vertical rear listed only)
     $pdus = [];
@@ -94,7 +120,7 @@ if ($id) {
 
     $uOccupiedFront = [];
     $uOccupiedRear = [];
-    foreach ($devices as $d) {
+    foreach ($rackDevices as $d) {
         if ($d['position_u'] === null) {
             continue;
         }
@@ -250,7 +276,7 @@ if ($id) {
 
     $usedDevices = array_sum(array_map(
         fn($d) => (int)$d['u_height'],
-        array_filter($devices, fn($d) => $d['position_u'] !== null)
+        array_filter($rackDevices, fn($d) => $d['position_u'] !== null)
     ));
     $usedPdus = array_sum(array_map(
         fn($p) => max(1, (int)($p['u_height'] ?? 1)),
@@ -341,12 +367,12 @@ if ($id) {
     <div class="rack-detail-grid">
         <div class="card rack-col">
             <div class="card-body">
-                <?php $renderRackFace('front', $devices, $uMountedPdus, $height, $aspectW, $aspectH, $id, $uOccupiedFront, $deviceOnFace, $deviceImage); ?>
+                <?php $renderRackFace('front', $rackDevices, $uMountedPdus, $height, $aspectW, $aspectH, $id, $uOccupiedFront, $deviceOnFace, $deviceImage); ?>
             </div>
         </div>
         <div class="card rack-col">
             <div class="card-body">
-                <?php $renderRackFace('rear', $devices, $uMountedPdus, $height, $aspectW, $aspectH, $id, $uOccupiedRear, $deviceOnFace, $deviceImage); ?>
+                <?php $renderRackFace('rear', $rackDevices, $uMountedPdus, $height, $aspectW, $aspectH, $id, $uOccupiedRear, $deviceOnFace, $deviceImage); ?>
             </div>
         </div>
         <div class="card rack-col rack-props-col">
@@ -405,25 +431,86 @@ if ($id) {
 
             <div class="card-header" style="border-top:1px solid var(--border)"><h2>Devices</h2></div>
             <div class="card-body flush">
-                <table class="data">
+                <table class="data cabinet-device-table">
                     <thead>
-                    <tr><th>U</th><th>Label</th><th>Mount</th><th>Status</th></tr>
+                    <tr>
+                        <th>U</th>
+                        <th>Name</th>
+                        <th>Make</th>
+                        <th>Model</th>
+                        <th>IP</th>
+                        <th>Status</th>
+                    </tr>
                     </thead>
                     <tbody>
-                    <?php if (!$devices): ?>
-                        <tr><td colspan="4" class="text-muted">Empty rack.</td></tr>
+                    <?php if (!$rackDevices): ?>
+                        <tr><td colspan="6" class="text-muted">Empty rack.</td></tr>
                     <?php endif; ?>
-                    <?php foreach ($devices as $d):
+                    <?php
+                    // Parents first (rack order); child modules nested under chassis
+                    $rackSorted = $rackDevices;
+                    usort($rackSorted, static function ($a, $b) {
+                        $ap = $a['position_u'] === null ? -1 : (int)$a['position_u'];
+                        $bp = $b['position_u'] === null ? -1 : (int)$b['position_u'];
+                        return $bp <=> $ap; // high U first (matches elevation)
+                    });
+                    foreach ($rackSorted as $d):
                         $half = !empty($d['half_depth']);
                         $rear = !empty($d['back_side']);
                         $mount = $half ? ($rear ? 'Half · Rear' : 'Half · Front') : 'Full';
+                        $uLabel = $d['position_u'] !== null
+                            ? ((int)$d['position_u'] . '–' . ((int)$d['position_u'] + max(1, (int)$d['u_height']) - 1))
+                            : '—';
+                        $make = trim((string)($d['manufacturer'] ?? '')) !== ''
+                            ? (string)$d['manufacturer']
+                            : (string)($d['tpl_manufacturer'] ?? '');
+                        $model = trim((string)($d['model'] ?? '')) !== ''
+                            ? (string)$d['model']
+                            : (string)($d['tpl_model'] ?? '');
+                        $pid = (int)$d['device_id'];
+                        $kids = $childrenByParent[$pid] ?? [];
                         ?>
-                        <tr>
-                            <td><?= $d['position_u'] !== null ? (int)$d['position_u'] . '–' . ((int)$d['position_u'] + (int)$d['u_height'] - 1) : '—' ?></td>
-                            <td><a href="<?= App::e(App::url('pages/devices.php?id=' . $d['device_id'])) ?>"><?= App::e($d['label']) ?></a></td>
-                            <td><?= App::e($mount) ?></td>
-                            <td><span class="badge badge-info"><?= App::e($d['status']) ?></span></td>
+                        <tr class="cabinet-device-parent<?= $kids ? ' has-children' : '' ?>">
+                            <td title="<?= App::e($mount) ?>"><?= App::e($uLabel) ?></td>
+                            <td>
+                                <a href="<?= App::e(App::url('pages/devices.php?id=' . $pid)) ?>"><?= App::e($d['label']) ?></a>
+                                <?php if ($kids): ?>
+                                    <span class="text-muted" style="font-size:.75rem"> · <?= count($kids) ?> child<?= count($kids) === 1 ? '' : 'ren' ?></span>
+                                <?php endif; ?>
+                            </td>
+                            <td><?= $make !== '' ? App::e($make) : '—' ?></td>
+                            <td><?= $model !== '' ? App::e($model) : '—' ?></td>
+                            <td><?= !empty($d['primary_ip']) ? App::e((string)$d['primary_ip']) : '—' ?></td>
+                            <td><span class="badge badge-info"><?= App::e((string)$d['status']) ?></span></td>
                         </tr>
+                        <?php foreach ($kids as $ch):
+                            $slot = $ch['position_u'] !== null ? (int)$ch['position_u'] : null;
+                            $parentU = $d['position_u'] !== null ? (int)$d['position_u'] : null;
+                            $slotLabel = ($parentU !== null && $slot !== null)
+                                ? ('U' . $parentU . '-' . $slot)
+                                : ($slot !== null ? ('slot ' . $slot) : '—');
+                            $chMake = trim((string)($ch['manufacturer'] ?? '')) !== ''
+                                ? (string)$ch['manufacturer']
+                                : (string)($ch['tpl_manufacturer'] ?? '');
+                            $chModel = trim((string)($ch['model'] ?? '')) !== ''
+                                ? (string)$ch['model']
+                                : (string)($ch['tpl_model'] ?? '');
+                            $chIp = trim((string)($ch['primary_ip'] ?? ''));
+                            if ($chIp === '') {
+                                $chIp = trim((string)($ch['mgmt_ip'] ?? ''));
+                            }
+                            ?>
+                            <tr class="cabinet-device-child">
+                                <td class="cabinet-device-slot"><?= App::e($slotLabel) ?></td>
+                                <td>
+                                    <a href="<?= App::e(App::url('pages/devices.php?id=' . (int)$ch['device_id'])) ?>"><?= App::e($ch['label']) ?></a>
+                                </td>
+                                <td><?= $chMake !== '' ? App::e($chMake) : '—' ?></td>
+                                <td><?= $chModel !== '' ? App::e($chModel) : '—' ?></td>
+                                <td><?= $chIp !== '' ? App::e($chIp) : '—' ?></td>
+                                <td class="text-muted" style="font-size:.8rem">—</td>
+                            </tr>
+                        <?php endforeach; ?>
                     <?php endforeach; ?>
                     </tbody>
                 </table>
@@ -1077,7 +1164,9 @@ if ($rowId) {
     $rowCabs = Database::fetchAll(
         'SELECT c.*,
             (SELECT COUNT(*) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1) AS device_count,
-            (SELECT ISNULL(SUM(d.u_height),0) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1 AND d.position_u IS NOT NULL) AS u_used,
+            (SELECT ISNULL(SUM(d.u_height),0) FROM devices d
+              WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1
+                AND d.position_u IS NOT NULL AND d.parent_device_id IS NULL) AS u_used,
             (SELECT ISNULL(SUM(d.nominal_watts),0) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1) AS device_watts,
             (SELECT ISNULL(SUM(p.last_poll_watts),0) FROM pdus p WHERE p.cabinet_id = c.cabinet_id AND p.is_active = 1) AS pdu_watts
          FROM cabinets c
@@ -1101,7 +1190,8 @@ if ($rowId) {
             'SELECT d.*, t.front_picture AS tpl_front, t.rear_picture AS tpl_rear
              FROM devices d
              LEFT JOIN device_templates t ON t.template_id = d.template_id
-             WHERE d.cabinet_id = ? AND d.is_active = 1 AND d.position_u IS NOT NULL
+             WHERE d.cabinet_id = ? AND d.is_active = 1
+               AND d.position_u IS NOT NULL AND d.parent_device_id IS NULL
              ORDER BY d.position_u DESC',
             [(int)$rc['cabinet_id']]
         );
@@ -1366,7 +1456,9 @@ $cabinets = Database::fetchAll(
             cr.row_id, cr.name AS row_name, cr.color_hex AS row_color,
             z.name AS zone_name,
         (SELECT COUNT(*) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1) AS device_count,
-        (SELECT ISNULL(SUM(d.u_height),0) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1 AND d.position_u IS NOT NULL) AS u_used,
+        (SELECT ISNULL(SUM(d.u_height),0) FROM devices d
+          WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1
+            AND d.position_u IS NOT NULL AND d.parent_device_id IS NULL) AS u_used,
         (SELECT ISNULL(SUM(d.nominal_watts),0) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1) AS device_watts,
         (SELECT ISNULL(SUM(p.last_poll_watts),0) FROM pdus p WHERE p.cabinet_id = c.cabinet_id AND p.is_active = 1) AS pdu_watts
      FROM cabinets c

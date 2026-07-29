@@ -2033,6 +2033,9 @@ class OpenDcimImportService
     /**
      * Download openDCIM template front/rear pictures into storage/uploads/templates/{id}/.
      *
+     * openDCIM stores only the filename (FrontPictureFile). The web path varies by install:
+     * classic is /pictures/, some deploys use /assets/pictures/ (this site).
+     *
      * @param list<array<string,mixed>> $templates
      */
     private function importTemplateImages(array $templates): void
@@ -2046,10 +2049,9 @@ class OpenDcimImportService
             return;
         }
 
+        // Offline mode can still load files from cache_dir/{assets/}pictures/ via downloadBinary.
         if ($this->client->isOfflineCache()) {
-            $this->log('Template images: offline mode — skipped (need live openDCIM /pictures/)');
-            $this->bump('image_skipped_offline');
-            return;
+            $this->log('Template images: offline mode — will use cache_dir pictures if present');
         }
 
         $this->log('Importing template images…');
@@ -2064,6 +2066,9 @@ class OpenDcimImportService
         $this->log("  templates with pictures: $withPics");
 
         $n = 0;
+        $failSamples = 0;
+        /** @var string|null Remember first working directory prefix e.g. /assets/pictures/ */
+        $workingPrefix = null;
         foreach ($templates as $t) {
             $n++;
             try {
@@ -2096,28 +2101,47 @@ class OpenDcimImportService
                 );
                 $updates = [];
 
-                if ($front !== '' && empty($existing['front_picture'])) {
-                    $rel = $this->fetchAndStoreTemplateImage($localId, $front, 'front', $uHeight);
-                    if ($rel) {
-                        $updates['front_picture'] = $rel;
-                        $this->bump('image_front_import');
-                    } else {
-                        $this->bump('image_front_fail');
+                foreach (
+                    [
+                        'front' => [$front, 'front_picture'],
+                        'rear' => [$rear, 'rear_picture'],
+                    ] as $stem => [$remoteName, $dbField]
+                ) {
+                    $remoteName = trim((string)$remoteName);
+                    if ($remoteName === '') {
+                        continue;
                     }
-                } elseif ($front !== '' && !empty($existing['front_picture'])) {
-                    $this->bump('image_front_exists');
-                }
+                    $dbPath = trim((string)($existing[$dbField] ?? ''));
+                    $abs = $dbPath !== ''
+                        ? App::ROOT . '/storage/uploads/' . ltrim(str_replace('\\', '/', $dbPath), '/')
+                        : '';
+                    $fileOk = $abs !== '' && is_file($abs) && filesize($abs) > 32;
+                    if ($fileOk) {
+                        $this->bump('image_' . $stem . '_exists');
+                        continue;
+                    }
+                    // Re-fetch when DB path empty OR file missing on disk (partial/failed prior run).
+                    if ($dbPath !== '' && !$fileOk) {
+                        $this->bump('image_' . $stem . '_missing_file');
+                    }
 
-                if ($rear !== '' && empty($existing['rear_picture'])) {
-                    $rel = $this->fetchAndStoreTemplateImage($localId, $rear, 'rear', $uHeight);
+                    $rel = $this->fetchAndStoreTemplateImage(
+                        $localId,
+                        $remoteName,
+                        $stem,
+                        $uHeight,
+                        $workingPrefix
+                    );
                     if ($rel) {
-                        $updates['rear_picture'] = $rel;
-                        $this->bump('image_rear_import');
+                        $updates[$dbField] = $rel;
+                        $this->bump('image_' . $stem . '_import');
                     } else {
-                        $this->bump('image_rear_fail');
+                        $this->bump('image_' . $stem . '_fail');
+                        if ($failSamples < 5) {
+                            $this->log('WARN image download failed: ' . $remoteName . ' (template #' . $localId . ' ' . $stem . ')');
+                            $failSamples++;
+                        }
                     }
-                } elseif ($rear !== '' && !empty($existing['rear_picture'])) {
-                    $this->bump('image_rear_exists');
                 }
 
                 if ($updates) {
@@ -2137,24 +2161,59 @@ class OpenDcimImportService
         }
     }
 
+    /**
+     * @param string|null $workingPrefix Cached openDCIM directory that worked (e.g. /assets/pictures/)
+     */
     private function fetchAndStoreTemplateImage(
         int $templateId,
         string $filename,
         string $stem,
-        int $uHeight
+        int $uHeight,
+        ?string &$workingPrefix = null
     ): ?string {
         $filename = basename(str_replace(['\\', '..'], ['/', ''], $filename));
         if ($filename === '' || $filename === '.' || $filename === '..') {
             return null;
         }
 
-        // Prefer unencoded path first (openDCIM serves /pictures/Name.png)
-        $bytes = $this->client->downloadBinary('/pictures/' . $filename);
-        if ($bytes === null && preg_match('/[^A-Za-z0-9._-]/', $filename)) {
-            $bytes = $this->client->downloadBinary('/pictures/' . rawurlencode($filename));
+        $bytes = null;
+        $usedPath = '';
+        // Path order: this deploy serves under /assets/pictures/; classic openDCIM uses /pictures/.
+        $prefixes = [
+            '/assets/pictures/',
+            '/pictures/',
+            '/assets/drawings/',
+            '/drawings/',
+        ];
+        if ($workingPrefix !== null && $workingPrefix !== '') {
+            // Try the known-good prefix first
+            $prefixes = array_values(array_unique(array_merge([$workingPrefix], $prefixes)));
         }
-        if ($bytes === null) {
-            $bytes = $this->client->downloadBinary('/drawings/' . $filename);
+        $nameVariants = [$filename];
+        if (preg_match('/[^A-Za-z0-9._-]/', $filename)) {
+            $nameVariants[] = rawurlencode($filename);
+            $nameVariants[] = str_replace(' ', '%20', $filename);
+        }
+        foreach ($prefixes as $prefix) {
+            foreach ($nameVariants as $name) {
+                $path = $prefix . $name;
+                $bytes = $this->client->downloadBinary($path);
+                if ($bytes !== null && strlen($bytes) >= 32) {
+                    // Reject HTML error bodies that slipped past content-type checks
+                    $trim = ltrim($bytes);
+                    if (str_starts_with($trim, '<') || str_starts_with($trim, '<!')) {
+                        $bytes = null;
+                        continue;
+                    }
+                    $usedPath = $path;
+                    if ($workingPrefix === null) {
+                        $workingPrefix = $prefix;
+                        $this->log('  image download path OK: ' . $prefix . '… (' . strlen($bytes) . ' bytes, e.g. ' . $filename . ')');
+                    }
+                    break 2;
+                }
+                $bytes = null;
+            }
         }
         if ($bytes === null || strlen($bytes) < 32) {
             return null;
