@@ -71,6 +71,14 @@ foreach (array_slice($argv, 1) as $a) {
         $args['no_power'] = true;
         continue;
     }
+    if ($a === '--no-audits') {
+        $args['no_audits'] = true;
+        continue;
+    }
+    if ($a === '--no-images') {
+        $args['no_images'] = true;
+        continue;
+    }
     if (str_starts_with($a, '--cache-dir=')) {
         $args['cache_dir'] = substr($a, 12);
         continue;
@@ -193,6 +201,8 @@ $importOpts = [
     'include_disposed' => !empty($args['include_disposed']),
     'include_ports' => empty($args['no_ports']),
     'include_power' => empty($args['no_power']),
+    'include_audits' => empty($args['no_audits']),
+    'include_images' => empty($args['no_images']),
     'target_datacenter_id' => $args['target_dc'] ?? null,
     'progress' => static function (string $msg): void {
         fwrite(STDERR, $msg . "\n");

@@ -1365,6 +1365,12 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
                 <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer">
                     <input type="checkbox" id="od_include_power" value="1" checked> Import CDUs / power maps
                 </label>
+                <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer">
+                    <input type="checkbox" id="od_include_audits" value="1" checked> Import cabinet audits
+                </label>
+                <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer">
+                    <input type="checkbox" id="od_include_images" value="1" checked> Import template images
+                </label>
             </div>
 
             <div class="form-row full" style="display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.5rem">
@@ -2071,6 +2077,8 @@ function settingsTestPendingHtml(msg, sub) {
             include_disposed: !!(document.getElementById('od_include_disposed') || {}).checked,
             include_ports: !!(document.getElementById('od_include_ports') || {}).checked,
             include_power: !!(document.getElementById('od_include_power') || {}).checked,
+            include_audits: !!(document.getElementById('od_include_audits') || {}).checked,
+            include_images: !!(document.getElementById('od_include_images') || {}).checked,
             insecure: !!(document.getElementById('od_insecure') || {}).checked
         };
         var tdc = (document.getElementById('od_target_dc') || {}).value || '';

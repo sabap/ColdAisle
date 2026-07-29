@@ -66,6 +66,8 @@ $opts = [
     'include_disposed' => !empty($d['include_disposed']),
     'include_ports' => !array_key_exists('include_ports', $d) || !empty($d['include_ports']),
     'include_power' => !array_key_exists('include_power', $d) || !empty($d['include_power']),
+    'include_audits' => !array_key_exists('include_audits', $d) || !empty($d['include_audits']),
+    'include_images' => !array_key_exists('include_images', $d) || !empty($d['include_images']),
     'target_datacenter_id' => !empty($d['target_datacenter_id']) ? (int)$d['target_datacenter_id'] : null,
 ];
 if (!empty($d['datacenter_ids']) && is_array($d['datacenter_ids'])) {
