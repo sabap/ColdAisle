@@ -107,8 +107,7 @@ class OpenDcimClient
         if ($this->cacheDir !== null) {
             $path = '/' . ltrim($path, '/');
             $local = $this->cacheDir . DIRECTORY_SEPARATOR . ltrim(str_replace('/', DIRECTORY_SEPARATOR, $path), DIRECTORY_SEPARATOR);
-            // also try pictures/filename in cache root
-            $base = basename($path);
+            $base = basename(urldecode($path));
             $candidates = [
                 $local,
                 $this->cacheDir . DIRECTORY_SEPARATOR . 'pictures' . DIRECTORY_SEPARATOR . $base,
@@ -123,14 +122,113 @@ class OpenDcimClient
             return null;
         }
         $path = '/' . ltrim($path, '/');
+        // Avoid double-encoding: path may already include %20 etc.
         $url = rtrim($this->baseUrl, '/') . $path;
         try {
-            $raw = $this->requestWithRetry('GET', $url);
-            return $raw !== '' ? $raw : null;
+            // Single attempt, no JSON expectations — pictures are public static files
+            return $this->requestBinaryOnce($url);
         } catch (Throwable $e) {
             $this->lastErrors[] = 'download ' . $path . ': ' . $e->getMessage();
             return null;
         }
+    }
+
+    /** Lightweight GET for static files (images). Returns null on failure. */
+    private function requestBinaryOnce(string $url): ?string
+    {
+        if (!function_exists('curl_init')) {
+            $ctx = stream_context_create([
+                'http' => [
+                    'method' => 'GET',
+                    'timeout' => min(60, $this->timeout),
+                    'ignore_errors' => true,
+                    'header' => "Accept: */*\r\nConnection: close\r\nUser-Agent: ColdAisle-OpenDcimClient/1.1\r\n",
+                ],
+                'ssl' => [
+                    'verify_peer' => $this->tlsVerify,
+                    'verify_peer_name' => $this->tlsVerify,
+                    'allow_self_signed' => !$this->tlsVerify,
+                ],
+            ]);
+            // Apply resolve via connect-to IP if configured
+            $parts = parse_url($url);
+            $host = $parts['host'] ?? '';
+            $target = $url;
+            if ($host && isset($this->resolve[$host])) {
+                $scheme = $parts['scheme'] ?? 'https';
+                $port = (int)($parts['port'] ?? ($scheme === 'https' ? 443 : 80));
+                $path = ($parts['path'] ?? '/') . (isset($parts['query']) ? '?' . $parts['query'] : '');
+                $target = $scheme . '://' . $this->resolve[$host]
+                    . (($port !== 443 && $port !== 80) ? ':' . $port : '')
+                    . $path;
+                $ctx = stream_context_create([
+                    'http' => [
+                        'method' => 'GET',
+                        'timeout' => min(60, $this->timeout),
+                        'ignore_errors' => true,
+                        'header' => "Host: {$host}\r\nAccept: */*\r\nConnection: close\r\n",
+                    ],
+                    'ssl' => [
+                        'verify_peer' => false,
+                        'verify_peer_name' => false,
+                        'allow_self_signed' => true,
+                        'peer_name' => $host,
+                    ],
+                ]);
+            }
+            $body = @file_get_contents($target, false, $ctx);
+            if ($body === false || strlen($body) < 24) {
+                return null;
+            }
+            // Reject HTML error pages
+            if (str_starts_with(ltrim($body), '<') || str_starts_with(ltrim($body), '<!')) {
+                return null;
+            }
+            return $body;
+        }
+
+        $ch = curl_init($url);
+        if ($ch === false) {
+            return null;
+        }
+        $opts = [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 3,
+            CURLOPT_CONNECTTIMEOUT => 15,
+            CURLOPT_TIMEOUT => min(60, $this->timeout),
+            CURLOPT_HTTPHEADER => ['Accept: */*', 'Connection: close'],
+            CURLOPT_USERAGENT => 'ColdAisle-OpenDcimClient/1.1',
+            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+        ];
+        if (!$this->tlsVerify) {
+            $opts[CURLOPT_SSL_VERIFYPEER] = false;
+            $opts[CURLOPT_SSL_VERIFYHOST] = 0;
+        }
+        $resolve = $this->buildCurlResolve();
+        if ($resolve) {
+            $opts[CURLOPT_RESOLVE] = $resolve;
+        }
+        curl_setopt_array($ch, $opts);
+        $body = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $ctype = (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+        curl_close($ch);
+        if ($body === false || $code >= 400 || strlen((string)$body) < 24) {
+            return null;
+        }
+        if (str_contains(strtolower($ctype), 'text/html')) {
+            return null;
+        }
+        $raw = (string)$body;
+        if (str_starts_with(ltrim($raw), '<!')) {
+            return null;
+        }
+        // Cap absurd sizes (15 MB)
+        if (strlen($raw) > 15 * 1024 * 1024) {
+            return null;
+        }
+        return $raw;
     }
 
     /**

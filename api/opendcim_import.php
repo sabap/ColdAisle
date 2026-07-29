@@ -3,8 +3,7 @@
  * OpenDCIM import API (Settings wizard).
  *
  * POST actions: test | preview | import | status
- * - test/preview/import: create job, spawn worker (or run inline fallback)
- * - status: poll job_id
+ * GET: ?job_id= for status poll
  */
 declare(strict_types=1);
 
@@ -14,141 +13,158 @@ require_once dirname(__DIR__) . '/src/Services/OpenDcimImportService.php';
 require_once dirname(__DIR__) . '/src/Services/OpenDcimImportJob.php';
 require_once dirname(__DIR__) . '/includes/power_helpers.php';
 
-$user = AuthManager::user();
-if (!$user || !AuthManager::can($user, 'manage_settings')) {
-    App::json(['error' => 'Forbidden'], 403);
-}
-
-$method = api_method();
-if ($method === 'GET') {
-    $jobId = trim((string)($_GET['job_id'] ?? ''));
-    if ($jobId === '') {
-        App::json(['error' => 'job_id required'], 400);
-    }
-    $job = OpenDcimImportJob::read($jobId);
-    if (!$job) {
-        App::json(['error' => 'Job not found'], 404);
-    }
-    // Don't echo secrets
-    unset($job['connection']['api_key'], $job['connection']);
-    App::json(['job' => $job]);
-}
-
-if ($method !== 'POST') {
-    App::json(['error' => 'Method not allowed'], 405);
-}
-
-api_require_csrf();
-$d = api_read_json();
-$action = strtolower(trim((string)($d['action'] ?? '')));
-
-if ($action === 'status') {
-    $jobId = trim((string)($d['job_id'] ?? ''));
-    $job = OpenDcimImportJob::read($jobId);
-    if (!$job) {
-        App::json(['error' => 'Job not found'], 404);
-    }
-    unset($job['connection']);
-    App::json(['job' => $job]);
-}
-
-if (!in_array($action, ['test', 'preview', 'import'], true)) {
-    App::json(['error' => 'action must be test, preview, import, or status'], 400);
-}
-
 try {
-    $conn = buildConnectionFromRequest($d);
+    opendcim_api_main();
 } catch (Throwable $e) {
-    App::json(['error' => $e->getMessage()], 400);
-}
-$opts = [
-    'mode' => OpenDcimImportService::MODE_MERGE,
-    'include_disposed' => !empty($d['include_disposed']),
-    'include_ports' => !array_key_exists('include_ports', $d) || !empty($d['include_ports']),
-    'include_power' => !array_key_exists('include_power', $d) || !empty($d['include_power']),
-    'include_audits' => !array_key_exists('include_audits', $d) || !empty($d['include_audits']),
-    'include_images' => !array_key_exists('include_images', $d) || !empty($d['include_images']),
-    'target_datacenter_id' => !empty($d['target_datacenter_id']) ? (int)$d['target_datacenter_id'] : null,
-];
-if (!empty($d['datacenter_ids']) && is_array($d['datacenter_ids'])) {
-    $opts['datacenter_ids'] = array_map('strval', $d['datacenter_ids']);
-} elseif (!empty($d['opendcim_dc_id'])) {
-    $opts['datacenter_ids'] = [(string)$d['opendcim_dc_id']];
+    App::log('opendcim_import API: ' . $e->getMessage() . "\n" . $e->getTraceAsString(), 'error');
+    App::json([
+        'ok' => false,
+        'error' => 'Import API error: ' . $e->getMessage(),
+    ], 500);
 }
 
-// Fast path: test can run inline (seconds)
-if ($action === 'test') {
-    try {
-        $client = new OpenDcimClient($conn);
-        $result = $client->testConnection();
-        AuditService::log((int)$user['user_id'], $user['username'], 'opendcim_test', 'system', null, [
-            'ok' => !empty($result['ok']),
-            'base' => $result['base_url'] ?? '',
-        ]);
-        App::json(['ok' => !empty($result['ok']), 'result' => $result]);
-    } catch (Throwable $e) {
-        App::json(['ok' => false, 'error' => $e->getMessage(), 'result' => null], 400);
+function opendcim_api_main(): void
+{
+    $user = AuthManager::user();
+    if (!$user || !AuthManager::can($user, 'manage_settings')) {
+        App::json(['error' => 'Forbidden'], 403);
     }
-}
 
-// preview / import as background jobs (can take minutes)
-$jobId = OpenDcimImportJob::create([
-    'action' => $action,
-    'state' => 'queued',
-    'message' => $action === 'preview' ? 'Preview queued' : 'Import queued',
-    'connection' => $conn,
-    'options' => array_merge($opts, [
-        'dry_run' => $action === 'preview',
-    ]),
-    'requested_by' => $user['username'] ?? '',
-]);
-
-$spawned = OpenDcimImportJob::spawnWorker($jobId);
-if (!$spawned) {
-    // Inline fallback (may hit web timeout on large imports)
-    try {
-        runJobInline($jobId, $action, $conn, $opts);
-    } catch (Throwable $e) {
-        OpenDcimImportJob::patch($jobId, [
-            'state' => 'error',
-            'error' => $e->getMessage(),
-            'message' => 'Failed',
-        ]);
-    }
-} else {
-    // Give worker a moment
-    usleep(200000);
-    // If still queued, try inline (spawn may have failed silently on some hosts)
-    $job = OpenDcimImportJob::read($jobId);
-    if ($job && ($job['state'] ?? '') === 'queued') {
-        // wait a bit more
-        usleep(500000);
+    $method = api_method();
+    if ($method === 'GET') {
+        $jobId = trim((string)($_GET['job_id'] ?? ''));
+        if ($jobId === '') {
+            App::json(['error' => 'job_id required'], 400);
+        }
         $job = OpenDcimImportJob::read($jobId);
+        if (!$job) {
+            App::json(['error' => 'Job not found'], 404);
+        }
+        unset($job['connection']);
+        App::json(['job' => $job]);
     }
-    if ($job && ($job['state'] ?? '') === 'queued') {
+
+    if ($method !== 'POST') {
+        App::json(['error' => 'Method not allowed'], 405);
+    }
+
+    api_require_csrf();
+    $d = api_read_json();
+    $action = strtolower(trim((string)($d['action'] ?? '')));
+
+    if ($action === 'status') {
+        $jobId = trim((string)($d['job_id'] ?? ''));
+        $job = OpenDcimImportJob::read($jobId);
+        if (!$job) {
+            App::json(['error' => 'Job not found'], 404);
+        }
+        unset($job['connection']);
+        App::json(['job' => $job]);
+    }
+
+    if (!in_array($action, ['test', 'preview', 'import'], true)) {
+        App::json(['error' => 'action must be test, preview, import, or status'], 400);
+    }
+
+    try {
+        $conn = buildConnectionFromRequest($d);
+    } catch (Throwable $e) {
+        App::json(['error' => $e->getMessage()], 400);
+    }
+
+    $opts = [
+        'mode' => OpenDcimImportService::MODE_MERGE,
+        'include_disposed' => !empty($d['include_disposed']),
+        'include_ports' => !array_key_exists('include_ports', $d) || !empty($d['include_ports']),
+        'include_power' => !array_key_exists('include_power', $d) || !empty($d['include_power']),
+        'include_audits' => !array_key_exists('include_audits', $d) || !empty($d['include_audits']),
+        'include_images' => !array_key_exists('include_images', $d) || !empty($d['include_images']),
+        'target_datacenter_id' => !empty($d['target_datacenter_id']) ? (int)$d['target_datacenter_id'] : null,
+    ];
+    if (!empty($d['datacenter_ids']) && is_array($d['datacenter_ids'])) {
+        $opts['datacenter_ids'] = array_map('strval', $d['datacenter_ids']);
+    } elseif (!empty($d['opendcim_dc_id'])) {
+        $opts['datacenter_ids'] = [(string)$d['opendcim_dc_id']];
+    }
+
+    // Fast path: test inline
+    if ($action === 'test') {
         try {
+            $client = new OpenDcimClient($conn);
+            $result = $client->testConnection();
+            AuditService::log((int)$user['user_id'], $user['username'], 'opendcim_test', 'system', null, [
+                'ok' => !empty($result['ok']),
+                'base' => $result['base_url'] ?? '',
+            ]);
+            App::json(['ok' => !empty($result['ok']), 'result' => $result]);
+        } catch (Throwable $e) {
+            App::json(['ok' => false, 'error' => $e->getMessage(), 'result' => null], 400);
+        }
+    }
+
+    // preview / import as background jobs
+    $jobId = OpenDcimImportJob::create([
+        'action' => $action,
+        'state' => 'queued',
+        'message' => $action === 'preview' ? 'Preview queued' : 'Import queued',
+        'connection' => $conn,
+        'options' => array_merge($opts, [
+            'dry_run' => $action === 'preview',
+        ]),
+        'requested_by' => $user['username'] ?? '',
+    ]);
+
+    $spawned = OpenDcimImportJob::spawnWorker($jobId);
+
+    // Give worker a short moment to flip to running
+    usleep(400000);
+    $job = OpenDcimImportJob::read($jobId);
+
+    // If still queued, worker likely failed to start — run inline with raised limits
+    if ($job && ($job['state'] ?? '') === 'queued') {
+        OpenDcimImportJob::patch($jobId, [
+            'log_append' => $spawned
+                ? 'Worker still queued — running inline in web request (may take several minutes)…'
+                : 'Worker spawn unavailable — running inline…',
+            'message' => 'Running…',
+            'state' => 'running',
+            'percent' => 5,
+        ]);
+        try {
+            @set_time_limit(0);
+            @ini_set('memory_limit', '512M');
+            ignore_user_abort(true);
             runJobInline($jobId, $action, $conn, $opts);
         } catch (Throwable $e) {
+            App::log('opendcim inline job: ' . $e->getMessage(), 'error');
             OpenDcimImportJob::patch($jobId, [
                 'state' => 'error',
                 'error' => $e->getMessage(),
-                'message' => 'Failed',
+                'message' => 'Failed: ' . $e->getMessage(),
+                'percent' => 100,
+                'log_append' => 'ERROR: ' . $e->getMessage(),
             ]);
         }
     }
+
+    try {
+        AuditService::log((int)$user['user_id'], $user['username'], 'opendcim_' . $action, 'system', null, [
+            'job_id' => $jobId,
+        ]);
+    } catch (Throwable $e) {
+        // non-fatal
+    }
+
+    $job = OpenDcimImportJob::read($jobId);
+    if (is_array($job)) {
+        unset($job['connection']);
+    }
+    App::json([
+        'ok' => true,
+        'job_id' => $jobId,
+        'job' => $job,
+    ]);
 }
-
-AuditService::log((int)$user['user_id'], $user['username'], 'opendcim_' . $action, 'system', null, [
-    'job_id' => $jobId,
-]);
-
-$job = OpenDcimImportJob::read($jobId);
-unset($job['connection']);
-App::json([
-    'ok' => true,
-    'job_id' => $jobId,
-    'job' => $job,
-]);
 
 /**
  * @param array<string,mixed> $d
@@ -162,7 +178,6 @@ function buildConnectionFromRequest(array $d): array
         if ($dir === '') {
             $dir = App::ROOT . '/storage/tmp/opendcim_probe';
         }
-        // Only allow under App::ROOT or absolute paths that exist
         if (!is_dir($dir)) {
             throw new InvalidArgumentException('Offline cache directory not found: ' . $dir);
         }
@@ -173,7 +188,6 @@ function buildConnectionFromRequest(array $d): array
     $user = trim((string)($d['user_id'] ?? $d['username'] ?? ''));
     $key = (string)($d['api_key'] ?? $d['key'] ?? '');
     if ($url === '' || $user === '' || $key === '') {
-        // Fall back to config
         $cfg = App::config()['opendcim'] ?? [];
         if ($url === '') {
             $url = (string)($cfg['base_url'] ?? '');
@@ -214,14 +228,11 @@ function buildConnectionFromRequest(array $d): array
  */
 function runJobInline(string $jobId, string $action, array $conn, array $opts): void
 {
-    @set_time_limit(0);
-    ignore_user_abort(true);
-
     OpenDcimImportJob::patch($jobId, [
         'state' => 'running',
         'message' => 'Running…',
         'percent' => 10,
-        'log_append' => 'Running inline worker',
+        'log_append' => 'Inline worker started',
     ]);
 
     $client = new OpenDcimClient($conn);
