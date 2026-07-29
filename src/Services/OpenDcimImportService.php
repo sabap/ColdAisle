@@ -129,6 +129,174 @@ class OpenDcimImportService
         return round($n, 2);
     }
 
+    /**
+     * Parse openDCIM cabinet Location like Z1-RA-R4 or SNHUC-Z1-RA-R1
+     * (tree: ZONE 1 → ROW A → Z1-RA-R4).
+     *
+     * @return array{zone_num:?int,row_letter:?string,rack_num:?int}
+     */
+    public static function parseCabinetLocation(string $location): array
+    {
+        $out = ['zone_num' => null, 'row_letter' => null, 'rack_num' => null];
+        // Z{zone}-R{rowLetter}-R{rack}  e.g. Z1-RA-R10 → zone 1, row A, rack 10
+        if (preg_match('/Z(\d+)-R([A-Za-z]+)-R(\d+)/i', $location, $m)) {
+            $out['zone_num'] = (int)$m[1];
+            $token = strtoupper($m[2]); // "A" from "A" or "A" from "A" after -R([A-Z]+)-
+            // Group is "A" when location is Z1-RA-R1 (-R + A + -R1)
+            $out['row_letter'] = $token !== '' ? substr($token, -1) : null;
+            $out['rack_num'] = (int)$m[3];
+        }
+        return $out;
+    }
+
+    /**
+     * openDCIM "Primary IP / Hostname" → separate ColdAisle fields.
+     *
+     * @return array{primary_ip:?string,hostname:?string}
+     */
+    public static function splitPrimaryIpHostname(mixed $raw): array
+    {
+        $v = trim((string)($raw ?? ''));
+        if ($v === '') {
+            return ['primary_ip' => null, 'hostname' => null];
+        }
+        if (filter_var($v, FILTER_VALIDATE_IP)) {
+            return ['primary_ip' => $v, 'hostname' => null];
+        }
+        // Hostnames / labels (not dotted-quad or IPv6)
+        return ['primary_ip' => null, 'hostname' => $v];
+    }
+
+    private static function normalizeNameKey(string $name): string
+    {
+        return strtolower((string)preg_replace('/[\s\-_.]+/', '', $name));
+    }
+
+    /**
+     * Infer manufacturer display name from template picture filenames (openDCIM API has no manufacturer list).
+     *
+     * @param list<array<string,mixed>> $templates
+     */
+    public static function inferManufacturerName(int $manufacturerId, array $templates): string
+    {
+        if ($manufacturerId <= 0) {
+            return 'Unknown';
+        }
+        $votes = [];
+        foreach ($templates as $t) {
+            if ((int)($t['ManufacturerID'] ?? 0) !== $manufacturerId) {
+                continue;
+            }
+            foreach (['FrontPictureFile', 'RearPictureFile'] as $f) {
+                $fn = (string)($t[$f] ?? '');
+                if (preg_match('/^([A-Za-z][A-Za-z0-9+]{1,24})[_-]/', $fn, $m)) {
+                    $brand = self::normalizeBrandToken($m[1]);
+                    if ($brand !== null) {
+                        $votes[$brand] = ($votes[$brand] ?? 0) + 1;
+                    }
+                }
+            }
+        }
+        if ($votes) {
+            arsort($votes);
+            return (string)array_key_first($votes);
+        }
+        return 'Manufacturer ' . $manufacturerId;
+    }
+
+    private static function normalizeBrandToken(string $token): ?string
+    {
+        $t = trim($token);
+        if ($t === '' || is_numeric($t)) {
+            return null;
+        }
+        // Skip obvious model/product fragments
+        $skip = [
+            'front', 'rear', 'panel', 'power', 'edge', 'hard', 'optiplex', 'fpr', 'nexus',
+            'procurve', 'cloudkeyenterprise', 'unvrpro', 'unifi', 'pr1000rt2u',
+            'signamaxpatchpanel24', 'signamaxpatchpanel48', 'dmpu4032', 'kmmled156',
+            'poweredger650', 'cisco4300',
+        ];
+        if (in_array(strtolower($t), $skip, true)) {
+            return null;
+        }
+        $aliases = [
+            'cisco' => 'Cisco',
+            'ciscosystems' => 'Cisco',
+            'meraki' => 'Cisco',
+            'dell' => 'Dell',
+            'delemc' => 'Dell EMC',
+            'dellemc' => 'Dell EMC',
+            'emc' => 'Dell EMC',
+            'hp' => 'HPE',
+            'hpe' => 'HPE',
+            'hewlettpackard' => 'HPE',
+            'apc' => 'APC',
+            'lenovo' => 'Lenovo',
+            'ibm' => 'IBM',
+            'fortinet' => 'Fortinet',
+            'fortigate' => 'Fortinet',
+            'ubiquiti' => 'Ubiquiti',
+            'avaya' => 'Avaya',
+            'ciena' => 'Ciena',
+            'raritan' => 'Raritan',
+            'nimble' => 'HPE',
+            'mellanox' => 'NVIDIA',
+            'exacqvision' => 'ExacqVision',
+            'exaqvision' => 'ExacqVision',
+            'geovision' => 'GeoVision',
+            'linksys' => 'Linksys',
+            'oracle' => 'Oracle',
+            'citrix' => 'Citrix',
+            'accedian' => 'Accedian',
+            'generic' => 'Generic',
+            'lg' => 'LG',
+            'fatpipe' => 'FatPipe',
+            'multitech' => 'MultiTech',
+            'newmar' => 'Newmar',
+            'caswell' => 'Caswell',
+            'cardinalhealth' => 'Cardinal Health',
+            'digi' => 'Digi',
+            'hargray' => 'Hargray',
+            'invidtech' => 'InVid Tech',
+            'telco' => 'Telco',
+            'telesyn' => 'Telesyn',
+            'titanium' => 'Titanium',
+            'ampnetconnect' => 'CommScope',
+            'corningcopperpanel' => 'Corning',
+        ];
+        $key = strtolower($t);
+        if (isset($aliases[$key])) {
+            return $aliases[$key];
+        }
+        // Title-case unknown brands
+        if (preg_match('/^[A-Za-z]+$/', $t) && strlen($t) >= 2 && strlen($t) <= 20) {
+            return strtoupper($t[0]) . strtolower(substr($t, 1));
+        }
+        return null;
+    }
+
+    /**
+     * Do not blank existing SNMP/IP when openDCIM has empty values.
+     *
+     * @param array<string,mixed> $fields
+     * @param array<string,mixed>|null $existing
+     * @return array<string,mixed>
+     */
+    private function mergePreserveNonEmpty(array $fields, ?array $existing, array $keys): array
+    {
+        if (!$existing) {
+            return $fields;
+        }
+        foreach ($keys as $k) {
+            $new = $fields[$k] ?? null;
+            if ($new === null || $new === '') {
+                unset($fields[$k]);
+            }
+        }
+        return $fields;
+    }
+
     // ------------------------------------------------------------------
     // Identity map
     // ------------------------------------------------------------------
@@ -662,13 +830,41 @@ class OpenDcimImportService
         }
         foreach (array_keys($mfrIds) as $mid) {
             $src = (string)$mid;
+            $name = self::inferManufacturerName($mid, $templates);
+            // Always prefer an existing brand row with the inferred name
+            $byName = null;
+            if (!preg_match('/^Manufacturer\s+\d+$/i', $name)) {
+                $byName = Database::fetchOne(
+                    'SELECT manufacturer_id, name FROM manufacturers WHERE name = ?',
+                    [$name]
+                );
+            }
+            if ($byName) {
+                $this->rememberMapping('manufacturer', $src, (int)$byName['manufacturer_id']);
+                $this->bump('manufacturer_matched');
+                continue;
+            }
+
             $mapped = $this->resolveLocalId('manufacturer', $src);
             if ($mapped && $mapped < 1000000) {
+                // Fix placeholder names from earlier imports
+                if (!$this->isDryRun()) {
+                    $row = Database::fetchOne('SELECT name FROM manufacturers WHERE manufacturer_id = ?', [$mapped]);
+                    $cur = (string)($row['name'] ?? '');
+                    if ($cur === '' || preg_match('/^Manufacturer\s+\d+$/i', $cur)) {
+                        if ($name !== $cur && !preg_match('/^Manufacturer\s+\d+$/i', $name)) {
+                            Database::update('manufacturers', [
+                                'name' => $name,
+                                'notes' => 'OpenDCIM ManufacturerID=' . $mid,
+                            ], 'manufacturer_id = :id', [':id' => $mapped]);
+                            $this->bump('manufacturer_renamed');
+                        }
+                    }
+                }
                 $this->bump('manufacturer_mapped');
                 continue;
             }
-            $name = 'Manufacturer ' . $mid;
-            $existing = Database::fetchOne('SELECT manufacturer_id FROM manufacturers WHERE name = ?', [$name]);
+            $existing = Database::fetchOne('SELECT manufacturer_id, name FROM manufacturers WHERE name = ?', [$name]);
             if ($existing) {
                 $this->rememberMapping('manufacturer', $src, (int)$existing['manufacturer_id']);
                 $this->bump('manufacturer_matched');
@@ -833,25 +1029,54 @@ class OpenDcimImportService
         return $id;
     }
 
-    private function ensureZone(int $localDcId, string $zoneSrcId): ?int
+    /**
+     * Match/create power zone. openDCIM tree labels are "ZONE 1"; local may be "Zone-1" / "Zone 1".
+     */
+    private function ensureZone(int $localDcId, string $zoneSrcId, ?int $zoneNumFromLoc = null): ?int
     {
         if ($zoneSrcId === '' || $zoneSrcId === '0') {
             return null;
+        }
+        $num = $zoneNumFromLoc ?: (ctype_digit($zoneSrcId) ? (int)$zoneSrcId : null);
+        $preferredLabel = $num !== null ? ('ZONE ' . $num) : ('Zone ' . $zoneSrcId);
+        $aliases = [];
+        if ($num !== null) {
+            $aliases = [
+                'ZONE ' . $num,
+                'Zone ' . $num,
+                'Zone-' . $num,
+                'Zone' . $num,
+                'Z' . $num,
+                'Z-' . $num,
+            ];
+        }
+        $aliases[] = 'Zone ' . $zoneSrcId;
+        $aliases[] = 'ZONE ' . $zoneSrcId;
+        $aliasKeys = array_unique(array_map([self::class, 'normalizeNameKey'], $aliases));
+
+        try {
+            $all = Database::fetchAll(
+                'SELECT zone_id, name FROM power_zones WHERE datacenter_id = ?',
+                [$localDcId]
+            );
+        } catch (Throwable $e) {
+            $all = [];
+        }
+        // Prefer matching an existing site zone (even if import_id_map points at a duplicate)
+        foreach ($all as $z) {
+            $key = self::normalizeNameKey((string)$z['name']);
+            if (in_array($key, $aliasKeys, true)) {
+                $id = (int)$z['zone_id'];
+                $this->rememberMapping('zone', $zoneSrcId, $id);
+                $this->bump('zone_matched');
+                return $id;
+            }
         }
         $mapped = $this->resolveLocalId('zone', $zoneSrcId);
         if ($mapped && $mapped < 1000000) {
             return $mapped;
         }
-        $name = 'Zone ' . $zoneSrcId;
-        $existing = Database::fetchOne(
-            'SELECT zone_id FROM power_zones WHERE datacenter_id = ? AND name = ?',
-            [$localDcId, $name]
-        );
-        if ($existing) {
-            $id = (int)$existing['zone_id'];
-            $this->rememberMapping('zone', $zoneSrcId, $id);
-            return $id;
-        }
+
         if ($this->isDryRun()) {
             $id = $this->dryId();
             $this->rememberMapping('zone', $zoneSrcId, $id);
@@ -860,7 +1085,7 @@ class OpenDcimImportService
         }
         $id = Database::insert('power_zones', [
             'datacenter_id' => $localDcId,
-            'name' => $name,
+            'name' => $preferredLabel,
             'description' => 'OpenDCIM ZoneID=' . $zoneSrcId,
             'feed_type' => 'A',
             'color_hex' => '#ef4444',
@@ -868,7 +1093,7 @@ class OpenDcimImportService
         if (!$id) {
             $row = Database::fetchOne(
                 'SELECT zone_id FROM power_zones WHERE datacenter_id = ? AND name = ?',
-                [$localDcId, $name]
+                [$localDcId, $preferredLabel]
             );
             $id = $row ? (int)$row['zone_id'] : 0;
         }
@@ -879,36 +1104,70 @@ class OpenDcimImportService
         return $id ?: null;
     }
 
-    private function ensureRow(int $roomId, int $localDcId, string $rowSrcId, ?int $zoneId, string $hintName): ?int
-    {
+    /**
+     * Match/create cabinet row. Tree labels "ROW A"; locations Z1-RA-R* → letter A.
+     */
+    private function ensureRow(
+        int $roomId,
+        int $localDcId,
+        string $rowSrcId,
+        ?int $zoneId,
+        ?string $rowLetter,
+        string $fallbackHint
+    ): ?int {
         if ($rowSrcId === '' || $rowSrcId === '0') {
             return null;
+        }
+        $letter = $rowLetter !== null && $rowLetter !== '' ? strtoupper($rowLetter) : null;
+        $preferredLabel = $letter !== null ? ('ROW ' . $letter) : (
+            $fallbackHint !== '' ? $fallbackHint : ('Row ' . $rowSrcId)
+        );
+        $aliases = [];
+        if ($letter !== null) {
+            $aliases = [
+                'ROW ' . $letter,
+                'Row ' . $letter,
+                'Row-' . $letter,
+                'R' . $letter,
+                'R ' . $letter,
+                $letter,
+            ];
+            if ($fallbackHint !== '') {
+                $aliases[] = $fallbackHint;
+            }
+        }
+        if ($fallbackHint !== '') {
+            $aliases[] = $fallbackHint;
+        }
+        $aliases[] = 'Row ' . $rowSrcId;
+        $aliasKeys = array_unique(array_map([self::class, 'normalizeNameKey'], $aliases));
+
+        try {
+            $all = Database::fetchAll(
+                'SELECT row_id, name, zone_id FROM cabinet_rows WHERE room_id = ?',
+                [$roomId]
+            );
+        } catch (Throwable $e) {
+            $all = [];
+        }
+        // Prefer site rows (Row A) over import duplicates (Z1-RA)
+        foreach ($all as $r) {
+            $key = self::normalizeNameKey((string)$r['name']);
+            if (in_array($key, $aliasKeys, true)) {
+                $id = (int)$r['row_id'];
+                if (!$this->isDryRun() && $zoneId && $zoneId < 1000000 && empty($r['zone_id'])) {
+                    Database::update('cabinet_rows', ['zone_id' => $zoneId], 'row_id = :id', [':id' => $id]);
+                }
+                $this->rememberMapping('row', $rowSrcId, $id);
+                $this->bump('row_matched');
+                return $id;
+            }
         }
         $mapped = $this->resolveLocalId('row', $rowSrcId);
         if ($mapped && $mapped < 1000000) {
             return $mapped;
         }
-        // Prefer parsing row token from cabinet location e.g. Z1-RA-R4 → use CabRowID-based name
-        $name = $hintName !== '' ? $hintName : ('Row ' . $rowSrcId);
-        // Keep short
-        if (strlen($name) > 50) {
-            $name = 'Row ' . $rowSrcId;
-        }
-        $existing = Database::fetchOne(
-            'SELECT row_id FROM cabinet_rows WHERE room_id = ? AND name = ?',
-            [$roomId, $name]
-        );
-        if (!$existing) {
-            $existing = Database::fetchOne(
-                'SELECT row_id FROM cabinet_rows WHERE room_id = ? AND name = ?',
-                [$roomId, 'Row ' . $rowSrcId]
-            );
-        }
-        if ($existing) {
-            $id = (int)$existing['row_id'];
-            $this->rememberMapping('row', $rowSrcId, $id);
-            return $id;
-        }
+
         if ($this->isDryRun()) {
             $id = $this->dryId();
             $this->rememberMapping('row', $rowSrcId, $id);
@@ -917,14 +1176,14 @@ class OpenDcimImportService
         }
         $id = Database::insert('cabinet_rows', [
             'room_id' => $roomId,
-            'name' => $name,
+            'name' => $preferredLabel,
             'data_center_id' => $localDcId,
-            'zone_id' => $zoneId,
+            'zone_id' => $zoneId && $zoneId < 1000000 ? $zoneId : null,
         ]);
         if (!$id) {
             $row = Database::fetchOne(
                 'SELECT row_id FROM cabinet_rows WHERE room_id = ? AND name = ?',
-                [$roomId, $name]
+                [$roomId, $preferredLabel]
             );
             $id = $row ? (int)$row['row_id'] : 0;
         }
@@ -954,14 +1213,25 @@ class OpenDcimImportService
             if ($name === '') {
                 $name = 'Cabinet ' . $srcId;
             }
-            $zoneId = $this->ensureZone($localDcId, (string)($cab['ZoneID'] ?? ''));
-            $rowHint = $name; // e.g. Z1-RA-R4
-            // Derive row label from location prefix before last segment when possible
-            $rowName = 'Row ' . ($cab['CabRowID'] ?? '');
-            if (preg_match('/^(.+)-R\d+$/i', $name, $m)) {
-                $rowName = $m[1]; // Z1-RA
+            // Tree: ZONE 1 → ROW A → Z1-RA-R1 (Location encodes zone + row)
+            $parsed = self::parseCabinetLocation($name);
+            $zoneId = $this->ensureZone(
+                $localDcId,
+                (string)($cab['ZoneID'] ?? ''),
+                $parsed['zone_num']
+            );
+            $rowHint = '';
+            if (preg_match('/^(.*)-R\d+$/i', $name, $m)) {
+                $rowHint = $m[1]; // Z1-RA
             }
-            $rowId = $this->ensureRow($roomId, $localDcId, (string)($cab['CabRowID'] ?? ''), $zoneId, $rowName);
+            $rowId = $this->ensureRow(
+                $roomId,
+                $localDcId,
+                (string)($cab['CabRowID'] ?? ''),
+                $zoneId,
+                $parsed['row_letter'],
+                $rowHint
+            );
 
             $uHeight = max(1, min(60, (int)($cab['CabinetHeight'] ?? 42)));
             $maxKw = isset($cab['MaxKW']) && is_numeric($cab['MaxKW']) && (float)$cab['MaxKW'] > 0
@@ -1136,6 +1406,8 @@ class OpenDcimImportService
             $contactLocal = $this->resolveLocalId('person', (string)(int)($d['PrimaryContact'] ?? 0));
 
             $psCount = max(0, min(16, (int)($d['PowerSupplyCount'] ?? 0)));
+            // openDCIM "Primary IP / Hostname" is a single field — never put hostnames in primary_ip
+            $ipHost = self::splitPrimaryIpHostname($d['PrimaryIP'] ?? null);
             $fields = [
                 'cabinet_id' => ($localCab && $localCab < 1000000) ? $localCab : null,
                 'template_id' => ($tplLocal && $tplLocal < 1000000) ? $tplLocal : null,
@@ -1145,7 +1417,6 @@ class OpenDcimImportService
                 'serial_no' => $this->emptyToNull($d['SerialNo'] ?? null),
                 'asset_tag' => $this->emptyToNull($d['AssetTag'] ?? null),
                 'device_type' => self::mapDeviceType($type),
-                'primary_ip' => $this->emptyToNull($d['PrimaryIP'] ?? null),
                 'position_u' => isset($d['Position']) && (int)$d['Position'] > 0 ? (int)$d['Position'] : null,
                 'u_height' => max(1, min(60, (int)($d['Height'] ?? 1))),
                 'half_depth' => !empty($d['HalfDepth']) ? 1 : 0,
@@ -1162,6 +1433,17 @@ class OpenDcimImportService
                 'notes' => $this->emptyToNull($d['Notes'] ?? null),
                 'is_active' => $status === 'disposed' ? 0 : 1,
             ];
+            // Only set the side of IP/hostname that openDCIM actually provided (don't null the other)
+            if ($ipHost['primary_ip']) {
+                $fields['primary_ip'] = $ipHost['primary_ip'];
+            }
+            if ($ipHost['hostname']) {
+                $fields['hostname'] = $ipHost['hostname'];
+                // Clear mistaken prior import of hostname into primary_ip
+                if (!$ipHost['primary_ip']) {
+                    $fields['primary_ip'] = null;
+                }
+            }
             // SNMP only if useful
             $snmpVer = $this->emptyToNull($d['SNMPVersion'] ?? null);
             $snmpComm = $this->emptyToNull($d['SNMPCommunity'] ?? null);
@@ -1175,6 +1457,10 @@ class OpenDcimImportService
             if ($mapped && $mapped < 1000000) {
                 $deviceId = $mapped;
                 if (!$this->isDryRun()) {
+                    // If hostname-like value was stored in primary_ip, move it
+                    if ($ipHost['hostname'] && !$ipHost['primary_ip']) {
+                        $fields['primary_ip'] = null;
+                    }
                     Database::update('devices', $fields, 'device_id = :id', [':id' => $deviceId]);
                 }
                 $this->bump('device_update');
@@ -1391,18 +1677,22 @@ class OpenDcimImportService
             }
 
             $mapped = $this->resolveLocalId('pdu', $srcId);
+            $odIpHost = self::splitPrimaryIpHostname($d['PrimaryIP'] ?? null);
             $pduFields = [
                 'cabinet_id' => $localCab < 1000000 ? $localCab : null,
                 'name' => $label,
                 'pdu_scope' => 'rack',
                 'mount_style' => 'vertical_rear',
                 'serial_no' => $this->emptyToNull($d['SerialNo'] ?? null),
-                'ip_address' => $this->emptyToNull($d['PrimaryIP'] ?? null),
                 'num_outlets' => $numOutlets,
                 'output_mode' => 'outlets',
                 'notes' => 'OpenDCIM CDU DeviceID=' . $srcId,
                 'is_active' => 1,
             ];
+            // Only set IP when openDCIM has a real IP — never wipe an existing ColdAisle PDU IP
+            if ($odIpHost['primary_ip']) {
+                $pduFields['ip_address'] = $odIpHost['primary_ip'];
+            }
             $snmpComm = $this->emptyToNull($d['SNMPCommunity'] ?? null);
             $snmpVer = $this->emptyToNull($d['SNMPVersion'] ?? null);
             if ($snmpComm && $snmpVer) {
@@ -1415,22 +1705,40 @@ class OpenDcimImportService
             if ($mapped && $mapped < 1000000) {
                 $pduId = $mapped;
                 if (!$this->isDryRun()) {
-                    Database::update('pdus', $pduFields, 'pdu_id = :id', [':id' => $pduId]);
+                    $exist = Database::fetchOne('SELECT * FROM pdus WHERE pdu_id = ?', [$pduId]);
+                    $upd = $this->mergePreserveNonEmpty($pduFields, $exist, [
+                        'ip_address', 'serial_no', 'snmp_community', 'snmp_version',
+                    ]);
+                    Database::update('pdus', $upd, 'pdu_id = :id', [':id' => $pduId]);
                 }
                 $this->bump('pdu_update');
             } else {
                 $existing = null;
                 if ($pduFields['cabinet_id']) {
                     $existing = Database::fetchOne(
-                        'SELECT pdu_id FROM pdus WHERE cabinet_id = ? AND name = ? AND is_active = 1',
+                        'SELECT * FROM pdus WHERE cabinet_id = ? AND name = ? AND is_active = 1',
                         [$pduFields['cabinet_id'], $label]
+                    );
+                }
+                // Also match pre-existing rack PDUs by name only (any cabinet) carefully
+                if (!$existing) {
+                    $existing = Database::fetchOne(
+                        'SELECT * FROM pdus WHERE name = ? AND is_active = 1',
+                        [$label]
                     );
                 }
                 if ($existing) {
                     $pduId = (int)$existing['pdu_id'];
                     $this->rememberMapping('pdu', $srcId, $pduId);
                     if (!$this->isDryRun()) {
-                        Database::update('pdus', $pduFields, 'pdu_id = :id', [':id' => $pduId]);
+                        $upd = $this->mergePreserveNonEmpty($pduFields, $existing, [
+                            'ip_address', 'serial_no', 'snmp_community', 'snmp_version',
+                        ]);
+                        // Keep existing cabinet if OD cabinet missing
+                        if (empty($upd['cabinet_id']) && !empty($existing['cabinet_id'])) {
+                            unset($upd['cabinet_id']);
+                        }
+                        Database::update('pdus', $upd, 'pdu_id = :id', [':id' => $pduId]);
                     }
                     $this->bump('pdu_matched');
                 } elseif ($this->isDryRun() || !$pduFields['cabinet_id']) {
