@@ -13,6 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+### Enhancements
+
+### Bug fixes
+
+---
+
+## [0.2.84] - 2026-07-29
+
+### New features
+
 - **Device templates: power supplies** — define named PSUs (watts, connector) on the template; they are created on the device when the template is applied. PDU outlet mapping is still done on the device after it is in a cabinet.
 
 ### Enhancements
@@ -21,10 +31,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - Interface labels card is **Data interface labels** only (power is the Power Supply section).
 - Creating a device no longer auto-creates power ports; data ports still come from the data-port count.
 
-### Bug fixes
-
 ---
-
 ## [0.2.83] - 2026-07-29
 
 ### New features
