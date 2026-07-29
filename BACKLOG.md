@@ -116,6 +116,61 @@ Historical note commits:
 
 ---
 
+### 4. Cooling & environmental monitoring
+
+| Field | Value |
+|-------|--------|
+| **Status** | open |
+| **Requested** | 2026-07-29 (user) |
+| **Source** | `BACKLOG.md` |
+| **Priority** | product expansion (post power/SNMP foundation) |
+
+**Goal:** Track cooling plant and room environment alongside power — so ColdAisle covers thermal/air as well as electrical load.
+
+**Desired capabilities (v1 sketch — confirm scope when implementing)**
+
+1. **Environment sensors / points**  
+   - Temperature, humidity (and optionally dew point, differential pressure, airflow)  
+   - Placement: site / DC / room / row / rack (or free “zone”)  
+   - Status from last poll + short history charts (reuse power-history patterns where practical)
+
+2. **Cooling equipment inventory**  
+   - CRAC/CRAH, in-row coolers, chillers, CDUs, leak detectors as first-class assets (or typed “environment devices”)  
+   - Optional link to power PDUs / circuits that feed them  
+
+3. **SNMP / poll integration**  
+   - Site OID templates for common environmental probes (e.g. APC NetBotz-class, Vertiv, generic temp/humidity OIDs)  
+   - Scheduled poll via existing worker (or shared scheduler)  
+   - Alerts/digests for high temp, high humidity, sensor offline (extend PowerAlertService patterns or a sibling EnvironmentAlertService)
+
+4. **UI**  
+   - Nav area under Power or a sibling **Environment / Cooling** section  
+   - Room or floor overlay later (optional): heat/humidity callouts — not required for v1  
+
+**Implementer notes**
+
+- Reuse: `SnmpPoller` / site OID templates, history sample tables (or parallel `env_readings`), MailService digests, Settings retention.  
+- Prefer additive schema (`env_sensors`, `cooling_units`, readings JSON or typed columns) rather than overloading `pdus`.  
+- Units: °C default with optional °F display; humidity %RH.  
+- Don’t invent BMS/BACnet full stack in v1 unless requested — SNMP + manual entry first.
+
+**Out of scope (unless asked later)**
+
+- Full BMS / BACnet / Modbus gateways  
+- CFD / thermal twin modeling  
+- Automatic cooling control (setpoints / BMS write)  
+- ASHRAE envelope compliance engine (reports can come later)
+
+**Acceptance (when built)**
+
+- [ ] Can define at least temp (+ humidity) points and see last value + recent history  
+- [ ] Can inventory cooling units and associate them with rooms/rows  
+- [ ] SNMP poll path works for at least one probe template end-to-end  
+- [ ] Threshold alert (e.g. high temp) can notify via existing mail settings  
+- [ ] Power features remain unaffected  
+
+---
+
 ## Completed (keep for audit; do not re-implement)
 
 ### Update / backup housekeeping
