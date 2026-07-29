@@ -259,6 +259,153 @@ function power_outlet_connector_types(): array
     ];
 }
 
+/** @return list<string> Common device-side PSU plug / connector types (NEMA / IEC). */
+function power_device_connector_types(): array
+{
+    return [
+        'C13', 'C14', 'C19', 'C20',
+        '5-15P', '5-20P', 'L5-20P', 'L5-30P',
+        'L6-20P', 'L6-30P', 'L14-30P',
+        'IEC 60309', 'Other',
+    ];
+}
+
+/**
+ * Normalize template / form PSU definitions (no PDU mapping).
+ *
+ * @param list<array<string,mixed>>|string|null $raw
+ * @return list<array{name:string,watts:?float,connector_type:?string,sort_order:int,notes:?string}>
+ */
+function power_normalize_psu_defs($raw): array
+{
+    if (is_string($raw)) {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        $raw = is_array($decoded) ? $decoded : [];
+    }
+    if (!is_array($raw)) {
+        return [];
+    }
+    $out = [];
+    $i = 0;
+    foreach ($raw as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $name = trim((string)($row['name'] ?? ''));
+        if ($name === '') {
+            $name = 'PSU-' . ($i + 1);
+        }
+        $watts = $row['watts'] ?? null;
+        if ($watts === '' || $watts === null) {
+            $watts = null;
+        } else {
+            $watts = (float)$watts;
+        }
+        $conn = trim((string)($row['connector_type'] ?? $row['connector'] ?? ''));
+        $notes = trim((string)($row['notes'] ?? ''));
+        $sort = isset($row['sort_order']) ? (int)$row['sort_order'] : $i;
+        $out[] = [
+            'name' => $name,
+            'watts' => $watts,
+            'connector_type' => $conn !== '' ? $conn : null,
+            'sort_order' => $sort,
+            'notes' => $notes !== '' ? $notes : null,
+        ];
+        $i++;
+    }
+    return $out;
+}
+
+/**
+ * Build PSU defs from parallel form arrays (template editor).
+ *
+ * @param list<string>|null $names
+ * @param list<string>|null $watts
+ * @param list<string>|null $connectors
+ * @return list<array{name:string,watts:?float,connector_type:?string,sort_order:int,notes:?string}>
+ */
+function power_psu_defs_from_form_arrays(?array $names, ?array $watts, ?array $connectors): array
+{
+    $names = $names ?? [];
+    $watts = $watts ?? [];
+    $connectors = $connectors ?? [];
+    $n = max(count($names), count($watts), count($connectors));
+    $rows = [];
+    for ($i = 0; $i < $n; $i++) {
+        $name = trim((string)($names[$i] ?? ''));
+        $w = $watts[$i] ?? '';
+        $c = trim((string)($connectors[$i] ?? ''));
+        // Skip fully empty rows
+        if ($name === '' && ($w === '' || $w === null) && $c === '') {
+            continue;
+        }
+        $rows[] = [
+            'name' => $name !== '' ? $name : ('PSU-' . (count($rows) + 1)),
+            'watts' => $w,
+            'connector_type' => $c,
+            'sort_order' => count($rows),
+        ];
+    }
+    return power_normalize_psu_defs($rows);
+}
+
+/**
+ * Resolve PSU defs for a device template (JSON preferred; legacy num_power_ports fallback).
+ *
+ * @return list<array{name:string,watts:?float,connector_type:?string,sort_order:int,notes:?string}>
+ */
+function power_template_psu_defs(array $tpl): array
+{
+    $defs = [];
+    if (!empty($tpl['power_supplies_json'])) {
+        $defs = power_normalize_psu_defs($tpl['power_supplies_json']);
+    }
+    if ($defs) {
+        return $defs;
+    }
+    // Legacy: synthesize named PSUs from count (no connector/watts)
+    $n = max(0, min(16, (int)($tpl['num_power_ports'] ?? 0)));
+    for ($i = 0; $i < $n; $i++) {
+        $defs[] = [
+            'name' => $n === 1 ? 'PSU' : ('PSU-' . chr(65 + $i)), // PSU-A, PSU-B…
+            'watts' => null,
+            'connector_type' => null,
+            'sort_order' => $i,
+            'notes' => null,
+        ];
+    }
+    return $defs;
+}
+
+/**
+ * Insert device_power_supplies rows for a new device (no PDU mapping).
+ *
+ * @param list<array{name?:string,watts?:?float,connector_type?:?string,sort_order?:int,notes?:?string}> $defs
+ */
+function power_create_device_psus(int $deviceId, array $defs): int
+{
+    $defs = power_normalize_psu_defs($defs);
+    $count = 0;
+    foreach ($defs as $d) {
+        Database::insert('device_power_supplies', [
+            'device_id' => $deviceId,
+            'name' => $d['name'],
+            'watts' => $d['watts'],
+            'connector_type' => $d['connector_type'],
+            'pdu_id' => null,
+            'pdu_outlet_id' => null,
+            'sort_order' => (int)$d['sort_order'],
+            'notes' => $d['notes'],
+        ]);
+        $count++;
+    }
+    return $count;
+}
+
 /**
  * Decode pdus.last_poll_outlets JSON for UI.
  * Snapshot keys are outlet numbers as strings: "1" => {amps,watts,name,state,num?}.

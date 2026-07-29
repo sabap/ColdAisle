@@ -7,6 +7,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/src/Services/ImageUpload.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
+require_once dirname(__DIR__) . '/includes/power_helpers.php';
 App::boot();
 $user = App::requirePermission('view_devices');
 
@@ -90,6 +91,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? '') && ($_POST['action'] ?? '') === 'save_template') {
     $tid = !empty($_POST['template_id']) ? (int)$_POST['template_id'] : 0;
     $uHeight = max(1, min(60, (int)($_POST['u_height'] ?? 1)));
+    $psuDefs = power_psu_defs_from_form_arrays(
+        isset($_POST['psu_name']) && is_array($_POST['psu_name']) ? $_POST['psu_name'] : [],
+        isset($_POST['psu_watts']) && is_array($_POST['psu_watts']) ? $_POST['psu_watts'] : [],
+        isset($_POST['psu_connector']) && is_array($_POST['psu_connector']) ? $_POST['psu_connector'] : []
+    );
     $data = [
         'manufacturer_id' => $_POST['manufacturer_id'] !== '' ? (int)$_POST['manufacturer_id'] : null,
         'model' => trim((string)($_POST['model'] ?? '')),
@@ -97,8 +103,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         'u_height' => $uHeight,
         'weight_kg' => $_POST['weight_kg'] !== '' ? (float)$_POST['weight_kg'] : null,
         'watts' => $_POST['watts'] !== '' ? (float)$_POST['watts'] : null,
-        'num_power_ports' => max(0, (int)($_POST['num_power_ports'] ?? 0)),
+        // Keep legacy count in sync with PSU defs for older code paths
+        'num_power_ports' => count($psuDefs),
         'num_data_ports' => max(0, (int)($_POST['num_data_ports'] ?? 0)),
+        'power_supplies_json' => $psuDefs
+            ? json_encode($psuDefs, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+            : null,
         'snmp_template' => tpl_empty($_POST['snmp_template'] ?? null),
         'notes' => tpl_empty($_POST['notes'] ?? null),
         'is_active' => 1,
@@ -116,9 +126,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         }
 
         if ($tid) {
-            Database::update('device_templates', $data, 'template_id = :id', [':id' => $tid]);
+            try {
+                Database::update('device_templates', $data, 'template_id = :id', [':id' => $tid]);
+            } catch (Throwable $e) {
+                // Column may not exist until Schema::ensure — retry without JSON once
+                if (stripos($e->getMessage(), 'power_supplies_json') !== false) {
+                    unset($data['power_supplies_json']);
+                    Database::update('device_templates', $data, 'template_id = :id', [':id' => $tid]);
+                } else {
+                    throw $e;
+                }
+            }
         } else {
-            $tid = Database::insert('device_templates', $data);
+            try {
+                $tid = Database::insert('device_templates', $data);
+            } catch (Throwable $e) {
+                if (stripos($e->getMessage(), 'power_supplies_json') !== false) {
+                    unset($data['power_supplies_json']);
+                    $tid = Database::insert('device_templates', $data);
+                } else {
+                    throw $e;
+                }
+            }
             if (!$tid) {
                 $row = Database::fetchOne(
                     'SELECT TOP 1 template_id FROM device_templates WHERE model = ? ORDER BY template_id DESC',
@@ -173,6 +202,12 @@ if ($action === 'new' || $id) {
         App::redirect('pages/device_templates.php');
     }
 
+    $nemaTypes = power_device_connector_types();
+    $tplPsus = $tpl ? power_template_psu_defs($tpl) : [
+        ['name' => 'PSU-A', 'watts' => null, 'connector_type' => 'C14', 'sort_order' => 0, 'notes' => null],
+        ['name' => 'PSU-B', 'watts' => null, 'connector_type' => 'C14', 'sort_order' => 1, 'notes' => null],
+    ];
+
     layout_header($tpl ? 'Template: ' . $tpl['model'] : 'New Device Template', $user, 'device_templates');
     ?>
     <div class="flex-between mb-2">
@@ -183,12 +218,13 @@ if ($action === 'new' || $id) {
     </div>
 
     <div class="split-2">
-        <form method="post" enctype="multipart/form-data" class="card">
+        <form method="post" enctype="multipart/form-data" id="templateForm">
             <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
             <input type="hidden" name="action" value="save_template">
             <?php if ($tpl): ?>
                 <input type="hidden" name="template_id" value="<?= (int)$tpl['template_id'] ?>">
             <?php endif; ?>
+            <div class="card">
             <div class="card-header"><h2><?= $tpl ? 'Edit template' : 'New template' ?></h2></div>
             <div class="card-body form-grid">
                 <div class="form-row"><label>Manufacturer</label>
@@ -221,13 +257,11 @@ if ($action === 'new' || $id) {
                 <div class="form-row"><label>Weight (kg)</label>
                     <input class="form-control" type="number" step="0.01" name="weight_kg"
                            value="<?= App::e((string)($tpl['weight_kg'] ?? '')) ?>"></div>
-                <div class="form-row"><label>Wattage</label>
+                <div class="form-row"><label>Nominal wattage</label>
                     <input class="form-control" type="number" step="0.1" name="watts"
-                           value="<?= App::e((string)($tpl['watts'] ?? '')) ?>"></div>
-                <div class="form-row"><label>Number of power connections</label>
-                    <input class="form-control" type="number" min="0" name="num_power_ports"
-                           value="<?= (int)($tpl['num_power_ports'] ?? 2) ?>"></div>
-                <div class="form-row"><label>Number of Ports (data)</label>
+                           value="<?= App::e((string)($tpl['watts'] ?? '')) ?>"
+                           title="Device-level rated draw (optional; per-PSU watts below)"></div>
+                <div class="form-row"><label>Number of data ports</label>
                     <input class="form-control" type="number" min="0" name="num_data_ports"
                            value="<?= (int)($tpl['num_data_ports'] ?? 0) ?>"></div>
                 <div class="form-row"><label>SNMP version</label>
@@ -268,10 +302,99 @@ if ($action === 'new' || $id) {
                     <input class="form-control" type="file" name="rear_picture" accept="image/jpeg,image/png,image/gif,image/webp">
                 </div>
             </div>
-            <div class="card-body form-actions">
-                <button class="btn btn-primary" type="submit"><?= $tpl ? 'Save template' : 'Create template' ?></button>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="flex-between" style="width:100%">
+                        <h2 style="margin:0">Power supplies</h2>
+                        <button type="button" class="btn btn-sm btn-secondary" id="btnAddTplPsu">+ Add PSU</button>
+                    </div>
+                </div>
+                <div class="card-body flush">
+                    <div class="table-wrap">
+                        <table class="data" id="tplPsuTable">
+                            <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Watts</th>
+                                <th>Connector (NEMA / IEC)</th>
+                                <th></th>
+                            </tr>
+                            </thead>
+                            <tbody id="tplPsuBody">
+                            <?php foreach ($tplPsus as $ps): ?>
+                                <tr class="tpl-psu-row">
+                                    <td><input class="form-control form-control-sm" name="psu_name[]"
+                                               value="<?= App::e($ps['name'] ?? 'PSU') ?>"></td>
+                                    <td><input class="form-control form-control-sm" type="number" step="0.1" name="psu_watts[]"
+                                               style="width:5.5rem"
+                                               value="<?= $ps['watts'] !== null && $ps['watts'] !== '' ? App::e((string)$ps['watts']) : '' ?>"></td>
+                                    <td>
+                                        <select class="form-control form-control-sm" name="psu_connector[]">
+                                            <option value="">—</option>
+                                            <?php foreach ($nemaTypes as $nt): ?>
+                                                <option value="<?= App::e($nt) ?>"
+                                                    <?= ($ps['connector_type'] ?? '') === $nt ? 'selected' : '' ?>>
+                                                    <?= App::e($nt) ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </td>
+                                    <td><button type="button" class="btn btn-sm btn-danger tpl-psu-del" title="Remove">×</button></td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="text-muted" style="font-size:.78rem;padding:.5rem 1rem;margin:0">
+                        These PSUs are created on the device when the template is applied.
+                        PDU outlet mapping is done later on the device (after it is in a cabinet).
+                    </p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body form-actions">
+                    <button class="btn btn-primary" type="submit"><?= $tpl ? 'Save template' : 'Create template' ?></button>
+                </div>
             </div>
         </form>
+        <script>
+        (function () {
+            var nema = <?= json_encode($nemaTypes, JSON_UNESCAPED_UNICODE) ?>;
+            function connectorOptions(selected) {
+                var html = '<option value="">—</option>';
+                nema.forEach(function (t) {
+                    html += '<option value="' + t + '"' + (selected === t ? ' selected' : '') + '>' + t + '</option>';
+                });
+                return html;
+            }
+            var body = document.getElementById('tplPsuBody');
+            var addBtn = document.getElementById('btnAddTplPsu');
+            if (body) {
+                body.addEventListener('click', function (e) {
+                    var btn = e.target.closest('.tpl-psu-del');
+                    if (!btn) return;
+                    var row = btn.closest('tr');
+                    if (row) row.remove();
+                });
+            }
+            if (addBtn && body) {
+                addBtn.addEventListener('click', function () {
+                    var n = body.querySelectorAll('tr.tpl-psu-row').length + 1;
+                    var tr = document.createElement('tr');
+                    tr.className = 'tpl-psu-row';
+                    tr.innerHTML =
+                        '<td><input class="form-control form-control-sm" name="psu_name[]" value="PSU-' + n + '"></td>' +
+                        '<td><input class="form-control form-control-sm" type="number" step="0.1" name="psu_watts[]" style="width:5.5rem"></td>' +
+                        '<td><select class="form-control form-control-sm" name="psu_connector[]">' + connectorOptions('C14') + '</select></td>' +
+                        '<td><button type="button" class="btn btn-sm btn-danger tpl-psu-del" title="Remove">×</button></td>';
+                    body.appendChild(tr);
+                });
+            }
+        })();
+        </script>
 
         <div>
             <form method="post" class="card">
@@ -333,7 +456,7 @@ layout_header('Device Templates', $user, 'device_templates');
 <div class="flex-between mb-2">
     <div class="flex gap-1" style="align-items:center">
         <a class="btn btn-sm btn-ghost" href="<?= App::e(App::url('pages/devices.php')) ?>">← Devices</a>
-        <span class="text-muted" style="font-size:.85rem">Templates pre-fill fields when creating a device</span>
+        <span class="text-muted" style="font-size:.85rem">Templates pre-fill fields and create PSUs when creating a device</span>
     </div>
     <a class="btn btn-primary" href="?action=new">+ New template</a>
 </div>
@@ -351,13 +474,15 @@ layout_header('Device Templates', $user, 'device_templates');
                     <th>U</th>
                     <th>Watts</th>
                     <th>Data</th>
-                    <th>Power</th>
+                    <th>PSUs</th>
                     <th>SNMP</th>
                     <th></th>
                 </tr>
                 </thead>
                 <tbody>
-                <?php foreach ($templates as $t): ?>
+                <?php foreach ($templates as $t):
+                    $psuCount = count(power_template_psu_defs($t));
+                    ?>
                     <tr>
                         <td style="width:64px">
                             <?php if (!empty($t['front_picture'])): ?>
@@ -373,7 +498,7 @@ layout_header('Device Templates', $user, 'device_templates');
                         <td><?= (int)$t['u_height'] ?></td>
                         <td><?= $t['watts'] !== null ? App::e((string)$t['watts']) : '—' ?></td>
                         <td><?= (int)$t['num_data_ports'] ?></td>
-                        <td><?= (int)$t['num_power_ports'] ?></td>
+                        <td><?= $psuCount ?></td>
                         <td><?= App::e($t['snmp_template'] ?? '—') ?></td>
                         <td class="actions">
                             <a class="btn btn-sm btn-secondary" href="?id=<?= (int)$t['template_id'] ?>">Edit</a>

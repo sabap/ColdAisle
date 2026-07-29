@@ -263,8 +263,10 @@ CREATE TABLE device_templates (
     u_height INT NOT NULL DEFAULT 1,
     weight_kg DECIMAL(8,2) NULL,
     watts DECIMAL(10,2) NULL,
-    num_power_ports INT NOT NULL DEFAULT 2,
+    num_power_ports INT NOT NULL DEFAULT 2, -- legacy; prefer power_supplies_json
     num_data_ports INT NOT NULL DEFAULT 0,
+    -- JSON array of PSU defs: [{name, watts, connector_type, sort_order}] — no PDU mapping
+    power_supplies_json NVARCHAR(MAX) NULL,
     front_picture NVARCHAR(255) NULL,
     rear_picture NVARCHAR(255) NULL,
     snmp_template NVARCHAR(50) NULL,
