@@ -19,6 +19,18 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.2.91] - 2026-07-29
+
+### Enhancements
+
+- **Chassis children in cabinet views:** only parent (rack-mounted) devices appear on cabinet elevations, row view, and 3D; U utilization ignores blades/modules. Parent rows list child devices with **Name / Make / Model / IP** (linked to the device page). Slot labels use openDCIM-style `U{parent}-{slot}` (e.g. `U23-1`).
+
+### Bug fixes
+
+- **OpenDCIM template images:** download from `/assets/pictures/` (this install) as well as classic `/pictures/`; re-fetch when the DB path is set but the file is missing on disk; clearer success/failure logging. Re-run migration with images enabled to backfill.
+- **Child devices drawing in rack:** chassis blades/modules store **slot** in `position_u` (not rack U) — they no longer occupy elevation slots or conflict with rack U placement.
+
+---
 ## [0.2.90] - 2026-07-29
 
 ### Enhancements
@@ -37,7 +49,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **OpenDCIM import:** cabinet **audits** (CertifyAudit → `cabinet_audits`) and **template front/rear images** (from openDCIM `/pictures/…`).
+- **OpenDCIM import:** cabinet **audits** (CertifyAudit → `cabinet_audits`) and **template front/rear images** (from openDCIM picture dirs).
 
 ---
 ## [0.2.87] - 2026-07-29
