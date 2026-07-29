@@ -100,6 +100,40 @@ class OpenDcimClient
     }
 
     /**
+     * Download a binary asset (e.g. /pictures/Dell_Front.png). Returns raw bytes or null.
+     */
+    public function downloadBinary(string $path): ?string
+    {
+        if ($this->cacheDir !== null) {
+            $path = '/' . ltrim($path, '/');
+            $local = $this->cacheDir . DIRECTORY_SEPARATOR . ltrim(str_replace('/', DIRECTORY_SEPARATOR, $path), DIRECTORY_SEPARATOR);
+            // also try pictures/filename in cache root
+            $base = basename($path);
+            $candidates = [
+                $local,
+                $this->cacheDir . DIRECTORY_SEPARATOR . 'pictures' . DIRECTORY_SEPARATOR . $base,
+                $this->cacheDir . DIRECTORY_SEPARATOR . $base,
+            ];
+            foreach ($candidates as $f) {
+                if (is_file($f)) {
+                    $b = @file_get_contents($f);
+                    return $b === false ? null : $b;
+                }
+            }
+            return null;
+        }
+        $path = '/' . ltrim($path, '/');
+        $url = rtrim($this->baseUrl, '/') . $path;
+        try {
+            $raw = $this->requestWithRetry('GET', $url);
+            return $raw !== '' ? $raw : null;
+        } catch (Throwable $e) {
+            $this->lastErrors[] = 'download ' . $path . ': ' . $e->getMessage();
+            return null;
+        }
+    }
+
+    /**
      * GET /api/v1/{path} and return decoded JSON array.
      *
      * @param array<string,scalar|null> $query

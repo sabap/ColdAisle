@@ -51,7 +51,8 @@ class OpenDcimImportService
             'include_disposed' => false,
             'include_ports' => true,
             'include_power' => true,
-            'include_audits' => false,
+            'include_audits' => true,
+            'include_images' => true,
             'datacenter_ids' => null,
             'target_datacenter_id' => null,
             'weight_unit' => 'lb',
@@ -643,6 +644,9 @@ class OpenDcimImportService
             $this->importDepartments($c['department']);
             $this->importPeople($c['people']);
             $this->importManufacturersAndTemplates($c['devicetemplate']);
+            if (!empty($this->options['include_images'])) {
+                $this->importTemplateImages($c['devicetemplate']);
+            }
         } catch (Throwable $e) {
             $errors[] = 'Org/templates: ' . $e->getMessage();
             $this->log('ERROR ' . $e->getMessage());
@@ -671,6 +675,9 @@ class OpenDcimImportService
                 }
                 // Parent device second pass (same DC devices)
                 $this->linkParentDevices($odDcId, $c['device']);
+                if (!empty($this->options['include_audits'])) {
+                    $this->importCabinetAuditsForDc($odDcId, $c['cabinet']);
+                }
             } catch (Throwable $e) {
                 $errors[] = "DC {$odName}: " . $e->getMessage();
                 $this->log('ERROR DC ' . $odName . ': ' . $e->getMessage());
@@ -1895,6 +1902,274 @@ class OpenDcimImportService
                 ], 'outlet_id = :id', [':id' => $oid]);
                 $this->bump('power_map');
             }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Cabinet audits
+    // ------------------------------------------------------------------
+
+    /**
+     * Import openDCIM CertifyAudit / CabinetAudit rows into cabinet_audits.
+     *
+     * @param list<array<string,mixed>> $allCabs
+     */
+    private function importCabinetAuditsForDc(string $odDcId, array $allCabs): void
+    {
+        $cabs = array_values(array_filter($allCabs, static function ($c) use ($odDcId) {
+            return (string)($c['DataCenterID'] ?? '') === $odDcId;
+        }));
+        $this->log('Importing cabinet audits for ' . count($cabs) . ' cabinets…');
+
+        foreach ($cabs as $cab) {
+            $odCabId = (string)($cab['CabinetID'] ?? '');
+            $localCab = $this->resolveLocalId('cabinet', $odCabId);
+            if (!$localCab || $localCab >= 1000000) {
+                continue;
+            }
+
+            $rows = [];
+            try {
+                // Prefer CabinetID filter; some installs return related rows for DeviceID too
+                $json = $this->client->get('/api/v1/audit', ['CabinetID' => $odCabId]);
+                $inner = $json['audit'] ?? [];
+                if (is_array($inner)) {
+                    $rows = array_values($inner);
+                }
+            } catch (Throwable $e) {
+                $this->log('WARN audit cabinet ' . $odCabId . ': ' . $e->getMessage());
+                $this->bump('audit_fetch_error');
+                continue;
+            }
+
+            foreach ($rows as $a) {
+                $class = (string)($a['Class'] ?? '');
+                $action = (string)($a['Action'] ?? '');
+                // Physical cabinet walkthroughs
+                $isCabinetAudit = stripos($class, 'Cabinet') !== false
+                    || strcasecmp($action, 'CertifyAudit') === 0;
+                if (!$isCabinetAudit) {
+                    $this->bump('audit_skipped_other');
+                    continue;
+                }
+
+                $objId = (string)($a['ObjectID'] ?? '');
+                // ObjectID should be the cabinet for CabinetAudit
+                if ($objId !== '' && $objId !== '0' && $objId !== $odCabId) {
+                    // Row might be for another object in the same response
+                    $altCab = $this->resolveLocalId('cabinet', $objId);
+                    if ($altCab && $altCab < 1000000) {
+                        $localCab = $altCab;
+                    }
+                }
+
+                $when = $this->emptyToNull($a['Time'] ?? null);
+                $user = trim((string)($a['UserID'] ?? ''));
+                $prop = (string)($a['Property'] ?? '');
+                $newVal = trim((string)($a['NewVal'] ?? ''));
+                $oldVal = trim((string)($a['OldVal'] ?? ''));
+                $comments = null;
+                if ($newVal !== '') {
+                    $comments = $prop !== '' && strcasecmp($prop, 'Comments') !== 0
+                        ? ($prop . ': ' . $newVal)
+                        : $newVal;
+                } elseif ($oldVal !== '') {
+                    $comments = $prop !== '' ? ($prop . ': ' . $oldVal) : $oldVal;
+                }
+                if ($comments === null || $comments === '') {
+                    $comments = trim($action . ' ' . $class);
+                }
+
+                $auditedAt = $when;
+                // Normalize "2025-12-16 18:20:09" for SQL Server
+                if ($auditedAt && preg_match('/^\d{4}-\d{2}-\d{2}/', $auditedAt)) {
+                    $auditedAt = str_replace('T', ' ', substr($auditedAt, 0, 19));
+                } else {
+                    $auditedAt = date('Y-m-d H:i:s');
+                }
+
+                // Dedup: same cabinet + time (and similar comment when present)
+                try {
+                    $exists = Database::fetchOne(
+                        'SELECT cabinet_audit_id FROM cabinet_audits
+                         WHERE cabinet_id = ? AND audited_at = ?',
+                        [$localCab, $auditedAt]
+                    );
+                } catch (Throwable $e) {
+                    $exists = null;
+                }
+                if ($exists) {
+                    $this->bump('audit_matched');
+                    continue;
+                }
+
+                if ($this->isDryRun()) {
+                    $this->bump('audit_create');
+                    continue;
+                }
+
+                try {
+                    Database::insert('cabinet_audits', [
+                        'cabinet_id' => $localCab,
+                        'audited_by' => null,
+                        'audited_by_name' => $user !== '' ? $user : 'openDCIM',
+                        'certified' => 1,
+                        'comments' => $comments,
+                        'audited_at' => $auditedAt,
+                    ]);
+                    $this->bump('audit_create');
+                } catch (Throwable $e) {
+                    $this->log('WARN audit insert cab ' . $localCab . ': ' . $e->getMessage());
+                    $this->bump('audit_error');
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Template images
+    // ------------------------------------------------------------------
+
+    /**
+     * Download openDCIM template front/rear pictures into storage/uploads/templates/{id}/.
+     *
+     * @param list<array<string,mixed>> $templates
+     */
+    private function importTemplateImages(array $templates): void
+    {
+        if (!class_exists('ImageUpload')) {
+            require_once dirname(__DIR__) . '/Services/ImageUpload.php';
+        }
+
+        $this->log('Importing template images…');
+        $withPics = 0;
+        foreach ($templates as $t) {
+            $front = trim((string)($t['FrontPictureFile'] ?? ''));
+            $rear = trim((string)($t['RearPictureFile'] ?? ''));
+            if ($front === '' && $rear === '') {
+                continue;
+            }
+            $withPics++;
+        }
+        $this->log("  templates with pictures: $withPics");
+
+        foreach ($templates as $t) {
+            $srcId = (string)($t['TemplateID'] ?? '');
+            $localId = $this->resolveLocalId('template', $srcId);
+            if (!$localId || $localId >= 1000000) {
+                continue;
+            }
+
+            $uHeight = max(1, (int)($t['Height'] ?? 1));
+            $front = trim((string)($t['FrontPictureFile'] ?? ''));
+            $rear = trim((string)($t['RearPictureFile'] ?? ''));
+            if ($front === '' && $rear === '') {
+                continue;
+            }
+
+            if ($this->isDryRun()) {
+                if ($front !== '') {
+                    $this->bump('image_front_would_import');
+                }
+                if ($rear !== '') {
+                    $this->bump('image_rear_would_import');
+                }
+                continue;
+            }
+
+            // Skip if already has pictures (unless empty)
+            $existing = Database::fetchOne(
+                'SELECT front_picture, rear_picture FROM device_templates WHERE template_id = ?',
+                [$localId]
+            );
+            $updates = [];
+
+            if ($front !== '' && empty($existing['front_picture'])) {
+                $rel = $this->fetchAndStoreTemplateImage($localId, $front, 'front', $uHeight);
+                if ($rel) {
+                    $updates['front_picture'] = $rel;
+                    $this->bump('image_front_import');
+                } else {
+                    $this->bump('image_front_fail');
+                }
+            } elseif ($front !== '' && !empty($existing['front_picture'])) {
+                $this->bump('image_front_exists');
+            }
+
+            if ($rear !== '' && empty($existing['rear_picture'])) {
+                $rel = $this->fetchAndStoreTemplateImage($localId, $rear, 'rear', $uHeight);
+                if ($rel) {
+                    $updates['rear_picture'] = $rel;
+                    $this->bump('image_rear_import');
+                } else {
+                    $this->bump('image_rear_fail');
+                }
+            } elseif ($rear !== '' && !empty($existing['rear_picture'])) {
+                $this->bump('image_rear_exists');
+            }
+
+            if ($updates) {
+                Database::update('device_templates', $updates, 'template_id = :id', [':id' => $localId]);
+            }
+        }
+    }
+
+    private function fetchAndStoreTemplateImage(
+        int $templateId,
+        string $filename,
+        string $stem,
+        int $uHeight
+    ): ?string {
+        $filename = basename(str_replace(['\\', '..'], ['/', ''], $filename));
+        if ($filename === '' || $filename === '.' || $filename === '..') {
+            return null;
+        }
+
+        $bytes = $this->client->downloadBinary('/pictures/' . rawurlencode($filename));
+        // Some installs store without URL-encoding or under drawings/
+        if ($bytes === null) {
+            $bytes = $this->client->downloadBinary('/pictures/' . $filename);
+        }
+        if ($bytes === null) {
+            $bytes = $this->client->downloadBinary('/drawings/' . $filename);
+        }
+        if ($bytes === null || strlen($bytes) < 32) {
+            return null;
+        }
+
+        $tmpDir = App::ROOT . '/storage/tmp/opendcim_images';
+        if (!is_dir($tmpDir)) {
+            @mkdir($tmpDir, 0775, true);
+        }
+        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION) ?: 'png');
+        if (!in_array($ext, ['png', 'jpg', 'jpeg', 'gif', 'webp'], true)) {
+            $ext = 'png';
+        }
+        $tmp = $tmpDir . '/' . $templateId . '_' . $stem . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+        if (@file_put_contents($tmp, $bytes) === false) {
+            return null;
+        }
+
+        $destDir = App::ROOT . '/storage/uploads/templates/' . $templateId;
+        $dest = $destDir . '/' . $stem . '.jpg';
+        try {
+            $result = ImageUpload::processFromPath($tmp, $dest, $uHeight);
+            @unlink($tmp);
+            $rel = 'templates/' . $templateId . '/' . basename($result['path']);
+            return $rel;
+        } catch (Throwable $e) {
+            // Fallback: store original bytes
+            if (!is_dir($destDir)) {
+                @mkdir($destDir, 0775, true);
+            }
+            $fallback = $destDir . '/' . $stem . '.' . $ext;
+            @rename($tmp, $fallback);
+            if (is_file($fallback)) {
+                return 'templates/' . $templateId . '/' . basename($fallback);
+            }
+            $this->log('WARN image ' . $filename . ': ' . $e->getMessage());
+            @unlink($tmp);
+            return null;
         }
     }
 }
