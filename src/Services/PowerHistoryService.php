@@ -222,93 +222,245 @@ class PowerHistoryService
             return $result;
         }
 
-        $params = [];
-        $where = 'r.polled_at >= ? AND r.polled_at < ?';
-        $params[] = $fromSql;
-        $params[] = $toSql;
-        $join = '';
-
+        // Site/zone: build series in PHP with per-PDU hold-forward.
+        // SQL "SUM of PDUs present in bucket only" creates comb-to-zero charts when
+        // poll times stagger (many PDUs, 5‑min buckets, not all units sampled every bucket).
         if ($scope === 'zone' && $scopeId && $scopeId > 0) {
-            $join = ' INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.is_active = 1 AND p.zone_id = ? ';
-            $params[] = $scopeId;
+            $result = self::seriesSiteOrZoneWithHold('zone', $scopeId, $hoursEff, $bucketMin, $fromTs, $toTs);
         } else {
-            $join = ' INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.is_active = 1 ';
             $scope = 'site';
             $scopeId = null;
+            $result = self::seriesSiteOrZoneWithHold('site', null, $hoursEff, $bucketMin, $fromTs, $toTs);
+        }
+        $result['from'] = date('c', $fromTs);
+        $result['to'] = date('c', $toTs);
+        $result['summary'] = self::summarizeSeries($result);
+        return $result;
+    }
+
+    /**
+     * Facility/zone total: for each time bucket, sum each active PDU's latest reading
+     * in that bucket, or hold the last known good watts/amps within a hold window.
+     * Prevents sawtooth/comb graphs when poll cycles don't hit every PDU every bucket.
+     *
+     * @return array<string,mixed>
+     */
+    private static function seriesSiteOrZoneWithHold(
+        string $scope,
+        ?int $zoneId,
+        int $hours,
+        int $bucketMin,
+        int $fromTs,
+        int $toTs
+    ): array {
+        $fromSql = date('Y-m-d H:i:s', $fromTs);
+        $toSql = date('Y-m-d H:i:s', $toTs);
+        // Hold last reading up to max(3 buckets, 15 minutes) so 5‑min interval PDUs fill gaps
+        $holdSec = max(15 * 60, $bucketMin * 60 * 3);
+
+        $pduSql = 'SELECT pdu_id FROM pdus WHERE is_active = 1';
+        $pduParams = [];
+        if ($scope === 'zone' && $zoneId && $zoneId > 0) {
+            $pduSql .= ' AND zone_id = ?';
+            $pduParams[] = $zoneId;
+        }
+        $pduIds = [];
+        try {
+            foreach (Database::fetchAll($pduSql, $pduParams) as $pr) {
+                $pduIds[] = (int)$pr['pdu_id'];
+            }
+        } catch (Throwable $e) {
+            $pduIds = [];
         }
 
-        $bucketExpr = "DATEADD(MINUTE, (DATEDIFF(MINUTE, '20000101', r.polled_at) / {$bucketMin}) * {$bucketMin}, '20000101')";
-
-        // Prefer volts column; fall back to volts derived in PHP path for zone/site raw fill
-        $sql = "SELECT bucket,
-                       SUM(pdu_watts) AS watts,
-                       SUM(pdu_amps) AS amps,
-                       AVG(pdu_volts) AS volts
-                FROM (
-                    SELECT r.pdu_id,
-                           {$bucketExpr} AS bucket,
-                           AVG(r.watts) AS pdu_watts,
-                           AVG(r.amps) AS pdu_amps,
-                           AVG(COALESCE(r.volts, r.volts_ll)) AS pdu_volts
-                    FROM pdu_readings r
-                    {$join}
-                    WHERE {$where}
-                    GROUP BY r.pdu_id, {$bucketExpr}
-                ) x
-                GROUP BY bucket
-                ORDER BY bucket";
-
-        $rows = [];
+        // Pull samples with a lookback so hold works at the left edge of the window
+        $lookbackSql = date('Y-m-d H:i:s', $fromTs - $holdSec);
+        $samples = [];
         try {
-            $rows = Database::fetchAll($sql, $params);
+            if ($scope === 'zone' && $zoneId && $zoneId > 0) {
+                $samples = Database::fetchAll(
+                    'SELECT r.pdu_id, r.polled_at, r.watts, r.amps, r.volts, r.volts_ll
+                     FROM pdu_readings r
+                     INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.is_active = 1 AND p.zone_id = ?
+                     WHERE r.polled_at >= ? AND r.polled_at < ?
+                     ORDER BY r.polled_at',
+                    [$zoneId, $lookbackSql, $toSql]
+                );
+            } else {
+                $samples = Database::fetchAll(
+                    'SELECT r.pdu_id, r.polled_at, r.watts, r.amps, r.volts, r.volts_ll
+                     FROM pdu_readings r
+                     INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.is_active = 1
+                     WHERE r.polled_at >= ? AND r.polled_at < ?
+                     ORDER BY r.polled_at',
+                    [$lookbackSql, $toSql]
+                );
+            }
         } catch (Throwable $e) {
-            // Older schema without volts_ll
             try {
-                $sql = "SELECT bucket,
-                               SUM(pdu_watts) AS watts,
-                               SUM(pdu_amps) AS amps,
-                               AVG(pdu_volts) AS volts
-                        FROM (
-                            SELECT r.pdu_id,
-                                   {$bucketExpr} AS bucket,
-                                   AVG(r.watts) AS pdu_watts,
-                                   AVG(r.amps) AS pdu_amps,
-                                   AVG(r.volts) AS pdu_volts
-                            FROM pdu_readings r
-                            {$join}
-                            WHERE {$where}
-                            GROUP BY r.pdu_id, {$bucketExpr}
-                        ) x
-                        GROUP BY bucket
-                        ORDER BY bucket";
-                $rows = Database::fetchAll($sql, $params);
+                if ($scope === 'zone' && $zoneId && $zoneId > 0) {
+                    $samples = Database::fetchAll(
+                        'SELECT r.pdu_id, r.polled_at, r.watts, r.amps, r.volts
+                         FROM pdu_readings r
+                         INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.is_active = 1 AND p.zone_id = ?
+                         WHERE r.polled_at >= ? AND r.polled_at < ?
+                         ORDER BY r.polled_at',
+                        [$zoneId, $lookbackSql, $toSql]
+                    );
+                } else {
+                    $samples = Database::fetchAll(
+                        'SELECT r.pdu_id, r.polled_at, r.watts, r.amps, r.volts
+                         FROM pdu_readings r
+                         INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.is_active = 1
+                         WHERE r.polled_at >= ? AND r.polled_at < ?
+                         ORDER BY r.polled_at',
+                        [$lookbackSql, $toSql]
+                    );
+                }
             } catch (Throwable $e2) {
-                App::log('PowerHistory series: ' . $e2->getMessage(), 'warning');
-                $rows = [];
+                App::log('PowerHistory site/zone hold series: ' . $e2->getMessage(), 'warning');
+                $samples = [];
             }
         }
+
+        // Per PDU: list of [ts, watts, amps, volts]
+        /** @var array<int,list<array{0:int,1:?float,2:?float,3:?float}>> $byPdu */
+        $byPdu = [];
+        foreach ($samples as $r) {
+            $pid = (int)($r['pdu_id'] ?? 0);
+            if ($pid < 1) {
+                continue;
+            }
+            $ts = strtotime((string)($r['polled_at'] ?? ''));
+            if (!$ts) {
+                continue;
+            }
+            $w = isset($r['watts']) && is_numeric($r['watts']) ? (float)$r['watts'] : null;
+            $a = isset($r['amps']) && is_numeric($r['amps']) ? (float)$r['amps'] : null;
+            $v = null;
+            if (isset($r['volts']) && is_numeric($r['volts'])) {
+                $v = (float)$r['volts'];
+            } elseif (isset($r['volts_ll']) && is_numeric($r['volts_ll'])) {
+                $v = (float)$r['volts_ll'] / 1.732;
+            }
+            // Ignore pure null rows for hold (load_state-only samples without power)
+            if ($w === null && $a === null && $v === null) {
+                continue;
+            }
+            $byPdu[$pid][] = [$ts, $w, $a, $v];
+        }
+        if (!$pduIds && $byPdu) {
+            $pduIds = array_keys($byPdu);
+        }
+
+        $step = max(1, $bucketMin) * 60;
+        $startBucket = (int)(floor($fromTs / $step) * $step);
+        $endBucket = (int)(floor(($toTs - 1) / $step) * $step);
 
         $t = [];
         $watts = [];
         $kw = [];
         $volts = [];
         $amps = [];
-        foreach ($rows as $r) {
-            $bt = self::formatBucket($r['bucket'] ?? null);
-            $t[] = $bt;
-            $w = isset($r['watts']) && is_numeric($r['watts']) ? (float)$r['watts'] : null;
-            $watts[] = $w;
-            $kw[] = $w !== null ? round($w / 1000.0, 3) : null;
-            $volts[] = isset($r['volts']) && is_numeric($r['volts']) ? round((float)$r['volts'], 2) : null;
-            $amps[] = isset($r['amps']) && is_numeric($r['amps']) ? round((float)$r['amps'], 3) : null;
+        $heldBuckets = 0;
+        $rawBuckets = 0;
+
+        for ($b = $startBucket; $b <= $endBucket; $b += $step) {
+            $bEnd = $b + $step;
+            $sumW = 0.0;
+            $sumA = 0.0;
+            $sumV = 0.0;
+            $nW = 0;
+            $nA = 0;
+            $nV = 0;
+            $anyHeld = false;
+            $anyRaw = false;
+
+            foreach ($pduIds as $pid) {
+                $list = $byPdu[$pid] ?? [];
+                $bucketW = null;
+                $bucketA = null;
+                $bucketV = null;
+                $nIn = 0;
+                $wSum = 0.0;
+                $aSum = 0.0;
+                $vSum = 0.0;
+                $nVw = 0;
+                $nVa = 0;
+                $nVv = 0;
+                $lastBefore = null; // last sample with ts < bEnd
+
+                foreach ($list as $sample) {
+                    [$ts, $w, $a, $v] = $sample;
+                    if ($ts < $bEnd) {
+                        $lastBefore = $sample;
+                    }
+                    if ($ts >= $b && $ts < $bEnd) {
+                        $nIn++;
+                        if ($w !== null) {
+                            $wSum += $w;
+                            $nVw++;
+                        }
+                        if ($a !== null) {
+                            $aSum += $a;
+                            $nVa++;
+                        }
+                        if ($v !== null) {
+                            $vSum += $v;
+                            $nVv++;
+                        }
+                    }
+                }
+
+                if ($nIn > 0) {
+                    $anyRaw = true;
+                    $bucketW = $nVw > 0 ? $wSum / $nVw : null;
+                    $bucketA = $nVa > 0 ? $aSum / $nVa : null;
+                    $bucketV = $nVv > 0 ? $vSum / $nVv : null;
+                } elseif ($lastBefore !== null) {
+                    [$lts, $lw, $la, $lv] = $lastBefore;
+                    if (($bEnd - 1 - $lts) <= $holdSec) {
+                        $anyHeld = true;
+                        $bucketW = $lw;
+                        $bucketA = $la;
+                        $bucketV = $lv;
+                    }
+                }
+
+                if ($bucketW !== null) {
+                    $sumW += $bucketW;
+                    $nW++;
+                }
+                if ($bucketA !== null) {
+                    $sumA += $bucketA;
+                    $nA++;
+                }
+                if ($bucketV !== null) {
+                    $sumV += $bucketV;
+                    $nV++;
+                }
+            }
+
+            if ($nW === 0 && $nA === 0 && $nV === 0) {
+                continue; // nothing at all in this empty edge
+            }
+            if ($anyHeld && !$anyRaw) {
+                $heldBuckets++;
+            }
+            if ($anyRaw) {
+                $rawBuckets++;
+            }
+
+            $t[] = date('c', $b);
+            $watts[] = $nW > 0 ? round($sumW, 3) : null;
+            $kw[] = $nW > 0 ? round($sumW / 1000.0, 3) : null;
+            $amps[] = $nA > 0 ? round($sumA, 3) : null;
+            $volts[] = $nV > 0 ? round($sumV / $nV, 2) : null;
         }
 
-        // Carry-forward voltage so sparse samples still draw a continuous line
         $volts = self::carryForward($volts);
 
-        $outages = self::loadOutageMarkers($scope, $scopeId, $bucketMin, $fromTs, $toTs);
-
-        $outageCount = count($outages);
+        $outages = self::loadOutageMarkers($scope, $zoneId, $bucketMin, $fromTs, $toTs);
         $outagePhases = [];
         foreach ($outages as $o) {
             foreach ($o['phases'] as $ph) {
@@ -316,13 +468,11 @@ class PowerHistoryService
             }
         }
 
-        $result = [
+        return [
             'ok' => true,
             'scope' => $scope,
-            'scope_id' => $scopeId,
-            'hours' => $hoursEff,
-            'from' => date('c', $fromTs),
-            'to' => date('c', $toTs),
+            'scope_id' => $zoneId,
+            'hours' => $hours,
             'bucket_minutes' => $bucketMin,
             'series' => [
                 't' => $t,
@@ -334,13 +484,16 @@ class PowerHistoryService
             'outages' => $outages,
             'meta' => [
                 'points' => count($t),
-                'sample_count' => self::countSamplesRange($scope, $scopeId, $fromTs, $toTs),
-                'outage_events' => $outageCount,
+                'sample_count' => self::countSamplesRange($scope, $zoneId, $fromTs, $toTs),
+                'outage_events' => count($outages),
                 'outage_phases' => array_keys($outagePhases),
+                'pdu_count' => count($pduIds),
+                'hold_seconds' => $holdSec,
+                'buckets_with_raw' => $rawBuckets,
+                'buckets_hold_only' => $heldBuckets,
+                'aggregation' => 'per_pdu_hold_forward',
             ],
         ];
-        $result['summary'] = self::summarizeSeries($result);
-        return $result;
     }
 
     /**

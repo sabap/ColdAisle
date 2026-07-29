@@ -19,6 +19,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.2.81] - 2026-07-29
+
+### Bug fixes
+
+- **Facility / zone power charts:** stop comb-to-zero usage when poll times stagger across many PDUs. Site/zone totals now **hold each PDU’s last known watts** (up to ~15 min / 3 buckets) instead of summing only PDUs present in that 5‑minute bucket.
+- Avoid writing **spurious 0 W** history samples when a poll only succeeds on load_state / non-power OIDs (common on older APC maps).
+
+---
+
 ## [0.2.80] - 2026-07-28
 
 ### Enhancements

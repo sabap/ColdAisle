@@ -542,6 +542,37 @@ class SnmpPoller
      * @param array<string,mixed>|null $phases
      * @param array<string,mixed>|null $outlets
      */
+    /**
+     * Drop zero totals when we never got real phase/device power (load_state-only polls).
+     * Still keeps last_poll_* display from raw values when provided.
+     *
+     * @param array<string,mixed>|null $phases
+     * @return array{0:?float,1:?float}
+     */
+    private static function sanitizePowerTotalsForHistory(?float $watts, ?float $amps, ?array $phases): array
+    {
+        $phaseHasWatts = false;
+        $phaseHasAmps = false;
+        if (is_array($phases)) {
+            foreach (['L1', 'L2', 'L3'] as $lab) {
+                if (isset($phases[$lab]['watts']) && $phases[$lab]['watts'] !== null) {
+                    $phaseHasWatts = true;
+                }
+                if (isset($phases[$lab]['amps']) && $phases[$lab]['amps'] !== null) {
+                    $phaseHasAmps = true;
+                }
+            }
+        }
+        // Explicit 0 with no phase power is usually a bad/missing OID, not "facility off"
+        if ($watts !== null && abs($watts) < 0.05 && !$phaseHasWatts) {
+            $watts = null;
+        }
+        if ($amps !== null && abs($amps) < 0.005 && !$phaseHasAmps && !$phaseHasWatts) {
+            $amps = null;
+        }
+        return [$watts, $amps];
+    }
+
     private static function writePduPoll(
         int $pduId,
         ?float $watts,
@@ -550,6 +581,11 @@ class SnmpPoller
         ?string $serialNo = null,
         ?array $outlets = null
     ): void {
+        // UI last_poll can still show raw; history uses sanitized totals
+        $histWatts = $watts;
+        $histAmps = $amps;
+        [$histWatts, $histAmps] = self::sanitizePowerTotalsForHistory($watts, $amps, $phases);
+
         $row = [
             'last_poll_at' => date('Y-m-d H:i:s'),
             'last_poll_watts' => $watts,
@@ -607,26 +643,26 @@ class SnmpPoller
                 } catch (Throwable $e) {
                     // ignore
                 }
-                PowerHistoryService::recordSample($pduId, $watts, $amps, $phases, $nominalLn);
+                PowerHistoryService::recordSample($pduId, $histWatts, $histAmps, $phases, $nominalLn);
             } catch (Throwable $e) {
                 // Fallback: legacy minimal insert
-                if ($watts !== null || $amps !== null) {
+                if ($histWatts !== null || $histAmps !== null) {
                     try {
                         Database::insert('pdu_readings', [
                             'pdu_id' => $pduId,
-                            'watts' => $watts,
-                            'amps' => $amps,
+                            'watts' => $histWatts,
+                            'amps' => $histAmps,
                         ]);
                     } catch (Throwable $e2) {
                         // ignore
                     }
                 }
             }
-        } elseif ($watts !== null || $amps !== null) {
+        } elseif ($histWatts !== null || $histAmps !== null) {
             Database::insert('pdu_readings', [
                 'pdu_id' => $pduId,
-                'watts' => $watts,
-                'amps' => $amps,
+                'watts' => $histWatts,
+                'amps' => $histAmps,
             ]);
         }
 
