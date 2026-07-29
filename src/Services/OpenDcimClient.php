@@ -3,6 +3,7 @@
  * HTTP client for openDCIM REST API (/api/v1).
  *
  * Auth: UserID + APIKey request headers (not Basic).
+ * Retries transient TLS/network failures (common on Windows Schannel + Apache renegotiation).
  */
 declare(strict_types=1);
 
@@ -19,6 +20,7 @@ class OpenDcimClient
     private array $lastErrors = [];
     /** Offline mode: directory of api_v1_*.json dumps (no network). */
     private ?string $cacheDir = null;
+    private int $retries;
 
     /**
      * @param array{
@@ -28,7 +30,8 @@ class OpenDcimClient
      *   tls_verify?:bool,
      *   timeout?:int,
      *   resolve?:array<string,string>,
-     *   cache_dir?:string
+     *   cache_dir?:string,
+     *   retries?:int
      * } $config
      */
     public function __construct(array $config)
@@ -46,6 +49,7 @@ class OpenDcimClient
             $this->tlsVerify = false;
             $this->timeout = 5;
             $this->resolve = [];
+            $this->retries = 0;
             return;
         }
 
@@ -53,7 +57,6 @@ class OpenDcimClient
         if ($base === '') {
             throw new InvalidArgumentException('OpenDCIM base_url is required (or set cache_dir for offline mode).');
         }
-        // Allow host without scheme
         if (!preg_match('#^https?://#i', $base)) {
             $base = 'https://' . $base;
         }
@@ -64,8 +67,15 @@ class OpenDcimClient
             throw new InvalidArgumentException('OpenDCIM user_id and api_key are required.');
         }
         $this->tlsVerify = !array_key_exists('tls_verify', $config) || !empty($config['tls_verify']);
-        $this->timeout = max(5, min(300, (int)($config['timeout'] ?? 60)));
+        $this->timeout = max(10, min(300, (int)($config['timeout'] ?? 90)));
         $this->resolve = is_array($config['resolve'] ?? null) ? $config['resolve'] : [];
+        $this->retries = max(0, min(5, (int)($config['retries'] ?? 3)));
+
+        // If URL host is an IP, still allow Host header override via resolve keys
+        $host = parse_url($this->baseUrl, PHP_URL_HOST) ?: '';
+        if ($host !== '' && filter_var($host, FILTER_VALIDATE_IP) && empty($this->resolve)) {
+            // connecting by IP with no SNI name — leave as-is
+        }
     }
 
     public function isOfflineCache(): bool
@@ -120,7 +130,7 @@ class OpenDcimClient
             }
         }
 
-        $raw = $this->request('GET', $url);
+        $raw = $this->requestWithRetry('GET', $url);
         $json = json_decode($raw, true);
         if (!is_array($json)) {
             throw new RuntimeException('OpenDCIM returned non-JSON for ' . $path . ': ' . substr($raw, 0, 200));
@@ -134,21 +144,15 @@ class OpenDcimClient
     }
 
     /**
-     * Read offline dumps produced by probes / a future export.
-     * Expected files: api_v1_datacenter.json, api_v1_device.json, …
-     * Per-device: api_v1_powerport_{id}.json, cdu_{id}_powerport.json, etc.
-     *
      * @param array<string,scalar|null> $query
      * @return array<string,mixed>
      */
     private function getFromCache(string $path, array $query = []): array
     {
         $path = '/' . ltrim($path, '/');
-        // Strip query already separated
         $rel = preg_replace('#^/api/v1/?#', '', $path) ?? '';
         $rel = trim($rel, '/');
 
-        // Collection endpoints
         $collections = [
             'datacenter' => 'datacenter',
             'department' => 'department',
@@ -164,7 +168,6 @@ class OpenDcimClient
         if (isset($collections[$base]) && !str_contains($rel, '/')) {
             $file = $this->cacheDir . DIRECTORY_SEPARATOR . 'api_v1_' . $base . '.json';
             if (!is_file($file)) {
-                // empty ok for optional collections
                 return ['error' => false, 'errorcode' => 200, $collections[$base] => []];
             }
             $json = json_decode((string)file_get_contents($file), true);
@@ -174,7 +177,6 @@ class OpenDcimClient
             return $json;
         }
 
-        // /device/{id}, /deviceport/{id}, /powerport/{id}
         if (preg_match('#^(device|deviceport|powerport)/([^/]+)$#i', $rel, $m)) {
             $kind = strtolower($m[1]);
             $id = rawurldecode($m[2]);
@@ -193,25 +195,18 @@ class OpenDcimClient
                     return $json;
                 }
             }
-            // Offline without per-device dumps: empty ports (inventory still imports)
             $wrap = $kind === 'device' ? 'device' : $kind;
-            return ['error' => false, 'errorcode' => 200, $wrap => $kind === 'device' ? [] : []];
+            return ['error' => false, 'errorcode' => 200, $wrap => []];
         }
 
-        // /audit?CabinetID= / DeviceID=
         if (strtolower($rel) === 'audit' || str_starts_with(strtolower($rel), 'audit')) {
-            $file = $this->cacheDir . DIRECTORY_SEPARATOR . 'api_v1_audit.json';
-            if (is_file($file)) {
-                $json = json_decode((string)file_get_contents($file), true);
-                if (is_array($json)) {
-                    return $json;
-                }
-            }
-            $file = $this->cacheDir . DIRECTORY_SEPARATOR . 'audit_sample.json';
-            if (is_file($file)) {
-                $json = json_decode((string)file_get_contents($file), true);
-                if (is_array($json)) {
-                    return $json;
+            foreach (['api_v1_audit.json', 'audit_sample.json'] as $name) {
+                $file = $this->cacheDir . DIRECTORY_SEPARATOR . $name;
+                if (is_file($file)) {
+                    $json = json_decode((string)file_get_contents($file), true);
+                    if (is_array($json)) {
+                        return $json;
+                    }
                 }
             }
             return ['error' => false, 'errorcode' => 200, 'audit' => []];
@@ -221,8 +216,6 @@ class OpenDcimClient
     }
 
     /**
-     * Unwrap standard openDCIM collection payload { error, errorcode, <name>: [...] }.
-     *
      * @return list<array<string,mixed>>
      */
     public function collection(string $path, ?string $wrapKey = null): array
@@ -237,20 +230,17 @@ class OpenDcimClient
                 continue;
             }
             if (is_array($v)) {
-                // Associative map of id => row OR list
                 if ($v === []) {
                     return [];
                 }
                 if (array_is_list($v)) {
                     return $v;
                 }
-                // Could be single object (has DeviceID etc.) or map of rows
                 $first = reset($v);
                 if (is_array($first) && !array_is_list($first) && $this->looksLikeEntityMap($v)) {
                     return array_values($v);
                 }
                 if (is_array($first) || is_scalar($first)) {
-                    // single entity returned as field bag under wrap key
                     if (isset($v['DeviceID']) || isset($v['CabinetID']) || isset($v['TemplateID']) || isset($v['DataCenterID'])) {
                         return [$v];
                     }
@@ -273,9 +263,7 @@ class OpenDcimClient
     }
 
     /**
-     * Test connection; return inventory counts.
-     *
-     * @return array{ok:bool,base_url:string,counts:array<string,int>,errors:list<string>}
+     * @return array{ok:bool,base_url:string,counts:array<string,int>,errors:list<string>,hint?:string}
      */
     public function testConnection(): array
     {
@@ -300,26 +288,84 @@ class OpenDcimClient
                 $errors[] = $path . ': ' . $e->getMessage();
             }
         }
-        $ok = $counts['datacenter'] >= 0 && $errors === [];
-        // Partial success still useful
-        if ($counts['datacenter'] >= 0) {
-            $ok = true;
-        }
-        return [
+        $ok = ($counts['datacenter'] ?? -1) >= 0;
+        $out = [
             'ok' => $ok,
             'base_url' => $this->baseUrl,
             'counts' => $counts,
             'errors' => $errors,
         ];
+        if (!$ok && $errors) {
+            $joined = implode(' ', $errors);
+            $hint = 'Check network path from this ColdAisle host to openDCIM, DNS, and that “Skip TLS verify” is enabled for lab certs.';
+            if (str_contains($joined, 'resolve') || str_contains(strtolower($joined), 'could not resolve')) {
+                $hint = 'Hostname did not resolve. Set DNS resolve to hostname:IP (e.g. dcim.example.org:192.0.2.10).';
+            } elseif (str_contains($joined, 'stream') || str_contains($joined, 'curl') || str_contains($joined, 'SSL') || str_contains($joined, 'TLS')) {
+                $hint = 'TLS/network glitch is common with openDCIM on Windows PHP. Retry Test; keep Skip TLS verify on; use DNS resolve if DNS is flaky. If it keeps failing, use Offline JSON dumps.';
+            } elseif (str_contains($joined, '401') || str_contains($joined, '403') || str_contains($joined, 'Access Denied')) {
+                $hint = 'Credentials rejected. Re-paste the API key (the field is cleared after each page load) and confirm UserID.';
+            }
+            $out['hint'] = $hint;
+        }
+        return $out;
     }
 
-    private function request(string $method, string $url): string
+    private function requestWithRetry(string $method, string $url): string
+    {
+        $attempts = 1 + $this->retries;
+        $lastEx = null;
+        for ($i = 0; $i < $attempts; $i++) {
+            try {
+                if ($i > 0) {
+                    // brief backoff: 200ms, 500ms, 1000ms…
+                    usleep((int)(200000 * $i * $i + 100000));
+                }
+                return $this->requestOnce($method, $url, $i > 0);
+            } catch (Throwable $e) {
+                $lastEx = $e;
+                $msg = $e->getMessage();
+                // Do not retry auth failures
+                if (str_contains($msg, 'HTTP 401') || str_contains($msg, 'HTTP 403') || str_contains($msg, 'Access Denied')) {
+                    throw $e;
+                }
+            }
+        }
+        throw $lastEx ?? new RuntimeException('OpenDCIM request failed for ' . $url);
+    }
+
+    private function requestOnce(string $method, string $url, bool $freshConnect): string
     {
         $this->lastErrors = [];
-        if (!function_exists('curl_init')) {
-            return $this->requestStream($method, $url);
+        $curlErr = null;
+        if (function_exists('curl_init')) {
+            try {
+                return $this->requestCurl($method, $url, $freshConnect);
+            } catch (Throwable $e) {
+                $curlErr = $e;
+                $this->lastErrors[] = 'curl: ' . $e->getMessage();
+                // fall through to stream
+            }
         }
 
+        try {
+            return $this->requestStream($method, $url);
+        } catch (Throwable $e) {
+            $bits = [];
+            if ($curlErr) {
+                $bits[] = 'curl: ' . $curlErr->getMessage();
+            }
+            $bits[] = 'stream: ' . $e->getMessage();
+            if ($this->resolve) {
+                $bits[] = 'resolve=' . json_encode($this->resolve);
+            }
+            throw new RuntimeException(
+                'OpenDCIM request failed for ' . $url . ' (' . implode('; ', $bits) . ')'
+            );
+        }
+    }
+
+    private function requestCurl(string $method, string $url, bool $freshConnect): string
+    {
         $ch = curl_init($url);
         if ($ch === false) {
             throw new RuntimeException('curl_init failed');
@@ -328,39 +374,38 @@ class OpenDcimClient
             'UserID: ' . $this->userId,
             'APIKey: ' . $this->apiKey,
             'Accept: application/json',
+            'Connection: close',
         ];
         $opts = [
             CURLOPT_CUSTOMREQUEST => $method,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 3,
-            CURLOPT_CONNECTTIMEOUT => min(15, $this->timeout),
+            CURLOPT_CONNECTTIMEOUT => min(20, $this->timeout),
             CURLOPT_TIMEOUT => $this->timeout,
             CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_USERAGENT => 'ColdAisle-OpenDcimClient/1.0',
+            CURLOPT_USERAGENT => 'ColdAisle-OpenDcimClient/1.1',
+            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+            CURLOPT_ENCODING => '',
         ];
+        if ($freshConnect) {
+            $opts[CURLOPT_FRESH_CONNECT] = true;
+            $opts[CURLOPT_FORBID_REUSE] = true;
+        }
         if (!$this->tlsVerify) {
             $opts[CURLOPT_SSL_VERIFYPEER] = false;
             $opts[CURLOPT_SSL_VERIFYHOST] = 0;
         }
-        if ($this->resolve) {
-            $resolve = [];
-            $host = parse_url($this->baseUrl, PHP_URL_HOST) ?: '';
-            $port = (int)(parse_url($this->baseUrl, PHP_URL_PORT) ?: (str_starts_with($this->baseUrl, 'https') ? 443 : 80));
-            foreach ($this->resolve as $h => $ip) {
-                $resolve[] = $h . ':' . $port . ':' . $ip;
-                if ($host !== '' && strcasecmp($h, $host) !== 0) {
-                    // also bind configured base host if only IP alias given
-                }
-            }
-            // Convenience: if resolve has IP for the base host name
-            if ($host && isset($this->resolve[$host])) {
-                $resolve[] = $host . ':' . $port . ':' . $this->resolve[$host];
-            }
-            if ($resolve) {
-                $opts[CURLOPT_RESOLVE] = array_values(array_unique($resolve));
-            }
+        // Prefer TLS 1.2+ when constant exists (avoids some renegotiation edge cases)
+        if (defined('CURL_SSLVERSION_TLSv1_2')) {
+            $opts[CURLOPT_SSLVERSION] = CURL_SSLVERSION_TLSv1_2;
         }
+
+        $resolveList = $this->buildCurlResolve();
+        if ($resolveList) {
+            $opts[CURLOPT_RESOLVE] = $resolveList;
+        }
+
         curl_setopt_array($ch, $opts);
         $body = curl_exec($ch);
         $errno = curl_errno($ch);
@@ -369,22 +414,57 @@ class OpenDcimClient
         curl_close($ch);
 
         if ($body === false || $errno) {
-            $this->lastErrors[] = $err !== '' ? $err : 'curl error ' . $errno;
-            // Fallback for environments where curl+schannel fails
-            return $this->requestStream($method, $url);
+            throw new RuntimeException(
+                ($err !== '' ? $err : 'curl error ' . $errno) . ' (errno ' . $errno . ')'
+            );
+        }
+        // Empty body with code 0 often means connection reset mid-TLS
+        if ($code === 0) {
+            throw new RuntimeException('empty response / TLS reset (HTTP 0)');
         }
         if ($code === 401 || $code === 403) {
-            $msg = $body;
             $j = json_decode((string)$body, true);
-            if (is_array($j) && !empty($j['message'])) {
-                $msg = (string)$j['message'];
-            }
-            throw new RuntimeException("OpenDCIM HTTP {$code}: {$msg}");
+            $msg = is_array($j) && !empty($j['message']) ? (string)$j['message'] : (string)$body;
+            throw new RuntimeException("HTTP {$code}: {$msg}");
         }
         if ($code >= 400) {
-            throw new RuntimeException("OpenDCIM HTTP {$code} for {$url}: " . substr((string)$body, 0, 300));
+            throw new RuntimeException("HTTP {$code}: " . substr((string)$body, 0, 300));
         }
         return (string)$body;
+    }
+
+    /** @return list<string> */
+    private function buildCurlResolve(): array
+    {
+        if (!$this->resolve) {
+            return [];
+        }
+        $host = parse_url($this->baseUrl, PHP_URL_HOST) ?: '';
+        $port = (int)(parse_url($this->baseUrl, PHP_URL_PORT) ?: (str_starts_with($this->baseUrl, 'https') ? 443 : 80));
+        $out = [];
+        foreach ($this->resolve as $h => $ip) {
+            $h = trim((string)$h);
+            $ip = trim((string)$ip);
+            if ($h === '' || $ip === '') {
+                continue;
+            }
+            $out[] = $h . ':' . $port . ':' . $ip;
+            // Also map the base URL host if resolve key is only the hostname form
+            if ($host !== '' && strcasecmp($h, $host) !== 0 && filter_var($ip, FILTER_VALIDATE_IP)) {
+                // if user entered only IP mapping under a different name, still ok
+            }
+        }
+        if ($host !== '' && isset($this->resolve[$host])) {
+            $out[] = $host . ':' . $port . ':' . $this->resolve[$host];
+        }
+        // If single resolve entry and host differs, also bind base host to that IP
+        if ($host !== '' && count($this->resolve) === 1) {
+            $ip = (string)reset($this->resolve);
+            if (filter_var($ip, FILTER_VALIDATE_IP) && !isset($this->resolve[$host])) {
+                $out[] = $host . ':' . $port . ':' . $ip;
+            }
+        }
+        return array_values(array_unique($out));
     }
 
     private function requestStream(string $method, string $url): string
@@ -398,20 +478,32 @@ class OpenDcimClient
         $connectHost = $host;
         if ($host && isset($this->resolve[$host])) {
             $connectHost = $this->resolve[$host];
+        } elseif (count($this->resolve) === 1) {
+            $onlyIp = (string)reset($this->resolve);
+            if (filter_var($onlyIp, FILTER_VALIDATE_IP)) {
+                $connectHost = $onlyIp;
+            }
         }
 
         $hdr = "Host: {$host}\r\n";
         $hdr .= 'UserID: ' . $this->userId . "\r\n";
         $hdr .= 'APIKey: ' . $this->apiKey . "\r\n";
         $hdr .= "Accept: application/json\r\n";
-        $hdr .= "User-Agent: ColdAisle-OpenDcimClient/1.0\r\n";
+        $hdr .= "Connection: close\r\n";
+        $hdr .= "User-Agent: ColdAisle-OpenDcimClient/1.1\r\n";
 
         $ssl = [
             'verify_peer' => $this->tlsVerify,
             'verify_peer_name' => $this->tlsVerify,
             'allow_self_signed' => !$this->tlsVerify,
             'peer_name' => $host,
+            'SNI_enabled' => true,
+            'capture_peer_cert' => false,
         ];
+        if (defined('STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT')) {
+            $ssl['crypto_method'] = STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT;
+        }
+
         $ctx = stream_context_create([
             'http' => [
                 'method' => $method,
@@ -419,6 +511,7 @@ class OpenDcimClient
                 'timeout' => $this->timeout,
                 'ignore_errors' => true,
                 'follow_location' => 1,
+                'protocol_version' => 1.1,
             ],
             'ssl' => $ssl,
         ]);
@@ -433,15 +526,24 @@ class OpenDcimClient
         $statusLine = $http_response_header[0] ?? '';
         $code = preg_match('/\s(\d{3})\s/', $statusLine, $m) ? (int)$m[1] : 0;
         if ($body === false) {
-            throw new RuntimeException('OpenDCIM request failed (stream) for ' . $url);
+            $err = error_get_last();
+            $detail = is_array($err) ? (string)($err['message'] ?? '') : '';
+            throw new RuntimeException(
+                'stream open failed'
+                . ($detail !== '' ? ': ' . $detail : '')
+                . " (connect={$connectHost} host={$host})"
+            );
         }
         if ($code === 401 || $code === 403) {
             $j = json_decode($body, true);
             $msg = is_array($j) ? (string)($j['message'] ?? $body) : $body;
-            throw new RuntimeException("OpenDCIM HTTP {$code}: {$msg}");
+            throw new RuntimeException("HTTP {$code}: {$msg}");
         }
         if ($code >= 400) {
-            throw new RuntimeException("OpenDCIM HTTP {$code}: " . substr($body, 0, 300));
+            throw new RuntimeException("HTTP {$code}: " . substr($body, 0, 300));
+        }
+        if ($code === 0 && $body === '') {
+            throw new RuntimeException('empty stream response');
         }
         return $body;
     }

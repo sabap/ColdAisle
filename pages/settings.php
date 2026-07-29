@@ -1315,12 +1315,21 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
                            placeholder="dcim"
                            value="<?= App::e((string)($opendcimCfg['user_id'] ?? '')) ?>"></div>
                 <div class="form-row"><label>API key</label>
-                    <input class="form-control" id="od_api_key" type="password" autocomplete="new-password"
+                    <input class="form-control" id="od_api_key" type="text" autocomplete="off" spellcheck="false"
                            placeholder="Paste API key from openDCIM User Administration"
-                           value=""></div>
-                <div class="form-row"><label>DNS resolve (optional)</label>
-                    <input class="form-control" id="od_resolve" placeholder="hostname:10.x.x.x"
-                           value=""></div>
+                           value="">
+                    <span class="text-muted" style="font-size:.75rem">
+                        Kept in this browser tab only (not saved to the server until you run a job).
+                        Re-paste if Test fails after a full page reload.
+                    </span>
+                </div>
+                <div class="form-row"><label>DNS resolve (optional but recommended)</label>
+                    <input class="form-control" id="od_resolve" placeholder="dcim.example.org:192.0.2.10"
+                           value="">
+                    <span class="text-muted" style="font-size:.75rem">
+                        Use when the app server cannot reliably DNS-resolve openDCIM (hostname:IP).
+                    </span>
+                </div>
                 <div class="form-row full">
                     <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer">
                         <input type="checkbox" id="od_insecure" value="1"
@@ -2003,7 +2012,59 @@ function settingsTestPendingHtml(msg, sub) {
             .replace(/"/g, '&quot;');
     }
 
+    var SS_KEY = 'coldaisle_opendcim_form_v1';
+
+    function saveFormLocal() {
+        try {
+            var data = {
+                base_url: ((document.getElementById('od_base_url') || {}).value || ''),
+                user_id: ((document.getElementById('od_user_id') || {}).value || ''),
+                api_key: ((document.getElementById('od_api_key') || {}).value || ''),
+                resolve: ((document.getElementById('od_resolve') || {}).value || ''),
+                insecure: !!(document.getElementById('od_insecure') || {}).checked,
+                target_dc: ((document.getElementById('od_target_dc') || {}).value || ''),
+                dc_filter: ((document.getElementById('od_dc_filter') || {}).value || ''),
+                source: (document.getElementById('od_src_offline') && document.getElementById('od_src_offline').checked) ? 'offline' : 'live'
+            };
+            sessionStorage.setItem(SS_KEY, JSON.stringify(data));
+        } catch (e) { /* ignore */ }
+    }
+
+    function restoreFormLocal() {
+        try {
+            var raw = sessionStorage.getItem(SS_KEY);
+            if (!raw) return;
+            var data = JSON.parse(raw);
+            function set(id, v) {
+                var el = document.getElementById(id);
+                if (el && v != null && v !== '') el.value = v;
+            }
+            set('od_base_url', data.base_url);
+            set('od_user_id', data.user_id);
+            set('od_api_key', data.api_key);
+            set('od_resolve', data.resolve);
+            set('od_target_dc', data.target_dc);
+            set('od_dc_filter', data.dc_filter);
+            if (typeof data.insecure === 'boolean') {
+                var inc = document.getElementById('od_insecure');
+                if (inc) inc.checked = data.insecure;
+            }
+            if (data.source === 'offline') {
+                var off = document.getElementById('od_src_offline');
+                if (off && !off.disabled) off.checked = true;
+            }
+        } catch (e) { /* ignore */ }
+    }
+    restoreFormLocal();
+    ['od_base_url','od_user_id','od_api_key','od_resolve','od_target_dc','od_dc_filter','od_insecure','od_src_live','od_src_offline'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', saveFormLocal);
+        el.addEventListener('input', saveFormLocal);
+    });
+
     function collectPayload() {
+        saveFormLocal();
         var offline = document.getElementById('od_src_offline') && document.getElementById('od_src_offline').checked;
         var p = {
             source: offline ? 'offline' : 'live',
@@ -2083,6 +2144,9 @@ function settingsTestPendingHtml(msg, sub) {
         var counts = (result && result.counts) || {};
         var html = '<p style="margin-top:0">' + esc(ok ? 'Reached openDCIM and read inventory counts.' : 'Could not fully connect.') + '</p>';
         html += '<p class="text-muted" style="font-size:.85rem">Base: ' + esc((result && result.base_url) || '—') + '</p>';
+        if (result && result.hint) {
+            html += '<p class="alert alert-warning" style="font-size:.88rem">' + esc(result.hint) + '</p>';
+        }
         html += '<table class="data" style="font-size:.85rem"><thead><tr><th>Resource</th><th>Count</th></tr></thead><tbody>';
         Object.keys(counts).forEach(function (k) {
             var n = counts[k];
