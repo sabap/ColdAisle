@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **OpenDCIM import:** cabinet **audits** (CertifyAudit → `cabinet_audits`) and **template front/rear images** (from openDCIM `/pictures/…`).
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.2.88] - 2026-07-29
+
+### New features
+
+- **OpenDCIM import:** cabinet **audits** (CertifyAudit → `cabinet_audits`) and **template front/rear images** (from openDCIM `/pictures/…`).
+
+---
 ## [0.2.87] - 2026-07-29
 
 ### Bug fixes
