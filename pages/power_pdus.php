@@ -817,9 +817,10 @@ if ($pduId) {
     $numSlots = (int)($p['num_breaker_slots'] ?? 0);
     if ($outputMode === 'outlets') {
         $outlets = Database::fetchAll(
-            'SELECT o.*, d.label AS device_label
+            'SELECT o.*, d.label AS device_label, ps.name AS power_supply_name
              FROM pdu_outlets o
              LEFT JOIN devices d ON d.device_id = o.connected_device_id
+             LEFT JOIN device_power_supplies ps ON ps.power_supply_id = o.device_power_supply_id
              WHERE o.pdu_id = ?
              ORDER BY o.outlet_number',
             [$pduId]
@@ -2000,6 +2001,7 @@ if ($pduId) {
                             'rated_amps' => null,
                             'connected_device_id' => null,
                             'device_label' => null,
+                            'power_supply_name' => null,
                             'label' => null,
                         ];
                     }
@@ -2148,9 +2150,15 @@ if ($pduId) {
                                     <?php endif; ?>
                                     <td>
                                         <?php if (!empty($o['connected_device_id'])): ?>
-                                            <a href="<?= App::e(App::url('pages/devices.php?id=' . (int)$o['connected_device_id'])) ?>">
-                                                <?= App::e($o['device_label'] ?? ('#' . $o['connected_device_id'])) ?>
+                                            <a href="<?= App::e(App::url('pages/devices.php?id=' . (int)$o['connected_device_id'])) ?>"
+                                               title="Open device properties">
+                                                <?= App::e($o['device_label'] ?? ('Device #' . $o['connected_device_id'])) ?>
                                             </a>
+                                            <?php if (!empty($o['power_supply_name'])): ?>
+                                                <span class="text-muted" style="font-size:.78rem">
+                                                    · <?= App::e((string)$o['power_supply_name']) ?>
+                                                </span>
+                                            <?php endif; ?>
                                         <?php else: ?>
                                             <span class="text-muted">—</span>
                                         <?php endif; ?>
@@ -2168,8 +2176,9 @@ if ($pduId) {
                     <?php endif; ?>
                     <p class="text-muted" style="font-size:.78rem;padding:.65rem 1rem;margin:0">
                         Outlet <strong>count</strong> comes from SNMP device properties on poll (e.g. APC NumOutlets)
-                        or a PDU template. Set mixed types/labels here (bulk range OK). Device mapping is from the
-                        cabinet rack overlay or device Power Supply section.
+                        or a PDU template. Set mixed types/labels here (bulk range OK). Map devices from the
+                        <strong>device Power Supply</strong> section (cabinet PDUs → free outlets) or the
+                        cabinet rack PDU overlay; mapped devices link back to their properties page.
                         <?php if ($hasOutletLive): ?>
                             Live A/W from last SNMP poll<?= !empty($p['last_poll_at'])
                                 ? ' · ' . App::e((string)$p['last_poll_at'])

@@ -13,7 +13,12 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Device / PDU outlet mapping:** On device edit (**Power Supply**), choose a PDU assigned to the same cabinet, then an **available (unmapped)** outlet. Saving maps both sides: the PSU stores PDU/outlet, and the PDU outlet shows the device (with link to device properties) plus power-supply name.
+
 ### Enhancements
+
+- Device view **Power connections**: PDU name links to the PDU page.
+- `api/device_power.php`: validates same-cabinet PDUs, rejects already-mapped outlets, clears reverse links on unmap/delete; `?cabinet_pdus=1` lists free outlets for a cabinet.
 
 ### Bug fixes
 
