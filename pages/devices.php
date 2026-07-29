@@ -882,6 +882,7 @@ if ($action === 'new' || $id) {
                                     $watts = $ps['watts'] ?? null;
                                     $conn = $ps['connector_type'] ?? ($pp['media_type'] ?? null);
                                     $pduName = $ps['pdu_name'] ?? null;
+                                    $pduIdLink = !empty($ps['pdu_id']) ? (int)$ps['pdu_id'] : 0;
                                     $plug = $ps['outlet_number'] ?? null;
                                     ?>
                                     <tr class="<?= $ps || $pp ? '' : 'row-empty' ?>">
@@ -889,7 +890,13 @@ if ($action === 'new' || $id) {
                                         <td><?= App::e($name) ?></td>
                                         <td><?= $watts !== null && $watts !== '' ? App::e((string)$watts) . ' W' : '—' ?></td>
                                         <td><?= $dash($conn) ?></td>
-                                        <td><?= $dash($pduName) ?></td>
+                                        <td><?php
+                                            if ($pduName && $pduIdLink):
+                                                ?><a href="<?= App::e(App::url('pages/power_pdus.php?id=' . $pduIdLink)) ?>"><?= App::e($pduName) ?></a><?php
+                                            else:
+                                                echo $dash($pduName);
+                                            endif;
+                                        ?></td>
                                         <td><?= $plug !== null && $plug !== '' ? '#' . App::e((string)$plug) : '—' ?></td>
                                     </tr>
                                 <?php endfor; ?>
@@ -1652,20 +1659,30 @@ if ($action === 'new' || $id) {
                                 </td>
                                 <td>
                                     <select class="form-control form-control-sm psu-outlet">
-                                        <option value="">—</option>
+                                        <option value="">— Available outlets —</option>
                                         <?php
                                         $selPduId = (int)($ps['pdu_id'] ?? 0);
+                                        $selOutletId = (int)($ps['pdu_outlet_id'] ?? 0);
+                                        $selPsuId = (int)($ps['power_supply_id'] ?? 0);
                                         foreach ($cabinetPdus as $cp) {
                                             if ((int)$cp['pdu_id'] !== $selPduId) {
                                                 continue;
                                             }
                                             foreach ($cp['outlets'] as $o) {
+                                                $oid = (int)$o['outlet_id'];
+                                                $isCurrent = $selOutletId > 0 && $oid === $selOutletId;
+                                                $taken = !empty($o['connected_device_id']) || !empty($o['device_power_supply_id']);
+                                                // Own mapping still counts as available
+                                                if ($taken && !$isCurrent
+                                                    && (int)($o['device_power_supply_id'] ?? 0) !== $selPsuId) {
+                                                    continue;
+                                                }
                                                 $lab = '#' . (int)$o['outlet_number'];
                                                 if (!empty($o['outlet_type'])) {
                                                     $lab .= ' · ' . $o['outlet_type'];
                                                 }
-                                                $sel = (int)($ps['pdu_outlet_id'] ?? 0) === (int)$o['outlet_id'] ? ' selected' : '';
-                                                echo '<option value="' . (int)$o['outlet_id'] . '"' . $sel . '>' . App::e($lab) . '</option>';
+                                                $sel = $isCurrent ? ' selected' : '';
+                                                echo '<option value="' . $oid . '"' . $sel . '>' . App::e($lab) . '</option>';
                                             }
                                         }
                                         ?>
@@ -1692,7 +1709,8 @@ if ($action === 'new' || $id) {
                     </p>
                 <?php else: ?>
                     <p class="text-muted" style="font-size:.78rem;padding:.5rem 1rem;margin:0">
-                        Mapping a PDU plug updates both the PSU and the PDU outlet for end-to-end power path tracking.
+                        Choose a PDU on this cabinet, then an <strong>available (unmapped)</strong> outlet.
+                        Saving updates both the power supply and the PDU outlet (with a link back to this device).
                     </p>
                 <?php endif; ?>
             </div>
@@ -2157,7 +2175,7 @@ if ($action === 'new' || $id) {
         if (snmpProf) snmpProf.addEventListener('change', applySnmpProfile);
         toggleSnmpV3Fields();
 
-        // Power Supply line items
+        // Power Supply line items (PSU ↔ cabinet PDU outlets)
         <?php if ($device): ?>
         var deviceId = <?= (int)$device['device_id'] ?>;
         var cabinetPdus = <?= json_encode(array_map(static function ($p) {
@@ -2177,17 +2195,31 @@ if ($action === 'new' || $id) {
         }, $cabinetPdus), JSON_UNESCAPED_UNICODE) ?>;
         var nemaTypes = <?= json_encode($nemaTypes) ?>;
 
-        function psuOutletOptions(pduId, selectedOutletId) {
-            var html = '<option value="">—</option>';
+        /** Free outlets for a PDU, plus the currently selected one (if remapping). */
+        function psuOutletOptions(pduId, selectedOutletId, currentPsuId) {
+            var html = '<option value="">— Available outlets —</option>';
             var pdu = cabinetPdus.find(function (p) { return String(p.pdu_id) === String(pduId); });
             if (!pdu) return html;
+            var freeCount = 0;
             (pdu.outlets || []).forEach(function (o) {
+                var isCurrent = selectedOutletId != null && selectedOutletId !== ''
+                    && String(selectedOutletId) === String(o.outlet_id);
+                var taken = o.connected_device_id != null || o.device_power_supply_id != null;
+                var ownPsu = currentPsuId && currentPsuId !== 'new'
+                    && String(o.device_power_supply_id) === String(currentPsuId);
+                if (taken && !isCurrent && !ownPsu) {
+                    return;
+                }
+                freeCount++;
                 var lab = '#' + o.outlet_number;
                 if (o.outlet_type) lab += ' · ' + o.outlet_type;
                 html += '<option value="' + o.outlet_id + '"' +
-                    (String(selectedOutletId || '') === String(o.outlet_id) ? ' selected' : '') +
+                    (isCurrent ? ' selected' : '') +
                     '>' + lab + '</option>';
             });
+            if (!freeCount) {
+                html += '<option value="" disabled>No free outlets on this PDU</option>';
+            }
             return html;
         }
 
@@ -2200,21 +2232,71 @@ if ($action === 'new' || $id) {
         }
 
         function psuPduOptions(selected) {
-            var html = '<option value="">—</option>';
+            var html = '<option value="">— Select PDU —</option>';
             cabinetPdus.forEach(function (p) {
                 html += '<option value="' + p.pdu_id + '"' +
                     (String(selected || '') === String(p.pdu_id) ? ' selected' : '') +
                     '>' + (p.name || ('PDU ' + p.pdu_id)) + '</option>';
             });
+            if (!cabinetPdus.length) {
+                html += '<option value="" disabled>No PDUs on this cabinet</option>';
+            }
             return html;
+        }
+
+        /** Keep in-memory outlet occupancy in sync after save/delete. */
+        function psuReleaseOutlet(psuId, outletId) {
+            cabinetPdus.forEach(function (p) {
+                (p.outlets || []).forEach(function (o) {
+                    if (outletId && String(o.outlet_id) === String(outletId)) {
+                        o.connected_device_id = null;
+                        o.device_power_supply_id = null;
+                    }
+                    if (psuId && psuId !== 'new' && String(o.device_power_supply_id) === String(psuId)) {
+                        o.connected_device_id = null;
+                        o.device_power_supply_id = null;
+                    }
+                });
+            });
+        }
+
+        function psuClaimOutlet(psuId, outletId) {
+            if (!outletId || !psuId) return;
+            cabinetPdus.forEach(function (p) {
+                (p.outlets || []).forEach(function (o) {
+                    if (String(o.outlet_id) === String(outletId)) {
+                        o.connected_device_id = deviceId;
+                        o.device_power_supply_id = parseInt(psuId, 10);
+                    }
+                });
+            });
+        }
+
+        function psuRefreshOtherRows(exceptRow) {
+            document.querySelectorAll('#psuTableBody tr[data-psu-id]').forEach(function (row) {
+                if (row === exceptRow) return;
+                var pduSel = row.querySelector('.psu-pdu');
+                var outSel = row.querySelector('.psu-outlet');
+                if (!pduSel || !outSel || !pduSel.value) return;
+                var keep = outSel.value;
+                outSel.innerHTML = psuOutletOptions(
+                    pduSel.value,
+                    keep,
+                    row.getAttribute('data-psu-id')
+                );
+            });
         }
 
         function bindPsuRow(row) {
             var pduSel = row.querySelector('.psu-pdu');
             var outSel = row.querySelector('.psu-outlet');
-            if (pduSel) {
+            if (pduSel && outSel) {
                 pduSel.addEventListener('change', function () {
-                    outSel.innerHTML = psuOutletOptions(pduSel.value, null);
+                    outSel.innerHTML = psuOutletOptions(
+                        pduSel.value,
+                        null,
+                        row.getAttribute('data-psu-id')
+                    );
                 });
             }
             var saveBtn = row.querySelector('.psu-save');
@@ -2222,6 +2304,7 @@ if ($action === 'new' || $id) {
             if (saveBtn) {
                 saveBtn.addEventListener('click', async function () {
                     var id = row.getAttribute('data-psu-id');
+                    var prevOutlet = row.getAttribute('data-prev-outlet') || '';
                     var payload = {
                         name: row.querySelector('.psu-name').value || 'PSU',
                         watts: row.querySelector('.psu-watts').value,
@@ -2231,24 +2314,36 @@ if ($action === 'new' || $id) {
                     };
                     saveBtn.disabled = true;
                     try {
+                        var res;
                         if (id && id !== 'new') {
                             payload.power_supply_id = parseInt(id, 10);
-                            await ColdAisle.api('api/device_power.php', {
+                            res = await ColdAisle.api('api/device_power.php', {
                                 method: 'PUT',
                                 forcePostOverride: true,
                                 body: payload
                             });
                         } else {
                             payload.device_id = deviceId;
-                            var res = await ColdAisle.api('api/device_power.php', {
+                            res = await ColdAisle.api('api/device_power.php', {
                                 method: 'POST',
                                 body: payload
                             });
                             if (res.power_supply && res.power_supply.power_supply_id) {
-                                row.setAttribute('data-psu-id', res.power_supply.power_supply_id);
+                                id = String(res.power_supply.power_supply_id);
+                                row.setAttribute('data-psu-id', id);
                             }
                         }
-                        ColdAisle.toast('Power supply saved', 'success');
+                        // Update occupancy cache so other rows only see free outlets
+                        if (prevOutlet) psuReleaseOutlet(id, prevOutlet);
+                        psuReleaseOutlet(id, null); // clear any prior claim by this PSU
+                        if (outSel.value) {
+                            psuClaimOutlet(id, outSel.value);
+                            row.setAttribute('data-prev-outlet', outSel.value);
+                        } else {
+                            row.removeAttribute('data-prev-outlet');
+                        }
+                        psuRefreshOtherRows(row);
+                        ColdAisle.toast('Power supply saved — PDU outlet updated', 'success');
                     } catch (err) {
                         ColdAisle.toast(err.message || 'Save failed', 'danger');
                     }
@@ -2258,6 +2353,7 @@ if ($action === 'new' || $id) {
             if (delBtn) {
                 delBtn.addEventListener('click', async function () {
                     var id = row.getAttribute('data-psu-id');
+                    var prevOutlet = row.getAttribute('data-prev-outlet') || (outSel && outSel.value) || '';
                     if (!confirm('Remove this power supply?')) return;
                     if (id && id !== 'new') {
                         try {
@@ -2270,13 +2366,19 @@ if ($action === 'new' || $id) {
                             return;
                         }
                     }
+                    if (prevOutlet || id) psuReleaseOutlet(id, prevOutlet);
                     row.remove();
+                    psuRefreshOtherRows(null);
                     var tbody = document.getElementById('psuTableBody');
                     if (tbody && !tbody.querySelector('tr[data-psu-id]')) {
                         tbody.innerHTML = '<tr class="psu-empty"><td colspan="6" class="text-muted">No power supplies defined.</td></tr>';
                     }
                     ColdAisle.toast('Power supply removed', 'success');
                 });
+            }
+            // Track currently mapped outlet for occupancy refresh
+            if (outSel && outSel.value) {
+                row.setAttribute('data-prev-outlet', outSel.value);
             }
         }
 
@@ -2296,7 +2398,7 @@ if ($action === 'new' || $id) {
                     '<td><input class="form-control form-control-sm psu-watts" type="number" step="0.1" style="width:5.5rem"></td>' +
                     '<td><select class="form-control form-control-sm psu-connector">' + psuNemaOptions('') + '</select></td>' +
                     '<td><select class="form-control form-control-sm psu-pdu">' + psuPduOptions('') + '</select></td>' +
-                    '<td><select class="form-control form-control-sm psu-outlet"><option value="">—</option></select></td>' +
+                    '<td><select class="form-control form-control-sm psu-outlet"><option value="">— Available outlets —</option></select></td>' +
                     '<td class="actions" style="white-space:nowrap">' +
                     '<button type="button" class="btn btn-sm btn-secondary psu-save">Save</button> ' +
                     '<button type="button" class="btn btn-sm btn-danger psu-del">×</button></td>';
