@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="ColdAisle">
+  <defs>
+    <linearGradient id="arm" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7dd3fc"/>
+      <stop offset="55%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="arm2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#bae6fd"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded app tile -->
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#0b1e33"/>
+  <g transform="translate(64 64)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- six crystal arms -->
+    <g stroke="url(#arm)" stroke-width="7">
+      <path d="M0-8 L0-42 L-7-34 M0-42 L7-34"/>
+      <path d="M0-8 L0-42 L-7-34 M0-42 L7-34" transform="rotate(60)"/>
+      <path d="M0-8 L0-42 L-7-34 M0-42 L7-34" transform="rotate(120)"/>
+      <path d="M0-8 L0-42 L-7-34 M0-42 L7-34" transform="rotate(180)"/>
+      <path d="M0-8 L0-42 L-7-34 M0-42 L7-34" transform="rotate(240)"/>
+      <path d="M0-8 L0-42 L-7-34 M0-42 L7-34" transform="rotate(300)"/>
+    </g>
+    <!-- mid branches -->
+    <g stroke="url(#arm2)" stroke-width="4.5">
+      <path d="M0-18 L-10-28 M0-18 L10-28"/>
+      <path d="M0-18 L-10-28 M0-18 L10-28" transform="rotate(60)"/>
+      <path d="M0-18 L-10-28 M0-18 L10-28" transform="rotate(120)"/>
+      <path d="M0-18 L-10-28 M0-18 L10-28" transform="rotate(180)"/>
+      <path d="M0-18 L-10-28 M0-18 L10-28" transform="rotate(240)"/>
+      <path d="M0-18 L-10-28 M0-18 L10-28" transform="rotate(300)"/>
+    </g>
+    <!-- binary / circuit nodes -->
+    <g fill="#38bdf8" stroke="none">
+      <circle cx="0" cy="-46" r="3.2"/>
+      <circle cx="0" cy="-46" r="3.2" transform="rotate(60)"/>
+      <circle cx="0" cy="-46" r="3.2" transform="rotate(120)"/>
+      <circle cx="0" cy="-46" r="3.2" transform="rotate(180)"/>
+      <circle cx="0" cy="-46" r="3.2" transform="rotate(240)"/>
+      <circle cx="0" cy="-46" r="3.2" transform="rotate(300)"/>
+      <circle cx="-14" cy="-30" r="2.4" fill="#7dd3fc"/>
+      <circle cx="14" cy="-30" r="2.4" fill="#0284c7"/>
+      <circle cx="-14" cy="-30" r="2.4" fill="#7dd3fc" transform="rotate(60)"/>
+      <circle cx="14" cy="-30" r="2.4" fill="#0284c7" transform="rotate(60)"/>
+      <circle cx="-14" cy="-30" r="2.4" fill="#7dd3fc" transform="rotate(120)"/>
+      <circle cx="14" cy="-30" r="2.4" fill="#0284c7" transform="rotate(120)"/>
+      <circle cx="-14" cy="-30" r="2.4" fill="#7dd3fc" transform="rotate(180)"/>
+      <circle cx="14" cy="-30" r="2.4" fill="#0284c7" transform="rotate(180)"/>
+      <circle cx="-14" cy="-30" r="2.4" fill="#7dd3fc" transform="rotate(240)"/>
+      <circle cx="14" cy="-30" r="2.4" fill="#0284c7" transform="rotate(240)"/>
+      <circle cx="-14" cy="-30" r="2.4" fill="#7dd3fc" transform="rotate(300)"/>
+      <circle cx="14" cy="-30" r="2.4" fill="#0284c7" transform="rotate(300)"/>
+    </g>
+    <!-- micro bits as tiny bars (read as 0/1 at large sizes) -->
+    <g fill="#bae6fd" opacity="0.9">
+      <rect x="-1.2" y="-52" width="2.4" height="5" rx="0.6"/>
+      <rect x="-1.2" y="-52" width="2.4" height="5" rx="0.6" transform="rotate(60)"/>
+      <rect x="-1.2" y="-52" width="2.4" height="5" rx="0.6" transform="rotate(120)"/>
+      <rect x="-1.2" y="-52" width="2.4" height="5" rx="0.6" transform="rotate(180)"/>
+      <rect x="-1.2" y="-52" width="2.4" height="5" rx="0.6" transform="rotate(240)"/>
+      <rect x="-1.2" y="-52" width="2.4" height="5" rx="0.6" transform="rotate(300)"/>
+    </g>
+    <!-- center hub -->
+    <circle cx="0" cy="0" r="9" fill="#0b1e33" stroke="#38bdf8" stroke-width="3"/>
+    <circle cx="0" cy="0" r="3.5" fill="#7dd3fc"/>
+  </g>
+</svg>

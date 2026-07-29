@@ -49,11 +49,21 @@ $appName = App::appName();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Login · <?= htmlspecialchars($appName) ?></title>
+    <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="assets/img/favicon-32.png" type="image/png" sizes="32x32">
     <link rel="stylesheet" href="assets/css/app.css">
+    <style>
+        .login-brand { display: flex; flex-direction: column; align-items: center; gap: .65rem; margin-bottom: .25rem; }
+        .login-brand img { width: 56px; height: 56px; border-radius: 12px; box-shadow: 0 0 0 1px rgba(56,189,248,.3); }
+        .login-card h1 { margin: 0; }
+    </style>
 </head>
 <body class="login-page">
     <div class="login-card">
-        <h1>⚡ <?= htmlspecialchars($appName) ?></h1>
+        <div class="login-brand">
+            <img src="assets/img/logo.svg" width="56" height="56" alt="">
+            <h1><?= htmlspecialchars($appName) ?></h1>
+        </div>
         <p class="subtitle">Data Center Infrastructure Management</p>
 
         <?php if ($error): ?>
