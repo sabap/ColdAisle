@@ -2109,28 +2109,53 @@ function settingsTestPendingHtml(msg, sub) {
     });
     toggleSource();
 
+    function transferAnimHtml(msg) {
+        return ''
+            + '<div class="od-xfer" id="od_xfer" aria-live="polite" aria-busy="true">'
+            + '  <div class="od-xfer-stage">'
+            + '    <div class="od-xfer-node"><div class="od-xfer-folder od-xfer-src" aria-hidden="true"></div><span>openDCIM</span></div>'
+            + '    <div class="od-xfer-lane" aria-hidden="true">'
+            + '      <span class="od-xfer-file"></span>'
+            + '      <span class="od-xfer-file"></span>'
+            + '      <span class="od-xfer-file"></span>'
+            + '    </div>'
+            + '    <div class="od-xfer-node"><div class="od-xfer-folder od-xfer-dst" aria-hidden="true"></div><span>ColdAisle</span></div>'
+            + '  </div>'
+            + '  <p class="od-xfer-status" id="od_xfer_status">' + esc(msg || 'Working…') + '</p>'
+            + '  <span class="od-xfer-pulse">Transfer in progress</span>'
+            + '</div>'
+            + '<pre id="od_log" style="margin:.75rem 0 0;font-size:.78rem;max-height:14rem;overflow:auto;white-space:pre-wrap;background:rgba(15,23,42,.35);padding:.65rem;border-radius:6px"></pre>';
+    }
+
     function renderPending(msg) {
         setPanelState('pending');
         if (title) title.textContent = 'OpenDCIM migration';
         if (modalRun) modalRun.hidden = true;
         if (modalPreview) modalPreview.hidden = true;
-        body.innerHTML = '<p class="text-muted" style="margin:0">' + esc(msg || 'Working…') + '</p>'
-            + '<div style="margin-top:1rem;height:.4rem;background:rgba(148,163,184,.2);border-radius:4px;overflow:hidden">'
-            + '<div id="od_prog_bar" style="height:100%;width:8%;background:var(--accent,#38bdf8);transition:width .3s"></div></div>'
-            + '<pre id="od_log" style="margin:1rem 0 0;font-size:.78rem;max-height:14rem;overflow:auto;white-space:pre-wrap;background:rgba(15,23,42,.35);padding:.65rem;border-radius:6px"></pre>';
+        body.innerHTML = transferAnimHtml(msg || 'Working…');
+        lastLogLen = 0;
     }
 
+    var lastLogLen = 0;
     function setProgress(pct, msg, logLines) {
-        var bar = document.getElementById('od_prog_bar');
-        if (bar) bar.style.width = Math.max(5, Math.min(100, pct || 0)) + '%';
+        // pct ignored — animation shows activity, not a fake percentage
         if (msg) {
-            var p = body.querySelector('p.text-muted');
-            if (p) p.textContent = msg;
+            var st = document.getElementById('od_xfer_status');
+            if (st) st.textContent = msg;
         }
         var pre = document.getElementById('od_log');
+        var xfer = document.getElementById('od_xfer');
         if (pre && logLines && logLines.length) {
-            pre.textContent = logLines.slice(-80).join('\n');
+            var slice = logLines.slice(-80);
+            pre.textContent = slice.join('\n');
             pre.scrollTop = pre.scrollHeight;
+            if (xfer && logLines.length !== lastLogLen) {
+                lastLogLen = logLines.length;
+                xfer.classList.remove('od-xfer-active');
+                // reflow so glow restarts when new log lines arrive
+                void xfer.offsetWidth;
+                xfer.classList.add('od-xfer-active');
+            }
         }
     }
 
