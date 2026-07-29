@@ -24,6 +24,26 @@
 
   // Deduplicate loads: many devices share one template faceplate URL
   var imageCache = Object.create(null);
+  // Cap concurrent media.php hits so IIS/PHP is not flooded on first paint
+  var IMAGE_CONCURRENCY = 8;
+  var imageInFlight = 0;
+  var imageWaitQueue = [];
+
+  function pumpImageQueue() {
+    while (imageInFlight < IMAGE_CONCURRENCY && imageWaitQueue.length) {
+      var job = imageWaitQueue.shift();
+      imageInFlight++;
+      job.start().then(function (result) {
+        imageInFlight--;
+        job.resolve(result);
+        pumpImageQueue();
+      }, function () {
+        imageInFlight--;
+        job.resolve(null);
+        pumpImageQueue();
+      });
+    }
+  }
 
   function loadImage(url) {
     if (!url) {
@@ -34,11 +54,19 @@
       return imageCache[key];
     }
     imageCache[key] = new Promise(function (resolve) {
-      var img = new Image();
-      // Same-origin media.php (session cookie) — do not set crossOrigin or canvas taints / auth fails
-      img.onload = function () { resolve(img); };
-      img.onerror = function () { resolve(null); };
-      img.src = key;
+      imageWaitQueue.push({
+        resolve: resolve,
+        start: function () {
+          return new Promise(function (res) {
+            var img = new Image();
+            // Same-origin media.php (session cookie) — do not set crossOrigin
+            img.onload = function () { res(img); };
+            img.onerror = function () { res(null); };
+            img.src = key;
+          });
+        },
+      });
+      pumpImageQueue();
     });
     return imageCache[key];
   }
@@ -74,23 +102,109 @@
     return face === 'rear' ? rear : !rear;
   }
 
-  /**
-   * Build a canvas texture for one rack face (19:1.75×U aspect).
-   * Y maps U1 at bottom of texture (matches rack elevation).
-   */
-  function buildFaceTexture(cab, face) {
+  function faceDims(cab) {
     var units = Math.max(1, Number(cab.u_height) || 42);
-    // Keep face textures modest — small (.sm) faceplates + low texel density is enough at room scale
-    var pxPerU = 16;
-    var h = Math.max(64, Math.round(units * pxPerU));
-    var w = Math.max(48, Math.round(h * (19 / (units * 1.75))));
+    // Modest texels — room-scale racks don't need sharp faceplates
+    var pxPerU = 12;
+    var h = Math.max(48, Math.round(units * pxPerU));
+    var w = Math.max(40, Math.round(h * (19 / (units * 1.75))));
+    return { units: units, w: w, h: h };
+  }
 
-    var canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    var ctx = canvas.getContext('2d');
+  function faceSignature(cab, face) {
+    var parts = [
+      String(cab.cabinet_id || ''),
+      face,
+      String(cab.u_height || 42),
+    ];
+    (cab.devices || []).forEach(function (d) {
+      if (d.position_u == null || !deviceOnFace(d, face)) return;
+      var url = face === 'rear' ? (d.rear_image || d.front_image) : (d.front_image || d.rear_image);
+      parts.push([
+        d.device_id || '',
+        d.position_u || '',
+        d.u_height || 1,
+        d.device_type || '',
+        url || '',
+      ].join(':'));
+    });
+    // short hash
+    var s = parts.join('|');
+    var h = 2166136261;
+    for (var i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return 'ca3d-v1-' + (h >>> 0).toString(36);
+  }
 
-    // Empty rack bay
+  function faceCacheGet(sig) {
+    try {
+      if (!global.sessionStorage) return null;
+      var raw = sessionStorage.getItem(sig);
+      if (!raw || raw.length < 32) return null;
+      return raw;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function faceCacheSet(sig, dataUrl) {
+    try {
+      if (!global.sessionStorage || !dataUrl) return;
+      // Cap ~2.5MB of face cache entries; drop oldest keys with our prefix
+      var budget = 2.5 * 1024 * 1024;
+      var used = 0;
+      var keys = [];
+      for (var i = 0; i < sessionStorage.length; i++) {
+        var k = sessionStorage.key(i);
+        if (k && k.indexOf('ca3d-v1-') === 0) {
+          keys.push(k);
+          used += (sessionStorage.getItem(k) || '').length;
+        }
+      }
+      used += dataUrl.length;
+      while (used > budget && keys.length) {
+        var drop = keys.shift();
+        used -= (sessionStorage.getItem(drop) || '').length;
+        sessionStorage.removeItem(drop);
+      }
+      sessionStorage.setItem(sig, dataUrl);
+    } catch (e) {
+      // quota / private mode — ignore
+    }
+  }
+
+  function texFromCanvas(canvas) {
+    var tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    if (THREE.sRGBEncoding !== undefined) {
+      tex.encoding = THREE.sRGBEncoding;
+    }
+    return tex;
+  }
+
+  function texFromDataUrl(dataUrl) {
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.onload = function () {
+        var tex = new THREE.Texture(img);
+        tex.needsUpdate = true;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        if (THREE.sRGBEncoding !== undefined) {
+          tex.encoding = THREE.sRGBEncoding;
+        }
+        resolve(tex);
+      };
+      img.onerror = function () { resolve(null); };
+      img.src = dataUrl;
+    });
+  }
+
+  function paintBayBackground(ctx, w, h, units) {
     ctx.fillStyle = '#0f172a';
     ctx.fillRect(0, 0, w, h);
     ctx.strokeStyle = '#334155';
@@ -102,10 +216,74 @@
       ctx.lineTo(w, y);
       ctx.stroke();
     }
-    // Side rails
     ctx.fillStyle = '#94a3b8';
     ctx.fillRect(0, 0, Math.max(2, w * 0.03), h);
     ctx.fillRect(w - Math.max(2, w * 0.03), 0, Math.max(2, w * 0.03), h);
+  }
+
+  function paintDeviceSlot(ctx, d, img, units, w, h) {
+    var pos = Math.max(1, Number(d.position_u) || 1);
+    var uh = Math.max(1, Number(d.u_height) || 1);
+    var bottomU = pos - 1;
+    var topU = pos - 1 + uh;
+    var yTop = h - (topU / units) * h;
+    var yBot = h - (bottomU / units) * h;
+    var dh = Math.max(1, yBot - yTop);
+
+    if (img) {
+      drawCover(ctx, img, 0, yTop, w, dh);
+    } else {
+      ctx.fillStyle = typeColor(d.device_type);
+      ctx.fillRect(0, yTop, w, dh);
+      ctx.strokeStyle = 'rgba(15,23,42,0.8)';
+      ctx.strokeRect(0.5, yTop + 0.5, w - 1, dh - 1);
+      if (dh >= 10) {
+        ctx.fillStyle = '#e2e8f0';
+        ctx.font = 'bold ' + Math.max(8, Math.min(12, dh * 0.35)) + 'px Segoe UI,sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(d.label || '').slice(0, 12), w / 2, yTop + dh / 2);
+      }
+    }
+    ctx.strokeStyle = 'rgba(148,163,184,0.45)';
+    ctx.beginPath();
+    ctx.moveTo(0, yTop);
+    ctx.lineTo(w, yTop);
+    ctx.stroke();
+  }
+
+  /** Instant type-color face (no network) — first paint. */
+  function buildFaceTextureSolid(cab, face) {
+    var dim = faceDims(cab);
+    var canvas = document.createElement('canvas');
+    canvas.width = dim.w;
+    canvas.height = dim.h;
+    var ctx = canvas.getContext('2d');
+    paintBayBackground(ctx, dim.w, dim.h, dim.units);
+    (cab.devices || []).forEach(function (d) {
+      if (d.position_u == null || !deviceOnFace(d, face)) return;
+      paintDeviceSlot(ctx, d, null, dim.units, dim.w, dim.h);
+    });
+    return texFromCanvas(canvas);
+  }
+
+  /**
+   * Full face with small faceplate images (or session cache).
+   * Y maps U1 at bottom of texture (matches rack elevation).
+   */
+  function buildFaceTexture(cab, face) {
+    var sig = faceSignature(cab, face);
+    var cached = faceCacheGet(sig);
+    if (cached) {
+      return texFromDataUrl(cached);
+    }
+
+    var dim = faceDims(cab);
+    var canvas = document.createElement('canvas');
+    canvas.width = dim.w;
+    canvas.height = dim.h;
+    var ctx = canvas.getContext('2d');
+    paintBayBackground(ctx, dim.w, dim.h, dim.units);
 
     var devices = (cab.devices || []).filter(function (d) {
       return d.position_u != null && deviceOnFace(d, face);
@@ -120,46 +298,45 @@
 
     return Promise.all(loaders).then(function (rows) {
       rows.forEach(function (row) {
-        var d = row.d;
-        var pos = Math.max(1, Number(d.position_u) || 1);
-        var uh = Math.max(1, Number(d.u_height) || 1);
-        // Bottom of device in U space from floor of rack
-        var bottomU = pos - 1;
-        var topU = pos - 1 + uh;
-        // Canvas Y increases downward; U1 at bottom of canvas
-        var yTop = h - (topU / units) * h;
-        var yBot = h - (bottomU / units) * h;
-        var dh = Math.max(1, yBot - yTop);
-
-        if (row.img) {
-          drawCover(ctx, row.img, 0, yTop, w, dh);
-        } else {
-          ctx.fillStyle = typeColor(d.device_type);
-          ctx.fillRect(0, yTop, w, dh);
-          ctx.strokeStyle = 'rgba(15,23,42,0.8)';
-          ctx.strokeRect(0.5, yTop + 0.5, w - 1, dh - 1);
-          ctx.fillStyle = '#e2e8f0';
-          ctx.font = 'bold ' + Math.max(10, Math.min(16, dh * 0.35)) + 'px Segoe UI,sans-serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(String(d.label || '').slice(0, 14), w / 2, yTop + dh / 2);
-        }
-        // Hairline between devices
-        ctx.strokeStyle = 'rgba(148,163,184,0.45)';
-        ctx.beginPath();
-        ctx.moveTo(0, yTop);
-        ctx.lineTo(w, yTop);
-        ctx.stroke();
+        paintDeviceSlot(ctx, row.d, row.img, dim.units, dim.w, dim.h);
       });
+      try {
+        // JPEG data URL is much smaller than PNG for sessionStorage
+        faceCacheSet(sig, canvas.toDataURL('image/jpeg', 0.72));
+      } catch (e) { /* ignore */ }
+      return texFromCanvas(canvas);
+    });
+  }
 
-      var tex = new THREE.CanvasTexture(canvas);
-      tex.needsUpdate = true;
-      tex.minFilter = THREE.LinearFilter;
-      tex.magFilter = THREE.LinearFilter;
-      if (THREE.sRGBEncoding !== undefined) {
-        tex.encoding = THREE.sRGBEncoding;
+  /** Run async jobs with limited concurrency. */
+  function mapPool(items, limit, worker) {
+    return new Promise(function (resolve) {
+      if (!items.length) {
+        resolve([]);
+        return;
       }
-      return tex;
+      var i = 0;
+      var active = 0;
+      var results = new Array(items.length);
+      var done = 0;
+      function next() {
+        while (active < limit && i < items.length) {
+          (function (idx) {
+            active++;
+            Promise.resolve(worker(items[idx], idx)).then(function (r) {
+              results[idx] = r;
+            }, function () {
+              results[idx] = null;
+            }).then(function () {
+              active--;
+              done++;
+              if (done === items.length) resolve(results);
+              else next();
+            });
+          })(i++);
+        }
+      }
+      next();
     });
   }
 
@@ -174,6 +351,11 @@
     var floorPdus = options.pdus || options.floor_pdus || [];
     var rooms = options.rooms || [];
     var interactive = options.interactive !== false;
+    // 'front' = room overview (default, fast). 'both' = front + rear (floor planner).
+    var textureFaces = (options.textureFaces === 'both' || options.textureFaces === 'front')
+      ? options.textureFaces
+      : 'front';
+    var textureConcurrency = Math.max(1, Math.min(6, Number(options.textureConcurrency) || 3));
 
     var width = container.clientWidth || 600;
     var height = container.clientHeight || 400;
@@ -238,6 +420,18 @@
 
     var uHeightM = 0.04445; // 1U ≈ 44.45mm
 
+    // Status chip while faceplates stream in
+    var statusEl = document.createElement('div');
+    statusEl.className = 'dcim-3d-status';
+    statusEl.textContent = 'Building racks…';
+    statusEl.style.cssText = 'position:absolute;left:10px;bottom:10px;z-index:2;font:12px/1.3 Segoe UI,sans-serif;color:#94a3b8;background:rgba(15,23,42,.72);padding:4px 8px;border-radius:6px;pointer-events:none';
+    if (getComputedStyle(container).position === 'static') {
+      container.style.position = 'relative';
+    }
+    container.appendChild(statusEl);
+
+    var faceJobs = []; // { cab, face, mat }
+
     cabinets.forEach(function (cab) {
       var w = mmToM(cab.width_mm) || 0.6;
       var d = mmToM(cab.depth_mm) || 1.2;
@@ -258,42 +452,34 @@
       mesh.rotation.y = rot;
       mesh.userData = { cabinet: cab };
 
-      // Front / rear face planes — textured async with device images
+      // Front / rear face planes — solid first (instant), images upgrade async
       var faceW = w * 0.98;
       var faceH = h * 0.98;
       var frontGeo = new THREE.PlaneGeometry(faceW, faceH);
       var frontMat = new THREE.MeshStandardMaterial({
-        color: 0x1e293b,
+        color: 0xffffff,
         roughness: 0.45,
         metalness: 0.15,
+        map: buildFaceTextureSolid(cab, 'front'),
       });
       var front = new THREE.Mesh(frontGeo, frontMat);
       front.position.set(0, 0, d / 2 + 0.003);
       mesh.add(front);
+      faceJobs.push({ cab: cab, face: 'front', mat: frontMat });
 
       var rearMat = new THREE.MeshStandardMaterial({
-        color: 0x1e293b,
+        color: 0xffffff,
         roughness: 0.45,
         metalness: 0.15,
+        map: buildFaceTextureSolid(cab, 'rear'),
       });
       var rear = new THREE.Mesh(frontGeo.clone(), rearMat);
       rear.position.set(0, 0, -d / 2 - 0.003);
       rear.rotation.y = Math.PI;
       mesh.add(rear);
-
-      // Load device textures onto faces
-      buildFaceTexture(cab, 'front').then(function (tex) {
-        if (!tex) return;
-        frontMat.map = tex;
-        frontMat.color.setHex(0xffffff);
-        frontMat.needsUpdate = true;
-      });
-      buildFaceTexture(cab, 'rear').then(function (tex) {
-        if (!tex) return;
-        rearMat.map = tex;
-        rearMat.color.setHex(0xffffff);
-        rearMat.needsUpdate = true;
-      });
+      if (textureFaces === 'both') {
+        faceJobs.push({ cab: cab, face: 'rear', mat: rearMat });
+      }
 
       // Side rails accent
       var railMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.7, roughness: 0.3 });
@@ -325,6 +511,39 @@
 
       rackGroup.add(mesh);
     });
+
+    // Stream faceplate textures after the scene is interactive (fronts first, limited concurrency)
+    var cancelled = false;
+    var totalJobs = faceJobs.length;
+    var doneJobs = 0;
+    if (totalJobs === 0) {
+      statusEl.textContent = '';
+      statusEl.style.display = 'none';
+    } else {
+      statusEl.textContent = 'Loading faceplates 0/' + totalJobs + '…';
+      // Yield so first frames render solid racks
+      setTimeout(function () {
+        if (cancelled) return;
+        mapPool(faceJobs, textureConcurrency, function (job) {
+          if (cancelled) return null;
+          return buildFaceTexture(job.cab, job.face).then(function (tex) {
+            if (cancelled || !tex) return;
+            var old = job.mat.map;
+            job.mat.map = tex;
+            job.mat.needsUpdate = true;
+            if (old && old.dispose) old.dispose();
+            doneJobs++;
+            statusEl.textContent = 'Loading faceplates ' + doneJobs + '/' + totalJobs + '…';
+          });
+        }).then(function () {
+          if (cancelled) return;
+          statusEl.textContent = 'Ready';
+          setTimeout(function () {
+            if (statusEl && statusEl.parentNode) statusEl.style.display = 'none';
+          }, 900);
+        });
+      }, 40);
+    }
 
     // Row / room floor PDUs — translucent zone-colored body + wireframe edges
     floorPdus.forEach(function (pdu) {
@@ -475,8 +694,12 @@
       camera: camera,
       renderer: renderer,
       dispose: function () {
+        cancelled = true;
         cancelAnimationFrame(animId);
         window.removeEventListener('resize', onResize);
+        try {
+          if (statusEl && statusEl.parentNode) statusEl.parentNode.removeChild(statusEl);
+        } catch (e) { /* ignore */ }
         renderer.dispose();
       },
     };
