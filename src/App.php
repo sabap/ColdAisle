@@ -129,30 +129,37 @@ class App
             }
             self::$bootPhasesMs['schema'] = (hrtime(true) - $tPhase) / 1e6;
 
-            // App-level secret encryption (SNMP passphrases, etc.)
+            // App-level secret encryption (SNMP passphrases, etc.) — skip after one-time stamp
             $tPhase = hrtime(true);
             try {
-                if (Crypto::ensureAppKey()) {
-                    Crypto::reset();
-                    // Reload config into memory if key was just written
-                    if (is_file(self::configPath())) {
-                        self::$config = require self::configPath();
+                $cryptoStamp = self::ROOT . '/storage/tmp/crypto_ok.flag';
+                if (!is_file($cryptoStamp)) {
+                    if (Crypto::ensureAppKey()) {
                         Crypto::reset();
-                    }
-                }
-                if (Crypto::isAvailable()) {
-                    $migrated = SettingsService::get('secrets_migration_v1', '');
-                    if ($migrated !== '1') {
-                        $stats = Crypto::migratePlaintextSecrets();
-                        SettingsService::set('secrets_migration_v1', '1', 'security');
-                        if (($stats['sealed'] ?? 0) > 0) {
-                            self::log(
-                                'Encrypted ' . (int)$stats['sealed'] . ' secret field(s) at rest (skipped '
-                                . (int)$stats['skipped'] . ', errors ' . (int)$stats['errors'] . ')',
-                                'info'
-                            );
+                        if (is_file(self::configPath())) {
+                            self::$config = require self::configPath();
+                            Crypto::reset();
                         }
                     }
+                    if (Crypto::isAvailable()) {
+                        $migrated = SettingsService::get('secrets_migration_v1', '');
+                        if ($migrated !== '1') {
+                            $stats = Crypto::migratePlaintextSecrets();
+                            SettingsService::set('secrets_migration_v1', '1', 'security');
+                            if (($stats['sealed'] ?? 0) > 0) {
+                                self::log(
+                                    'Encrypted ' . (int)$stats['sealed'] . ' secret field(s) at rest (skipped '
+                                    . (int)$stats['skipped'] . ', errors ' . (int)$stats['errors'] . ')',
+                                    'info'
+                                );
+                            }
+                        }
+                    }
+                    $tmpDir = self::ROOT . '/storage/tmp';
+                    if (!is_dir($tmpDir)) {
+                        @mkdir($tmpDir, 0775, true);
+                    }
+                    @file_put_contents($cryptoStamp, date('c') . "\n");
                 }
             } catch (Throwable $e) {
                 self::log('Crypto bootstrap: ' . $e->getMessage(), 'warning');
@@ -442,10 +449,17 @@ class App
         if (!empty(self::$config['debug']['request_timer'])) {
             return true;
         }
+        // File flag avoids a SQL round-trip every page (synced from Settings save)
+        $timerFlag = self::ROOT . '/storage/tmp/debug_request_timer.flag';
+        if (is_file($timerFlag)) {
+            return true;
+        }
         // DB setting (Settings → Diagnostics). Safe if DB not ready yet.
         if ($allowDb && self::isInstalled() && class_exists('SettingsService', false)) {
             try {
                 if (SettingsService::get('debug_request_timer', '0') === '1') {
+                    // One-time bridge: older installs only have the DB row
+                    self::setRequestTimerFlag(true);
                     return true;
                 }
             } catch (Throwable $e) {
@@ -453,6 +467,21 @@ class App
             }
         }
         return false;
+    }
+
+    /** Keep file flag in sync with Settings → Diagnostics (no SQL on each page). */
+    public static function setRequestTimerFlag(bool $on): void
+    {
+        $dir = self::ROOT . '/storage/tmp';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        $flag = $dir . '/debug_request_timer.flag';
+        if ($on) {
+            @file_put_contents($flag, date('c') . "\n");
+        } elseif (is_file($flag)) {
+            @unlink($flag);
+        }
     }
 
     /**
