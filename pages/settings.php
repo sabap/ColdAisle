@@ -145,14 +145,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             if (!AuthManager::isAdmin($user)) {
                 throw new RuntimeException('Only Global Admin can change diagnostic settings.');
             }
+            $timerOn = !empty($_POST['debug_request_timer']);
             SettingsService::set(
                 'debug_request_timer',
-                !empty($_POST['debug_request_timer']) ? '1' : '0',
+                $timerOn ? '1' : '0',
                 'debug'
             );
+            App::setRequestTimerFlag($timerOn);
             App::flash(
                 'success',
-                !empty($_POST['debug_request_timer'])
+                $timerOn
                     ? 'Request timer enabled — shown in the footer on the next page load.'
                     : 'Request timer disabled.'
             );

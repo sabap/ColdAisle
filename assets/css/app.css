@@ -119,6 +119,24 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
   font-size: .75rem; font-weight: 700; padding: 0 .4rem;
 }
 .content { padding: 1.25rem 1.5rem 2rem; flex: 1; }
+
+/* Dashboard 3D loads after first paint */
+.panel-3d.dash-3d-loading {
+  position: relative;
+  min-height: 280px;
+}
+.panel-3d.dash-3d-loading::after {
+  content: 'Loading 3D view…';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted, #94a3b8);
+  font-size: .9rem;
+  background: rgba(15, 23, 42, 0.35);
+  pointer-events: none;
+  z-index: 1;
+}
 .app-footer {
   padding: .75rem 1.5rem; color: var(--muted); font-size: .8rem;
   border-top: 1px solid var(--border);

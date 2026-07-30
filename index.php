@@ -253,24 +253,57 @@ layout_header('Dashboard', $user, 'dashboard');
     </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=4"></script>
 <script>
-document.addEventListener('DOMContentLoaded', function () {
-    const el = document.getElementById('dashboard-3d');
-    if (el && window.ColdAisle3D) {
-        const cabinets = JSON.parse(el.dataset.cabinets || '[]');
-        const pdus = JSON.parse(el.dataset.pdus || '[]');
-        const rooms = JSON.parse(el.dataset.rooms || '[]');
-        // Front faces only on dashboard — rear doubles load and is rarely visible room-wide
+(function () {
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = src;
+      s.async = true;
+      s.onload = function () { resolve(); };
+      s.onerror = function () { reject(new Error('Failed to load ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+
+  function mount3d() {
+    var el = document.getElementById('dashboard-3d');
+    if (!el) return;
+    el.classList.add('dash-3d-loading');
+    var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=5') ?>;
+    loadScript(threeUrl)
+      .then(function () { return loadScript(app3d); })
+      .then(function () {
+        if (!window.ColdAisle3D) return;
+        var cabinets = JSON.parse(el.dataset.cabinets || '[]');
+        var pdus = JSON.parse(el.dataset.pdus || '[]');
+        var rooms = JSON.parse(el.dataset.rooms || '[]');
         ColdAisle3D.mount(el, {
-            cabinets: cabinets,
-            pdus: pdus,
-            rooms: rooms,
-            interactive: true,
-            textureFaces: 'front',
+          cabinets: cabinets,
+          pdus: pdus,
+          rooms: rooms,
+          interactive: true,
+          textureFaces: 'front',
         });
+        el.classList.remove('dash-3d-loading');
+      })
+      .catch(function () {
+        el.classList.remove('dash-3d-loading');
+        el.innerHTML = '<div class="empty-state"><p>3D view could not load (network or script blocked).</p></div>';
+      });
+  }
+
+  // Paint the rest of the dashboard first; 3D is secondary
+  function schedule3d() {
+    if (window.requestIdleCallback) {
+      requestIdleCallback(function () { mount3d(); }, { timeout: 1200 });
+    } else {
+      setTimeout(mount3d, 50);
     }
-});
+  }
+  if (document.readyState === 'complete') schedule3d();
+  else window.addEventListener('load', schedule3d);
+})();
 </script>
 <?php layout_footer(); ?>

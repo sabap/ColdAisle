@@ -22,6 +22,9 @@ class UpdateService
     /** Suffix for deferred replacements when the live file is locked (Windows/IIS). */
     public const PENDING_SUFFIX = '.coldaisle-new';
 
+    /** Marker: only scan for pending files when this exists (set on deferred update). */
+    public const PENDING_FLAG = 'has_pending_updates.flag';
+
     /** @var list<string> pending .coldaisle-new paths created this request */
     private static array $pendingCreated = [];
 
@@ -488,10 +491,36 @@ class UpdateService
      *
      * @return int number of pending files still remaining
      */
+    public static function pendingFlagPath(): string
+    {
+        return App::ROOT . '/storage/tmp/' . self::PENDING_FLAG;
+    }
+
+    public static function markPendingUpdates(): void
+    {
+        $dir = App::ROOT . '/storage/tmp';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        @file_put_contents(self::pendingFlagPath(), date('c') . "\n");
+    }
+
+    public static function clearPendingUpdatesFlag(): void
+    {
+        $p = self::pendingFlagPath();
+        if (is_file($p)) {
+            @unlink($p);
+        }
+    }
+
     public static function applyPendingReplacements(): int
     {
         $root = realpath(App::ROOT);
         if ($root === false || !is_dir($root)) {
+            return 0;
+        }
+        // Fast path: no deferred files expected (normal steady-state)
+        if (!is_file(self::pendingFlagPath()) && self::$pendingCreated === []) {
             return 0;
         }
         $remaining = 0;
@@ -564,6 +593,11 @@ class UpdateService
             }
         } catch (Throwable $e) {
             App::log('applyPendingReplacements: ' . $e->getMessage(), 'warning');
+        }
+        if ($remaining === 0) {
+            self::clearPendingUpdatesFlag();
+        } else {
+            self::markPendingUpdates();
         }
         return $remaining;
     }
@@ -1193,11 +1227,13 @@ class UpdateService
         @chmod($pending, 0666);
         if (@copy($src, $pending)) {
             self::$pendingCreated[] = $pending;
+            self::markPendingUpdates();
             return true;
         }
         $data = @file_get_contents($src);
         if ($data !== false && @file_put_contents($pending, $data) !== false) {
             self::$pendingCreated[] = $pending;
+            self::markPendingUpdates();
             return true;
         }
         return false;
