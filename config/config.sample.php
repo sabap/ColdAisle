@@ -1,4 +1,4 @@
-?php
+<?php
 /**
  * ColdAisle sample configuration
  * Copy to config.php or use the web setup wizard (setup.php).
@@ -15,6 +15,12 @@ return [
     'timezone' => 'UTC',
     'base_url' => '', // e.g. https://dcim.contoso.com
     'org_name' => 'My Organization',
+    // Dev-only: show request timing in the page footer (SQL vs PHP vs browser after-HTML).
+    // Also: set env COLDAISLE_DEBUG=1 or COLDAISLE_REQUEST_TIMER=1 (no config edit).
+    // Leave false in production.
+    'debug' => [
+        'request_timer' => false,
+    ],
     // Phase B â€” transport & session hardening (see Settings â†’ Security)
     'security' => [
         'force_https' => false,          // 301 redirect HTTP â†’ HTTPS

@@ -272,6 +272,70 @@
     if (legacy) bindTimezoneCombobox(legacy);
   }
 
+  /**
+   * Dev request timer: fill "Browser …" from Navigation Timing.
+   * after HTML ≈ responseEnd → loadEventEnd (images, JS, 3D setup).
+   */
+  function paintDevRequestTimer() {
+    var el = document.getElementById('devRequestTimer');
+    if (!el) return;
+    var browserEl = el.querySelector('.dev-timer-browser');
+    if (!browserEl) return;
+
+    var nav = null;
+    if (performance.getEntriesByType) {
+      var list = performance.getEntriesByType('navigation');
+      if (list && list.length) nav = list[0];
+    }
+
+    var ttfb = 0;
+    var afterHtml = 0;
+    var loadMs = 0;
+    var dclMs = 0;
+
+    if (nav && typeof nav.responseEnd === 'number') {
+      ttfb = Math.max(0, nav.responseStart || 0);
+      var respEnd = nav.responseEnd || 0;
+      var loadEnd = nav.loadEventEnd > 0 ? nav.loadEventEnd : performance.now();
+      var dclEnd = nav.domContentLoadedEventEnd > 0 ? nav.domContentLoadedEventEnd : loadEnd;
+      afterHtml = Math.max(0, loadEnd - respEnd);
+      loadMs = loadEnd;
+      dclMs = dclEnd;
+    } else if (performance.timing) {
+      var t = performance.timing;
+      var navStart = t.navigationStart || 0;
+      ttfb = Math.max(0, (t.responseStart || 0) - navStart);
+      var respEnd2 = (t.responseEnd || 0) - navStart;
+      var loadEnd2 = (t.loadEventEnd || Date.now()) - navStart;
+      afterHtml = Math.max(0, loadEnd2 - respEnd2);
+      loadMs = loadEnd2;
+      dclMs = Math.max(0, (t.domContentLoadedEventEnd || 0) - navStart);
+    } else {
+      afterHtml = performance.now();
+      loadMs = afterHtml;
+    }
+
+    function r(n) { return Math.round(n); }
+
+    browserEl.textContent =
+      ' · Browser after-HTML ' + r(afterHtml) + 'ms' +
+      ' (TTFB ~' + r(ttfb) + 'ms · DCL ' + r(dclMs) + 'ms · load ' + r(loadMs) + 'ms)';
+
+    // Highlight when browser work dominates after the document arrived
+    var sql = parseFloat(el.getAttribute('data-sql-ms') || '0') || 0;
+    var php = parseFloat(el.getAttribute('data-php-ms') || '0') || 0;
+    var server = parseFloat(el.getAttribute('data-total-ms') || '0') || 0;
+    el.classList.remove('dev-timer-hot', 'dev-timer-ok');
+    if (afterHtml > server * 1.5 && afterHtml > 400) {
+      browserEl.classList.add('dev-timer-hot');
+    } else if (sql > php && sql > 200) {
+      el.querySelector('.dev-timer-server') &&
+        el.querySelector('.dev-timer-server').classList.add('dev-timer-hot');
+    } else if (server < 200 && afterHtml < 500) {
+      el.classList.add('dev-timer-ok');
+    }
+  }
+
   // Sidebar toggle + timezone widgets
   document.addEventListener('DOMContentLoaded', function () {
     const btn = document.getElementById('sidebarToggle');
@@ -286,5 +350,10 @@
       });
     }
     initTimezoneComboboxes(document);
+    // First paint of browser metrics at DCL; refine on full load
+    paintDevRequestTimer();
+  });
+  window.addEventListener('load', function () {
+    paintDevRequestTimer();
   });
 })();
