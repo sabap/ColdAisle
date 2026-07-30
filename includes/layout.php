@@ -21,6 +21,8 @@ function layout_header(string $title, array $user, string $active = ''): void
     } catch (Throwable $e) {
         // ignore
     }
+    // Flashes already read; free session lock so media.php / parallel requests are not blocked
+    App::releaseSessionLock();
     ?>
 <!DOCTYPE html>
 <html lang="en">

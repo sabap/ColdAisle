@@ -9,7 +9,8 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/src/App.php';
-App::boot();
+// Light boot: no schema/crypto/pending walk — faceplate bursts must stay cheap
+App::boot(['light' => true]);
 
 if (!App::isInstalled()) {
     http_response_code(503);
@@ -21,6 +22,8 @@ if (!AuthManager::user()) {
     http_response_code(401);
     exit('Unauthorized');
 }
+// Do not hold the session lock while streaming bytes (parallel thumb loads)
+App::releaseSessionLock();
 
 $rel = (string)($_GET['f'] ?? '');
 $rel = str_replace(['\\', "\0"], ['/', ''], $rel);
