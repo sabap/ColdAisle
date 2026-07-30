@@ -171,6 +171,90 @@ Historical note commits:
 
 ---
 
+### 5. NOC-View dashboard (live metrics, no full page refresh)
+
+| Field | Value |
+|-------|--------|
+| **Status** | open |
+| **Requested** | 2026-07-29 (user) |
+| **Source** | `BACKLOG.md` (chat request after 3D/dashboard perf work) |
+| **Priority** | nice-to-have (ops / wall display) |
+
+**Goal:** A **NOC-style dashboard** that shows key site metrics and keeps them **auto-updating without a full page refresh** (suitable for a wall monitor or always-on ops tab).
+
+**Desired UX (v1 sketch — confirm when implementing)**
+
+1. **Dedicated view** (e.g. Dashboard → NOC / full-screen friendly layout): large typography, dark “ops wall” density, minimal chrome optional.  
+2. **Metrics** (start from what we already have; expand as data allows): device/cabinet counts, U utilization, PDU load / kW, recent audits or open alerts, optional mini floor/3D or top hot cabinets — confirm set at implement time.  
+3. **Live updates:** poll JSON APIs (or SSE later) on a timer (e.g. 15–60s); update numbers/charts in place — **no** full reload of the page or re-bootstrap of heavy 3D unless the user opts in.  
+4. **Resilience:** show last-updated timestamp; degrade gracefully if a poll fails; pause when the tab is hidden (Page Visibility) to save load.
+
+**Implementer notes**
+
+- Prefer thin **read APIs** (reuse / extend `api/dashboard.php`, power history snapshots, alert digests) over scraping HTML.  
+- Keep 3D optional or static snapshot on NOC wall — continuous Three.js rebuild is expensive (see 0.2.93 session face cache).  
+- Auth: same session cookie; long-lived wall displays may need a kiosk/read-only role or token later (out of scope unless asked).  
+- Do not block normal interactive dashboard; NOC can be a separate route/page.
+
+**Out of scope (unless asked later)**
+
+- True websockets / multi-user collaborative cursors  
+- External TV signage players / proprietary NOC appliances  
+- Auto-logout disable for kiosks without a dedicated kiosk account design  
+
+**Acceptance (when built)**
+
+- [ ] NOC (or equivalent) page loads and shows core metrics  
+- [ ] Metrics refresh on an interval without full page navigation/reload  
+- [ ] Last-updated time visible; failed poll does not blank the whole UI  
+- [ ] Hidden tab does not hammer the server (pause or slow poll)  
+- [ ] Existing home dashboard still works for day-to-day use  
+
+---
+
+### 6. Cabinet QR codes (labels / plaques → cabinet page)
+
+| Field | Value |
+|-------|--------|
+| **Status** | open |
+| **Requested** | 2026-07-29 (user) |
+| **Source** | `BACKLOG.md` (chat request) |
+| **Priority** | nice-to-have (field ops / audits) |
+
+**Goal:** Generate **QR codes per cabinet** for printing labels or laser-engraving plaques. Scanning a code should open that cabinet’s page in ColdAisle for audits or quick device reference.
+
+**Desired UX (v1 sketch — confirm when implementing)**
+
+1. **Encode a stable deep link** to the cabinet detail page (e.g. `https://{host}/pages/cabinets.php?id={cabinet_id}`), optionally with a short token or path alias if IDs should not appear raw.  
+2. **Per-cabinet QR** on the cabinet page (download PNG/SVG; print-friendly size).  
+3. **Bulk export** (optional v1.1): sheet of QRs + cabinet names for label runs / plaque shops.  
+4. **Scan path:** phone camera / scanner opens the URL in a browser → login if needed → cabinet view (devices, audits).  
+
+**Implementer notes**
+
+- Prefer **absolute HTTPS URLs** using configured `base_url` so engraved plaques still work after DNS changes only if hostname stays valid — document that plaques should use the production FQDN.  
+- Client-side QR library or server-side generation (PHP) both fine; SVG is best for laser engraving.  
+- **Mobile without a native app:** modern phone cameras open HTTPS URLs in the browser; ColdAisle is a web app, so this **is viable without a store app** if:  
+  - the site is reachable from the scan network (corp Wi‑Fi / VPN), and  
+  - auth works on mobile browsers (session / Entra).  
+- PWA “Add to Home Screen” can improve the field feel later; not required for QR → cabinet.  
+- Audits: deep-link can land on cabinet detail with audit history / log-audit control already present.
+
+**Out of scope (unless asked later)**
+
+- Native iOS/Android app with in-app camera scanner  
+- QR on every device (cabinet-only unless requested)  
+- Offline scan queue when the phone has no network  
+
+**Acceptance (when built)**
+
+- [ ] Each cabinet can show/download a QR that encodes its ColdAisle URL  
+- [ ] Opening that URL (authenticated) lands on the correct cabinet page  
+- [ ] Printable / engraving-friendly export (at least PNG or SVG)  
+- [ ] Document network/auth expectations for field scanning (no native app required for basic flow)  
+
+---
+
 ## Completed (keep for audit; do not re-implement)
 
 ### Update / backup housekeeping

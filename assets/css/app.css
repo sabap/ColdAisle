@@ -126,6 +126,18 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
 .app-footer a { color: #38bdf8; text-decoration: none; }
 .app-footer a:hover { text-decoration: underline; color: #7dd3fc; }
 
+/* Dev-only request timing (debug.request_timer / COLDAISLE_DEBUG) */
+.dev-request-timer {
+  display: inline;
+  margin-left: .15rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .72rem;
+  color: #fbbf24;
+  white-space: normal;
+}
+.dev-request-timer .dev-timer-hot { color: #f87171; font-weight: 600; }
+.dev-request-timer .dev-timer-ok { color: #4ade80; }
+
 .snmp-enable-cmd-wrap {
   display: flex;
   flex-direction: column;

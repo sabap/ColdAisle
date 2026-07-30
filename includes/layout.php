@@ -32,7 +32,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon.svg')) ?>" type="image/svg+xml">
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon-32.png')) ?>" type="image/png" sizes="32x32">
     <link rel="apple-touch-icon" href="<?= App::e(App::url('assets/img/favicon-180.png')) ?>" sizes="180x180">
-    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=34">
+    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=35">
     <script>
     window.ColdAisle = { baseUrl: <?= json_encode(App::baseUrl()) ?>, csrf: <?= json_encode($csrf) ?> };
     window.WINDCIM = window.ColdAisle; // legacy alias
@@ -149,16 +149,37 @@ function layout_header(string $title, array $user, string $active = ''): void
 function layout_footer(): void
 {
     $donateUrl = 'https://paypal.me/mattelsberry';
+    $timerOn = class_exists('App', false) && App::requestTimerEnabled();
+    $timing = $timerOn ? App::requestTimingSnapshot() : null;
     ?>
         </main>
         <footer class="app-footer">
             ColdAisle v<?= App::VERSION ?> · <?= date('Y') ?>
             · <a href="<?= App::e($donateUrl) ?>" target="_blank" rel="noopener noreferrer">Donate</a>
             · <a href="https://github.com/sabap/ColdAisle" target="_blank" rel="noopener noreferrer">GitHub</a>
+            <?php if ($timing): ?>
+                <span class="dev-request-timer"
+                      id="devRequestTimer"
+                      title="Dev request timer (disable debug.request_timer / COLDAISLE_DEBUG when done). SQL = prepare+execute; PHP = server wall − SQL; Browser = after HTML received."
+                      data-total-ms="<?= App::e((string)$timing['total_ms']) ?>"
+                      data-sql-ms="<?= App::e((string)$timing['sql_ms']) ?>"
+                      data-sql-count="<?= App::e((string)$timing['sql_count']) ?>"
+                      data-php-ms="<?= App::e((string)$timing['php_ms']) ?>"
+                      data-connect-ms="<?= App::e((string)$timing['connect_ms']) ?>">
+                    · <span class="dev-timer-server">Server <?= App::e((string)$timing['total_ms']) ?>ms
+                        (SQL <?= (int)$timing['sql_count'] ?>q / <?= App::e((string)$timing['sql_ms']) ?>ms
+                        · PHP <?= App::e((string)$timing['php_ms']) ?>ms
+                        <?php if ($timing['connect_ms'] > 0): ?>
+                            · connect <?= App::e((string)$timing['connect_ms']) ?>ms
+                        <?php endif; ?>)
+                    </span>
+                    <span class="dev-timer-browser"> · Browser …</span>
+                </span>
+            <?php endif; ?>
         </footer>
     </div>
 </div>
-<script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=4"></script>
+<script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=5"></script>
 </body>
 </html>
     <?php

@@ -14,11 +14,52 @@ class Database
     private static array $config = [];
     private static ?string $driver = null; // 'sqlsrv' | 'odbc'
 
+    /** Dev request timer: wall time of prepare+execute (and first connect). */
+    private static bool $timingEnabled = false;
+    private static int $queryCount = 0;
+    private static float $queryTimeMs = 0.0;
+    private static float $connectTimeMs = 0.0;
+    private static bool $connectTimed = false;
+
     public static function configure(array $config): void
     {
         self::$config = $config;
         self::$pdo = null;
         self::$driver = null;
+        self::$connectTimed = false;
+        self::$connectTimeMs = 0.0;
+        // Keep query counters across reconfigure in the same request if any
+    }
+
+    /** Enable per-query timing (dev request timer). Cheap when disabled. */
+    public static function setTimingEnabled(bool $enabled): void
+    {
+        self::$timingEnabled = $enabled;
+    }
+
+    public static function isTimingEnabled(): bool
+    {
+        return self::$timingEnabled;
+    }
+
+    /**
+     * @return array{query_count:int,query_ms:float,connect_ms:float}
+     */
+    public static function timingStats(): array
+    {
+        return [
+            'query_count' => self::$queryCount,
+            'query_ms' => round(self::$queryTimeMs, 2),
+            'connect_ms' => round(self::$connectTimeMs, 2),
+        ];
+    }
+
+    public static function resetTimingStats(): void
+    {
+        self::$queryCount = 0;
+        self::$queryTimeMs = 0.0;
+        self::$connectTimeMs = 0.0;
+        self::$connectTimed = false;
     }
 
     public static function driverName(): string
@@ -114,12 +155,17 @@ class Database
         $pass = self::$config['password'] ?? '';
         $dsn = self::buildDsn(self::$config, true);
 
+        $t0 = self::$timingEnabled ? hrtime(true) : 0;
         // Never emulate prepares on ODBC: emulation uses quote() which ODBC cannot do.
         self::$pdo = new PDO($dsn, $user, $pass, [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES   => false,
         ]);
+        if (self::$timingEnabled && !self::$connectTimed) {
+            self::$connectTimeMs = (hrtime(true) - $t0) / 1e6;
+            self::$connectTimed = true;
+        }
         self::driverName(); // cache
 
         return self::$pdo;
@@ -197,8 +243,16 @@ class Database
     public static function query(string $sql, array $params = []): PDOStatement
     {
         [$sql, $params] = self::normalizeParams($sql, $params);
+        if (!self::$timingEnabled) {
+            $stmt = self::connection()->prepare($sql);
+            $stmt->execute($params);
+            return $stmt;
+        }
+        $t0 = hrtime(true);
         $stmt = self::connection()->prepare($sql);
         $stmt->execute($params);
+        self::$queryCount++;
+        self::$queryTimeMs += (hrtime(true) - $t0) / 1e6;
         return $stmt;
     }
 
@@ -209,7 +263,14 @@ class Database
      */
     public static function exec(string $sql): int|false
     {
-        return self::connection()->exec($sql);
+        if (!self::$timingEnabled) {
+            return self::connection()->exec($sql);
+        }
+        $t0 = hrtime(true);
+        $result = self::connection()->exec($sql);
+        self::$queryCount++;
+        self::$queryTimeMs += (hrtime(true) - $t0) / 1e6;
+        return $result;
     }
 
     public static function fetchAll(string $sql, array $params = []): array

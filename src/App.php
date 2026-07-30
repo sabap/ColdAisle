@@ -33,6 +33,8 @@ class App
     public const ROOT = __DIR__ . '/..';
 
     private static bool $booted = false;
+    /** hrtime(true) at start of boot — for dev request timer */
+    private static int|float $requestStartHr = 0;
     private static array $config = [];
     private static bool $securityHeadersSent = false;
 
@@ -52,11 +54,20 @@ class App
             return;
         }
 
+        if (self::$requestStartHr === 0) {
+            self::$requestStartHr = hrtime(true);
+        }
+
         $isCli = PHP_SAPI === 'cli';
 
         // Load config before session so security.cookie_* can apply
         if (self::isInstalled()) {
             self::$config = require self::configPath();
+        }
+
+        // Dev request timer: enable SQL timing as early as possible (config or env)
+        if (!$isCli && self::requestTimerEnabled()) {
+            Database::setTimingEnabled(true);
         }
 
         if (!$isCli && session_status() === PHP_SESSION_NONE) {
@@ -73,6 +84,10 @@ class App
 
         Database::configure(self::$config['database'] ?? []);
         date_default_timezone_set(self::$config['timezone'] ?? 'UTC');
+        // Re-check after DB is up (Settings → Diagnostics may enable timer)
+        if (!$isCli && self::requestTimerEnabled()) {
+            Database::setTimingEnabled(true);
+        }
 
         // CLI poll worker: skip Schema/Crypto migration/Update finish — those can hang
         // under SYSTEM or when SQL is slow; web requests keep the full bootstrap.
@@ -367,6 +382,75 @@ class App
             $val = $val[$p];
         }
         return $val;
+    }
+
+    /**
+     * Dev-only footer timing. Enable via:
+     * - Settings → Diagnostics (Global Admin) — preferred
+     * - config debug.request_timer = true
+     * - env COLDAISLE_DEBUG=1 or COLDAISLE_REQUEST_TIMER=1
+     * Shows timing to all logged-in users while on; only admins can toggle.
+     */
+    public static function requestTimerEnabled(): bool
+    {
+        if (PHP_SAPI === 'cli') {
+            return false;
+        }
+        $env = getenv('COLDAISLE_REQUEST_TIMER');
+        if ($env === false || $env === '') {
+            $env = getenv('COLDAISLE_DEBUG');
+        }
+        if ($env === '1' || strcasecmp((string)$env, 'true') === 0) {
+            return true;
+        }
+        if (!empty(self::$config['debug']['request_timer'])) {
+            return true;
+        }
+        // DB setting (Settings → Diagnostics). Safe if DB not ready yet.
+        if (self::isInstalled() && class_exists('SettingsService', false)) {
+            try {
+                if (SettingsService::get('debug_request_timer', '0') === '1') {
+                    return true;
+                }
+            } catch (Throwable $e) {
+                // ignore
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Snapshot for footer / JSON. Call near end of HTML render.
+     *
+     * @return array{
+     *   total_ms:float,
+     *   sql_ms:float,
+     *   sql_count:int,
+     *   connect_ms:float,
+     *   php_ms:float
+     * }
+     */
+    public static function requestTimingSnapshot(): array
+    {
+        $start = self::$requestStartHr > 0 ? self::$requestStartHr : hrtime(true);
+        $totalMs = (hrtime(true) - $start) / 1e6;
+        $db = class_exists('Database', false) ? Database::timingStats() : [
+            'query_count' => 0,
+            'query_ms' => 0.0,
+            'connect_ms' => 0.0,
+        ];
+        $sqlMs = (float)($db['query_ms'] ?? 0);
+        $connectMs = (float)($db['connect_ms'] ?? 0);
+        // PHP wall outside timed SQL (includes connect if not double-counted: connect is separate)
+        $phpMs = max(0.0, $totalMs - $sqlMs);
+
+        return [
+            'total_ms' => round($totalMs, 1),
+            'sql_ms' => round($sqlMs, 1),
+            'sql_count' => (int)($db['query_count'] ?? 0),
+            'connect_ms' => round($connectMs, 1),
+            'php_ms' => round($phpMs, 1),
+        ];
     }
 
     /** Always "ColdAisle" â€” not user-configurable. */

@@ -139,6 +139,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             ];
         }
 
+        // Dev diagnostics — Global Admin only (settings page is already manage_settings;
+        // isAdmin() keeps legacy custom roles without full admin from toggling this).
+        if ($section === 'diagnostics') {
+            if (!AuthManager::isAdmin($user)) {
+                throw new RuntimeException('Only Global Admin can change diagnostic settings.');
+            }
+            SettingsService::set(
+                'debug_request_timer',
+                !empty($_POST['debug_request_timer']) ? '1' : '0',
+                'debug'
+            );
+            App::flash(
+                'success',
+                !empty($_POST['debug_request_timer'])
+                    ? 'Request timer enabled — shown in the footer on the next page load.'
+                    : 'Request timer disabled.'
+            );
+            App::redirect('pages/settings.php#diagnostics');
+        }
+
         if ($section === 'mail') {
             if (!class_exists('MailService')) {
                 throw new RuntimeException('MailService is not installed on this host. Deploy src/Services/MailService.php.');
@@ -481,6 +501,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         if (!in_array($section, [
             'update_check', 'update_apply', 'update_backup_now', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
             'power_alerts', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
+            'diagnostics',
         ], true)) {
             $export = var_export($config, true);
             $php = "<?php\n/** ColdAisle configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
@@ -498,6 +519,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#updates';
     } elseif ($secPost === 'security') {
         $redirHash = '#security';
+    } elseif ($secPost === 'diagnostics') {
+        $redirHash = '#diagnostics';
     } elseif ($secPost === 'export_site_backup') {
         $redirHash = '#backup';
     } elseif ($secPost === 'snmp_schedule') {
@@ -658,6 +681,57 @@ layout_header('Settings', $user, 'settings');
         </form>
     </div>
 </div>
+
+<?php if (AuthManager::isAdmin($user)):
+    $timerOn = SettingsService::get('debug_request_timer', '0') === '1'
+        || App::requestTimerEnabled();
+    $timerFromEnvOrConfig = App::requestTimerEnabled()
+        && SettingsService::get('debug_request_timer', '0') !== '1';
+    ?>
+<div class="card" id="diagnostics">
+    <div class="card-header"><h2>Diagnostics (Global Admin)</h2></div>
+    <div class="card-body">
+        <form method="post" class="form-grid">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="diagnostics">
+            <div class="form-row full">
+                <p class="text-muted" style="margin:0;font-size:.85rem">
+                    Developer tools for performance troubleshooting. The request timer is visible in the
+                    site footer for <strong>all signed-in users</strong> while enabled — turn it off when finished.
+                    Only Global Admin can change this setting.
+                </p>
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="debug_request_timer" value="1"
+                    <?= SettingsService::get('debug_request_timer', '0') === '1' ? 'checked' : '' ?>>
+                Show request timer in footer
+                <span class="text-muted" style="font-weight:400">
+                    (page total · SQL queries/time · PHP · browser after-HTML)
+                </span>
+            </label></div>
+            <?php if ($timerFromEnvOrConfig): ?>
+                <div class="form-row full">
+                    <div class="alert alert-warning" style="margin:0">
+                        Timer is currently forced <strong>on</strong> by
+                        <code>config.php</code> <code>debug.request_timer</code>
+                        or environment <code>COLDAISLE_DEBUG</code> /
+                        <code>COLDAISLE_REQUEST_TIMER</code>.
+                        Uncheck above and clear those overrides to fully disable.
+                    </div>
+                </div>
+            <?php elseif ($timerOn): ?>
+                <div class="form-row full">
+                    <p class="text-muted" style="margin:0;font-size:.8rem">
+                        Status: <strong style="color:var(--warning,#fbbf24)">enabled</strong>
+                        — look at the bottom of any page after save.
+                    </p>
+                </div>
+            <?php endif; ?>
+            <div class="form-row"><button class="btn btn-primary" type="submit">Save diagnostics</button></div>
+        </form>
+    </div>
+</div>
+<?php endif; ?>
 
 <div class="card" id="security">
     <div class="card-header"><h2>Security (HTTPS &amp; sessions)</h2></div>
