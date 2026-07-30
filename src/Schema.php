@@ -21,6 +21,14 @@ class Schema
         }
         self::$ensured = true;
 
+        // Skip catalog chatter when this app version already ensured successfully.
+        // (IIS FastCGI often uses a fresh PHP process per request — static alone is not enough.)
+        $stampDir = App::ROOT . '/storage/tmp';
+        $stamp = $stampDir . '/schema_ok_' . preg_replace('/[^0-9A-Za-z._-]/', '_', App::VERSION) . '.flag';
+        if (is_file($stamp)) {
+            return;
+        }
+
         try {
             self::ensureColumn(
                 'datacenters',
@@ -382,6 +390,12 @@ class Schema
                     created_at DATETIME2 NOT NULL CONSTRAINT DF_rgm_created DEFAULT SYSUTCDATETIME()
                 )"
             );
+
+            // Mark this app version as schema-ready (skips catalog probes on next request)
+            if (!is_dir($stampDir)) {
+                @mkdir($stampDir, 0775, true);
+            }
+            @file_put_contents($stamp, date('c') . "\n");
         } catch (Throwable $e) {
             App::log('Schema ensure failed: ' . $e->getMessage(), 'error');
         }
