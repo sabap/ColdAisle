@@ -2,9 +2,10 @@
 /**
  * ColdAisle - Authenticated media server for storage/uploads
  * Usage: media.php?f=templates/12/front.jpg
- *        media.php?f=templates/12/front.sm.jpg  (small rack/3D variant)
+ *        media.php?f=templates/12/front.md.jpg  (medium — cabinet/row elevation)
+ *        media.php?f=templates/12/front.sm.jpg  (small — 3D / list thumbs)
  *
- * Missing .sm companions are generated on first request from the full image.
+ * Missing .sm / .md companions are generated on first request from the full image.
  */
 declare(strict_types=1);
 
@@ -36,18 +37,18 @@ if ($rel === '' || str_contains($rel, '..')) {
 $base = realpath(__DIR__ . '/storage/uploads');
 $full = $base ? realpath(__DIR__ . '/storage/uploads/' . $rel) : false;
 
-// Lazy-generate .sm.jpg from full faceplate when missing (backfill)
-if ((!$full || !is_file($full)) && preg_match('/\.sm\.jpe?g$/i', $rel)) {
+// Lazy-generate .sm.jpg / .md.jpg from full faceplate when missing (backfill)
+if ((!$full || !is_file($full)) && preg_match('/\.(sm|md)\.jpe?g$/i', $rel, $m)) {
     if (!class_exists('ImageUpload')) {
         require_once __DIR__ . '/src/Services/ImageUpload.php';
     }
-    // templates/12/front.sm.jpg → templates/12/front.jpg (or .png)
-    $stem = preg_replace('/\.sm\.jpe?g$/i', '', $rel) ?? '';
+    $variant = strtolower($m[1]);
+    $stem = preg_replace('/\.(sm|md)\.jpe?g$/i', '', $rel) ?? '';
     $candidates = [$stem . '.jpg', $stem . '.jpeg', $stem . '.png', $stem . '.gif', $stem . '.webp'];
     foreach ($candidates as $cand) {
         $candAbs = __DIR__ . '/storage/uploads/' . $cand;
         if (is_file($candAbs)) {
-            $created = ImageUpload::ensureVariant($cand, ImageUpload::VARIANT_SM);
+            $created = ImageUpload::ensureVariant($cand, $variant);
             if ($created) {
                 $full = realpath(__DIR__ . '/storage/uploads/' . $created);
             }
@@ -72,7 +73,7 @@ $types = [
 $mime = $types[$ext] ?? 'application/octet-stream';
 
 // Long cache: variants are content-addressed by path; re-upload overwrites file
-$maxAge = preg_match('/\.sm\.jpe?g$/i', $rel) ? 604800 : 86400; // sm: 7d, full: 1d
+$maxAge = preg_match('/\.(sm|md)\.jpe?g$/i', $rel) ? 604800 : 86400;
 
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . (string)filesize($full));

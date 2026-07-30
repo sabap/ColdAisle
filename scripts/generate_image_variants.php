@@ -1,9 +1,11 @@
 <?php
 /**
- * Backfill small (.sm.jpg) faceplate variants for rack elevation / row / 3D.
+ * Backfill faceplate variants (.sm.jpg + .md.jpg) under storage/uploads/templates.
  *
  * Usage (from app root):
  *   php scripts/generate_image_variants.php
+ *   php scripts/generate_image_variants.php md    # medium only
+ *   php scripts/generate_image_variants.php sm    # small only
  */
 declare(strict_types=1);
 
@@ -13,10 +15,17 @@ require_once $root . '/src/Services/ImageUpload.php';
 
 App::boot();
 
-echo "Scanning storage/uploads/templates for missing .sm variants…\n";
+$arg = strtolower(trim((string)($argv[1] ?? '')));
+$variants = match ($arg) {
+    'sm', 'small' => [ImageUpload::VARIANT_SM],
+    'md', 'medium' => [ImageUpload::VARIANT_MD],
+    default => [ImageUpload::VARIANT_SM, ImageUpload::VARIANT_MD],
+};
+
+echo 'Scanning storage/uploads/templates for missing variants (' . implode(', ', $variants) . ")…\n";
 $stats = ImageUpload::backfillSmallVariants(static function (string $msg): void {
     echo '  ' . $msg . "\n";
-});
+}, $variants);
 
 echo sprintf(
     "Done. scanned=%d created=%d skipped=%d failed=%d\n",

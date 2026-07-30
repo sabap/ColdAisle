@@ -2,8 +2,9 @@
 /**
  * ColdAisle - Image upload + resize (GD), preserve aspect ratio (never stretch).
  *
- * Stores a full-resolution faceplate plus a small (.sm) JPEG for rack elevation,
- * row view, and 3D texturing so those pages do not pull multi‑hundred‑KB files.
+ * Stores full-resolution faceplate plus companions:
+ *   .sm.jpg  — 3D / list thumbs (tiny)
+ *   .md.jpg  — cabinet elevation + row view (sharper, still modest)
  */
 declare(strict_types=1);
 
@@ -15,18 +16,21 @@ class ImageUpload
     public const MAX_HEIGHT = 1200;
     public const JPEG_QUALITY = 85;
 
-    /**
-     * Small variant for elevations / row / 3D.
-     * ~96px wide is enough for a rack face strip and keeps files tiny.
-     */
+    /** Small: 3D textures + template list thumbs */
     public const SM_MAX_WIDTH = 96;
     public const SM_MAX_HEIGHT = 240;
     public const SM_JPEG_QUALITY = 72;
     public const VARIANT_SM = 'sm';
 
+    /** Medium: cabinet elevation + row view */
+    public const MD_MAX_WIDTH = 240;
+    public const MD_MAX_HEIGHT = 600;
+    public const MD_JPEG_QUALITY = 80;
+    public const VARIANT_MD = 'md';
+
     /**
      * Process an uploaded image into $destPath (JPEG or PNG).
-     * Also writes the .sm companion JPEG next to it.
+     * Also writes .sm and .md companion JPEGs.
      * @return array{path:string,width:int,height:int}
      */
     public static function processUpload(array $file, string $destPath, int $uHeight = 1): array
@@ -63,7 +67,7 @@ class ImageUpload
 
     /**
      * Resize/copy image from an arbitrary filesystem path (imports, CLI).
-     * Writes full image + small (.sm.jpg) companion.
+     * Writes full image + .sm + .md companions.
      * @return array{path:string,width:int,height:int}
      */
     public static function processFromPath(string $sourcePath, string $destPath, int $uHeight = 1): array
@@ -116,11 +120,16 @@ class ImageUpload
             throw new RuntimeException('Could not write resized image.');
         }
 
-        // Build small companion from the already-resized full image (cheaper than reloading source)
+        // Companions from the already-resized full image
         try {
-            self::writeSmVariantFromGd($dst, $destPath);
+            self::writeVariantFromGd($dst, $destPath, self::VARIANT_SM);
         } catch (Throwable $e) {
-            // Non-fatal — full image is enough; sm can be generated lazily later
+            // Non-fatal
+        }
+        try {
+            self::writeVariantFromGd($dst, $destPath, self::VARIANT_MD);
+        } catch (Throwable $e) {
+            // Non-fatal
         }
         imagedestroy($dst);
 
@@ -129,7 +138,7 @@ class ImageUpload
 
     /**
      * Map a stored relative path to a variant path.
-     * templates/12/front.jpg + sm → templates/12/front.sm.jpg
+     * templates/12/front.jpg + md → templates/12/front.md.jpg
      */
     public static function variantRelPath(string $rel, string $variant = self::VARIANT_SM): string
     {
@@ -143,20 +152,14 @@ class ImageUpload
         }
         $dir = str_replace('\\', '/', dirname($rel));
         $base = pathinfo($rel, PATHINFO_FILENAME);
-        // already a variant?
         if (str_ends_with($base, '.' . $variant)) {
             return $rel;
         }
-        // strip existing .sm etc.
         $base = preg_replace('/\.(sm|thumb|md)$/i', '', $base) ?? $base;
         $prefix = ($dir === '.' || $dir === '') ? '' : ($dir . '/');
-        // Small variants are always JPEG for size
         return $prefix . $base . '.' . $variant . '.jpg';
     }
 
-    /**
-     * Absolute filesystem path under storage/uploads for a relative media path.
-     */
     public static function absUploadPath(string $rel): string
     {
         $rel = ltrim(str_replace('\\', '/', $rel), '/');
@@ -164,8 +167,7 @@ class ImageUpload
     }
 
     /**
-     * Ensure a small variant exists for $rel (DB full path). Returns variant relative path or null.
-     * Generates on demand when missing (backfill for pre-variant uploads).
+     * Ensure a variant exists for $rel (DB full path). Returns variant relative path or null.
      */
     public static function ensureVariant(string $rel, string $variant = self::VARIANT_SM): ?string
     {
@@ -185,13 +187,12 @@ class ImageUpload
 
         $fullAbs = self::absUploadPath($rel);
         if (!is_file($fullAbs)) {
-            // Maybe DB already points at something that is missing
             return null;
         }
 
         try {
-            if ($variant === self::VARIANT_SM) {
-                self::writeSmVariantFromFile($fullAbs, $varAbs);
+            if ($variant === self::VARIANT_SM || $variant === self::VARIANT_MD) {
+                self::writeVariantFromFile($fullAbs, $varAbs, $variant);
                 return is_file($varAbs) ? $varRel : null;
             }
         } catch (Throwable $e) {
@@ -201,9 +202,9 @@ class ImageUpload
     }
 
     /**
-     * Build a media.php URL. For variant=sm, points at the .sm companion path
-     * (media.php generates it on first request if missing) — no GD during page render.
-     * @param 'full'|'sm' $variant
+     * Build a media.php URL for full / sm / md.
+     * Points at companion path; media.php generates missing variants on first request.
+     * @param 'full'|'sm'|'md' $variant
      */
     public static function mediaUrl(?string $rel, string $variant = 'full'): string
     {
@@ -211,22 +212,18 @@ class ImageUpload
             return '';
         }
         $rel = ltrim(str_replace('\\', '/', $rel), '/');
-        if ($variant === self::VARIANT_SM) {
-            $smRel = self::variantRelPath($rel, self::VARIANT_SM);
-            // If full is gone but sm exists, still serve sm; otherwise prefer sm URL
-            $smAbs = self::absUploadPath($smRel);
+        if ($variant === self::VARIANT_SM || $variant === self::VARIANT_MD) {
+            $varRel = self::variantRelPath($rel, $variant);
+            $varAbs = self::absUploadPath($varRel);
             $fullAbs = self::absUploadPath($rel);
-            if (is_file($smAbs) || is_file($fullAbs)) {
-                $rel = $smRel;
+            if (is_file($varAbs) || is_file($fullAbs)) {
+                $rel = $varRel;
             }
-            // else leave $rel as full path (may 404)
         }
         return App::url('media.php?f=' . rawurlencode($rel));
     }
 
-    /**
-     * Delete full image + known companions for a relative path.
-     */
+    /** Delete full image + known companions for a relative path. */
     public static function deleteWithVariants(?string $rel): void
     {
         if ($rel === null || trim($rel) === '') {
@@ -236,6 +233,7 @@ class ImageUpload
         $paths = [
             self::absUploadPath($rel),
             self::absUploadPath(self::variantRelPath($rel, self::VARIANT_SM)),
+            self::absUploadPath(self::variantRelPath($rel, self::VARIANT_MD)),
         ];
         foreach ($paths as $p) {
             if (is_file($p)) {
@@ -245,11 +243,13 @@ class ImageUpload
     }
 
     /**
-     * Batch-generate missing .sm variants under storage/uploads/templates.
+     * Batch-generate missing .sm / .md variants under storage/uploads/templates.
+     * @param list<string>|null $variants Defaults to both sm and md
      * @return array{scanned:int,created:int,skipped:int,failed:int}
      */
-    public static function backfillSmallVariants(?callable $log = null): array
+    public static function backfillSmallVariants(?callable $log = null, ?array $variants = null): array
     {
+        $variants = $variants ?? [self::VARIANT_SM, self::VARIANT_MD];
         $root = App::ROOT . '/storage/uploads/templates';
         $stats = ['scanned' => 0, 'created' => 0, 'skipped' => 0, 'failed' => 0];
         if (!is_dir($root)) {
@@ -264,7 +264,6 @@ class ImageUpload
                 continue;
             }
             $name = $file->getFilename();
-            // Only full faceplate files (front.jpg / rear.png) — skip existing .sm
             if (preg_match('/\.(sm|thumb|md)\./i', $name)) {
                 continue;
             }
@@ -273,21 +272,24 @@ class ImageUpload
             }
             $stats['scanned']++;
             $abs = $file->getPathname();
-            $varAbs = preg_replace('/\.[^.]+$/', '', $abs) . '.sm.jpg';
-            if (is_file($varAbs) && filesize($varAbs) > 32) {
-                $stats['skipped']++;
-                continue;
-            }
-            try {
-                self::writeSmVariantFromFile($abs, $varAbs);
-                $stats['created']++;
-                if ($log) {
-                    $log('created ' . $varAbs);
+            $stem = preg_replace('/\.[^.]+$/', '', $abs) ?? $abs;
+            foreach ($variants as $variant) {
+                $varAbs = $stem . '.' . $variant . '.jpg';
+                if (is_file($varAbs) && filesize($varAbs) > 32) {
+                    $stats['skipped']++;
+                    continue;
                 }
-            } catch (Throwable $e) {
-                $stats['failed']++;
-                if ($log) {
-                    $log('fail ' . $abs . ': ' . $e->getMessage());
+                try {
+                    self::writeVariantFromFile($abs, $varAbs, $variant);
+                    $stats['created']++;
+                    if ($log) {
+                        $log('created ' . $varAbs);
+                    }
+                } catch (Throwable $e) {
+                    $stats['failed']++;
+                    if ($log) {
+                        $log('fail ' . $abs . ' (' . $variant . '): ' . $e->getMessage());
+                    }
                 }
             }
         }
@@ -297,6 +299,15 @@ class ImageUpload
     // ------------------------------------------------------------------
     // Internals
     // ------------------------------------------------------------------
+
+    /** @return array{0:int,1:int,2:int} maxW, maxH, quality */
+    private static function variantLimits(string $variant): array
+    {
+        return match ($variant) {
+            self::VARIANT_MD => [self::MD_MAX_WIDTH, self::MD_MAX_HEIGHT, self::MD_JPEG_QUALITY],
+            default => [self::SM_MAX_WIDTH, self::SM_MAX_HEIGHT, self::SM_JPEG_QUALITY],
+        };
+    }
 
     /** @return \GdImage|resource|false */
     private static function loadGd(string $path, string $mime)
@@ -334,42 +345,43 @@ class ImageUpload
     /**
      * @param \GdImage|resource $src Already-decoded full (or original) image
      */
-    private static function writeSmVariantFromGd($src, string $fullDestPath): void
+    private static function writeVariantFromGd($src, string $fullDestPath, string $variant): void
     {
+        [$maxW, $maxH, $quality] = self::variantLimits($variant);
         $sw = imagesx($src);
         $sh = imagesy($src);
-        $scale = min(1.0, self::SM_MAX_WIDTH / max(1, $sw), self::SM_MAX_HEIGHT / max(1, $sh));
+        $scale = min(1.0, $maxW / max(1, $sw), $maxH / max(1, $sh));
         $dw = max(1, (int)round($sw * $scale));
         $dh = max(1, (int)round($sh * $scale));
         $sm = self::resample($src, $dw, $dh);
         if (!$sm) {
-            throw new RuntimeException('Could not allocate small image buffer.');
+            throw new RuntimeException('Could not allocate image buffer for ' . $variant);
         }
-        $smPath = preg_replace('/\.[^.]+$/', '', $fullDestPath) . '.sm.jpg';
-        $dir = dirname($smPath);
+        $outPath = preg_replace('/\.[^.]+$/', '', $fullDestPath) . '.' . $variant . '.jpg';
+        $dir = dirname($outPath);
         if (!is_dir($dir) && !@mkdir($dir, 0775, true)) {
             imagedestroy($sm);
-            throw new RuntimeException('Could not create upload directory for small variant.');
+            throw new RuntimeException('Could not create upload directory for ' . $variant . ' variant.');
         }
-        // Flatten onto dark slate so JPEG has no ugly black/white matte for rack faces
+        // Flatten onto dark slate so JPEG has no ugly matte for rack faces
         $flat = imagecreatetruecolor($dw, $dh);
         if ($flat) {
             $bg = imagecolorallocate($flat, 15, 23, 42); // slate-900
             imagefilledrectangle($flat, 0, 0, $dw, $dh, $bg);
             imagecopy($flat, $sm, 0, 0, 0, 0, $dw, $dh);
             imagedestroy($sm);
-            $ok = imagejpeg($flat, $smPath, self::SM_JPEG_QUALITY);
+            $ok = imagejpeg($flat, $outPath, $quality);
             imagedestroy($flat);
         } else {
-            $ok = imagejpeg($sm, $smPath, self::SM_JPEG_QUALITY);
+            $ok = imagejpeg($sm, $outPath, $quality);
             imagedestroy($sm);
         }
         if (!$ok) {
-            throw new RuntimeException('Could not write small image variant.');
+            throw new RuntimeException('Could not write ' . $variant . ' image variant.');
         }
     }
 
-    private static function writeSmVariantFromFile(string $sourceAbs, string $destAbs): void
+    private static function writeVariantFromFile(string $sourceAbs, string $destAbs, string $variant): void
     {
         $info = @getimagesize($sourceAbs);
         if ($info === false) {
@@ -380,10 +392,9 @@ class ImageUpload
             throw new RuntimeException('Unsupported image: ' . $sourceAbs);
         }
         try {
-            // writeSmVariantFromGd derives path from full dest — pass dest as if it were the full file
-            // so we need the stem of destAbs without .sm
-            $asFull = preg_replace('/\.sm\.jpg$/i', '.jpg', $destAbs) ?? $destAbs;
-            self::writeSmVariantFromGd($src, $asFull);
+            // Derive full path stem from variant dest (strip .sm.jpg / .md.jpg)
+            $asFull = preg_replace('/\.(sm|md)\.jpg$/i', '.jpg', $destAbs) ?? $destAbs;
+            self::writeVariantFromGd($src, $asFull, $variant);
         } finally {
             imagedestroy($src);
         }
