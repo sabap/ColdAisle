@@ -171,7 +171,17 @@ function layout_footer(): void
                         · PHP <?= App::e((string)$timing['php_ms']) ?>ms
                         <?php if ($timing['connect_ms'] > 0): ?>
                             · connect <?= App::e((string)$timing['connect_ms']) ?>ms
-                        <?php endif; ?>)
+                        <?php endif; ?>
+                        <?php
+                        $boot = $timing['boot'] ?? [];
+                        if ($boot):
+                            $bits = [];
+                            foreach ($boot as $phase => $ms) {
+                                $bits[] = App::e((string)$phase) . ' ' . App::e((string)$ms) . 'ms';
+                            }
+                            echo ' · boot: ' . implode(', ', $bits);
+                        endif;
+                        ?>)
                     </span>
                     <span class="dev-timer-browser"> · Browser …</span>
                 </span>

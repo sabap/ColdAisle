@@ -35,6 +35,8 @@ class App
     private static bool $booted = false;
     /** hrtime(true) at start of boot — for dev request timer */
     private static int|float $requestStartHr = 0;
+    /** @var array<string,float> boot phase durations in ms (dev timer) */
+    private static array $bootPhasesMs = [];
     private static array $config = [];
     private static bool $securityHeadersSent = false;
 
@@ -97,14 +99,17 @@ class App
         );
 
         if (!$cliLight) {
+            $tPhase = hrtime(true);
             try {
                 Schema::ensure();
             } catch (Throwable $e) {
                 // Non-fatal: features depending on new columns degrade gracefully
                 self::log('Schema ensure: ' . $e->getMessage(), 'warning');
             }
+            self::$bootPhasesMs['schema'] = (hrtime(true) - $tPhase) / 1e6;
 
             // App-level secret encryption (SNMP passphrases, etc.)
+            $tPhase = hrtime(true);
             try {
                 if (Crypto::ensureAppKey()) {
                     Crypto::reset();
@@ -131,14 +136,17 @@ class App
             } catch (Throwable $e) {
                 self::log('Crypto bootstrap: ' . $e->getMessage(), 'warning');
             }
+            self::$bootPhasesMs['crypto'] = (hrtime(true) - $tPhase) / 1e6;
 
             // Finish any deferred file replacements from a previous self-update
             // (Windows/IIS often locks the script that started the update).
+            $tPhase = hrtime(true);
             try {
                 UpdateService::applyPendingReplacements();
             } catch (Throwable $e) {
                 self::log('Pending update apply: ' . $e->getMessage(), 'warning');
             }
+            self::$bootPhasesMs['pending_files'] = (hrtime(true) - $tPhase) / 1e6;
         }
 
         // Phase B: transport + session hardening (web only)
@@ -427,7 +435,8 @@ class App
      *   sql_ms:float,
      *   sql_count:int,
      *   connect_ms:float,
-     *   php_ms:float
+     *   php_ms:float,
+     *   boot:array<string,float>
      * }
      */
     public static function requestTimingSnapshot(): array
@@ -444,12 +453,18 @@ class App
         // PHP wall outside timed SQL (includes connect if not double-counted: connect is separate)
         $phpMs = max(0.0, $totalMs - $sqlMs);
 
+        $boot = [];
+        foreach (self::$bootPhasesMs as $k => $ms) {
+            $boot[$k] = round((float)$ms, 1);
+        }
+
         return [
             'total_ms' => round($totalMs, 1),
             'sql_ms' => round($sqlMs, 1),
             'sql_count' => (int)($db['query_count'] ?? 0),
             'connect_ms' => round($connectMs, 1),
             'php_ms' => round($phpMs, 1),
+            'boot' => $boot,
         ];
     }
 

@@ -481,6 +481,11 @@ class UpdateService
     /**
      * Apply any *.coldaisle-new files left when a live file was locked mid-update.
      * Safe to call on every request (boot).
+     *
+     * Important: only scan code directories. Never walk storage/uploads (or .git) —
+     * a full-tree walk on every page was measured at multi‑second PHP cost after
+     * large faceplate imports.
+     *
      * @return int number of pending files still remaining
      */
     public static function applyPendingReplacements(): int
@@ -491,29 +496,70 @@ class UpdateService
         }
         $remaining = 0;
         try {
-            $iterator = new RecursiveIteratorIterator(
-                new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
-                RecursiveIteratorIterator::LEAVES_ONLY
-            );
-            foreach ($iterator as $file) {
-                /** @var SplFileInfo $file */
-                if (!$file->isFile()) {
+            // Root-level PHP/config only (no recursion into runtime data)
+            foreach (glob($root . DIRECTORY_SEPARATOR . '*' . self::PENDING_SUFFIX) ?: [] as $path) {
+                if (!is_file($path)) {
                     continue;
                 }
-                $path = $file->getPathname();
-                if (!str_ends_with($path, self::PENDING_SUFFIX)) {
-                    continue;
-                }
-                // Skip runtime dirs
-                $rel = str_replace('\\', '/', substr($path, strlen($root) + 1));
-                if (str_starts_with($rel, 'storage/')) {
-                    continue;
-                }
+                $rel = basename($path);
                 $dest = substr($path, 0, -strlen(self::PENDING_SUFFIX));
                 if (self::promotePendingFile($path, $dest)) {
                     App::log('Update applied deferred file: ' . $rel, 'info');
                 } else {
                     $remaining++;
+                }
+            }
+
+            // Code trees only — exclude storage, .git, vendor, etc.
+            $scanDirs = [
+                'api', 'assets', 'config', 'docs', 'includes', 'pages',
+                'scripts', 'sql', 'src', 'templates',
+            ];
+            foreach ($scanDirs as $dir) {
+                $base = $root . DIRECTORY_SEPARATOR . $dir;
+                if (!is_dir($base)) {
+                    continue;
+                }
+                $dirIterator = new RecursiveDirectoryIterator(
+                    $base,
+                    FilesystemIterator::SKIP_DOTS
+                );
+                $filter = new RecursiveCallbackFilterIterator(
+                    $dirIterator,
+                    static function ($current, $key, $iterator): bool {
+                        if ($current->isDir()) {
+                            $name = strtolower($current->getFilename());
+                            // Extra safety if a data dir is nested under a code path
+                            if (in_array($name, [
+                                'storage', '.git', '.grok', 'node_modules', 'vendor',
+                                'uploads', 'tmp', 'cache', 'sessions',
+                            ], true)) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                );
+                $iterator = new RecursiveIteratorIterator(
+                    $filter,
+                    RecursiveIteratorIterator::LEAVES_ONLY
+                );
+                foreach ($iterator as $file) {
+                    /** @var SplFileInfo $file */
+                    if (!$file->isFile()) {
+                        continue;
+                    }
+                    $path = $file->getPathname();
+                    if (!str_ends_with($path, self::PENDING_SUFFIX)) {
+                        continue;
+                    }
+                    $rel = str_replace('\\', '/', substr($path, strlen($root) + 1));
+                    $dest = substr($path, 0, -strlen(self::PENDING_SUFFIX));
+                    if (self::promotePendingFile($path, $dest)) {
+                        App::log('Update applied deferred file: ' . $rel, 'info');
+                    } else {
+                        $remaining++;
+                    }
                 }
             }
         } catch (Throwable $e) {
