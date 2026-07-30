@@ -123,8 +123,15 @@ class Database
         // LoginTimeout helps CLI/SYSTEM fail fast instead of hanging for minutes
         $loginTimeout = isset($config['login_timeout']) ? max(1, (int)$config['login_timeout']) : 8;
 
+        // Optional: database.login_timeout, database.connect_timeout (seconds)
+        $connectTimeout = isset($config['connect_timeout'])
+            ? max(1, (int)$config['connect_timeout'])
+            : $loginTimeout;
+
         if (in_array('sqlsrv', $drivers, true)) {
-            $dsn = "sqlsrv:Server={$server};Encrypt={$encrypt};TrustServerCertificate={$trust};LoginTimeout={$loginTimeout}";
+            // ConnectionPooling keeps TDS handles warm across PHP requests (same worker)
+            $dsn = "sqlsrv:Server={$server};Encrypt={$encrypt};TrustServerCertificate={$trust}"
+                . ";LoginTimeout={$loginTimeout};ConnectionPooling=1";
             if ($includeDatabase) {
                 $dsn .= ";Database={$db}";
             }
@@ -133,7 +140,9 @@ class Database
 
         if (in_array('odbc', $drivers, true)) {
             $driverName = $config['odbc_driver'] ?? 'ODBC Driver 18 for SQL Server';
-            $dsn = "odbc:Driver={{$driverName}};Server={$server};Encrypt={$encrypt};TrustServerCertificate={$trust};LoginTimeout={$loginTimeout}";
+            // Pooling=Yes is the ODBC Driver 17/18 connection-pool switch
+            $dsn = "odbc:Driver={{$driverName}};Server={$server};Encrypt={$encrypt};TrustServerCertificate={$trust}"
+                . ";LoginTimeout={$loginTimeout};Timeout={$connectTimeout};Pooling=Yes";
             if ($includeDatabase) {
                 $dsn .= ";Database={$db}";
             }

@@ -50,7 +50,10 @@ class App
         return is_file(self::configPath());
     }
 
-    public static function boot(): void
+    /**
+     * @param array{light?:bool} $options light=true skips schema/crypto/pending (media.php, static APIs)
+     */
+    public static function boot(array $options = []): void
     {
         if (self::$booted) {
             return;
@@ -61,44 +64,62 @@ class App
         }
 
         $isCli = PHP_SAPI === 'cli';
+        $light = !empty($options['light']);
 
         // Load config before session so security.cookie_* can apply
+        $tPhase = hrtime(true);
         if (self::isInstalled()) {
             self::$config = require self::configPath();
         }
+        self::$bootPhasesMs['config'] = (hrtime(true) - $tPhase) / 1e6;
 
-        // Dev request timer: enable SQL timing as early as possible (config or env)
-        if (!$isCli && self::requestTimerEnabled()) {
-            Database::setTimingEnabled(true);
-        }
+        // Env/config-only check first (no DB yet)
+        $timerWanted = !$isCli && self::requestTimerEnabled(false);
 
+        $tPhase = hrtime(true);
         if (!$isCli && session_status() === PHP_SESSION_NONE) {
             self::startSecureSession();
         }
+        self::$bootPhasesMs['session'] = (hrtime(true) - $tPhase) / 1e6;
 
         if (!self::isInstalled()) {
             if (!$isCli) {
                 self::sendSecurityHeaders();
             }
             self::$booted = true;
+            self::$bootPhasesMs['boot_done_at'] = (hrtime(true) - self::$requestStartHr) / 1e6;
             return;
         }
 
+        $tPhase = hrtime(true);
         Database::configure(self::$config['database'] ?? []);
         date_default_timezone_set(self::$config['timezone'] ?? 'UTC');
-        // Re-check after DB is up (Settings → Diagnostics may enable timer)
-        if (!$isCli && self::requestTimerEnabled()) {
+        // Enable SQL timing before any query/connect so connect_ms is visible
+        if ($timerWanted || (!$isCli && self::requestTimerEnabled(false))) {
             Database::setTimingEnabled(true);
         }
+        // Warm connection (and time it) before Settings/schema
+        try {
+            Database::connection();
+        } catch (Throwable $e) {
+            self::log('DB connect: ' . $e->getMessage(), 'error');
+            throw $e;
+        }
+        // DB-backed diagnostics flag (now that SQL is up)
+        if (!$isCli && !$timerWanted && self::requestTimerEnabled(true)) {
+            Database::setTimingEnabled(true);
+        }
+        self::$bootPhasesMs['db_connect'] = (hrtime(true) - $tPhase) / 1e6;
 
         // CLI poll worker: skip Schema/Crypto migration/Update finish — those can hang
         // under SYSTEM or when SQL is slow; web requests keep the full bootstrap.
+        // media.php uses light boot (no schema/pending) so faceplate bursts stay cheap.
         $cliLight = $isCli && (
             getenv('COLDAISLE_CLI_LIGHT') === '1'
             || in_array('--light', $GLOBALS['argv'] ?? [], true)
         );
 
-        if (!$cliLight) {
+        if (!$cliLight && !$light) {
             $tPhase = hrtime(true);
             try {
                 Schema::ensure();
@@ -147,16 +168,21 @@ class App
                 self::log('Pending update apply: ' . $e->getMessage(), 'warning');
             }
             self::$bootPhasesMs['pending_files'] = (hrtime(true) - $tPhase) / 1e6;
+        } else {
+            self::$bootPhasesMs['light'] = 1.0;
         }
 
         // Phase B: transport + session hardening (web only)
+        $tPhase = hrtime(true);
         if (!$isCli) {
             self::enforceTransportSecurity();
             self::sendSecurityHeaders();
             AuthManager::touchSession();
         }
+        self::$bootPhasesMs['post_boot'] = (hrtime(true) - $tPhase) / 1e6;
 
         self::$booted = true;
+        self::$bootPhasesMs['boot_done_at'] = (hrtime(true) - self::$requestStartHr) / 1e6;
     }
 
     /**
@@ -398,8 +424,10 @@ class App
      * - config debug.request_timer = true
      * - env COLDAISLE_DEBUG=1 or COLDAISLE_REQUEST_TIMER=1
      * Shows timing to all logged-in users while on; only admins can toggle.
+     *
+     * @param bool $allowDb When false, skip SettingsService (no DB yet).
      */
-    public static function requestTimerEnabled(): bool
+    public static function requestTimerEnabled(bool $allowDb = true): bool
     {
         if (PHP_SAPI === 'cli') {
             return false;
@@ -415,7 +443,7 @@ class App
             return true;
         }
         // DB setting (Settings → Diagnostics). Safe if DB not ready yet.
-        if (self::isInstalled() && class_exists('SettingsService', false)) {
+        if ($allowDb && self::isInstalled() && class_exists('SettingsService', false)) {
             try {
                 if (SettingsService::get('debug_request_timer', '0') === '1') {
                     return true;
@@ -457,6 +485,9 @@ class App
         foreach (self::$bootPhasesMs as $k => $ms) {
             $boot[$k] = round((float)$ms, 1);
         }
+        $bootDone = (float)(self::$bootPhasesMs['boot_done_at'] ?? 0);
+        $pageMs = $bootDone > 0 ? max(0.0, $totalMs - $bootDone) : 0.0;
+        $boot['page'] = round($pageMs, 1);
 
         return [
             'total_ms' => round($totalMs, 1),
@@ -466,6 +497,21 @@ class App
             'php_ms' => round($phpMs, 1),
             'boot' => $boot,
         ];
+    }
+
+    /**
+     * Release the session write lock early so parallel media.php / XHR
+     * requests for the same user are not serialized on the session file.
+     * Safe after auth/session reads for the rest of a typical page render.
+     */
+    public static function releaseSessionLock(): void
+    {
+        if (PHP_SAPI === 'cli') {
+            return;
+        }
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
     }
 
     /** Always "ColdAisle" â€” not user-configurable. */
