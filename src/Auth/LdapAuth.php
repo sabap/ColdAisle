@@ -976,6 +976,8 @@ class LdapAuth
         $mappedDeptId = AuthManager::departmentIdFromGroups('ldaps', $groupIds);
 
         if ($existing) {
+            // Existing ColdAisle accounts keep signing in even without a group match
+            // (role is only upgraded when a map matches).
             $fields = [
                 'email' => $email,
                 'display_name' => $displayName,
@@ -1017,10 +1019,30 @@ class LdapAuth
             ) ?? $existing;
         }
 
+        // --- First-time LDAPS user: only provision if in a mapped security group ---
+        // Base DN can be the whole domain; authorization is group membership, not OU.
+        $roleMaps = AuthManager::fetchRoleGroupMaps('ldaps');
+        $requireGroup = self::requireSecurityGroupForProvision();
+        if ($requireGroup && !$mappedRoleId) {
+            App::log(
+                'LDAPS provision denied for ' . $username
+                . ': not a member of any mapped security group'
+                . ' (role maps configured: ' . count($roleMaps)
+                . '; group tokens: ' . count($groupIds) . '). '
+                . 'Map AD groups under Users → Security group → role mapping.',
+                'warning'
+            );
+            return null;
+        }
+
         $defaultRole = (int)(App::config('auth.ldaps.default_role_id')
             ?? Database::fetchValue("SELECT role_id FROM roles WHERE name = 'Viewer'")
             ?? 4);
         $roleId = $mappedRoleId ?: $defaultRole;
+        if ($roleId <= 0) {
+            App::log('LDAPS provision failed for ' . $username . ': no role_id available', 'error');
+            return null;
+        }
 
         $insert = [
             'username' => $username,
@@ -1044,10 +1066,11 @@ class LdapAuth
                 . ' (groups: ' . count($groupIds) . ')',
                 'info'
             );
-        } elseif ($groupIds) {
+        } else {
             App::log(
-                'LDAPS role map: no map match for ' . $username
-                . ' (' . count($groupIds) . ' groups); using default role_id ' . $defaultRole,
+                'LDAPS: new user ' . $username
+                . ' provisioned with default role_id ' . $defaultRole
+                . ' (require_security_group off or no role maps)',
                 'info'
             );
         }
@@ -1058,5 +1081,26 @@ class LdapAuth
              WHERE u.user_id = ?',
             [$id]
         );
+    }
+
+    /**
+     * Whether first-time LDAPS logins must match a role↔security-group map.
+     * Default: true when any LDAPS role maps exist (org-wide Base DN is safe);
+     * false only if explicitly disabled in config / Settings.
+     */
+    public static function requireSecurityGroupForProvision(): bool
+    {
+        $cfg = App::config('auth.ldaps', []) ?: [];
+        // Explicit off: allow default_role_id provisioning (legacy / lab)
+        if (array_key_exists('require_security_group', $cfg) && empty($cfg['require_security_group'])) {
+            return false;
+        }
+        // Explicit on
+        if (!empty($cfg['require_security_group'])) {
+            return true;
+        }
+        // Default (key missing): require group only when maps are configured
+        $maps = AuthManager::fetchRoleGroupMaps('ldaps');
+        return count($maps) > 0;
     }
 }

@@ -48,6 +48,7 @@ return [
             'enabled' => false,
             'host' => 'dc01.contoso.com',
             'port' => 636,
+            // Organization-wide DN (not an IT OU). Access control = security group maps.
             'base_dn' => 'DC=contoso,DC=com',
             'user_filter' => '(sAMAccountName={username})',
             'bind_dn' => 'CN=svc-dcim,OU=Service Accounts,DC=contoso,DC=com',
@@ -56,6 +57,9 @@ return [
             'start_tls' => false,
             // true = do not verify LDAPS server cert (internal CA without ldap-ca.pem)
             'tls_insecure' => false,
+            // true (recommended): first login creates a user only if they match a role_group_maps entry
+            'require_security_group' => true,
+            // Fallback role only when require_security_group is false / no maps configured
             'default_role_id' => null,
         ],
         'entra' => [

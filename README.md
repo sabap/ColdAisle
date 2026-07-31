@@ -156,7 +156,8 @@ Always available after install. Managed under **Users**.
 ### LDAPS
 
 1. Enable PHP `ldap` extension.
-2. **Settings → LDAPS**: host, port `636`, base DN, bind account, user filter.
+2. **Settings → LDAPS**: host, port `636`, **organization-wide** base DN (e.g. `DC=contoso,DC=com`), bind account, user filter.
+3. **Users & Depts → Security group → role mapping**: map AD groups to roles. First-time logins create accounts only when the user is in any mapped group (recommended; keep **Require security group mapping** enabled).
 3. Users authenticating via AD are auto-provisioned with the default role (Viewer unless changed).
 
 ### Microsoft Entra ID
