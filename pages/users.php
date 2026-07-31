@@ -176,6 +176,7 @@ $users = Database::fetchAll(
      LEFT JOIN departments d ON d.department_id = u.department_id
      ORDER BY u.username'
 );
+$onlineMap = AuthManager::onlineUserIdMap();
 $roles = Database::fetchAll('SELECT * FROM roles ORDER BY name');
 // Prefer the four platform roles first in UI
 $roleOrder = ['Global Admin' => 1, 'Administrator' => 2, 'Data Center Admin' => 3, 'Department Admin' => 4, 'Viewer' => 5];
@@ -346,6 +347,9 @@ layout_header('Users & Departments', $user, 'users');
                     <tr>
                         <td>
                             <strong class="user-cell-name"><?= App::e($u['username']) ?></strong>
+                            <?php if (!empty($onlineMap[(int)$u['user_id']])): ?>
+                                <span class="badge badge-success user-online-badge" title="Signed in within the last ~2 minutes">Online</span>
+                            <?php endif; ?>
                             <?php if (!empty($u['display_name'])): ?>
                                 <div class="text-muted user-cell-sub"><?= App::e($u['display_name']) ?></div>
                             <?php endif; ?>
