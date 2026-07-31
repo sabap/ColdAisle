@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.9] - 2026-07-31
+
+### Bug fixes
+
 - **Discover still Internal Server Error (Windows Net-SNMP):** stop setting `MIBS=ALL` during MIB load (that hang is why the poll worker clears `MIBS`). Discover now matches the poller env, discards Net-SNMP stdout noise before JSON, and falls back if SNMP timeout args are unsupported.
 
 ---
-
 ## [0.3.8] - 2026-07-31
 
 ### Bug fixes
