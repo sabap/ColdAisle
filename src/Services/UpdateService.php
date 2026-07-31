@@ -710,6 +710,14 @@ class UpdateService
         if (!is_file($path)) {
             throw new RuntimeException('Pre-update backup zip was not created at ' . $path);
         }
+        // Optional DR copy (Settings → Site backup → SMB)
+        if (class_exists('SmbBackupService')) {
+            try {
+                SmbBackupService::maybeCopy($path, 'update_backup');
+            } catch (Throwable $e) {
+                App::log('SMB copy after pre-update backup: ' . $e->getMessage(), 'warning');
+            }
+        }
         $size = (int)@filesize($path);
         if ($size < 200) {
             @unlink($path);
