@@ -58,6 +58,11 @@ function snmp_device_template_public(?array $tpl): ?array
     ];
 }
 
+// Capture accidental Net-SNMP / extension noise so it never corrupts JSON
+if (ob_get_level() === 0) {
+    ob_start();
+}
+
 try {
     if ($method === 'GET') {
         $id = (int)($_GET['device_id'] ?? $_GET['id'] ?? 0);
@@ -108,6 +113,9 @@ try {
             if (function_exists('set_time_limit')) {
                 @set_time_limit(90);
             }
+            // Prevent Windows Net-SNMP MIB autoload hang (same as poll worker)
+            @putenv('MIBS=');
+            @putenv('MIBDIRS=' . str_replace('\\', '/', dirname(__DIR__) . '/storage/snmp/mibs'));
 
             $prereqs = SnmpDiscover::discoverPrereqs($dev);
             if (!$prereqs['ok']) {
@@ -305,6 +313,13 @@ try {
 
     App::json(['error' => 'Method not allowed'], 405);
 } catch (Throwable $e) {
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
     App::log('API snmp_device: ' . $e->getMessage(), 'error');
-    App::json(['error' => $e->getMessage()], 500);
+    $msg = $e->getMessage();
+    if ($msg === '') {
+        $msg = 'SNMP request failed unexpectedly. Check storage/logs/app.log and that PHP snmp is loaded.';
+    }
+    App::json(['error' => $msg], 500);
 }

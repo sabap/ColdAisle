@@ -71,6 +71,9 @@ class SnmpDiscover
             @set_time_limit(90);
         }
 
+        // Match poll worker: clear MIBS autoload before any SNMP call (Windows hang risk)
+        @putenv('MIBS=');
+
         $version = strtolower(trim((string)($creds['snmp_version'] ?? '3')));
         if ($version === 'v3') {
             $version = '3';
@@ -85,7 +88,7 @@ class SnmpDiscover
             }
         }
 
-        // Load uploaded vendor MIBs so walks can resolve symbolic names when available
+        // Load uploaded vendor MIBs (snmp_read_mib only — never MIBS=ALL)
         $mibsLoaded = 0;
         if (class_exists('MibService')) {
             try {
@@ -95,6 +98,7 @@ class SnmpDiscover
                 $mibsLoaded = 0;
             }
         }
+        @putenv('MIBS='); // loadAll must leave autoload off
 
         $port = (int)($creds['port'] ?? 161);
         if ($port <= 0 || $port > 65535) {
@@ -671,22 +675,26 @@ class SnmpDiscover
                 $sec = self::secLevel($creds);
                 $authProto = self::normalizeSnmpProtocol((string)($creds['auth_protocol'] ?? 'SHA'), 'auth');
                 $privProto = self::normalizeSnmpProtocol((string)($creds['priv_protocol'] ?? 'AES'), 'priv');
-                return @snmp3_get(
-                    $hostPort,
-                    (string)($creds['security_name'] ?? ''),
-                    $sec,
-                    $authProto,
-                    (string)($creds['auth_passphrase'] ?? ''),
-                    $privProto,
-                    (string)($creds['priv_passphrase'] ?? ''),
-                    $oid,
-                    self::WALK_TIMEOUT_USEC,
-                    self::WALK_RETRIES
+                $user = (string)($creds['security_name'] ?? '');
+                $authPass = (string)($creds['auth_passphrase'] ?? '');
+                $privPass = (string)($creds['priv_passphrase'] ?? '');
+                // Prefer timeout args; fall back if this PHP build rejects them
+                $r = @snmp3_get(
+                    $hostPort, $user, $sec, $authProto, $authPass, $privProto, $privPass, $oid,
+                    self::WALK_TIMEOUT_USEC, self::WALK_RETRIES
                 );
+                if ($r === false) {
+                    $r = @snmp3_get($hostPort, $user, $sec, $authProto, $authPass, $privProto, $privPass, $oid);
+                }
+                return $r;
             }
             if (function_exists('snmp2_get')) {
                 $community = (string)($creds['community'] ?? $creds['security_name'] ?? 'public');
-                return @snmp2_get($hostPort, $community, $oid, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
+                $r = @snmp2_get($hostPort, $community, $oid, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
+                if ($r === false) {
+                    $r = @snmp2_get($hostPort, $community, $oid);
+                }
+                return $r;
             }
         } catch (Throwable $e) {
             return null;
@@ -698,25 +706,32 @@ class SnmpDiscover
     private static function snmpWalk(string $hostPort, string $version, array $creds, string $root): array
     {
         $result = false;
-        if ($version === '3' && function_exists('snmp3_real_walk')) {
-            $sec = self::secLevel($creds);
-            $authProto = self::normalizeSnmpProtocol((string)($creds['auth_protocol'] ?? 'SHA'), 'auth');
-            $privProto = self::normalizeSnmpProtocol((string)($creds['priv_protocol'] ?? 'AES'), 'priv');
-            $result = @snmp3_real_walk(
-                $hostPort,
-                (string)($creds['security_name'] ?? ''),
-                $sec,
-                $authProto,
-                (string)($creds['auth_passphrase'] ?? ''),
-                $privProto,
-                (string)($creds['priv_passphrase'] ?? ''),
-                $root,
-                self::WALK_TIMEOUT_USEC,
-                self::WALK_RETRIES
-            );
-        } elseif (function_exists('snmprealwalk')) {
-            $community = (string)($creds['community'] ?? $creds['security_name'] ?? 'public');
-            $result = @snmprealwalk($hostPort, $community, $root, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
+        try {
+            if ($version === '3' && function_exists('snmp3_real_walk')) {
+                $sec = self::secLevel($creds);
+                $authProto = self::normalizeSnmpProtocol((string)($creds['auth_protocol'] ?? 'SHA'), 'auth');
+                $privProto = self::normalizeSnmpProtocol((string)($creds['priv_protocol'] ?? 'AES'), 'priv');
+                $user = (string)($creds['security_name'] ?? '');
+                $authPass = (string)($creds['auth_passphrase'] ?? '');
+                $privPass = (string)($creds['priv_passphrase'] ?? '');
+                $result = @snmp3_real_walk(
+                    $hostPort, $user, $sec, $authProto, $authPass, $privProto, $privPass, $root,
+                    self::WALK_TIMEOUT_USEC, self::WALK_RETRIES
+                );
+                if ($result === false || !is_array($result)) {
+                    $result = @snmp3_real_walk(
+                        $hostPort, $user, $sec, $authProto, $authPass, $privProto, $privPass, $root
+                    );
+                }
+            } elseif (function_exists('snmprealwalk')) {
+                $community = (string)($creds['community'] ?? $creds['security_name'] ?? 'public');
+                $result = @snmprealwalk($hostPort, $community, $root, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
+                if ($result === false || !is_array($result)) {
+                    $result = @snmprealwalk($hostPort, $community, $root);
+                }
+            }
+        } catch (Throwable $e) {
+            throw new RuntimeException('Walk failed for ' . $root . ': ' . $e->getMessage());
         }
         if ($result === false || !is_array($result)) {
             throw new RuntimeException('Walk failed for ' . $root);

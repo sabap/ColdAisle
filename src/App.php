@@ -663,6 +663,11 @@ class App
 
     public static function json($data, int $code = 200): never
     {
+        // Drop any accidental stdout (Net-SNMP MIB warnings, notices) so the
+        // body is pure JSON — corrupted JSON often surfaces as IIS 500 in the UI.
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
         http_response_code($code);
         header('Content-Type: application/json; charset=utf-8');
         // SNMP / AD strings can contain invalid UTF-8; without SUBSTITUTE json_encode

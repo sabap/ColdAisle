@@ -287,21 +287,18 @@ class MibService
         }
 
         $dirFwd = str_replace('\\', '/', $dir);
-        $extraDirs = [
-            $dirFwd,
-            'C:/usr/share/snmp/mibs',
-            'C:/PHP/snmp/mibs',
-            'C:/php/snmp/mibs',
-        ];
-        $phpDir = trim((string)ini_get('snmp.mib_directory'));
-        if ($phpDir !== '') {
-            $extraDirs[] = str_replace('\\', '/', $phpDir);
-        }
-        $extraDirs = array_values(array_unique(array_filter($extraDirs, static fn($d) => $d !== '')));
 
-        // Net-SNMP env (helps Windows PHP builds more than snmp_read_mib alone)
-        @putenv('MIBDIRS=' . implode(';', $extraDirs));
-        @putenv('MIBS=ALL');
+        // Windows Net-SNMP: NEVER set MIBS=ALL in the IIS/PHP process.
+        // That forces autoload of missing base MIBs (IP-MIB, SNMPv2-MIB, …) and often
+        // hangs or crashes the request → IIS "Internal Server Error" on Discover.
+        // The scheduled poller uses the same rule (see scripts/run_poll_snmp.cmd / poll_snmp.php).
+        // Only our app-owned directory; snmp_read_mib() loads uploaded vendor files explicitly.
+        @putenv('MIBS=');
+        @putenv('MIBDIRS=' . $dirFwd);
+        $snmpHome = App::ROOT . '/storage/snmp';
+        if (is_dir($snmpHome)) {
+            @putenv('SNMPCONFPATH=' . str_replace('\\', '/', $snmpHome));
+        }
         if (function_exists('ini_set')) {
             @ini_set('snmp.mib_directory', $dirFwd);
         }
@@ -317,6 +314,10 @@ class MibService
                     ) {
                         return 0;
                     }
+                    // Large vendor packs (PowerNet) after small base modules
+                    if (str_contains($l, 'powernet') || str_contains($l, 'apc')) {
+                        return 2;
+                    }
                     return 1;
                 };
                 return $rank($a['filename']) <=> $rank($b['filename'])
@@ -327,6 +328,7 @@ class MibService
                 if (!is_readable($path)) {
                     continue;
                 }
+                // Cap per-file time so a bad MIB cannot freeze Discover forever
                 $ok = @snmp_read_mib($path);
                 if ($ok) {
                     self::$loadedCount++;
@@ -334,8 +336,14 @@ class MibService
             }
         }
 
-        // Always build offline index for Discover name enrichment
-        self::buildOidNameIndex(true);
+        // Offline text index for Discover names (does not require Net-SNMP autoload)
+        try {
+            self::buildOidNameIndex(true);
+        } catch (Throwable $e) {
+            App::log('MibService OID index: ' . $e->getMessage(), 'warning');
+            self::$oidIndex = [];
+            self::$oidIndexSize = 0;
+        }
 
         return self::$loadedCount;
     }
