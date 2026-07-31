@@ -10,23 +10,32 @@ if (!App::isInstalled()) {
 
 $user = App::requireAuth();
 
+/** @var array<string,mixed>|null */
 function api_read_json(): array
 {
+    // php://input can only be read once — cache for CSRF + action body
+    static $cached = null;
+    if ($cached !== null) {
+        return $cached;
+    }
     $raw = file_get_contents('php://input') ?: '';
     if ($raw === '') {
-        return $_POST ?: [];
+        $cached = is_array($_POST) ? $_POST : [];
+        return $cached;
     }
     $data = json_decode($raw, true);
-    return is_array($data) ? $data : [];
+    $cached = is_array($data) ? $data : [];
+    return $cached;
 }
 
 function api_require_csrf(): void
 {
-    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? (api_read_json()['_csrf'] ?? ($_POST['_csrf'] ?? ''));
+    $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+    $token = is_string($hdr) && $hdr !== ''
+        ? $hdr
+        : (api_read_json()['_csrf'] ?? ($_POST['_csrf'] ?? ''));
     $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
     if (in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true) && !App::verifyCsrf(is_string($token) ? $token : null)) {
-        // Allow if session-authenticated same-origin; still prefer token
-        // Strict mode:
         App::json(['error' => 'Invalid CSRF token'], 419);
     }
 }

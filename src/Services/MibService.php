@@ -272,27 +272,20 @@ class MibService
      *
      * @return int Number of MIB files successfully passed to snmp_read_mib
      */
-    public static function loadAll(bool $force = false): int
+    /**
+     * Set Net-SNMP env for this process without loading MIB files.
+     * Safe for IIS Discover (avoids snmp_read_mib / MIBS=ALL hangs).
+     */
+    public static function prepareSnmpEnvironment(): void
     {
-        if (self::$loaded && !$force) {
-            return self::$loadedCount;
-        }
-        self::$loaded = true;
-        self::$loadedCount = 0;
-
         try {
             $dir = self::ensureDirectory();
         } catch (Throwable $e) {
-            return 0;
+            @putenv('MIBS=');
+            return;
         }
-
         $dirFwd = str_replace('\\', '/', $dir);
-
-        // Windows Net-SNMP: NEVER set MIBS=ALL in the IIS/PHP process.
-        // That forces autoload of missing base MIBs (IP-MIB, SNMPv2-MIB, …) and often
-        // hangs or crashes the request → IIS "Internal Server Error" on Discover.
-        // The scheduled poller uses the same rule (see scripts/run_poll_snmp.cmd / poll_snmp.php).
-        // Only our app-owned directory; snmp_read_mib() loads uploaded vendor files explicitly.
+        // Windows Net-SNMP: NEVER set MIBS=ALL (hangs IIS when base MIBs missing).
         @putenv('MIBS=');
         @putenv('MIBDIRS=' . $dirFwd);
         $snmpHome = App::ROOT . '/storage/snmp';
@@ -302,10 +295,28 @@ class MibService
         if (function_exists('ini_set')) {
             @ini_set('snmp.mib_directory', $dirFwd);
         }
+    }
 
-        if (self::snmpExtensionLoaded() && self::canReadMib()) {
+    public static function loadAll(bool $force = false): int
+    {
+        if (self::$loaded && !$force) {
+            return self::$loadedCount;
+        }
+        self::$loaded = true;
+        self::$loadedCount = 0;
+
+        self::prepareSnmpEnvironment();
+
+        try {
+            $dir = self::ensureDirectory();
+        } catch (Throwable $e) {
+            return 0;
+        }
+
+        // snmp_read_mib is optional enrichment for CLI poll — skip huge packs in web by default
+        $allowRead = (PHP_SAPI === 'cli') || !empty($GLOBALS['COLDAISLE_SNMP_READ_MIB']);
+        if ($allowRead && self::snmpExtensionLoaded() && self::canReadMib()) {
             $files = self::listMibs();
-            // Prefer base / RFC-ish names first so vendor IMPORTs can resolve
             usort($files, static function ($a, $b) {
                 $rank = static function (string $fn): int {
                     $l = strtolower($fn);
@@ -314,7 +325,6 @@ class MibService
                     ) {
                         return 0;
                     }
-                    // Large vendor packs (PowerNet) after small base modules
                     if (str_contains($l, 'powernet') || str_contains($l, 'apc')) {
                         return 2;
                     }
@@ -328,7 +338,6 @@ class MibService
                 if (!is_readable($path)) {
                     continue;
                 }
-                // Cap per-file time so a bad MIB cannot freeze Discover forever
                 $ok = @snmp_read_mib($path);
                 if ($ok) {
                     self::$loadedCount++;
@@ -345,6 +354,7 @@ class MibService
             self::$oidIndexSize = 0;
         }
 
+        @putenv('MIBS=');
         return self::$loadedCount;
     }
 
