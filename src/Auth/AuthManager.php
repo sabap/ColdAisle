@@ -15,6 +15,12 @@ declare(strict_types=1);
 
 class AuthManager
 {
+    /** Online badge: last_seen within this many seconds (≤ ~2 min staleness). */
+    public const PRESENCE_ONLINE_SECONDS = 120;
+
+    /** Throttle auth_sessions writes (seconds between heartbeats). */
+    public const PRESENCE_HEARTBEAT_SECONDS = 30;
+
     /** @var list<string> */
     public const PERMISSIONS = [
         'view_dashboard',
@@ -161,10 +167,13 @@ class AuthManager
         $_SESSION['login_at'] = time();
         $_SESSION['last_activity'] = time();
         $_SESSION['_ua'] = self::userAgentFingerprint();
+        $_SESSION['_presence_at'] = 0; // force presence row on first touch
 
         Database::update('users', [
             'last_login' => date('Y-m-d H:i:s'),
         ], 'user_id = :id', [':id' => (int)$user['user_id']]);
+
+        self::upsertPresence((int)$user['user_id'], true);
 
         AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'login', 'user', (int)$user['user_id'], [
             'source' => $source,
@@ -179,6 +188,7 @@ class AuthManager
         } catch (Throwable $e) {
             $user = null;
         }
+        self::unregisterPresence();
         if ($user) {
             AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'logout', 'user', (int)$user['user_id']);
         }
@@ -237,6 +247,182 @@ class AuthManager
         }
 
         $_SESSION['last_activity'] = $now;
+
+        // Presence heartbeat (throttled) — local / LDAPS / Entra all use this path
+        $lastPresence = (int)($_SESSION['_presence_at'] ?? 0);
+        if ($lastPresence === 0 || ($now - $lastPresence) >= self::PRESENCE_HEARTBEAT_SECONDS) {
+            self::upsertPresence((int)$_SESSION['user_id'], false);
+            $_SESSION['_presence_at'] = $now;
+        }
+    }
+
+    /**
+     * Users with a recent presence heartbeat (for Online badges / update warnings).
+     *
+     * @return list<array{user_id:int,username:string,display_name:?string,last_seen_at:string}>
+     */
+    public static function activeUsers(?int $withinSeconds = null): array
+    {
+        $within = $withinSeconds ?? self::PRESENCE_ONLINE_SECONDS;
+        $within = max(30, min(3600, $within));
+        try {
+            self::purgeExpiredPresence();
+            $cutoff = gmdate('Y-m-d H:i:s', time() - $within);
+            $rows = Database::fetchAll(
+                'SELECT u.user_id, u.username, u.display_name,
+                        MAX(s.last_seen_at) AS last_seen_at
+                 FROM auth_sessions s
+                 INNER JOIN users u ON u.user_id = s.user_id
+                 WHERE u.is_active = 1
+                   AND s.last_seen_at >= ?
+                   AND s.expires_at >= ?
+                 GROUP BY u.user_id, u.username, u.display_name
+                 ORDER BY u.username',
+                [$cutoff, gmdate('Y-m-d H:i:s')]
+            );
+            $out = [];
+            foreach ($rows as $r) {
+                $out[] = [
+                    'user_id' => (int)$r['user_id'],
+                    'username' => (string)$r['username'],
+                    'display_name' => $r['display_name'] !== null && $r['display_name'] !== ''
+                        ? (string)$r['display_name'] : null,
+                    'last_seen_at' => (string)($r['last_seen_at'] ?? ''),
+                ];
+            }
+            return $out;
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * @return array{count:int,names:string,users:list<array{user_id:int,username:string,display_name:?string,last_seen_at:string}>}
+     */
+    public static function activeUserSummary(?int $withinSeconds = null, int $nameLimit = 8): array
+    {
+        $users = self::activeUsers($withinSeconds);
+        $labels = [];
+        foreach ($users as $u) {
+            $labels[] = $u['display_name'] ?: $u['username'];
+        }
+        $shown = array_slice($labels, 0, max(1, $nameLimit));
+        $names = implode(', ', $shown);
+        if (count($labels) > count($shown)) {
+            $names .= ' +' . (count($labels) - count($shown)) . ' more';
+        }
+        return [
+            'count' => count($users),
+            'names' => $names,
+            'users' => $users,
+        ];
+    }
+
+    /** @return array<int,true> user_id => true for currently online users */
+    public static function onlineUserIdMap(?int $withinSeconds = null): array
+    {
+        $map = [];
+        foreach (self::activeUsers($withinSeconds) as $u) {
+            $map[(int)$u['user_id']] = true;
+        }
+        return $map;
+    }
+
+    private static function upsertPresence(int $userId, bool $force): void
+    {
+        if ($userId <= 0) {
+            return;
+        }
+        $sid = session_id();
+        if ($sid === '') {
+            return;
+        }
+        $now = gmdate('Y-m-d H:i:s');
+        $expires = self::presenceExpiresAtUtc();
+        $ip = self::clientIp();
+        $ua = substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 500);
+        try {
+            $exists = Database::fetchValue(
+                'SELECT 1 FROM auth_sessions WHERE session_id = ?',
+                [$sid]
+            );
+            if ($exists) {
+                Database::update('auth_sessions', [
+                    'user_id' => $userId,
+                    'last_seen_at' => $now,
+                    'expires_at' => $expires,
+                    'ip_address' => $ip,
+                    'user_agent' => $ua !== '' ? $ua : null,
+                ], 'session_id = :sid', [':sid' => $sid]);
+            } else {
+                Database::insert('auth_sessions', [
+                    'session_id' => $sid,
+                    'user_id' => $userId,
+                    'ip_address' => $ip,
+                    'user_agent' => $ua !== '' ? $ua : null,
+                    'last_seen_at' => $now,
+                    'expires_at' => $expires,
+                    'created_at' => $now,
+                ]);
+            }
+            if ($force || random_int(1, 20) === 1) {
+                self::purgeExpiredPresence();
+            }
+        } catch (Throwable $e) {
+            // Table may not exist until schema ensure; never break login
+            App::log('Presence upsert: ' . $e->getMessage(), 'warning');
+        }
+    }
+
+    private static function unregisterPresence(): void
+    {
+        $sid = session_id();
+        if ($sid === '') {
+            return;
+        }
+        try {
+            Database::delete('auth_sessions', 'session_id = ?', [$sid]);
+        } catch (Throwable $e) {
+            // non-fatal
+        }
+    }
+
+    private static function purgeExpiredPresence(): void
+    {
+        try {
+            $now = gmdate('Y-m-d H:i:s');
+            // Drop expired rows and long-stale heartbeats (keep table small)
+            Database::query(
+                'DELETE FROM auth_sessions WHERE expires_at < ? OR last_seen_at < ?',
+                [$now, gmdate('Y-m-d H:i:s', time() - 86400)]
+            );
+        } catch (Throwable $e) {
+            // non-fatal
+        }
+    }
+
+    private static function presenceExpiresAtUtc(): string
+    {
+        $sec = App::securityConfig();
+        $idleMin = (int)($sec['session_idle_minutes'] ?? 480);
+        if ($idleMin <= 0) {
+            $idleMin = 480;
+        }
+        // Session can last idle window from last activity; store as absolute wall clock
+        return gmdate('Y-m-d H:i:s', time() + ($idleMin * 60));
+    }
+
+    private static function clientIp(): ?string
+    {
+        $ip = (string)($_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? '');
+        if (str_contains($ip, ',')) {
+            $ip = trim(explode(',', $ip, 2)[0]);
+        }
+        $ip = trim($ip);
+        if ($ip === '' || strlen($ip) > 45) {
+            return null;
+        }
+        return $ip;
     }
 
     private static function expireSession(string $message): void
@@ -249,6 +435,7 @@ class AuthManager
         } catch (Throwable $e) {
             $user = null;
         }
+        self::unregisterPresence();
         if ($user) {
             try {
                 AuditService::log(

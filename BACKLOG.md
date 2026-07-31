@@ -25,34 +25,19 @@ Historical note commits:
 
 | Field | Value |
 |-------|--------|
-| **Status** | open |
+| **Status** | **done** (release **0.2.99**) |
 | **Requested** | 2026-07-26 (user) |
 | **Source** | `BACKLOG.md` / commit `dfdeb03` |
-| **Priority** | nice-to-have (ops UX) |
+| **Delivered** | `auth_sessions` registry + heartbeat; Online badge on Users; Settings → Updates warning |
 
 **Goal:** Show who is signed in; warn before in-app updates while others are active.
 
-**UX**
-
-1. **Users & Departments** — badge/tag next to users with an active session (“Online” / “Active”).  
-2. **Settings → Updates → Apply** — warning such as:  
-   *“N users are currently logged in (alice, bob, …). Applying this update may interrupt them.”*  
-   Warning only (not a hard block) unless a later “strict mode” is requested.
-
-**Implementer notes**
-
-- `auth_sessions` exists in `sql/schema.sql` but may not be fully wired (PHP native sessions).  
-- Likely need login registry + `last_seen` heartbeat, idle cleanup aligned with session security settings, helper e.g. `AuthManager::activeUsers()`.  
-- No multi-node session store unless PROD requires it.
-
-**Out of scope (unless asked later):** websockets, force-logout on update, per-page “who is viewing”, mobile push.
-
 **Acceptance**
 
-- [ ] Online users visible on Users & Departments (≤ ~1–2 min staleness OK)  
-- [ ] Update apply shows count + sample usernames when sessions are active  
-- [ ] Expired sessions not shown as active  
-- [ ] Local / LDAPS / Entra accounts behave the same  
+- [x] Online users visible on Users & Departments (≤ ~2 min staleness)  
+- [x] Update apply shows count + sample usernames when sessions are active (warning only)  
+- [x] Expired sessions not shown as active  
+- [x] Local / LDAPS / Entra accounts behave the same (shared `touchSession` path)  
 
 ---
 
@@ -256,6 +241,16 @@ Historical note commits:
 ---
 
 ## Completed (keep for audit; do not re-implement)
+
+### Active sessions / presence
+
+| Field | Value |
+|-------|--------|
+| **Status** | **done** (release **0.2.99**) |
+| **Source** | backlog item #1 |
+| **Delivered** | Presence via `auth_sessions` (login + throttled heartbeat); Online badge on Users & Departments; Settings → Updates apply warning lists active users (not a hard block) |
+
+---
 
 ### Update / backup housekeeping
 

@@ -60,9 +60,18 @@ CREATE TABLE auth_sessions (
     user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
     ip_address NVARCHAR(45) NULL,
     user_agent NVARCHAR(500) NULL,
+    last_seen_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     expires_at DATETIME2 NOT NULL,
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_auth_sessions_user' AND object_id = OBJECT_ID('auth_sessions'))
+CREATE NONCLUSTERED INDEX IX_auth_sessions_user ON auth_sessions(user_id, last_seen_at DESC);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_auth_sessions_seen' AND object_id = OBJECT_ID('auth_sessions'))
+CREATE NONCLUSTERED INDEX IX_auth_sessions_seen ON auth_sessions(last_seen_at DESC);
 GO
 
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'audit_log')

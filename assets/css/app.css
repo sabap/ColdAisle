@@ -120,6 +120,14 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
 }
 .content { padding: 1.25rem 1.5rem 2rem; flex: 1; }
 
+/* Users: presence */
+.user-online-badge {
+  margin-left: .35rem;
+  vertical-align: middle;
+  font-size: .7rem;
+  letter-spacing: .02em;
+}
+
 /* Dashboard 3D loads after first paint */
 .panel-3d.dash-3d-loading {
   position: relative;

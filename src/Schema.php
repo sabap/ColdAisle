@@ -391,6 +391,25 @@ class Schema
                 )"
             );
 
+            // Active session / presence registry (login + heartbeat)
+            self::ensureTable(
+                'auth_sessions',
+                "CREATE TABLE auth_sessions (
+                    session_id NVARCHAR(128) NOT NULL PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    ip_address NVARCHAR(45) NULL,
+                    user_agent NVARCHAR(500) NULL,
+                    last_seen_at DATETIME2 NOT NULL CONSTRAINT DF_auth_sess_seen DEFAULT SYSUTCDATETIME(),
+                    expires_at DATETIME2 NOT NULL,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_auth_sess_created DEFAULT SYSUTCDATETIME()
+                )"
+            );
+            self::ensureColumn(
+                'auth_sessions',
+                'last_seen_at',
+                "DATETIME2 NOT NULL CONSTRAINT DF_auth_sess_seen2 DEFAULT SYSUTCDATETIME()"
+            );
+
             // Mark this app version as schema-ready (skips catalog probes on next request)
             if (!is_dir($stampDir)) {
                 @mkdir($stampDir, 0775, true);

@@ -1593,8 +1593,23 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
                 <input type="hidden" name="section" value="update_backup_now">
                 <button class="btn btn-secondary" type="submit">Create recovery backup</button>
             </form>
-            <?php if ($updStatus && !empty($updStatus['update_available'])): ?>
+            <?php if ($updStatus && !empty($updStatus['update_available'])):
+                $presence = AuthManager::activeUserSummary();
+                $presenceWarn = '';
+                if ($presence['count'] > 0) {
+                    $presenceWarn = $presence['count'] === 1
+                        ? ('1 user is currently logged in (' . $presence['names'] . '). Applying this update may interrupt them.')
+                        : ($presence['count'] . ' users are currently logged in (' . $presence['names'] . '). Applying this update may interrupt them.');
+                }
+                ?>
+            <?php if ($presenceWarn !== ''): ?>
+                <div class="alert alert-warning" style="margin:.5rem 0 0;flex:1 1 100%">
+                    <strong>Active sessions:</strong> <?= App::e($presenceWarn) ?>
+                    This is a warning only — you can still apply the update.
+                </div>
+            <?php endif; ?>
             <form method="post" style="display:inline" id="form-update-apply"
+                  data-presence-warn="<?= App::e($presenceWarn) ?>"
                   onsubmit="return coldAisleStartUpdate(this, '<?= App::e((string)$updStatus['latest']) ?>');">
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                 <input type="hidden" name="section" value="update_apply">
@@ -1632,7 +1647,12 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
         </style>
         <script>
         function coldAisleStartUpdate(form, version) {
-            if (!confirm('Backup this install and update to v' + version + '? The site may be briefly unavailable.')) {
+            var msg = 'Backup this install and update to v' + version + '? The site may be briefly unavailable.';
+            var presence = (form && form.getAttribute('data-presence-warn')) || '';
+            if (presence) {
+                msg = presence + '\n\n' + msg;
+            }
+            if (!confirm(msg)) {
                 return false;
             }
             var prog = document.getElementById('update-progress');
