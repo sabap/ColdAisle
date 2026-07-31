@@ -10,30 +10,28 @@ require_once __DIR__ . '/SnmpPoller.php';
 class SnmpDiscover
 {
     /**
-     * Enterprise / system roots to walk (bounded).
-     * Narrow trees first so env managers / probes fill the candidate budget before
-     * a broad PowerNet walk exhausts MAX_OIDS (or hangs IIS).
+     * Roots to walk after a successful sysDescr probe.
+     * Keep this short — each root costs a full SNMP timeout on dead branches.
+     * Broad 1.3.6.1.4.1.318 is intentionally omitted (too large for IIS Discover).
      */
     private const WALK_ROOTS = [
         '1.3.6.1.2.1.1',              // MIB-II system
-        '1.3.6.1.4.1.318.1.1.10',     // APC Environmental Monitoring (AP9340 / IEM / probes)
-        '1.3.6.1.4.1.318.1.1.25',     // APC Universal I/O / modular sensors
-        '1.3.6.1.4.1.318.1.1.26',     // APC rPDU2 (metered PDUs)
+        '1.3.6.1.4.1.318.1.1.10',     // APC Environmental Monitoring (AP9340 / IEM)
+        '1.3.6.1.4.1.318.1.1.25',     // APC Universal I/O
+        '1.3.6.1.4.1.318.1.1.26',     // APC rPDU2
         '1.3.6.1.4.1.318.1.1.12',     // APC rPDU
-        '1.3.6.1.4.1.318.1.1.3',      // APC UPS-ish (when present)
-        '1.3.6.1.4.1.3808',           // CyberPower
-        '1.3.6.1.4.1.13742',          // Raritan
-        '1.3.6.1.4.1.21239',          // Vertiv / Geist
-        '1.3.6.1.4.1.1718',           // Server Technology
+        '1.3.6.1.4.1.3808.1.1.1',     // CyberPower power (narrow)
+        '1.3.6.1.4.1.13742.1',        // Raritan (narrow)
+        '1.3.6.1.4.1.21239.2',        // Vertiv / Geist (narrow)
         '1.3.6.1.4.1.99999',          // ColdAisle lab agent
-        // Broad APC last — can be huge; only fills remaining MAX_OIDS budget
-        '1.3.6.1.4.1.318',
     ];
 
-    private const MAX_OIDS = 400;
-    /** Per-walk timeout passed to snmp*_real_walk (microseconds). */
-    private const WALK_TIMEOUT_USEC = 3_000_000;
+    private const MAX_OIDS = 300;
+    /** Per-request SNMP timeout (microseconds). Keep short so IIS never soft-500s. */
+    private const WALK_TIMEOUT_USEC = 1_500_000;
     private const WALK_RETRIES = 0;
+    /** Probe GET timeout (microseconds) — fail closed agents quickly. */
+    private const PROBE_TIMEOUT_USEC = 1_200_000;
     /** Candidates shown in Discover UI (high-signal only). */
     private const MAX_DISPLAY_CANDIDATES = 40;
     /** Minimum score to appear in the Discover table. */
@@ -88,17 +86,19 @@ class SnmpDiscover
             }
         }
 
-        // Load uploaded vendor MIBs (snmp_read_mib only — never MIBS=ALL)
+        // Web Discover: do NOT snmp_read_mib() large PowerNet packs in IIS (can hang).
+        // Use offline text OID index only for names. Poll worker may still load MIBs.
         $mibsLoaded = 0;
+        @putenv('MIBS=');
         if (class_exists('MibService')) {
             try {
-                $mibsLoaded = MibService::loadAll();
+                // Ensure MIB dir / env only; skip Net-SNMP file load for speed/stability
+                MibService::prepareSnmpEnvironment();
             } catch (Throwable $e) {
-                App::log('SnmpDiscover MIB load: ' . $e->getMessage(), 'warning');
-                $mibsLoaded = 0;
+                App::log('SnmpDiscover env prep: ' . $e->getMessage(), 'warning');
             }
         }
-        @putenv('MIBS='); // loadAll must leave autoload off
+        @putenv('MIBS=');
 
         $port = (int)($creds['port'] ?? 161);
         if ($port <= 0 || $port > 65535) {
@@ -111,21 +111,34 @@ class SnmpDiscover
         if (defined('SNMP_VALUE_PLAIN')) {
             @snmp_set_valueretrieval(SNMP_VALUE_PLAIN);
         }
+        self::setOidOutputFormat('numeric');
 
-        $sysDescr = self::snmpGet($hostPort, $version, $creds, '1.3.6.1.2.1.1.1.0');
+        // --- Fast probe: if this fails, do NOT walk dozens of trees (IIS 500 timeout) ---
+        $sysDescr = self::snmpGet(
+            $hostPort,
+            $version,
+            $creds,
+            '1.3.6.1.2.1.1.1.0',
+            self::PROBE_TIMEOUT_USEC
+        );
+        if ($sysDescr === null || $sysDescr === false) {
+            $hint = $version === '3'
+                ? ' Check SNMPv3 user, auth/priv protocols, passphrases, and that UDP/161 is open from the IIS server.'
+                : ' Check community string and that UDP/161 is open from the IIS server.';
+            throw new RuntimeException(
+                'No SNMP response from ' . $hostPort . ' (sysDescr).' . $hint
+            );
+        }
+
         /** @var array<string,array{raw:mixed,name:?string,module:?string,raw_key:string}> $collected */
         $collected = [];
         $errors = [];
 
-        // 1) Prefer MODULE::name keys when MIBs resolve
-        self::setOidOutputFormat('module');
-        self::collectWalks($hostPort, $version, $creds, $collected, $errors);
-
-        // 2) Fill gaps with pure numeric OIDs (portable maps; names kept from module pass)
+        // Single numeric walk pass only (module pass doubles time and is flaky on Windows)
         self::setOidOutputFormat('numeric');
         self::collectWalks($hostPort, $version, $creds, $collected, $errors);
 
-        // Always try lab + common leaf GETs even if walk failed
+        // Targeted leaf GETs (only after probe succeeded)
         $leafGets = [
             '1.3.6.1.2.1.1.3.0',
             '1.3.6.1.4.1.99999.2.1.0',
@@ -133,30 +146,31 @@ class SnmpDiscover
             '1.3.6.1.4.1.99999.2.3.0',
             '1.3.6.1.4.1.318.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.318.1.1.1.4.2.8.0',
-            '1.3.6.1.4.1.318.1.1.12.1.6.0', // rPDUIdentSerialNumber
-            '1.3.6.1.4.1.318.1.1.26.2.1.9.0', // rPDU2IdentSerialNumber (scalar form)
+            '1.3.6.1.4.1.318.1.1.12.1.6.0',
+            '1.3.6.1.4.1.318.1.1.26.2.1.9.0',
             '1.3.6.1.4.1.318.1.1.26.2.1.9.1',
             '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.1',
-            '1.3.6.1.4.1.318.1.1.26.6.3.1.7.1', // rPDU2 phase power-ish (common)
-            // rPDU2 outlet metered status (table column.instance) — walks often hit MAX_OIDS first
-            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.6.1', // StatusCurrent.1
-            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.7.1', // StatusPower.1
-            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.5.1', // StatusState.1
-            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.3.1', // StatusName.1
-            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.6.1.1', // module-index style Current.1.1
+            '1.3.6.1.4.1.318.1.1.26.6.3.1.7.1',
+            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.6.1',
+            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.7.1',
+            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.5.1',
+            '1.3.6.1.4.1.318.1.1.26.9.4.3.1.3.1',
             '1.3.6.1.4.1.3808.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.3808.1.1.1.4.2.5.0',
-            // APC Integrated Environmental Monitor / AP9340-class probe tables (common instances)
-            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.4.1',  // iemStatusProbeCurrentTemp (example index)
-            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.6.1',  // iemStatusProbeCurrentHumid
-            '1.3.6.1.4.1.318.1.1.10.4.2.3.1.5.1',  // emStatusProbe* style (varies by firmware)
+            // APC env / AP9340-class probe instances
+            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.4.1',
+            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.6.1',
+            '1.3.6.1.4.1.318.1.1.10.4.2.3.1.5.1',
             '1.3.6.1.4.1.318.1.1.10.4.2.3.1.6.1',
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.1', // uioSensorStatusTemperature-ish
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.4.1', // uioSensorStatusHumidity-ish
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.1',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.4.1',
         ];
         foreach ($leafGets as $oid) {
             if (isset($collected[$oid])) {
                 continue;
+            }
+            if (count($collected) >= self::MAX_OIDS) {
+                break;
             }
             $v = self::snmpGet($hostPort, $version, $creds, $oid);
             if ($v !== null && $v !== false) {
@@ -169,16 +183,20 @@ class SnmpDiscover
             }
         }
 
-        if (!$collected && $sysDescr === null) {
+        if (!$collected && ($sysDescr === null || $sysDescr === false)) {
             $detail = $errors ? implode('; ', array_slice($errors, 0, 3)) : 'No response';
             throw new RuntimeException('SNMP discovery failed: ' . $detail);
         }
 
-        // Offline MIB index: map numeric OIDs → Module::name when Net-SNMP still
-        // returns numeric keys (typical on Windows even after snmp_read_mib).
+        // Offline MIB text index for names (no snmp_read_mib)
         $indexSize = 0;
         if (class_exists('MibService')) {
-            $indexSize = MibService::oidIndexSize();
+            try {
+                $indexSize = MibService::oidIndexSize();
+            } catch (Throwable $e) {
+                App::log('SnmpDiscover OID index: ' . $e->getMessage(), 'warning');
+                $indexSize = 0;
+            }
         }
 
         $scored = [];
@@ -557,12 +575,19 @@ class SnmpDiscover
         array &$collected,
         array &$errors
     ): void {
+        $consecutiveFails = 0;
         foreach (self::WALK_ROOTS as $root) {
             if (count($collected) >= self::MAX_OIDS) {
                 break;
             }
+            // After several empty trees, stop — agent already answered probe; further
+            // enterprise branches often just burn IIS request time.
+            if ($consecutiveFails >= 4 && count($collected) > 5) {
+                break;
+            }
             try {
                 $walk = self::snmpWalk($hostPort, $version, $creds, $root);
+                $before = count($collected);
                 foreach ($walk as $key => $val) {
                     $parsed = self::parseOidKey((string)$key);
                     $oid = $parsed['oid'];
@@ -585,8 +610,14 @@ class SnmpDiscover
                         return;
                     }
                 }
+                if (count($collected) === $before) {
+                    $consecutiveFails++;
+                } else {
+                    $consecutiveFails = 0;
+                }
             } catch (Throwable $e) {
                 $errors[] = $root . ': ' . $e->getMessage();
+                $consecutiveFails++;
             }
         }
     }
@@ -668,8 +699,14 @@ class SnmpDiscover
         return mb_substr($s, 0, 60);
     }
 
-    private static function snmpGet(string $hostPort, string $version, array $creds, string $oid)
-    {
+    private static function snmpGet(
+        string $hostPort,
+        string $version,
+        array $creds,
+        string $oid,
+        ?int $timeoutUsec = null
+    ) {
+        $timeout = $timeoutUsec ?? self::WALK_TIMEOUT_USEC;
         try {
             if ($version === '3' && function_exists('snmp3_get')) {
                 $sec = self::secLevel($creds);
@@ -678,23 +715,16 @@ class SnmpDiscover
                 $user = (string)($creds['security_name'] ?? '');
                 $authPass = (string)($creds['auth_passphrase'] ?? '');
                 $privPass = (string)($creds['priv_passphrase'] ?? '');
-                // Prefer timeout args; fall back if this PHP build rejects them
                 $r = @snmp3_get(
                     $hostPort, $user, $sec, $authProto, $authPass, $privProto, $privPass, $oid,
-                    self::WALK_TIMEOUT_USEC, self::WALK_RETRIES
+                    $timeout, self::WALK_RETRIES
                 );
-                if ($r === false) {
-                    $r = @snmp3_get($hostPort, $user, $sec, $authProto, $authPass, $privProto, $privPass, $oid);
-                }
-                return $r;
+                return ($r === false) ? null : $r;
             }
             if (function_exists('snmp2_get')) {
                 $community = (string)($creds['community'] ?? $creds['security_name'] ?? 'public');
-                $r = @snmp2_get($hostPort, $community, $oid, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
-                if ($r === false) {
-                    $r = @snmp2_get($hostPort, $community, $oid);
-                }
-                return $r;
+                $r = @snmp2_get($hostPort, $community, $oid, $timeout, self::WALK_RETRIES);
+                return ($r === false) ? null : $r;
             }
         } catch (Throwable $e) {
             return null;

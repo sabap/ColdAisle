@@ -63,6 +63,32 @@ if (ob_get_level() === 0) {
     ob_start();
 }
 
+// Convert fatal PHP errors into JSON (IIS otherwise returns bare "Internal Server Error")
+register_shutdown_function(static function (): void {
+    $err = error_get_last();
+    if ($err === null) {
+        return;
+    }
+    $fatal = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR];
+    if (!in_array($err['type'] ?? 0, $fatal, true)) {
+        return;
+    }
+    while (ob_get_level() > 0) {
+        @ob_end_clean();
+    }
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+    }
+    $msg = (string)($err['message'] ?? 'Fatal error');
+    $file = basename((string)($err['file'] ?? ''));
+    $line = (int)($err['line'] ?? 0);
+    echo json_encode([
+        'error' => 'PHP fatal during SNMP request: ' . $msg
+            . ($file !== '' ? " ({$file}:{$line})" : ''),
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+});
+
 try {
     if ($method === 'GET') {
         $id = (int)($_GET['device_id'] ?? $_GET['id'] ?? 0);
