@@ -62,6 +62,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'start_tls' => !empty($_POST['ldaps_start_tls']),
                 'tls_insecure' => !empty($_POST['ldaps_tls_insecure']),
                 'default_role_id' => $_POST['ldaps_default_role_id'] !== '' ? (int)$_POST['ldaps_default_role_id'] : null,
+                // When on (default): new LDAPS users must match a role security-group map
+                'require_security_group' => !empty($_POST['ldaps_require_security_group']),
             ];
             SettingsService::set('auth_ldaps_enabled', !empty($_POST['ldaps_enabled']) ? '1' : '0', 'auth');
 
@@ -1493,13 +1495,29 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
                 <input class="form-control" type="number" name="ldaps_port" value="<?= (int)($ldaps['port'] ?? 636) ?>"></div>
             <div class="form-row full"><label>Base DN</label>
                 <input class="form-control" name="ldaps_base_dn" value="<?= App::e($ldaps['base_dn'] ?? '') ?>" placeholder="DC=contoso,DC=com"></div>
+            <p class="text-muted form-row full" style="font-size:.78rem;margin:-.35rem 0 .5rem">
+                Use the <strong>organization-wide</strong> DN (e.g. <code>DC=sgmc,DC=org</code>) so users outside IT can be found.
+                Do <em>not</em> limit Base DN to an OU to control who gets access — use security group maps instead.
+            </p>
             <div class="form-row full"><label>User Filter</label>
                 <input class="form-control" name="ldaps_user_filter" value="<?= App::e($ldaps['user_filter'] ?? '(sAMAccountName={username})') ?>"></div>
             <div class="form-row full"><label>Bind DN (service account)</label>
                 <input class="form-control" name="ldaps_bind_dn" value="<?= App::e($ldaps['bind_dn'] ?? '') ?>"></div>
             <div class="form-row"><label>Bind Password</label>
                 <input class="form-control" type="password" name="ldaps_bind_password" placeholder="Leave blank to keep"></div>
-            <div class="form-row"><label>Default Role (new users)</label>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="ldaps_require_security_group" value="1"
+                    <?= (!array_key_exists('require_security_group', $ldaps) || !empty($ldaps['require_security_group'])) ? 'checked' : '' ?>>
+                Require security group mapping to create accounts
+            </label>
+                <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                    Recommended. First-time LDAPS logins create a ColdAisle user <strong>only</strong> if the person is in
+                    <em>any</em> group mapped under <strong>Users &amp; Depts → Security group → role mapping</strong>
+                    (nested groups supported). Random domain users can authenticate to AD but will not get a ColdAisle account.
+                    Existing ColdAisle users can still sign in. Uncheck only for lab / open Viewer provisioning.
+                </p>
+            </div>
+            <div class="form-row"><label>Default Role (fallback)</label>
                 <select class="form-control" name="ldaps_default_role_id">
                     <option value="">Viewer</option>
                     <?php foreach ($roles as $r): ?>
@@ -1508,6 +1526,10 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
                         </option>
                     <?php endforeach; ?>
                 </select>
+                <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                    Used only when “Require security group…” is off (or no role maps exist yet).
+                    Mapped groups always set the role when they match.
+                </p>
             </div>
             <div class="form-row"><label><input type="checkbox" name="ldaps_use_ssl" value="1" <?= ($ldaps['use_ssl'] ?? true) ? 'checked' : '' ?>> Use LDAPS (SSL)</label></div>
             <div class="form-row"><label><input type="checkbox" name="ldaps_start_tls" value="1" <?= !empty($ldaps['start_tls']) ? 'checked' : '' ?>> STARTTLS</label></div>

@@ -395,10 +395,13 @@ layout_header('Users & Departments', $user, 'users');
     <div class="card-body">
         <p class="text-muted" style="font-size:.88rem;margin-top:0">
             Map AD/Entra groups to platform roles. At LDAPS login, membership is read from
-            <code>memberOf</code> and the <strong>highest-privilege</strong> matching map wins
+            <code>memberOf</code> (including nested groups) and the <strong>highest-privilege</strong> matching map wins
             (Global Admin &gt; Data Center Admin &gt; Operator &gt; Department Admin &gt; Auditor &gt; Viewer).
             Role is re-evaluated on every login. Group ID may be the full DN, CN, or Entra object ID
             (display name is also matched).
+            <strong>Account creation:</strong> with org-wide Base DN, a first-time LDAPS user is provisioned
+            only if they match <em>any</em> of these role maps (see Settings → LDAPS → Require security group mapping).
+            Map a Viewer (or C-Suite) group here so executives can sign in without being in the IT OU.
         </p>
         <div class="table-wrap">
             <table class="data">
