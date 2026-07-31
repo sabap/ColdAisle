@@ -104,6 +104,11 @@ try {
         snmp_device_can_edit($user, $dev);
 
         if ($action === 'discover') {
+            @ini_set('max_execution_time', '90');
+            if (function_exists('set_time_limit')) {
+                @set_time_limit(90);
+            }
+
             $prereqs = SnmpDiscover::discoverPrereqs($dev);
             if (!$prereqs['ok']) {
                 App::json([
@@ -116,8 +121,32 @@ try {
             }
 
             $creds = SnmpDiscover::credsFromDevice($dev);
-            $result = SnmpDiscover::discover($creds);
-            $templateName = SnmpDiscover::templateName($prereqs['vendor'], $prereqs['model']);
+            $ver = strtolower((string)($creds['snmp_version'] ?? ''));
+            if ($ver === '3' || $ver === 'v3') {
+                if (trim((string)($creds['security_name'] ?? '')) === '') {
+                    App::json([
+                        'error' => 'SNMPv3 user (security name) is empty. Open Edit, set SNMP version 3, '
+                            . 'select a credential profile (or enter the v3 user), Save, then Discover again.',
+                    ], 400);
+                }
+            }
+
+            try {
+                $result = SnmpDiscover::discover($creds);
+            } catch (Throwable $e) {
+                App::log('Device discover failed device_id=' . $id . ': ' . $e->getMessage(), 'error');
+                App::json([
+                    'error' => $e->getMessage() !== ''
+                        ? $e->getMessage()
+                        : 'SNMP discovery failed (no detail). Check IP, SNMPv3 profile, and that PHP snmp extension is loaded.',
+                ], 500);
+            }
+
+            try {
+                $templateName = SnmpDiscover::templateName($prereqs['vendor'], $prereqs['model']);
+            } catch (Throwable $e) {
+                App::json(['error' => 'Template name: ' . $e->getMessage()], 400);
+            }
             $existing = SnmpDiscover::findSiteTemplateByName($templateName);
 
             App::json([

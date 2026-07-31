@@ -665,7 +665,23 @@ class App
     {
         http_response_code($code);
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        // SNMP / AD strings can contain invalid UTF-8; without SUBSTITUTE json_encode
+        // returns false and clients see IIS "Internal Server Error" HTML or empty bodies.
+        $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+        if (defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
+            $flags |= JSON_INVALID_UTF8_SUBSTITUTE;
+        }
+        $json = json_encode($data, $flags);
+        if ($json === false) {
+            $json = json_encode([
+                'error' => 'Failed to encode JSON response',
+                'detail' => function_exists('json_last_error_msg') ? json_last_error_msg() : 'encode error',
+            ], JSON_UNESCAPED_SLASHES) ?: '{"error":"Failed to encode JSON response"}';
+            if ($code < 400) {
+                http_response_code(500);
+            }
+        }
+        echo $json;
         exit;
     }
 
