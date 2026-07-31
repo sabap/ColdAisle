@@ -399,9 +399,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
 
         if ($section === 'export_site_backup') {
             @set_time_limit(600);
+            $encrypt = !empty($_POST['encrypt_backup']);
+            $pw = (string)($_POST['backup_password'] ?? '');
+            $pw2 = (string)($_POST['backup_password_confirm'] ?? '');
+            if ($encrypt) {
+                if (strlen($pw) < 8) {
+                    throw new RuntimeException('Encryption password must be at least 8 characters.');
+                }
+                if (!hash_equals($pw, $pw2)) {
+                    throw new RuntimeException('Encryption password and confirmation do not match.');
+                }
+            }
             $path = SiteBackupService::export([
                 'include_audit' => !empty($_POST['include_audit']),
                 'include_readings' => !empty($_POST['include_readings']),
+                'encrypt' => $encrypt,
+                'password' => $encrypt ? $pw : '',
             ]);
             $smbNote = null;
             if (class_exists('SmbBackupService')) {
@@ -413,6 +426,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             AuditService::log((int)$user['user_id'], $user['username'], 'site_backup_export', 'system', null, [
                 'file' => basename($path),
                 'bytes' => @filesize($path) ?: null,
+                'encrypted' => $encrypt,
                 'smb_ok' => isset($smbNote) ? !empty($smbNote['ok']) : null,
             ]);
             // Remember SMB result for flash after download (download response cannot set flash easily mid-stream)
@@ -424,8 +438,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                         : ('Local backup ready; SMB copy failed: ' . ($smbNote['message'] ?? 'unknown')),
                 ];
             }
+            if ($encrypt) {
+                $_SESSION['_flash'][] = [
+                    'type' => 'success',
+                    'message' => 'Encrypted backup downloaded. Retain the password — it cannot be recovered from ColdAisle.',
+                ];
+            }
             $name = basename($path);
-            header('Content-Type: application/zip');
+            $isEnc = str_ends_with(strtolower($name), '.caisle') || SiteBackupService::isEncryptedPackage($path);
+            header('Content-Type: ' . ($isEnc ? 'application/octet-stream' : 'application/zip'));
             header('Content-Disposition: attachment; filename="' . $name . '"');
             header('Content-Length: ' . (string)filesize($path));
             header('Cache-Control: no-store');
@@ -1955,13 +1976,84 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
                 <input type="checkbox" name="include_readings" value="1" checked>
                 Include SNMP / PDU historical readings
             </label></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="encrypt_backup" value="1" id="encrypt_backup">
+                Encrypt backup file with a password
+            </label>
+                <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                    AES-256-GCM whole-file encryption (download as <code>.caisle</code>).
+                    The password is <strong>not</strong> stored in ColdAisle.
+                </p>
+            </div>
+            <div class="form-row full backup-encrypt-fields" id="backup_encrypt_fields" style="display:none">
+                <div class="alert alert-warning" style="margin:0 0 .75rem">
+                    <strong>Retain this password.</strong>
+                    Without it, the backup <em>cannot</em> be restored — not by ColdAisle support, and not from
+                    <code>app_key</code> alone. Store the password in your password vault / DR runbook before relying on the file.
+                </div>
+                <label>Encryption password</label>
+                <input class="form-control" type="password" name="backup_password" id="backup_password"
+                       autocomplete="new-password" minlength="8" placeholder="At least 8 characters">
+                <label style="margin-top:.5rem;display:block">Confirm password</label>
+                <input class="form-control" type="password" name="backup_password_confirm" id="backup_password_confirm"
+                       autocomplete="new-password" minlength="8">
+            </div>
             <div class="form-row">
-                <button class="btn btn-primary" type="submit"
-                        onclick="return confirm('Create and download a site backup ZIP now? Large sites may take a minute.');">
+                <button class="btn btn-primary" type="submit" id="btn_download_site_backup">
                     Download site backup
                 </button>
             </div>
         </form>
+        <script>
+        (function () {
+            var cb = document.getElementById('encrypt_backup');
+            var box = document.getElementById('backup_encrypt_fields');
+            var btn = document.getElementById('btn_download_site_backup');
+            if (!cb || !box) return;
+            function sync() {
+                box.style.display = cb.checked ? '' : 'none';
+                var p = document.getElementById('backup_password');
+                var p2 = document.getElementById('backup_password_confirm');
+                if (p) p.required = cb.checked;
+                if (p2) p2.required = cb.checked;
+            }
+            cb.addEventListener('change', sync);
+            sync();
+            if (btn) {
+                btn.addEventListener('click', function (e) {
+                    if (cb.checked) {
+                        var p = document.getElementById('backup_password');
+                        var p2 = document.getElementById('backup_password_confirm');
+                        var a = p ? p.value : '';
+                        var b = p2 ? p2.value : '';
+                        if (a.length < 8) {
+                            e.preventDefault();
+                            alert('Encryption password must be at least 8 characters.');
+                            return false;
+                        }
+                        if (a !== b) {
+                            e.preventDefault();
+                            alert('Password and confirmation do not match.');
+                            return false;
+                        }
+                        if (!confirm(
+                            'Create an ENCRYPTED site backup?\n\n'
+                            + 'You MUST retain this password to restore. It is not saved in ColdAisle.\n\n'
+                            + 'Continue?'
+                        )) {
+                            e.preventDefault();
+                            return false;
+                        }
+                        return true;
+                    }
+                    if (!confirm('Create and download a site backup ZIP now? Large sites may take a minute.')) {
+                        e.preventDefault();
+                        return false;
+                    }
+                });
+            }
+        })();
+        </script>
         <p class="hint text-muted" style="margin-top:.75rem">
             Files are also stored under <code>storage/backups/</code>. Keep backups private —
             they contain password hashes and encrypted SNMP secrets (and <code>app_key</code> to decrypt them).

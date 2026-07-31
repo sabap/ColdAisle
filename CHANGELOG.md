@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Optional backup encryption:** site export can produce an AES-256-GCM encrypted `.caisle` file with a user-chosen password. Strong UI warning to retain the password; setup restore accepts `.caisle` + password. Password is never stored in ColdAisle.
+
 ### Enhancements
 
 ### Bug fixes
