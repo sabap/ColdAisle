@@ -128,6 +128,42 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
   letter-spacing: .02em;
 }
 
+/* Nested optional block inside a settings card (e.g. SMB backup) */
+.settings-details {
+  margin-top: 1.15rem;
+  padding-top: .85rem;
+  border-top: 1px solid var(--border, #334155);
+}
+.settings-details-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .45rem .65rem;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: .95rem;
+  list-style: none;
+  user-select: none;
+}
+.settings-details-summary::-webkit-details-marker { display: none; }
+.settings-details-summary::before {
+  content: '';
+  width: .45rem;
+  height: .45rem;
+  border-right: 2px solid var(--muted, #94a3b8);
+  border-bottom: 2px solid var(--muted, #94a3b8);
+  transform: rotate(-45deg);
+  transition: transform .15s ease;
+  flex: 0 0 auto;
+}
+.settings-details[open] > .settings-details-summary::before {
+  transform: rotate(45deg);
+  margin-top: .15rem;
+}
+.settings-details-body {
+  margin-top: .85rem;
+}
+
 /* Settings: collapsible section cards */
 .settings-toolbar {
   display: flex;

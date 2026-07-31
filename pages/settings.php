@@ -373,10 +373,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             $sizeLabel = class_exists('StorageHousekeepingService')
                 ? StorageHousekeepingService::formatBytes($bytes)
                 : ($bytes . ' bytes');
-            App::flash(
-                'success',
-                'Recovery backup created: ' . basename($path) . ' (' . $sizeLabel . ') in storage/backups/.'
-            );
+            $msg = 'Recovery backup created: ' . basename($path) . ' (' . $sizeLabel . ') in storage/backups/.';
+            App::flash('success', $msg);
+            if (class_exists('SmbBackupService')) {
+                $smb = SmbBackupService::maybeCopy($path, 'update_backup');
+                if (empty($smb['skipped'])) {
+                    if (!empty($smb['ok'])) {
+                        App::flash('success', (string)($smb['message'] ?? 'Also copied to SMB share.'));
+                    } else {
+                        App::flash('error', 'Local recovery ZIP is fine; SMB copy failed: ' . ($smb['message'] ?? 'unknown error'));
+                    }
+                }
+            }
             App::redirect('pages/settings.php#housekeeping');
         }
 
@@ -395,10 +403,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'include_audit' => !empty($_POST['include_audit']),
                 'include_readings' => !empty($_POST['include_readings']),
             ]);
+            $smbNote = null;
+            if (class_exists('SmbBackupService')) {
+                $smb = SmbBackupService::maybeCopy($path, 'export');
+                if (empty($smb['skipped'])) {
+                    $smbNote = $smb;
+                }
+            }
             AuditService::log((int)$user['user_id'], $user['username'], 'site_backup_export', 'system', null, [
                 'file' => basename($path),
                 'bytes' => @filesize($path) ?: null,
+                'smb_ok' => isset($smbNote) ? !empty($smbNote['ok']) : null,
             ]);
+            // Remember SMB result for flash after download (download response cannot set flash easily mid-stream)
+            if ($smbNote !== null) {
+                $_SESSION['_flash'][] = [
+                    'type' => !empty($smbNote['ok']) ? 'success' : 'error',
+                    'message' => !empty($smbNote['ok'])
+                        ? (string)($smbNote['message'] ?? 'Backup also copied to SMB share.')
+                        : ('Local backup ready; SMB copy failed: ' . ($smbNote['message'] ?? 'unknown')),
+                ];
+            }
             $name = basename($path);
             header('Content-Type: application/zip');
             header('Content-Disposition: attachment; filename="' . $name . '"');
@@ -406,6 +431,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             header('Cache-Control: no-store');
             readfile($path);
             exit;
+        }
+
+        if ($section === 'smb_backup_save') {
+            if (!class_exists('SmbBackupService')) {
+                require_once dirname(__DIR__) . '/src/Services/SmbBackupService.php';
+            }
+            $s = SmbBackupService::saveFromPost($_POST);
+            AuditService::log((int)$user['user_id'], $user['username'], 'smb_backup_save', 'system', null, [
+                'enabled' => $s['enabled'],
+                'unc' => $s['unc'],
+                'auth_mode' => $s['auth_mode'],
+            ]);
+            App::flash('success', 'SMB backup settings saved.');
+            App::redirect('pages/settings.php#backup');
+        }
+
+        if ($section === 'smb_backup_test') {
+            if (!class_exists('SmbBackupService')) {
+                require_once dirname(__DIR__) . '/src/Services/SmbBackupService.php';
+            }
+            // Save form fields first if posted with test (optional full form)
+            if (isset($_POST['smb_backup_unc'])) {
+                try {
+                    SmbBackupService::saveFromPost($_POST);
+                } catch (Throwable $e) {
+                    App::flash('error', $e->getMessage());
+                    App::redirect('pages/settings.php#backup');
+                }
+            }
+            $test = SmbBackupService::testConnection();
+            App::flash(!empty($test['ok']) ? 'success' : 'error', $test['message'] ?? 'SMB test finished.');
+            App::redirect('pages/settings.php#backup');
         }
 
         if ($section === 'housekeeping_save') {
@@ -522,7 +579,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         if (!in_array($section, [
             'update_check', 'update_apply', 'update_backup_now', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
             'power_alerts', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
-            'diagnostics', 'schema_ensure',
+            'diagnostics', 'schema_ensure', 'smb_backup_save', 'smb_backup_test',
         ], true)) {
             $export = var_export($config, true);
             $php = "<?php\n/** ColdAisle configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
@@ -544,7 +601,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#diagnostics';
     } elseif ($secPost === 'schema_ensure') {
         $redirHash = '#schema';
-    } elseif ($secPost === 'export_site_backup') {
+    } elseif ($secPost === 'export_site_backup' || $secPost === 'smb_backup_save' || $secPost === 'smb_backup_test') {
         $redirHash = '#backup';
     } elseif ($secPost === 'snmp_schedule') {
         $redirHash = '#snmp-schedule';
@@ -1911,6 +1968,132 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
             Retention is controlled under <a href="#housekeeping">Storage housekeeping</a>.
             <?= extension_loaded('zip') ? '' : ' PHP <code>zip</code> extension recommended (PowerShell Compress-Archive used as fallback).' ?>
         </p>
+
+        <?php
+        $smb = class_exists('SmbBackupService') ? SmbBackupService::settings() : null;
+        ?>
+        <?php if ($smb !== null): ?>
+        <details class="settings-details" id="smb-backup" <?= !empty($smb['enabled']) ? 'open' : '' ?>>
+            <summary class="settings-details-summary">
+                <span>Copy backups to SMB share</span>
+                <?php if (!empty($smb['enabled'])): ?>
+                    <span class="badge badge-success">On</span>
+                <?php else: ?>
+                    <span class="badge">Off</span>
+                <?php endif; ?>
+            </summary>
+            <div class="settings-details-body">
+                <p class="text-muted" style="margin:0 0 .75rem;font-size:.85rem">
+                    After a local ZIP is created, optionally copy it to a network share for DR.
+                    Use the <strong>IIS app pool</strong> identity (no password stored), or
+                    <strong>local</strong> / <strong>domain (AD)</strong> credentials (same style of accounts you use for LDAPS).
+                    Password is stored encrypted with <code>app_key</code> and is never included in the backup package.
+                </p>
+                <form method="post" class="form-grid" id="smbBackupForm">
+                    <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                    <div class="form-row full"><label>
+                        <input type="checkbox" name="smb_backup_enabled" value="1" id="smb_backup_enabled"
+                            <?= !empty($smb['enabled']) ? 'checked' : '' ?>>
+                        Enable copy to SMB share
+                    </label></div>
+                    <div class="form-row full"><label>UNC path</label>
+                        <input class="form-control" name="smb_backup_unc" id="smb_backup_unc"
+                               value="<?= App::e($smb['unc']) ?>"
+                               placeholder="\\fileserver\backups\ColdAisle"
+                               autocomplete="off">
+                        <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                            Share or subfolder (must be a UNC path starting with <code>\\</code>).
+                        </p>
+                    </div>
+                    <div class="form-row full"><label>Credentials</label>
+                        <select class="form-control" name="smb_backup_auth_mode" id="smb_backup_auth_mode">
+                            <?php
+                            $modes = [
+                                'app_pool' => 'IIS app pool identity (no stored password)',
+                                'local' => 'Local Windows account (.\username)',
+                                'domain' => 'Domain / AD account (DOMAIN\user or user@domain)',
+                            ];
+                            foreach ($modes as $val => $lab):
+                                ?>
+                                <option value="<?= $val ?>" <?= ($smb['auth_mode'] ?? '') === $val ? 'selected' : '' ?>>
+                                    <?= App::e($lab) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="form-row smb-cred-fields"><label>Username</label>
+                        <input class="form-control" name="smb_backup_username" id="smb_backup_username"
+                               value="<?= App::e($smb['username']) ?>"
+                               autocomplete="off" placeholder="svc-backup or DOMAIN\svc-backup">
+                    </div>
+                    <div class="form-row smb-cred-fields"><label>Domain (optional)</label>
+                        <input class="form-control" name="smb_backup_domain" id="smb_backup_domain"
+                               value="<?= App::e($smb['domain']) ?>"
+                               autocomplete="off" placeholder="CONTOSO (if not in username)">
+                    </div>
+                    <div class="form-row full smb-cred-fields"><label>Password</label>
+                        <input class="form-control" type="password" name="smb_backup_password" id="smb_backup_password"
+                               value="" autocomplete="new-password"
+                               placeholder="<?= !empty($smb['has_password']) ? '••••••••  (leave blank to keep saved password)' : '' ?>">
+                    </div>
+                    <div class="form-row full"><label>
+                        <input type="checkbox" name="smb_backup_on_export" value="1"
+                            <?= !empty($smb['on_export']) ? 'checked' : '' ?>>
+                        Copy when downloading a <strong>site backup</strong>
+                    </label></div>
+                    <div class="form-row full"><label>
+                        <input type="checkbox" name="smb_backup_on_update_backup" value="1"
+                            <?= !empty($smb['on_update_backup']) ? 'checked' : '' ?>>
+                        Copy when creating a <strong>pre-update recovery</strong> ZIP
+                    </label></div>
+                    <?php if (!empty($smb['last_ok_at']) || !empty($smb['last_error'])): ?>
+                        <div class="form-row full">
+                            <?php if (!empty($smb['last_ok_at'])): ?>
+                                <p class="text-muted" style="margin:0;font-size:.8rem">
+                                    Last successful copy: <strong><?= App::e((string)$smb['last_ok_at']) ?></strong>
+                                    <?php if (!empty($smb['last_file'])): ?>
+                                        · <code><?= App::e((string)$smb['last_file']) ?></code>
+                                    <?php endif; ?>
+                                </p>
+                            <?php endif; ?>
+                            <?php if (!empty($smb['last_error'])): ?>
+                                <p style="margin:.35rem 0 0;font-size:.8rem;color:#fca5a5">
+                                    Last error: <?= App::e((string)$smb['last_error']) ?>
+                                </p>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
+                    <div class="form-row" style="display:flex;flex-wrap:wrap;gap:.5rem">
+                        <button class="btn btn-primary" type="submit" name="section" value="smb_backup_save">
+                            Save SMB settings
+                        </button>
+                        <button class="btn btn-secondary" type="submit" name="section" value="smb_backup_test"
+                                onclick="return confirm('Save settings (if changed) and write a short test file to the share?');">
+                            Test connection
+                        </button>
+                    </div>
+                </form>
+                <p class="text-muted" style="margin:.75rem 0 0;font-size:.75rem">
+                    The app pool needs permission to run <code>net use</code> and reach the share.
+                    Prefer a dedicated AD service account with write-only access to the backup folder.
+                </p>
+            </div>
+        </details>
+        <script>
+        (function () {
+            var mode = document.getElementById('smb_backup_auth_mode');
+            if (!mode) return;
+            function syncCreds() {
+                var show = mode.value !== 'app_pool';
+                document.querySelectorAll('.smb-cred-fields').forEach(function (el) {
+                    el.style.display = show ? '' : 'none';
+                });
+            }
+            mode.addEventListener('change', syncCreds);
+            syncCreds();
+        })();
+        </script>
+        <?php endif; ?>
     </div>
 </div>
 
