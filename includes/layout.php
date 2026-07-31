@@ -34,7 +34,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon.svg')) ?>" type="image/svg+xml">
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon-32.png')) ?>" type="image/png" sizes="32x32">
     <link rel="apple-touch-icon" href="<?= App::e(App::url('assets/img/favicon-180.png')) ?>" sizes="180x180">
-    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=37">
+    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=38">
     <script>
     window.ColdAisle = { baseUrl: <?= json_encode(App::baseUrl()) ?>, csrf: <?= json_encode($csrf) ?> };
     window.WINDCIM = window.ColdAisle; // legacy alias
@@ -191,7 +191,7 @@ function layout_footer(): void
         </footer>
     </div>
 </div>
-<script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=5"></script>
+<script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=6"></script>
 </body>
 </html>
     <?php

@@ -645,6 +645,16 @@ $opendcimOfflineReady = is_dir($opendcimOfflineDir)
 layout_header('Settings', $user, 'settings');
 ?>
 
+<div class="settings-toolbar" id="settingsToolbar">
+    <div class="settings-toolbar-label text-muted">Sections</div>
+    <div class="settings-toolbar-actions">
+        <button type="button" class="btn btn-sm btn-secondary" id="settingsExpandAll">Expand all</button>
+        <button type="button" class="btn btn-sm btn-secondary" id="settingsCollapseAll">Collapse all</button>
+    </div>
+</div>
+
+<div class="settings-sections" id="settingsSections">
+
 <div class="card" id="support">
     <div class="card-header">
         <h2>Support ColdAisle</h2>
@@ -2041,6 +2051,9 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
         </table>
     </div>
 </div>
+
+</div><!-- /#settingsSections -->
+
 <script>
 // Shared helpers for settings connection-test modals
 function settingsTestEsc(s) {

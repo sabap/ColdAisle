@@ -336,6 +336,180 @@
     }
   }
 
+  /**
+   * Settings page: collapsible section cards (default collapsed).
+   * Expand all / Collapse all; #hash opens a section; remembers open ids in localStorage.
+   */
+  function initSettingsCollapsible() {
+    var root = document.getElementById('settingsSections');
+    if (!root) return;
+
+    var STORAGE_KEY = 'coldaisle.settings.openCards';
+    var cards = [];
+
+    function slugify(text) {
+      return String(text || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 48) || 'section';
+    }
+
+    function loadOpenSet() {
+      try {
+        var raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return null; // null = no preference yet (use defaults)
+        var arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return null;
+        var set = Object.create(null);
+        arr.forEach(function (id) { set[id] = true; });
+        return set;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function saveOpenSet() {
+      try {
+        var open = cards.filter(function (c) { return c.open; }).map(function (c) { return c.id; });
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(open));
+      } catch (e) { /* private mode */ }
+    }
+
+    function setOpen(card, open, skipSave) {
+      card.open = !!open;
+      card.el.classList.toggle('is-collapsed', !card.open);
+      card.el.classList.toggle('is-expanded', card.open);
+      if (card.btn) {
+        card.btn.setAttribute('aria-expanded', card.open ? 'true' : 'false');
+      }
+      if (card.body) {
+        card.body.hidden = !card.open;
+      }
+      if (!skipSave) saveOpenSet();
+    }
+
+    function ensureCardId(el, title) {
+      if (el.id) return el.id;
+      var base = slugify(title);
+      var id = base;
+      var n = 2;
+      while (document.getElementById(id)) {
+        id = base + '-' + n;
+        n++;
+      }
+      el.id = id;
+      return id;
+    }
+
+    root.querySelectorAll(':scope > .card').forEach(function (el) {
+      var header = el.querySelector(':scope > .card-header');
+      var body = el.querySelector(':scope > .card-body');
+      if (!header || !body) return;
+
+      var h2 = header.querySelector('h2');
+      var title = h2 ? h2.textContent.trim() : 'Section';
+      var id = ensureCardId(el, title);
+
+      // Build accessible toggle control (keep badges / extra header content)
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'settings-card-toggle';
+      btn.setAttribute('aria-expanded', 'false');
+      btn.setAttribute('aria-controls', id + '-body');
+      body.id = body.id || (id + '-body');
+
+      var chevron = document.createElement('span');
+      chevron.className = 'settings-card-chevron';
+      chevron.setAttribute('aria-hidden', 'true');
+
+      var label = document.createElement('span');
+      label.className = 'settings-card-title';
+      if (h2) {
+        label.appendChild(h2);
+      } else {
+        label.textContent = title;
+      }
+
+      btn.appendChild(chevron);
+      btn.appendChild(label);
+
+      // Move remaining header children (badges, etc.) after the toggle
+      var extras = document.createElement('div');
+      extras.className = 'settings-card-extras';
+      while (header.firstChild) {
+        extras.appendChild(header.firstChild);
+      }
+      header.classList.add('settings-card-head');
+      header.appendChild(btn);
+      if (extras.childNodes.length) {
+        header.appendChild(extras);
+      }
+
+      var card = { el: el, body: body, btn: btn, id: id, open: false };
+      cards.push(card);
+
+      btn.addEventListener('click', function () {
+        setOpen(card, !card.open);
+      });
+    });
+
+    if (!cards.length) return;
+
+    var saved = loadOpenSet();
+    var hash = (location.hash || '').replace(/^#/, '');
+
+    cards.forEach(function (card) {
+      var shouldOpen = false;
+      if (hash && card.id === hash) {
+        shouldOpen = true;
+      } else if (saved) {
+        shouldOpen = !!saved[card.id];
+      }
+      // Default: all collapsed (saved empty array also stays collapsed)
+      setOpen(card, shouldOpen, true);
+    });
+    saveOpenSet();
+
+    if (hash) {
+      var target = document.getElementById(hash);
+      if (target && target.classList.contains('card')) {
+        // Expand and scroll after layout
+        var match = cards.filter(function (c) { return c.id === hash; })[0];
+        if (match) setOpen(match, true);
+        setTimeout(function () {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 50);
+      }
+    }
+
+    window.addEventListener('hashchange', function () {
+      var h = (location.hash || '').replace(/^#/, '');
+      if (!h) return;
+      cards.forEach(function (card) {
+        if (card.id === h) {
+          setOpen(card, true);
+          card.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+    });
+
+    var expandAll = document.getElementById('settingsExpandAll');
+    var collapseAll = document.getElementById('settingsCollapseAll');
+    if (expandAll) {
+      expandAll.addEventListener('click', function () {
+        cards.forEach(function (c) { setOpen(c, true, true); });
+        saveOpenSet();
+      });
+    }
+    if (collapseAll) {
+      collapseAll.addEventListener('click', function () {
+        cards.forEach(function (c) { setOpen(c, false, true); });
+        saveOpenSet();
+      });
+    }
+  }
+
   // Sidebar toggle + timezone widgets
   document.addEventListener('DOMContentLoaded', function () {
     const btn = document.getElementById('sidebarToggle');
@@ -350,6 +524,7 @@
       });
     }
     initTimezoneComboboxes(document);
+    initSettingsCollapsible();
     // First paint of browser metrics at DCL; refine on full load
     paintDevRequestTimer();
   });
