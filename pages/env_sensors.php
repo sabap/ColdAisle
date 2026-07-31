@@ -10,6 +10,8 @@ $canEdit = AuthManager::canEditCooling($user);
 
 $sensorId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $filterCu = isset($_GET['cooling_unit_id']) ? (int)$_GET['cooling_unit_id'] : 0;
+$filterDevice = isset($_GET['device_id']) ? (int)$_GET['device_id'] : 0;
+$prefillHost = (string)($_GET['host_type'] ?? '');
 
 $kinds = env_sensor_kinds();
 $hosts = env_sensor_hosts();
@@ -19,6 +21,7 @@ $rooms = [];
 $coolingUnits = [];
 $pdus = [];
 $cabinets = [];
+$devices = [];
 try {
     $rooms = Database::fetchAll(
         'SELECT r.room_id, r.name, dc.name AS dc_name
@@ -34,6 +37,14 @@ try {
     );
     $cabinets = Database::fetchAll(
         'SELECT cabinet_id, name FROM cabinets WHERE is_active = 1 ORDER BY name'
+    );
+    // Prefer env hosts first, then everything else with SNMP/IP (for AP9340 already as "other")
+    $devices = Database::fetchAll(
+        "SELECT device_id, label, device_type, cabinet_id, position_u, manufacturer, model, mgmt_ip, primary_ip
+         FROM devices WHERE is_active = 1
+         ORDER BY
+           CASE WHEN device_type IN ('env_monitor','env_module') THEN 0 ELSE 1 END,
+           label"
     );
 } catch (Throwable $e) {
     // partial lists ok
@@ -202,6 +213,15 @@ if ($sensorId > 0) {
         </div>
     </div>
 
+    <?php if (!empty($s['device_id'])): ?>
+    <p class="mb-2">
+        <a class="btn btn-secondary btn-sm"
+           href="<?= App::e(App::url('pages/devices.php?id=' . (int)$s['device_id'])) ?>">
+            Open host device
+        </a>
+    </p>
+    <?php endif; ?>
+
     <?php if ($canEdit): ?>
     <div class="card mb-2">
         <div class="card-header"><h3 class="mt-0 mb-0" style="font-size:1rem">Manual reading</h3></div>
@@ -271,6 +291,10 @@ $params = [];
 if ($filterCu > 0) {
     $where .= ' AND s.cooling_unit_id = ?';
     $params[] = $filterCu;
+}
+if ($filterDevice > 0) {
+    $where .= ' AND s.device_id = ?';
+    $params[] = $filterDevice;
 }
 $sensors = [];
 try {
@@ -372,13 +396,36 @@ layout_header('Environmental sensors', $user, 'env_sensors');
         </div>
         <div class="modal-body">
             <?php
-            $edit = $filterCu > 0 ? ['host_type' => 'cooling_unit', 'cooling_unit_id' => $filterCu] : [];
+            $edit = [];
+            if ($filterCu > 0) {
+                $edit = ['host_type' => 'cooling_unit', 'cooling_unit_id' => $filterCu];
+            } elseif ($filterDevice > 0) {
+                $edit = ['host_type' => $prefillHost !== '' ? $prefillHost : 'device', 'device_id' => $filterDevice];
+                foreach ($devices as $dv) {
+                    if ((int)$dv['device_id'] === $filterDevice) {
+                        if (!empty($dv['cabinet_id'])) {
+                            $edit['cabinet_id'] = (int)$dv['cabinet_id'];
+                        }
+                        break;
+                    }
+                }
+            }
             $formAction = 'add_sensor';
             require __DIR__ . '/_env_sensor_form.php';
             ?>
         </div>
     </div>
 </div>
+<?php if ($filterDevice > 0 && $canEdit): ?>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var m = document.getElementById('addEnvSensor');
+  if (m && window.location.search.indexOf('device_id=') >= 0) {
+    m.hidden = false;
+  }
+});
+</script>
+<?php endif; ?>
 <?php endif; ?>
 
 <?php layout_footer(); ?>

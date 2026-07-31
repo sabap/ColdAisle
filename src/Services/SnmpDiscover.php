@@ -12,7 +12,9 @@ class SnmpDiscover
     /** Enterprise / system roots to walk (bounded). */
     private const WALK_ROOTS = [
         '1.3.6.1.2.1.1',           // MIB-II system
-        '1.3.6.1.4.1.318',         // APC / Schneider
+        '1.3.6.1.4.1.318',         // APC / Schneider (PDU + Environmental / PowerNet)
+        '1.3.6.1.4.1.318.1.1.10',  // APC Environmental Monitoring (AP9340 / IEM / probes)
+        '1.3.6.1.4.1.318.1.1.25',  // APC Universal I/O / modular sensors (when present)
         '1.3.6.1.4.1.3808',        // CyberPower
         '1.3.6.1.4.1.13742',       // Raritan
         '1.3.6.1.4.1.21239',       // Vertiv / Geist
@@ -849,6 +851,16 @@ class SnmpDiscover
             if (preg_match('/\btemp|temperature\b/', $s)) {
                 $score += 4;
             }
+            // Environmental manager / probes (AP9340, IEM, uio, NetBotz-class under PowerNet)
+            if (preg_match('/\bhumid|humidity|dewpoint|dew.?point|probe|iemstatus|iemconfig|emstatus|emconfig|uio|sensorstatus|envmon|environmental\b/', $s)) {
+                $score += 14;
+            }
+            if (preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.(10|25)\./', $s)
+                || str_contains($s, '1.3.6.1.4.1.318.1.1.10.')
+                || str_contains($s, '1.3.6.1.4.1.318.1.1.25.')
+            ) {
+                $score += 10;
+            }
             // Prefer phase/device totals over bulk outlet sensors
             if (preg_match('/phasestatus|identdevice|devicestatus|phasetophase/', $s)) {
                 $score += 4;
@@ -969,6 +981,17 @@ class SnmpDiscover
             }
             if (preg_match('/\btemp|temperature\b/', $s)) {
                 $hints[] = 'MIB: temperature';
+            }
+            if (preg_match('/\bhumid|humidity\b/', $s)) {
+                $hints[] = 'MIB: humidity';
+            }
+            if (preg_match('/dewpoint|dew.?point/', $s)) {
+                $hints[] = 'MIB: dew point';
+            }
+            if (preg_match('/iemstatus|iemconfig|emstatus|uio|probe|envmon|environmental/', $s)
+                || preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.(10|25)\./', $oid)
+            ) {
+                $hints[] = 'MIB: environmental probe';
             }
             if (preg_match('/rpdu2|powernet-mib::|::apc|apc::/i', $s) || str_contains($oid, '.1.3.6.1.4.1.318.') || str_starts_with($oid, '1.3.6.1.4.1.318.')) {
                 $hints[] = 'APC PowerNet';

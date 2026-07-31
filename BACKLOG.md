@@ -97,10 +97,20 @@ Historical note commits:
 
 **Still open (follow-up slices)**
 
-1. **SNMP poll end-to-end** for cooling units + env probes (site OID templates, worker, last_poll_json)  
-2. **Threshold alerts / digests** via mail (high temp/humidity, offline sensors)  
-3. History charts (reuse power-history patterns)  
-4. Optional heat/humidity floor overlay  
+1. **SNMP poll end-to-end** for cooling units + env probes (site OID templates map → `env_readings`, worker)  
+2. **AP9340 field mapping** — after user Discover/OID export, curated PowerNet env template (temp/humidity per probe)  
+3. **Threshold alerts / digests** via mail (high temp/humidity, offline sensors)  
+4. History charts (reuse power-history patterns)  
+5. **3D / floor plan sensor markers** using `env_sensors.pos_*` (height/Z later)  
+6. Optional heat/humidity floor overlay  
+
+**Recommended order (AP9340 site)**
+
+1. Tag AP9340 as **Environmental monitor**; expansion modules as **Env expansion module** (or leave type, just link sensors to the manager)  
+2. **SNMP → MIBs** — upload APC PowerNet MIB pack  
+3. On AP9340 device → **Discover OIDs** → save site template; share walk results for curated fields  
+4. **Cooling → Env sensors** — create points with host = that device  
+5. Later: poll worker writes readings; place sensors on floor/3D  
 
 **Out of scope (unless asked later)**
 

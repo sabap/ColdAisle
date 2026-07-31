@@ -23,6 +23,8 @@ $deviceTypes = [
     'chassis' => 'Chassis',
     'ups' => 'UPS',
     'firewall' => 'Firewall',
+    'env_monitor' => 'Environmental monitor',
+    'env_module' => 'Env expansion module',
     'other' => 'Other',
 ];
 
@@ -329,19 +331,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             $isChild = !empty($data['parent_device_id']);
             if (!$isChild) {
                 $others = Database::fetchAll(
-                    'SELECT device_id, label, position_u, u_height FROM devices
+                    'SELECT device_id, label, device_type, position_u, u_height, manufacturer, model
+                     FROM devices
                      WHERE cabinet_id = ? AND is_active = 1 AND position_u IS NOT NULL
                        AND parent_device_id IS NULL' .
                     ($exclude ? ' AND device_id <> ' . $exclude : ''),
                     [$data['cabinet_id']]
                 );
-                $end = $data['position_u'] + $data['u_height'] - 1;
+                $end = $data['position_u'] + max(1, (int)$data['u_height']) - 1;
+                $conflicts = [];
                 foreach ($others as $o) {
                     $os = (int)$o['position_u'];
-                    $oe = $os + (int)$o['u_height'] - 1;
+                    $oe = $os + max(1, (int)$o['u_height']) - 1;
                     if ($data['position_u'] <= $oe && $end >= $os) {
-                        throw new RuntimeException("U-space conflict with {$o['label']}");
+                        $conflicts[] = $o;
                     }
+                }
+                if ($conflicts) {
+                    $isEnvType = in_array((string)$data['device_type'], ['env_monitor', 'env_module'], true);
+                    // Creating env gear into occupied U: offer merge instead of silent fail
+                    if ($isEnvType && empty($_POST['device_id']) && empty($_POST['force_u_overlap'])) {
+                        $primary = $conflicts[0];
+                        $names = array_map(static fn($c) => (string)$c['label'], $conflicts);
+                        $_SESSION['env_merge_conflict'] = [
+                            'existing_device_id' => (int)$primary['device_id'],
+                            'existing_label' => (string)$primary['label'],
+                            'existing_type' => (string)($primary['device_type'] ?? ''),
+                            'cabinet_id' => (int)$data['cabinet_id'],
+                            'position_u' => (int)$data['position_u'],
+                            'u_height' => max(1, (int)$data['u_height']),
+                            'new_label' => (string)$data['label'],
+                            'new_type' => (string)$data['device_type'],
+                            'conflict_labels' => $names,
+                        ];
+                        App::flash(
+                            'warning',
+                            'U-space already occupied by ' . implode(', ', $names)
+                            . '. Open the existing device to use it as the environmental host (recommended),'
+                            . ' or confirm force-create if this is intentional.'
+                        );
+                        App::redirect(
+                            'pages/devices.php?action=new&env_merge=1'
+                            . '&cabinet_id=' . (int)$data['cabinet_id']
+                            . '&position_u=' . (int)$data['position_u']
+                            . '&device_type=' . rawurlencode((string)$data['device_type'])
+                        );
+                    }
+                    throw new RuntimeException(
+                        'U-space conflict with ' . implode(', ', array_map(static fn($c) => $c['label'], $conflicts))
+                    );
                 }
             }
         }
@@ -606,6 +644,8 @@ if ($action === 'new' || $id) {
     $defaults = [
         'cabinet_id' => $_GET['cabinet_id'] ?? ($device['cabinet_id'] ?? ''),
         'position_u' => $_GET['position_u'] ?? ($device['position_u'] ?? ''),
+        'device_type' => $_GET['device_type'] ?? ($device['device_type'] ?? 'server'),
+        'label' => $device['label'] ?? '',
     ];
 
     // Prefer explicit ?mount=rear from rack rear elevation empty-slot clicks
@@ -660,6 +700,22 @@ if ($action === 'new' || $id) {
                 ? (!empty($device['back_side']) ? 'Half-depth · Rear' : 'Half-depth · Front')
                 : 'Full depth';
         }
+        // Environmental sensors hosted by this device (AP9340 probes, etc.)
+        $envSensors = [];
+        try {
+            $envSensors = Database::fetchAll(
+                'SELECT sensor_id, name, sensor_kind, placement, last_value, unit, last_seen_at,
+                        warn_high, crit_high, warn_low, crit_low
+                 FROM env_sensors
+                 WHERE is_active = 1 AND device_id = ?
+                 ORDER BY name',
+                [(int)$device['device_id']]
+            );
+        } catch (Throwable $e) {
+            $envSensors = [];
+        }
+        $isEnvHostType = in_array((string)($device['device_type'] ?? ''), ['env_monitor', 'env_module'], true);
+
         // Child devices of this chassis (blades / modules)
         $childDevices = [];
         try {
@@ -1055,6 +1111,88 @@ if ($action === 'new' || $id) {
                         <?php endif; ?>
                     </div>
                 </div>
+
+                <?php if ($envSensors || $isEnvHostType): ?>
+                <div class="card view-pane" id="deviceEnvCard">
+                    <div class="card-header flex-between">
+                        <h2>Environment</h2>
+                        <div class="flex gap-1">
+                            <?php if (AuthManager::can($user, 'view_cooling')): ?>
+                            <a class="btn btn-secondary btn-sm"
+                               href="<?= App::e(App::url('pages/env_sensors.php?device_id=' . (int)$device['device_id'] . '&host_type=device')) ?>">
+                                <?= $envSensors ? 'Manage sensors' : 'Add sensors' ?>
+                            </a>
+                            <a class="btn btn-ghost btn-sm" href="<?= App::e(App::url('pages/cooling.php')) ?>">Cooling dashboard</a>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <div class="card-body" style="<?= $envSensors ? 'padding:0' : '' ?>">
+                        <?php if (!$envSensors): ?>
+                            <p class="text-muted mb-0" style="font-size:.88rem">
+                                No environmental points linked to this device yet.
+                                <?php if ($isEnvHostType): ?>
+                                    This is an environmental host — add probes under Cooling → Env sensors
+                                    (host type <strong>Device</strong>), then Discover OIDs on the SNMP card.
+                                <?php else: ?>
+                                    Link sensors with host type <strong>Device</strong> to attach AP9340 / probe ports here.
+                                    You can also change the device type to <strong>Environmental monitor</strong> if this is an env manager.
+                                <?php endif; ?>
+                            </p>
+                        <?php else: ?>
+                            <table class="table table-sm">
+                                <thead>
+                                <tr>
+                                    <th>Sensor</th>
+                                    <th>Kind</th>
+                                    <th>Placement</th>
+                                    <th>Last value</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <?php
+                                require_once dirname(__DIR__) . '/includes/cooling_helpers.php';
+                                $envKinds = env_sensor_kinds();
+                                $envPlacements = env_sensor_placements();
+                                foreach ($envSensors as $es):
+                                    $ev = $es['last_value'] !== null && $es['last_value'] !== '' ? (float)$es['last_value'] : null;
+                                    $est = env_sensor_threshold_status($ev, $es);
+                                    $ebadge = match ($est) {
+                                        'crit' => 'badge-danger',
+                                        'warn' => 'badge-warning',
+                                        'ok' => 'badge-success',
+                                        default => 'badge-muted',
+                                    };
+                                    ?>
+                                    <tr>
+                                        <td>
+                                            <a href="<?= App::e(App::url('pages/env_sensors.php?id=' . (int)$es['sensor_id'])) ?>">
+                                                <?= App::e($es['name']) ?>
+                                            </a>
+                                        </td>
+                                        <td><?= App::e($envKinds[$es['sensor_kind'] ?? ''] ?? ($es['sensor_kind'] ?? '—')) ?></td>
+                                        <td class="text-muted" style="font-size:.85rem">
+                                            <?= App::e($envPlacements[$es['placement'] ?? ''] ?? ($es['placement'] ?? '—')) ?>
+                                        </td>
+                                        <td>
+                                            <?php if ($ev !== null): ?>
+                                                <?= App::e(rtrim(rtrim(number_format($ev, 2, '.', ''), '0'), '.')) ?>
+                                                <?= App::e((string)($es['unit'] ?? '')) ?>
+                                                <span class="badge <?= $ebadge ?>"><?= App::e($est) ?></span>
+                                            <?php else: ?>
+                                                <span class="text-muted">—</span>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                            <p class="text-muted" style="font-size:.75rem;padding:.5rem 1rem;margin:0">
+                                Metrics are stored on env sensors. SNMP Discover / site templates on this device will feed values in a later poll slice.
+                            </p>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <?php endif; ?>
 
                 <?php if (!empty($device['snmp_version'])):
                     $siteTpl = null;
@@ -1537,6 +1675,10 @@ if ($action === 'new' || $id) {
     }
 
     layout_header($device ? 'Edit: ' . $device['label'] : 'New Device', $user, 'devices');
+    $envMerge = null;
+    if (!$device && !empty($_GET['env_merge']) && !empty($_SESSION['env_merge_conflict'])) {
+        $envMerge = $_SESSION['env_merge_conflict'];
+    }
     ?>
     <div class="flex-between mb-2">
         <p class="text-muted mb-0"><?= $device ? 'Editing device properties. Derived location fields stay read-only.' : 'Create a new device inventory record.' ?></p>
@@ -1548,6 +1690,53 @@ if ($action === 'new' || $id) {
             <?php endif; ?>
         </div>
     </div>
+    <?php if ($envMerge): ?>
+    <div class="card mb-2" style="border-color:var(--warning,#f59e0b)">
+        <div class="card-body">
+            <h3 class="mt-0" style="font-size:1rem">Existing device at this cabinet / U</h3>
+            <p class="mb-1" style="font-size:.9rem">
+                <strong><?= App::e((string)$envMerge['existing_label']) ?></strong>
+                already occupies this space
+                <?php if (!empty($envMerge['conflict_labels']) && count($envMerge['conflict_labels']) > 1): ?>
+                    (also: <?= App::e(implode(', ', array_slice($envMerge['conflict_labels'], 1))) ?>)
+                <?php endif; ?>.
+                For an APC AP9340 / environmental manager already in inventory, use that device as the SNMP host
+                instead of creating a duplicate.
+            </p>
+            <div class="flex gap-1" style="flex-wrap:wrap">
+                <a class="btn btn-primary"
+                   href="<?= App::e(App::url('pages/devices.php?id=' . (int)$envMerge['existing_device_id'])) ?>">
+                    Open existing device
+                </a>
+                <a class="btn btn-secondary"
+                   href="<?= App::e(App::url(
+                       'pages/env_sensors.php?device_id=' . (int)$envMerge['existing_device_id']
+                       . '&host_type=device'
+                   )) ?>">
+                    Add sensors on existing host
+                </a>
+                <button type="submit" form="deviceForm" name="force_u_overlap" value="1" class="btn btn-ghost btn-sm"
+                        onclick="return confirm('Create another device in the same U-space? Prefer linking the existing host.');">
+                    Force create anyway
+                </button>
+            </div>
+        </div>
+    </div>
+    <?php
+        // Prefill form from conflict context when still creating
+        if (!empty($envMerge['cabinet_id'])) {
+            $defaults['cabinet_id'] = (string)(int)$envMerge['cabinet_id'];
+        }
+        if (!empty($envMerge['position_u'])) {
+            $defaults['position_u'] = (string)(int)$envMerge['position_u'];
+        }
+        if (!empty($envMerge['new_type'])) {
+            $defaults['device_type'] = (string)$envMerge['new_type'];
+        }
+        if (!empty($envMerge['new_label']) && empty($defaults['label'])) {
+            $defaults['label'] = (string)$envMerge['new_label'];
+        }
+    endif; ?>
     <form method="post" id="deviceForm">
         <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
         <input type="hidden" name="action" value="save_device">
@@ -1617,16 +1806,22 @@ if ($action === 'new' || $id) {
             <div class="card-body form-grid">
                 <div class="form-row"><label>Device Name *</label>
                     <input class="form-control" name="label" required
-                           value="<?= App::e($device['label'] ?? '') ?>"></div>
+                           value="<?= App::e((string)($defaults['label'] ?? ($device['label'] ?? ''))) ?>"></div>
                 <div class="form-row"><label>Device Type</label>
                     <select class="form-control" name="device_type">
                         <?php foreach ($deviceTypes as $val => $lab): ?>
                             <option value="<?= App::e($val) ?>"
-                                <?= ($device['device_type'] ?? 'server') === $val ? 'selected' : '' ?>>
+                                <?= ($defaults['device_type'] ?? 'server') === $val ? 'selected' : '' ?>>
                                 <?= App::e($lab) ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
+                    <?php if (!$device): ?>
+                    <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                        Use <strong>Environmental monitor</strong> for AP9340-class hosts;
+                        <strong>Env expansion module</strong> for probe expanders. If the U is already filled, ColdAisle will offer to open the existing device.
+                    </p>
+                    <?php endif; ?>
                 </div>
                 <div class="form-row"><label>Device Template</label>
                     <select class="form-control" name="template_id" id="template_id">

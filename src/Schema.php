@@ -504,15 +504,24 @@ class Schema
                     crit_low DECIMAL(12,4) NULL,
                     crit_high DECIMAL(12,4) NULL,
                     snmp_oid NVARCHAR(255) NULL,
+                    snmp_index NVARCHAR(80) NULL,
                     snmp_site_template_id INT NULL,
                     last_value DECIMAL(14,4) NULL,
                     last_seen_at DATETIME2 NULL,
+                    pos_x DECIMAL(10,3) NULL,
+                    pos_y DECIMAL(10,3) NULL,
+                    pos_z DECIMAL(10,3) NULL,
                     notes NVARCHAR(500) NULL,
                     is_active BIT NOT NULL CONSTRAINT DF_es_active DEFAULT 1,
                     created_at DATETIME2 NOT NULL CONSTRAINT DF_es_created DEFAULT SYSUTCDATETIME(),
                     updated_at DATETIME2 NOT NULL CONSTRAINT DF_es_updated DEFAULT SYSUTCDATETIME()
                 )"
             );
+            // Additive columns if table predated placement / multi-probe index
+            self::ensureColumn('env_sensors', 'snmp_index', 'NVARCHAR(80) NULL');
+            self::ensureColumn('env_sensors', 'pos_x', 'DECIMAL(10,3) NULL');
+            self::ensureColumn('env_sensors', 'pos_y', 'DECIMAL(10,3) NULL');
+            self::ensureColumn('env_sensors', 'pos_z', 'DECIMAL(10,3) NULL');
             self::ensureTable(
                 'env_readings',
                 "CREATE TABLE env_readings (
@@ -629,7 +638,8 @@ class Schema
             ],
             'env_sensors' => [
                 'sensor_id', 'name', 'sensor_kind', 'host_type', 'room_id',
-                'cooling_unit_id', 'pdu_id', 'last_value',
+                'cooling_unit_id', 'pdu_id', 'device_id', 'last_value',
+                'snmp_oid', 'snmp_index', 'pos_x', 'pos_y', 'pos_z',
             ],
             'env_readings' => ['reading_id', 'sensor_id', 'value', 'recorded_at'],
         ];

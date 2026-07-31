@@ -24,6 +24,8 @@ $deviceTypes = [
     'chassis' => 'Chassis',
     'ups' => 'UPS',
     'firewall' => 'Firewall',
+    'env_monitor' => 'Environmental monitor',
+    'env_module' => 'Env expansion module',
     'other' => 'Other',
 ];
 
