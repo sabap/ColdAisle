@@ -127,7 +127,12 @@ function device_empty_to_null($v)
 }
 
 // ---- Save device ----
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? '') && ($_POST['action'] ?? '') === 'save_device') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_device') {
+    if (!App::verifyCsrf($_POST['_csrf'] ?? '')) {
+        App::flash('error', 'Session expired or invalid form token. Please try Save again.');
+        $redirId = (int)($_POST['device_id'] ?? 0);
+        App::redirect($redirId > 0 ? 'pages/devices.php?id=' . $redirId . '&action=edit' : 'pages/devices.php?action=new');
+    }
     $existingForAuth = null;
     if (!empty($_POST['device_id'])) {
         $existingForAuth = Database::fetchOne(
@@ -197,7 +202,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $data['parent_device_id'] = null;
     }
 
-    // Apply SNMPv3 profile credentials onto device fields when a profile is selected
+    // Apply SNMPv3 credential profile onto the device (authoritative when a profile is chosen).
+    // Passphrases are never sent from the browser when using a profile — always copy from the profile row.
+    $appliedSnmpProfile = false;
     if (!empty($data['snmp_v3_profile_id'])) {
         try {
             $prof = Database::fetchOne(
@@ -205,25 +212,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 [(int)$data['snmp_v3_profile_id']]
             );
             if ($prof) {
-                $data['snmp_version'] = $data['snmp_version'] ?: '3';
-                $data['snmp_v3_user'] = $prof['security_name'] ?? $data['snmp_v3_user'];
-                $data['snmp_v3_sec_level'] = $prof['security_level'] ?? $data['snmp_v3_sec_level'];
-                $data['snmp_v3_auth_proto'] = $prof['auth_protocol'] ?? $data['snmp_v3_auth_proto'];
-                $data['snmp_v3_priv_proto'] = $prof['priv_protocol'] ?? $data['snmp_v3_priv_proto'];
-                $data['snmp_v3_context'] = $prof['context_name'] ?? $data['snmp_v3_context'];
+                $data['snmp_version'] = '3';
+                $secName = trim((string)($prof['security_name'] ?? ''));
+                if ($secName !== '') {
+                    $data['snmp_v3_user'] = $secName;
+                }
+                $lvl = trim((string)($prof['security_level'] ?? ''));
+                if ($lvl !== '') {
+                    $data['snmp_v3_sec_level'] = $lvl;
+                }
+                $authProto = strtoupper(trim((string)($prof['auth_protocol'] ?? '')));
+                if ($authProto !== '') {
+                    $data['snmp_v3_auth_proto'] = $authProto;
+                }
+                $privProto = strtoupper(trim((string)($prof['priv_protocol'] ?? '')));
+                if ($privProto !== '') {
+                    $data['snmp_v3_priv_proto'] = $privProto;
+                }
+                // Context may intentionally be blank on the profile
+                if (array_key_exists('context_name', $prof)) {
+                    $ctx = $prof['context_name'];
+                    $data['snmp_v3_context'] = ($ctx === null || trim((string)$ctx) === '')
+                        ? null
+                        : trim((string)$ctx);
+                }
                 if (!empty($prof['auth_passphrase'])) {
-                    $data['snmp_v3_auth_pass'] = $prof['auth_passphrase']; // already sealed in profile
+                    $data['snmp_v3_auth_pass'] = $prof['auth_passphrase']; // already sealed
                 }
                 if (!empty($prof['priv_passphrase'])) {
                     $data['snmp_v3_priv_pass'] = $prof['priv_passphrase'];
                 }
+                $appliedSnmpProfile = true;
+            } else {
+                App::log(
+                    'Device save: snmp_v3_profile_id=' . (int)$data['snmp_v3_profile_id']
+                    . ' not found or inactive; SNMPv3 fields left as posted',
+                    'warning'
+                );
             }
         } catch (Throwable $e) {
-            // table may not exist yet on first request after deploy
+            App::log('Device save SNMPv3 profile apply failed: ' . $e->getMessage(), 'error');
         }
     }
 
-    // On edit: blank secret fields mean "keep existing"
+    // Normalize free-typed / profile-copied protocol names for stable select matching
+    if (!empty($data['snmp_v3_auth_proto'])) {
+        $data['snmp_v3_auth_proto'] = strtoupper((string)$data['snmp_v3_auth_proto']);
+    }
+    if (!empty($data['snmp_v3_priv_proto'])) {
+        $data['snmp_v3_priv_proto'] = strtoupper((string)$data['snmp_v3_priv_proto']);
+    }
+    // Selecting any SNMPv3 field without version → force v3 so Discover/creds work
+    if (empty($data['snmp_version'])
+        && (!empty($data['snmp_v3_user']) || !empty($data['snmp_v3_profile_id']) || !empty($data['snmp_v3_sec_level']))
+    ) {
+        $data['snmp_version'] = '3';
+    }
+
+    // On edit: blank secret fields mean "keep existing" (unless a profile just supplied them)
     if (!empty($_POST['device_id'])) {
         $prevDev = Database::fetchOne(
             'SELECT snmp_community, snmp_v3_auth_pass, snmp_v3_priv_pass FROM devices WHERE device_id = ?',
@@ -234,18 +280,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 && !empty($prevDev['snmp_community'])) {
                 $data['snmp_community'] = $prevDev['snmp_community'];
             }
-            if (($data['snmp_v3_auth_pass'] === null || $data['snmp_v3_auth_pass'] === '')
+            if (!$appliedSnmpProfile
+                && ($data['snmp_v3_auth_pass'] === null || $data['snmp_v3_auth_pass'] === '')
                 && !empty($prevDev['snmp_v3_auth_pass'])) {
                 $data['snmp_v3_auth_pass'] = $prevDev['snmp_v3_auth_pass'];
             }
-            if (($data['snmp_v3_priv_pass'] === null || $data['snmp_v3_priv_pass'] === '')
+            if (!$appliedSnmpProfile
+                && ($data['snmp_v3_priv_pass'] === null || $data['snmp_v3_priv_pass'] === '')
                 && !empty($prevDev['snmp_v3_priv_pass'])) {
                 $data['snmp_v3_priv_pass'] = $prevDev['snmp_v3_priv_pass'];
             }
         }
     }
 
-    // Seal SNMP secrets at rest (already-encrypted values unchanged)
+    // Seal SNMP secrets at rest (already-encrypted profile/device values unchanged)
     $data = Crypto::sealFields($data, ['snmp_community', 'snmp_v3_auth_pass', 'snmp_v3_priv_pass']);
 
     // Resolve primary contact: plain contact_id, or "user:123" → ensure contacts row
@@ -389,7 +437,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             $data['updated_at'] = date('Y-m-d H:i:s');
             Database::update('devices', $data, 'device_id = :id', [':id' => $did]);
             AuditService::log((int)$user['user_id'], $user['username'], 'update', 'device', $did);
-            App::flash('success', 'Device updated.');
+            $msg = 'Device updated.';
+            if ($appliedSnmpProfile) {
+                $msg = 'Device updated. SNMPv3 credentials applied from the selected profile.';
+            } elseif ((string)($data['snmp_version'] ?? '') === '3' && empty($data['snmp_v3_user'])) {
+                $msg = 'Device updated. SNMPv3 version is set but no user/security name was saved — select a profile or enter the v3 user.';
+            }
+            App::flash('success', $msg);
             App::redirect('pages/devices.php?id=' . $did);
         } else {
             $data['is_active'] = 1;
@@ -1260,9 +1314,46 @@ if ($action === 'new' || $id) {
                         <?php endif; ?>
                     </div>
                     <div class="card-body">
+                        <?php
+                        $snmpProfName = null;
+                        $snmpProfIdView = (int)($device['snmp_v3_profile_id'] ?? 0);
+                        if ($snmpProfIdView > 0) {
+                            try {
+                                $snmpProfName = Database::fetchValue(
+                                    'SELECT name FROM snmp_v3_profiles WHERE profile_id = ?',
+                                    [$snmpProfIdView]
+                                );
+                            } catch (Throwable $e) {
+                                $snmpProfName = null;
+                            }
+                        }
+                        $isV3 = (string)($device['snmp_version'] ?? '') === '3';
+                        ?>
                         <dl class="view-dl">
                             <div><dt>Version</dt><dd><?= App::e((string)$device['snmp_version']) ?></dd></div>
-                            <div><dt>Site template</dt><dd id="snmpTplName">
+                            <?php if ($isV3): ?>
+                            <div><dt>v3 profile</dt><dd>
+                                <?php if ($snmpProfName): ?>
+                                    <?= App::e((string)$snmpProfName) ?>
+                                <?php elseif ($snmpProfIdView > 0): ?>
+                                    #<?= $snmpProfIdView ?>
+                                <?php else: ?>
+                                    <span class="text-muted">Manual (no profile)</span>
+                                <?php endif; ?>
+                            </dd></div>
+                            <div><dt>v3 user</dt><dd><?= App::e((string)($device['snmp_v3_user'] ?? '—') ?: '—') ?></dd></div>
+                            <div><dt>Security level</dt><dd><?= App::e((string)($device['snmp_v3_sec_level'] ?? '—') ?: '—') ?></dd></div>
+                            <div><dt>Auth / Priv</dt><dd>
+                                <?= App::e((string)($device['snmp_v3_auth_proto'] ?? '—') ?: '—') ?>
+                                / <?= App::e((string)($device['snmp_v3_priv_proto'] ?? '—') ?: '—') ?>
+                                <?php if (!empty($device['snmp_v3_auth_pass'])): ?> · auth ••••<?php endif; ?>
+                                <?php if (!empty($device['snmp_v3_priv_pass'])): ?> · priv ••••<?php endif; ?>
+                            </dd></div>
+                            <?php if (!empty($device['snmp_v3_context'])): ?>
+                            <div><dt>Context</dt><dd><?= App::e((string)$device['snmp_v3_context']) ?></dd></div>
+                            <?php endif; ?>
+                            <?php endif; ?>
+                            <div><dt>Site OID template</dt><dd id="snmpTplName">
                                 <?php if ($siteTpl):
                                     $devTplLabel = trim(($siteTpl['vendor'] ?? '') . ' / ' . ($siteTpl['model'] ?? ''), ' /');
                                     if ($devTplLabel === '') {
@@ -2108,7 +2199,8 @@ if ($action === 'new' || $id) {
                     </select>
                     <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
                         Manage profiles under <a href="<?= App::e(App::url('pages/snmp.php#profiles')) ?>">SNMP → Profiles</a>.
-                        Selecting a profile fills the fields below (saved on the device).
+                        Selecting a profile fills user/level/protocols below; <strong>passphrases are applied from the profile on Save</strong>
+                        (not shown in the browser). Set <strong>SNMP Version = 3</strong> first if the profile fields are hidden.
                     </p>
                 </div>
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 User (security name)</label>
@@ -2424,11 +2516,39 @@ if ($action === 'new' || $id) {
         // SNMP version / v3 profile helpers
         var snmpVer = document.getElementById('snmp_version');
         var snmpProf = document.getElementById('snmp_v3_profile_id');
+        var deviceForm = document.getElementById('deviceForm');
         function toggleSnmpV3Fields() {
             var v3 = snmpVer && snmpVer.value === '3';
             document.querySelectorAll('.snmp-v3-fields').forEach(function (el) {
                 el.style.display = v3 ? '' : 'none';
             });
+        }
+        function setSnmpField(id, val) {
+            var el = document.getElementById(id);
+            if (!el || val == null) return;
+            var s = String(val);
+            // Selects: match case-insensitively against options so SHA/sha256 from profiles apply
+            if (el.tagName === 'SELECT' && s !== '') {
+                var want = s.toUpperCase();
+                var matched = false;
+                for (var i = 0; i < el.options.length; i++) {
+                    if (String(el.options[i].value).toUpperCase() === want) {
+                        el.selectedIndex = i;
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) {
+                    // Ensure a matching option exists so the value is submitted
+                    var o = document.createElement('option');
+                    o.value = s;
+                    o.textContent = s;
+                    el.appendChild(o);
+                    el.value = s;
+                }
+                return;
+            }
+            el.value = s;
         }
         function applySnmpProfile() {
             if (!snmpProf) return;
@@ -2438,26 +2558,34 @@ if ($action === 'new' || $id) {
                 snmpVer.value = '3';
                 toggleSnmpV3Fields();
             }
-            function setId(id, val) {
-                var el = document.getElementById(id);
-                if (el && val != null) el.value = val;
-            }
-            setId('snmp_v3_user', opt.getAttribute('data-user') || '');
-            setId('snmp_v3_sec_level', opt.getAttribute('data-level') || '');
-            setId('snmp_v3_auth_proto', opt.getAttribute('data-auth-proto') || '');
-            setId('snmp_v3_priv_proto', opt.getAttribute('data-priv-proto') || '');
-            setId('snmp_v3_context', opt.getAttribute('data-context') || '');
+            setSnmpField('snmp_v3_user', opt.getAttribute('data-user') || '');
+            setSnmpField('snmp_v3_sec_level', opt.getAttribute('data-level') || '');
+            setSnmpField('snmp_v3_auth_proto', opt.getAttribute('data-auth-proto') || '');
+            setSnmpField('snmp_v3_priv_proto', opt.getAttribute('data-priv-proto') || '');
+            setSnmpField('snmp_v3_context', opt.getAttribute('data-context') || '');
             // Passphrases applied server-side from the profile (not embedded in HTML)
-            setId('snmp_v3_auth_pass', '');
-            setId('snmp_v3_priv_pass', '');
+            setSnmpField('snmp_v3_auth_pass', '');
+            setSnmpField('snmp_v3_priv_pass', '');
             var authEl = document.getElementById('snmp_v3_auth_pass');
             var privEl = document.getElementById('snmp_v3_priv_pass');
-            if (authEl) authEl.placeholder = 'From selected profile (saved on device)';
-            if (privEl) privEl.placeholder = 'From selected profile (saved on device)';
+            if (authEl) authEl.placeholder = 'From selected profile (applied on Save)';
+            if (privEl) privEl.placeholder = 'From selected profile (applied on Save)';
         }
         if (snmpVer) snmpVer.addEventListener('change', toggleSnmpV3Fields);
         if (snmpProf) snmpProf.addEventListener('change', applySnmpProfile);
         toggleSnmpV3Fields();
+        // If a profile is already selected on load, fill fields so the form matches the profile
+        if (snmpProf && snmpProf.value) {
+            applySnmpProfile();
+        }
+        // Before submit: re-apply profile so version=3 and non-secret fields are never blank
+        if (deviceForm) {
+            deviceForm.addEventListener('submit', function () {
+                if (snmpProf && snmpProf.value) {
+                    applySnmpProfile();
+                }
+            });
+        }
 
         // Power Supply line items (PSU ↔ cabinet PDU outlets)
         <?php if ($device): ?>
