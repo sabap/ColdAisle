@@ -142,12 +142,72 @@ function env_sensor_hosts(): array
 {
     return [
         'standalone' => 'Standalone probe / monitor',
+        'device' => 'Device (env manager / NMC host)',
         'cooling_unit' => 'Mounted on cooling unit',
         'pdu' => 'PDU environmental port',
-        'device' => 'Device / other host',
-        'cabinet' => 'Cabinet-mounted',
+        'cabinet' => 'Cabinet-mounted (no host device)',
         'room' => 'Room / space (no host device)',
     ];
+}
+
+/**
+ * Device types treated as environmental hosts (AP9340-class managers, expansion modules).
+ * @return list<string>
+ */
+function env_device_types(): array
+{
+    return ['env_monitor', 'env_module'];
+}
+
+function env_is_env_device_type(?string $type): bool
+{
+    return in_array((string)$type, env_device_types(), true);
+}
+
+/**
+ * Find active rack devices whose U range overlaps cabinet + position + height.
+ *
+ * @return list<array{device_id:int,label:string,device_type:string,position_u:int,u_height:int,manufacturer:?string,model:?string}>
+ */
+function env_find_devices_at_cabinet_u(int $cabinetId, int $positionU, int $uHeight = 1, int $excludeDeviceId = 0): array
+{
+    if ($cabinetId <= 0 || $positionU <= 0) {
+        return [];
+    }
+    $uHeight = max(1, $uHeight);
+    $end = $positionU + $uHeight - 1;
+    $sql = 'SELECT device_id, label, device_type, position_u, u_height, manufacturer, model
+            FROM devices
+            WHERE is_active = 1 AND cabinet_id = ? AND position_u IS NOT NULL
+              AND parent_device_id IS NULL';
+    $params = [$cabinetId];
+    if ($excludeDeviceId > 0) {
+        $sql .= ' AND device_id <> ?';
+        $params[] = $excludeDeviceId;
+    }
+    $sql .= ' ORDER BY position_u, label';
+    try {
+        $rows = Database::fetchAll($sql, $params);
+    } catch (Throwable $e) {
+        return [];
+    }
+    $out = [];
+    foreach ($rows as $o) {
+        $os = (int)$o['position_u'];
+        $oe = $os + max(1, (int)($o['u_height'] ?? 1)) - 1;
+        if ($positionU <= $oe && $end >= $os) {
+            $out[] = [
+                'device_id' => (int)$o['device_id'],
+                'label' => (string)$o['label'],
+                'device_type' => (string)($o['device_type'] ?? ''),
+                'position_u' => $os,
+                'u_height' => max(1, (int)($o['u_height'] ?? 1)),
+                'manufacturer' => $o['manufacturer'] !== null ? (string)$o['manufacturer'] : null,
+                'model' => $o['model'] !== null ? (string)$o['model'] : null,
+            ];
+        }
+    }
+    return $out;
 }
 
 /** @return array<string,string> */
@@ -339,7 +399,11 @@ function env_sensor_fields_from_post(array $post): array
         'crit_low' => $num($post['crit_low'] ?? null),
         'crit_high' => $num($post['crit_high'] ?? null),
         'snmp_oid' => cooling_null_str($post['snmp_oid'] ?? null),
+        'snmp_index' => cooling_null_str($post['snmp_index'] ?? null),
         'snmp_site_template_id' => $intOrNull($post['snmp_site_template_id'] ?? null),
+        'pos_x' => $num($post['pos_x'] ?? null),
+        'pos_y' => $num($post['pos_y'] ?? null),
+        'pos_z' => $num($post['pos_z'] ?? null),
         'notes' => cooling_null_str($post['notes'] ?? null),
         'is_active' => isset($post['is_active']) ? (!empty($post['is_active']) ? 1 : 0) : 1,
     ];
@@ -354,6 +418,8 @@ function env_sensor_fields_from_post(array $post): array
             break;
         case 'device':
             $fields['device_id'] = $intOrNull($post['device_id'] ?? null);
+            // Optional cabinet for rack location of the host / probe
+            $fields['cabinet_id'] = $intOrNull($post['cabinet_id'] ?? null);
             break;
         case 'cabinet':
             $fields['cabinet_id'] = $intOrNull($post['cabinet_id'] ?? null);

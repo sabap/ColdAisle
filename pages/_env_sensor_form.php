@@ -1,7 +1,7 @@
 <?php
 /**
  * Shared env sensor add/edit form.
- * Expects: $edit, $formAction, $kinds, $hosts, $placements, $rooms, $coolingUnits, $pdus, $cabinets
+ * Expects: $edit, $formAction, $kinds, $hosts, $placements, $rooms, $coolingUnits, $pdus, $cabinets, $devices
  */
 declare(strict_types=1);
 
@@ -9,6 +9,7 @@ $edit = $edit ?? [];
 $formAction = $formAction ?? 'add_sensor';
 $isUpdate = $formAction === 'update_sensor';
 $hostType = (string)($edit['host_type'] ?? 'standalone');
+$devices = $devices ?? [];
 ?>
 <form method="post" class="form-grid form-grid-3" id="envSensorForm">
     <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
@@ -19,7 +20,7 @@ $hostType = (string)($edit['host_type'] ?? 'standalone');
 
     <div class="form-row"><label>Name</label>
         <input class="form-control" name="name" required value="<?= App::e($edit['name'] ?? '') ?>"
-               placeholder="e.g. Cold aisle row A / CRAC-1 supply"></div>
+               placeholder="e.g. Cold aisle row A / AP9340 probe 1 temp"></div>
     <div class="form-row"><label>Kind</label>
         <select class="form-control" name="sensor_kind">
             <?php foreach ($kinds as $val => $lab): ?>
@@ -40,6 +41,35 @@ $hostType = (string)($edit['host_type'] ?? 'standalone');
                 </option>
             <?php endforeach; ?>
         </select>
+        <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+            Prefer <strong>Device</strong> and select your AP9340 (or other env manager) so SNMP and inventory stay one host.
+        </p>
+    </div>
+    <div class="form-row env-host-field" data-hosts="device"><label>Host device</label>
+        <select class="form-control" name="device_id" id="env_device_id">
+            <option value="">— Select device —</option>
+            <?php foreach ($devices as $d):
+                $dlab = $d['label'];
+                $meta = trim(($d['manufacturer'] ?? '') . ' ' . ($d['model'] ?? ''));
+                $dtype = (string)($d['device_type'] ?? '');
+                if ($meta !== '') {
+                    $dlab .= ' · ' . $meta;
+                }
+                if ($dtype !== '') {
+                    $dlab .= ' [' . $dtype . ']';
+                }
+                ?>
+                <option value="<?= (int)$d['device_id'] ?>"
+                        data-cabinet="<?= (int)($d['cabinet_id'] ?? 0) ?>"
+                        data-pos="<?= (int)($d['position_u'] ?? 0) ?>"
+                    <?= (int)($edit['device_id'] ?? 0) === (int)$d['device_id'] ? 'selected' : '' ?>>
+                    <?= App::e($dlab) ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+        <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0" id="env_device_hint">
+            Env monitors and expansion modules are listed first. Open the device for Discover OIDs / PowerNet MIB.
+        </p>
     </div>
     <div class="form-row env-host-field" data-hosts="cooling_unit"><label>Cooling unit</label>
         <select class="form-control" name="cooling_unit_id">
@@ -63,8 +93,8 @@ $hostType = (string)($edit['host_type'] ?? 'standalone');
             <?php endforeach; ?>
         </select>
     </div>
-    <div class="form-row env-host-field" data-hosts="cabinet"><label>Cabinet</label>
-        <select class="form-control" name="cabinet_id">
+    <div class="form-row env-host-field" data-hosts="cabinet device"><label>Cabinet (location)</label>
+        <select class="form-control" name="cabinet_id" id="env_cabinet_id">
             <option value="">—</option>
             <?php foreach ($cabinets as $c): ?>
                 <option value="<?= (int)$c['cabinet_id'] ?>"
@@ -115,9 +145,23 @@ $hostType = (string)($edit['host_type'] ?? 'standalone');
                value="<?= App::e((string)($edit['crit_high'] ?? '')) ?>"></div>
 
     <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">SNMP (optional)</h4></div>
-    <div class="form-row full"><label>OID</label>
+    <div class="form-row"><label>OID</label>
         <input class="form-control" name="snmp_oid" value="<?= App::e($edit['snmp_oid'] ?? '') ?>"
-               placeholder="e.g. 1.3.6.1.4.1… (polled later via host or site template)"></div>
+               placeholder="Numeric OID from Discover / PowerNet"></div>
+    <div class="form-row"><label>Index / instance</label>
+        <input class="form-control" name="snmp_index" value="<?= App::e($edit['snmp_index'] ?? '') ?>"
+               placeholder="e.g. probe #1 table index"></div>
+    <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">3D / floor position (optional)</h4></div>
+    <div class="form-row"><label>Pos X (m)</label>
+        <input class="form-control" type="number" step="0.001" name="pos_x"
+               value="<?= App::e((string)($edit['pos_x'] ?? '')) ?>"></div>
+    <div class="form-row"><label>Pos Y (m)</label>
+        <input class="form-control" type="number" step="0.001" name="pos_y"
+               value="<?= App::e((string)($edit['pos_y'] ?? '')) ?>"></div>
+    <div class="form-row"><label>Height Z (m)</label>
+        <input class="form-control" type="number" step="0.001" name="pos_z"
+               value="<?= App::e((string)($edit['pos_z'] ?? '')) ?>"
+               placeholder="Future 3D height"></div>
     <div class="form-row full"><label>Notes</label>
         <textarea class="form-control" name="notes" rows="2"><?= App::e($edit['notes'] ?? '') ?></textarea></div>
 
@@ -128,6 +172,8 @@ $hostType = (string)($edit['host_type'] ?? 'standalone');
 <script>
 (function () {
   var sel = document.getElementById('env_host_type');
+  var dev = document.getElementById('env_device_id');
+  var cab = document.getElementById('env_cabinet_id');
   if (!sel) return;
   function sync() {
     var h = sel.value;
@@ -136,7 +182,18 @@ $hostType = (string)($edit['host_type'] ?? 'standalone');
       row.style.display = hosts.indexOf(h) >= 0 ? '' : 'none';
     });
   }
+  function fillCabFromDevice() {
+    if (!dev || !cab) return;
+    var opt = dev.options[dev.selectedIndex];
+    if (!opt) return;
+    var cid = opt.getAttribute('data-cabinet') || '';
+    if (cid && cid !== '0' && !cab.value) {
+      cab.value = cid;
+    }
+  }
   sel.addEventListener('change', sync);
+  if (dev) dev.addEventListener('change', fillCabFromDevice);
   sync();
+  fillCabFromDevice();
 })();
 </script>
