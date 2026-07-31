@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **Settings collapsible sections:** section cards default to collapsed with Expand all / Collapse all; `#hash` links open the matching card; open state remembered in `localStorage`.
-
 ### Bug fixes
 
 ---
 
+## [0.3.2] - 2026-07-31
+
+### Enhancements
+
+- **Settings collapsible sections:** section cards default to collapsed with Expand all / Collapse all; `#hash` links open the matching card; open state remembered in `localStorage`.
+
+---
 ## [0.3.1] - 2026-07-31
 
 ### Bug fixes
