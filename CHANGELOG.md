@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.10] - 2026-07-31
+
+### Bug fixes
+
 - **Discover IIS timeout / Internal Server Error:** fail fast when sysDescr probe fails (no multi-tree walk hang); skip snmp_read_mib in web Discover; shorter SNMP timeouts; fatal errors returned as JSON.
 
 ---
-
 ## [0.3.9] - 2026-07-31
 
 ### Bug fixes
