@@ -45,18 +45,16 @@ Historical note commits:
 
 | Field | Value |
 |-------|--------|
-| **Status** | open |
+| **Status** | **done** (release **0.3.0**) |
 | **Requested** | 2026-07-24 (agent note after long upgrades; user acknowledged “note hardening”) |
-| **Source** | commit `dbae6e0`, `src/Schema.php` header (kept in sync with this file) |
-| **Priority** | ops / support |
+| **Source** | commit `dbae6e0`, `src/Schema.php` |
+| **Delivered** | Settings → Schema health; ensure log; force ensure; inventory vs catalog; idempotent reshapes |
 
 **Items**
 
-- Schema status / health UI: app `VERSION`, last ensure OK, expected tables & columns vs live DB (verify after multi-version jumps).  
-- Optional `schema_version` / ensure-run log for ops visibility.  
-- Explicit idempotent alters for rare reshape/backfill (not only `ADD` column/table).
-
-**Context:** Additive `ensureColumn` / `ensureTable` already converges most installs; this is about **visibility and rare reshape**, not rewriting the ensure model.
+- [x] Schema status / health UI: app `VERSION`, last ensure OK, expected tables & columns vs live DB  
+- [x] Ensure-run log + `schema_version` / last ensure settings  
+- [x] Explicit idempotent reshape/backfill hooks (e.g. presence/breaker nulls)
 
 ---
 
@@ -241,6 +239,16 @@ Historical note commits:
 ---
 
 ## Completed (keep for audit; do not re-implement)
+
+### Schema status / hardening pass
+
+| Field | Value |
+|-------|--------|
+| **Status** | **done** (release **0.3.0**) |
+| **Source** | backlog item #2 |
+| **Delivered** | `Schema::status()` inventory check; Settings → Schema health; ensure JSONL log + stamp metadata; force ensure; `runIdempotentReshapes()` |
+
+---
 
 ### Active sessions / presence
 
