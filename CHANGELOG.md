@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **Active sessions / presence:** track signed-in users in `auth_sessions` (heartbeat on page use). **Users & Departments** shows an **Online** badge; **Settings → Updates** warns if others are logged in before apply (warning only).
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.2.99] - 2026-07-31
+
+### New features
+
+- **Active sessions / presence:** track signed-in users in `auth_sessions` (heartbeat on page use). **Users & Departments** shows an **Online** badge; **Settings → Updates** warns if others are logged in before apply (warning only).
+
+---
 ## [0.2.98] - 2026-07-30
 
 ### Enhancements
