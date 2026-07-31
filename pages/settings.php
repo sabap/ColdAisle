@@ -162,9 +162,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         }
 
         if ($section === 'schema_ensure') {
-            if (!AuthManager::isAdmin($user)) {
-                throw new RuntimeException('Only Global Admin can run schema ensure.');
-            }
+            // Settings page already requires manage_settings
             Schema::clearStamp();
             $run = Schema::ensure(true);
             if (!empty($run['ok'])) {
@@ -757,6 +755,182 @@ layout_header('Settings', $user, 'settings');
     </div>
 </div>
 <?php endif; ?>
+
+<?php
+// Schema health — always shown on Settings (manage_settings). Near top for visibility.
+$schemaStatus = null;
+$schemaStatusError = null;
+try {
+    $schemaStatus = Schema::status();
+} catch (Throwable $e) {
+    $schemaStatusError = $e->getMessage();
+    $schemaStatus = [
+        'app_version' => App::VERSION,
+        'ok' => false,
+        'stamp' => ['exists' => false, 'path' => '', 'at' => null, 'version' => null, 'ms' => null],
+        'last_ensure' => null,
+        'ensure_log' => [],
+        'missing_tables' => [],
+        'missing_columns' => [],
+        'present_tables' => 0,
+        'checked_tables' => 0,
+        'checked_columns' => 0,
+        'live_table_count' => 0,
+    ];
+}
+?>
+<div class="card" id="schema">
+    <div class="card-header flex-between">
+        <h2>Schema health</h2>
+        <?php if ($schemaStatusError): ?>
+            <span class="badge badge-danger">Error</span>
+        <?php elseif (!empty($schemaStatus['ok'])): ?>
+            <span class="badge badge-success">OK</span>
+        <?php else: ?>
+            <span class="badge badge-danger">Gaps found</span>
+        <?php endif; ?>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="margin-top:0;font-size:.88rem">
+            Compares this app version’s expected tables/columns (additive ensure inventory + core tables)
+            to the live SQL Server catalog. Useful after multi-version jumps or partial upgrades.
+        </p>
+        <?php if ($schemaStatusError): ?>
+            <div class="alert alert-error" style="margin-bottom:1rem">
+                Could not load schema status:
+                <code><?= App::e($schemaStatusError) ?></code>
+            </div>
+        <?php endif; ?>
+        <table class="data">
+            <tr>
+                <td>App version</td>
+                <td>
+                    <code><?= App::e((string)$schemaStatus['app_version']) ?></code>
+                    · installed <code><?= App::e(UpdateService::installedVersion()) ?></code>
+                </td>
+            </tr>
+            <tr>
+                <td>Ensure stamp</td>
+                <td>
+                    <?php if (!empty($schemaStatus['stamp']['exists'])): ?>
+                        <span class="badge badge-success">Present</span>
+                        <?php if (!empty($schemaStatus['stamp']['at'])): ?>
+                            · <?= App::e((string)$schemaStatus['stamp']['at']) ?>
+                        <?php endif; ?>
+                        <?php if (isset($schemaStatus['stamp']['ms']) && $schemaStatus['stamp']['ms'] !== null): ?>
+                            · last run <?= App::e((string)$schemaStatus['stamp']['ms']) ?> ms
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <span class="badge">Missing</span>
+                        <span class="text-muted">— next full request will run ensure (or use button below)</span>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <tr>
+                <td>Last ensure (settings)</td>
+                <td>
+                    <?php
+                    $le = $schemaStatus['last_ensure'] ?? null;
+                    if (is_array($le) && $le):
+                        $leOk = !empty($le['ok']);
+                        ?>
+                        <span class="badge <?= $leOk ? 'badge-success' : 'badge-danger' ?>">
+                            <?= $leOk ? 'OK' : 'Failed' ?>
+                        </span>
+                        v<?= App::e((string)($le['version'] ?? '—')) ?>
+                        · <?= App::e((string)($le['at'] ?? '—')) ?>
+                        · <?= App::e((string)($le['ms'] ?? '—')) ?> ms
+                        <?= !empty($le['force']) ? ' · forced' : '' ?>
+                        <?php if (!$leOk && !empty($le['error'])): ?>
+                            <div class="text-muted" style="font-size:.8rem;margin-top:.25rem"><?= App::e((string)$le['error']) ?></div>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <span class="text-muted">No run recorded yet</span>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <tr>
+                <td>Catalog check</td>
+                <td>
+                    <?= (int)$schemaStatus['present_tables'] ?>/<?= (int)$schemaStatus['checked_tables'] ?> expected tables present
+                    · <?= (int)$schemaStatus['checked_columns'] ?> columns checked
+                    · <?= (int)$schemaStatus['live_table_count'] ?> tables in dbo
+                </td>
+            </tr>
+            <tr>
+                <td>SQL host</td>
+                <td><?= App::e(($config['database']['host'] ?? '') . ' / ' . ($config['database']['database'] ?? '')) ?></td>
+            </tr>
+        </table>
+
+        <?php if (!empty($schemaStatus['missing_tables']) || !empty($schemaStatus['missing_columns'])): ?>
+            <div class="alert alert-warning" style="margin-top:1rem">
+                <strong>Missing from live DB</strong>
+                <?php if (!empty($schemaStatus['missing_tables'])): ?>
+                    <div style="margin-top:.4rem;font-size:.85rem">
+                        Tables:
+                        <code><?= App::e(implode(', ', $schemaStatus['missing_tables'])) ?></code>
+                    </div>
+                <?php endif; ?>
+                <?php if (!empty($schemaStatus['missing_columns'])): ?>
+                    <ul style="margin:.4rem 0 0;padding-left:1.2rem;font-size:.85rem;max-height:10rem;overflow:auto">
+                        <?php foreach (array_slice($schemaStatus['missing_columns'], 0, 40) as $mc): ?>
+                            <li><code><?= App::e($mc['table'] . '.' . $mc['column']) ?></code></li>
+                        <?php endforeach; ?>
+                        <?php if (count($schemaStatus['missing_columns']) > 40): ?>
+                            <li class="text-muted">…and <?= count($schemaStatus['missing_columns']) - 40 ?> more</li>
+                        <?php endif; ?>
+                    </ul>
+                <?php endif; ?>
+                <p class="text-muted" style="margin:.5rem 0 0;font-size:.8rem">
+                    Run <strong>Ensure schema now</strong> to apply additive fixes. Rare reshape/backfill steps also run.
+                </p>
+            </div>
+        <?php elseif (!$schemaStatusError): ?>
+            <p class="text-muted" style="margin-top:.75rem;font-size:.85rem">
+                No missing expected tables or managed columns detected.
+            </p>
+        <?php endif; ?>
+
+        <?php if (!empty($schemaStatus['ensure_log'])): ?>
+            <h3 style="font-size:.95rem;margin:1.25rem 0 .5rem">Recent ensure runs</h3>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead>
+                    <tr><th>When (UTC)</th><th>Version</th><th>Result</th><th>ms</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($schemaStatus['ensure_log'] as $row): ?>
+                        <tr>
+                            <td style="font-size:.82rem;white-space:nowrap"><?= App::e((string)($row['at'] ?? '—')) ?></td>
+                            <td><code><?= App::e((string)($row['version'] ?? '—')) ?></code></td>
+                            <td>
+                                <?php if (!empty($row['ok'])): ?>
+                                    <span class="badge badge-success">OK</span>
+                                <?php else: ?>
+                                    <span class="badge badge-danger">Fail</span>
+                                <?php endif; ?>
+                                <?= !empty($row['force']) ? '<span class="text-muted">force</span>' : '' ?>
+                            </td>
+                            <td><?= App::e((string)($row['ms'] ?? '—')) ?></td>
+                            <td class="text-muted" style="font-size:.78rem">
+                                <?= !empty($row['error']) ? App::e((string)$row['error']) : '' ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php endif; ?>
+
+        <form method="post" style="margin-top:1rem"
+              onsubmit="return confirm('Clear the ensure stamp and re-run schema ensure now? Safe additive changes only.');">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="schema_ensure">
+            <button type="submit" class="btn btn-secondary">Ensure schema now</button>
+        </form>
+    </div>
+</div>
 
 <div class="card" id="security">
     <div class="card-header"><h2>Security (HTTPS &amp; sessions)</h2></div>
