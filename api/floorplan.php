@@ -111,8 +111,164 @@ try {
         ]);
     }
 
-    // --- Row / room PDU floor placement ---
+    // --- Cooling unit floor placement ---
     $fpAction = (string)($_GET['action'] ?? '');
+    if ($method === 'POST' && in_array($fpAction, [
+        'place_cooling', 'create_floor_cooling', 'update_floor_cooling', 'unplace_cooling',
+    ], true)) {
+        api_require_any_permission(['edit_infrastructure', 'edit_cooling']);
+        api_require_csrf();
+        $data = api_read_json();
+
+        if ($fpAction === 'create_floor_cooling') {
+            $roomId = (int)($data['room_id'] ?? 0);
+            if (!$roomId) {
+                App::json(['error' => 'room_id required'], 400);
+            }
+            if (!floorplan_fetch_room($roomId)) {
+                App::json(['error' => 'Room not found'], 404);
+            }
+            $name = trim((string)($data['name'] ?? ''));
+            if ($name === '') {
+                $name = 'Cooling unit';
+            }
+            $unitType = strtolower((string)($data['unit_type'] ?? 'crac'));
+            $allowedTypes = [
+                'crac', 'crah', 'in_row', 'chiller', 'chilled_water_pump', 'ac_pump', 'cdu', 'ahu', 'other',
+            ];
+            if (!in_array($unitType, $allowedTypes, true)) {
+                $unitType = 'crac';
+            }
+            $medium = strtolower((string)($data['cooling_medium'] ?? 'dx'));
+            if (!in_array($medium, ['dx', 'chilled_water', 'glycol', 'dual', 'other'], true)) {
+                $medium = $unitType === 'crah' || str_contains($unitType, 'pump') ? 'chilled_water' : 'dx';
+            }
+            $facing = floorplan_normalize_facing($data['front_facing'] ?? 'north');
+            $geom = floorplan_cooling_geometry_from_data($data, $facing, $unitType);
+            $role = strtolower((string)($data['unit_role'] ?? 'primary'));
+            if (!in_array($role, ['primary', 'standby', 'shared', 'unknown'], true)) {
+                $role = 'primary';
+            }
+            $row = array_merge([
+                'name' => $name,
+                'unit_type' => $unitType,
+                'unit_role' => $role,
+                'cooling_medium' => $medium,
+                'room_id' => $roomId,
+                'manufacturer' => trim((string)($data['manufacturer'] ?? '')) !== ''
+                    ? trim((string)$data['manufacturer']) : null,
+                'model' => trim((string)($data['model'] ?? '')) !== ''
+                    ? trim((string)$data['model']) : null,
+                'status' => 'production',
+                'is_active' => 1,
+            ], $geom);
+            $cid = Database::insert('cooling_units', $row);
+            AuditService::log((int)$user['user_id'], $user['username'], 'create', 'cooling_unit', (int)$cid, [
+                'name' => $name,
+                'floor_placed' => true,
+                'room_id' => $roomId,
+            ]);
+            App::json(['cooling_unit' => floorplan_fetch_cooling((int)$cid)], 201);
+        }
+
+        if ($fpAction === 'place_cooling') {
+            $cid = (int)($data['cooling_unit_id'] ?? 0);
+            $roomId = (int)($data['room_id'] ?? 0);
+            if ($cid <= 0 || $roomId <= 0) {
+                App::json(['error' => 'cooling_unit_id and room_id required'], 400);
+            }
+            $unit = Database::fetchOne(
+                'SELECT * FROM cooling_units WHERE cooling_unit_id = ? AND is_active = 1',
+                [$cid]
+            );
+            if (!$unit) {
+                App::json(['error' => 'Cooling unit not found'], 404);
+            }
+            if (!floorplan_fetch_room($roomId)) {
+                App::json(['error' => 'Room not found'], 404);
+            }
+            $facing = floorplan_normalize_facing($data['front_facing'] ?? ($unit['front_facing'] ?? 'north'));
+            $geom = floorplan_cooling_geometry_from_data(
+                array_merge($unit, $data),
+                $facing,
+                (string)($unit['unit_type'] ?? 'crac')
+            );
+            $fields = array_merge(['room_id' => $roomId], $geom);
+            if (array_key_exists('name', $data) && trim((string)$data['name']) !== '') {
+                $fields['name'] = trim((string)$data['name']);
+            }
+            Database::update('cooling_units', $fields, 'cooling_unit_id = :id', [':id' => $cid]);
+            AuditService::log((int)$user['user_id'], $user['username'], 'update', 'cooling_unit', $cid, [
+                'floor_place' => true,
+                'room_id' => $roomId,
+            ]);
+            App::json(['cooling_unit' => floorplan_fetch_cooling($cid)]);
+        }
+
+        if ($fpAction === 'update_floor_cooling') {
+            $cid = (int)($data['cooling_unit_id'] ?? 0);
+            if ($cid <= 0) {
+                App::json(['error' => 'cooling_unit_id required'], 400);
+            }
+            $unit = Database::fetchOne(
+                'SELECT * FROM cooling_units WHERE cooling_unit_id = ? AND is_active = 1',
+                [$cid]
+            );
+            if (!$unit) {
+                App::json(['error' => 'Cooling unit not found'], 404);
+            }
+            $fields = [];
+            if (array_key_exists('name', $data) && trim((string)$data['name']) !== '') {
+                $fields['name'] = trim((string)$data['name']);
+            }
+            $hasGeom = false;
+            foreach (['pos_x', 'pos_y', 'width_mm', 'depth_mm', 'height_mm', 'rotation_deg', 'front_facing', 'color_hex'] as $k) {
+                if (array_key_exists($k, $data)) {
+                    $hasGeom = true;
+                    break;
+                }
+            }
+            if ($hasGeom) {
+                $facing = floorplan_normalize_facing($data['front_facing'] ?? ($unit['front_facing'] ?? 'north'));
+                $merged = array_merge($unit, $data);
+                $fields = array_merge(
+                    $fields,
+                    floorplan_cooling_geometry_from_data($merged, $facing, (string)($unit['unit_type'] ?? 'crac'))
+                );
+            }
+            if (!$fields) {
+                App::json(['error' => 'No fields to update'], 400);
+            }
+            $fields['updated_at'] = date('Y-m-d H:i:s');
+            Database::update('cooling_units', $fields, 'cooling_unit_id = :id', [':id' => $cid]);
+            App::json(['cooling_unit' => floorplan_fetch_cooling($cid)]);
+        }
+
+        if ($fpAction === 'unplace_cooling') {
+            $cid = (int)($data['cooling_unit_id'] ?? 0);
+            if ($cid <= 0) {
+                App::json(['error' => 'cooling_unit_id required'], 400);
+            }
+            $unit = Database::fetchOne(
+                'SELECT cooling_unit_id FROM cooling_units WHERE cooling_unit_id = ? AND is_active = 1',
+                [$cid]
+            );
+            if (!$unit) {
+                App::json(['error' => 'Cooling unit not found'], 404);
+            }
+            Database::update('cooling_units', [
+                'pos_x' => null,
+                'pos_y' => null,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ], 'cooling_unit_id = :id', [':id' => $cid]);
+            AuditService::log((int)$user['user_id'], $user['username'], 'update', 'cooling_unit', $cid, [
+                'floor_unplace' => true,
+            ]);
+            App::json(['ok' => true, 'cooling_unit_id' => $cid]);
+        }
+    }
+
+    // --- Row / room PDU floor placement ---
     if ($method === 'POST' && in_array($fpAction, [
         'place_pdu', 'create_floor_pdu', 'update_floor_pdu', 'unplace_pdu',
     ], true)) {
@@ -380,6 +536,45 @@ try {
         App::log('floorplan PDU query: ' . $e->getMessage(), 'warning');
     }
 
+    $placedCooling = [];
+    $unplacedCooling = [];
+    try {
+        $dcId = (int)($room['datacenter_id'] ?? 0);
+        $placedCooling = Database::fetchAll(
+            'SELECT u.cooling_unit_id, u.name, u.unit_type, u.unit_role, u.cooling_medium,
+                    u.room_id, u.pos_x, u.pos_y, u.pos_z, u.rotation_deg, u.front_facing,
+                    u.width_mm, u.depth_mm, u.height_mm, u.color_hex, u.primary_ip, u.status,
+                    u.rated_kw_cooling, u.standby_of_id
+             FROM cooling_units u
+             WHERE u.is_active = 1
+               AND u.room_id = ?
+               AND u.pos_x IS NOT NULL AND u.pos_y IS NOT NULL
+             ORDER BY u.name',
+            [$roomId]
+        );
+        $unplacedCooling = Database::fetchAll(
+            'SELECT u.cooling_unit_id, u.name, u.unit_type, u.unit_role, u.cooling_medium,
+                    u.width_mm, u.depth_mm, u.height_mm, u.color_hex, u.front_facing,
+                    u.primary_ip, u.status, u.room_id
+             FROM cooling_units u
+             LEFT JOIN rooms rm ON rm.room_id = u.room_id
+             WHERE u.is_active = 1
+               AND (u.pos_x IS NULL OR u.pos_y IS NULL)
+               AND (
+                    ? = 0
+                    OR u.room_id IS NULL
+                    OR u.room_id = ?
+                    OR rm.datacenter_id = ?
+               )
+             ORDER BY u.name',
+            [$dcId, $roomId, $dcId]
+        );
+    } catch (Throwable $e) {
+        $placedCooling = [];
+        $unplacedCooling = [];
+        App::log('floorplan cooling query: ' . $e->getMessage(), 'warning');
+    }
+
     $paths = Database::fetchAll('SELECT * FROM cable_paths WHERE room_id = ?', [$roomId]);
     $units = SettingsService::get('length_units', 'metric');
 
@@ -390,6 +585,8 @@ try {
         'zones' => $zones,
         'placed_pdus' => $placedPdus,
         'unplaced_pdus' => $unplacedPdus,
+        'placed_cooling' => $placedCooling,
+        'unplaced_cooling' => $unplacedCooling,
         'cable_paths' => $paths,
         'units' => $units === 'imperial' ? 'imperial' : 'metric',
         'planner' => [
@@ -461,6 +658,59 @@ function floorplan_pdu_geometry_from_data(array $data, string $facing): array
             ? (float)$data['rotation_deg'] : 0.0,
         'color_hex' => $color,
     ];
+}
+
+function floorplan_cooling_default_color(string $unitType): string
+{
+    return match ($unitType) {
+        'crac', 'crah', 'in_row', 'ahu' => '#0ea5e9',
+        'chiller' => '#0284c7',
+        'chilled_water_pump', 'ac_pump' => '#0369a1',
+        'cdu' => '#38bdf8',
+        default => '#64748b',
+    };
+}
+
+/**
+ * @param array<string,mixed> $data
+ * @return array<string,mixed>
+ */
+function floorplan_cooling_geometry_from_data(array $data, string $facing, string $unitType = 'crac'): array
+{
+    $defaultColor = floorplan_cooling_default_color($unitType);
+    $color = (string)($data['color_hex'] ?? $defaultColor);
+    if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $color)) {
+        $color = $defaultColor;
+    }
+    $defaultW = str_contains($unitType, 'pump') ? 600 : 1200;
+    $defaultD = str_contains($unitType, 'pump') ? 600 : 900;
+    $defaultH = str_contains($unitType, 'pump') ? 1200 : 2000;
+    return [
+        'pos_x' => round((float)($data['pos_x'] ?? 0), 3),
+        'pos_y' => round((float)($data['pos_y'] ?? 0), 3),
+        'pos_z' => isset($data['pos_z']) && $data['pos_z'] !== '' && $data['pos_z'] !== null
+            ? round((float)$data['pos_z'], 3) : 0.0,
+        'width_mm' => max(100, min(8000, (int)($data['width_mm'] ?? $defaultW))),
+        'depth_mm' => max(100, min(8000, (int)($data['depth_mm'] ?? $defaultD))),
+        'height_mm' => max(100, min(8000, (int)($data['height_mm'] ?? $defaultH))),
+        'front_facing' => $facing,
+        'rotation_deg' => isset($data['rotation_deg']) && $data['rotation_deg'] !== '' && $data['rotation_deg'] !== null
+            ? (float)$data['rotation_deg'] : 0.0,
+        'color_hex' => $color,
+    ];
+}
+
+function floorplan_fetch_cooling(int $coolingUnitId): ?array
+{
+    return Database::fetchOne(
+        'SELECT u.cooling_unit_id, u.name, u.unit_type, u.unit_role, u.cooling_medium,
+                u.room_id, u.pos_x, u.pos_y, u.pos_z, u.rotation_deg, u.front_facing,
+                u.width_mm, u.depth_mm, u.height_mm, u.color_hex, u.primary_ip, u.status,
+                u.rated_kw_cooling, u.standby_of_id, u.is_active
+         FROM cooling_units u
+         WHERE u.cooling_unit_id = ?',
+        [$coolingUnitId]
+    );
 }
 
 function floorplan_fetch_pdu(int $pduId): ?array

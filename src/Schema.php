@@ -430,6 +430,99 @@ class Schema
                 "DATETIME2 NOT NULL CONSTRAINT DF_auth_sess_seen2 DEFAULT SYSUTCDATETIME()"
             );
 
+            // Cooling units (CRAC/CRAH/pumps/chillers) + environmental sensors
+            self::ensureTable(
+                'cooling_units',
+                "CREATE TABLE cooling_units (
+                    cooling_unit_id INT IDENTITY(1,1) PRIMARY KEY,
+                    name NVARCHAR(150) NOT NULL,
+                    unit_type NVARCHAR(40) NOT NULL CONSTRAINT DF_cu_type DEFAULT 'crac',
+                    unit_role NVARCHAR(20) NOT NULL CONSTRAINT DF_cu_role DEFAULT 'primary',
+                    standby_of_id INT NULL,
+                    room_id INT NULL,
+                    row_id INT NULL,
+                    manufacturer NVARCHAR(100) NULL,
+                    model NVARCHAR(100) NULL,
+                    serial_no NVARCHAR(100) NULL,
+                    asset_tag NVARCHAR(100) NULL,
+                    primary_ip NVARCHAR(45) NULL,
+                    hostname NVARCHAR(255) NULL,
+                    warranty_provider NVARCHAR(150) NULL,
+                    warranty_end DATE NULL,
+                    install_date DATE NULL,
+                    manufacture_date DATE NULL,
+                    cooling_medium NVARCHAR(30) NOT NULL CONSTRAINT DF_cu_medium DEFAULT 'dx',
+                    rated_kw_cooling DECIMAL(10,2) NULL,
+                    rated_tons DECIMAL(10,2) NULL,
+                    rated_cfm DECIMAL(12,2) NULL,
+                    supply_temp_setpoint_c DECIMAL(6,2) NULL,
+                    return_temp_setpoint_c DECIMAL(6,2) NULL,
+                    ashrae_class NVARCHAR(20) NULL,
+                    status NVARCHAR(30) NOT NULL CONSTRAINT DF_cu_status DEFAULT 'production',
+                    pos_x DECIMAL(10,3) NULL,
+                    pos_y DECIMAL(10,3) NULL,
+                    pos_z DECIMAL(10,3) NULL,
+                    rotation_deg DECIMAL(8,2) NULL,
+                    front_facing NVARCHAR(10) NULL,
+                    width_mm INT NULL,
+                    depth_mm INT NULL,
+                    height_mm INT NULL,
+                    color_hex NVARCHAR(7) NULL,
+                    snmp_enabled BIT NOT NULL CONSTRAINT DF_cu_snmp_en DEFAULT 0,
+                    snmp_version NVARCHAR(10) NULL,
+                    snmp_community NVARCHAR(100) NULL,
+                    snmp_port INT NULL,
+                    snmp_v3_profile_id INT NULL,
+                    snmp_site_template_id INT NULL,
+                    snmp_auto_poll BIT NOT NULL CONSTRAINT DF_cu_snmp_auto DEFAULT 0,
+                    snmp_last_poll_at DATETIME2 NULL,
+                    last_poll_json NVARCHAR(MAX) NULL,
+                    notes NVARCHAR(MAX) NULL,
+                    is_active BIT NOT NULL CONSTRAINT DF_cu_active DEFAULT 1,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_cu_created DEFAULT SYSUTCDATETIME(),
+                    updated_at DATETIME2 NOT NULL CONSTRAINT DF_cu_updated DEFAULT SYSUTCDATETIME()
+                )"
+            );
+            self::ensureTable(
+                'env_sensors',
+                "CREATE TABLE env_sensors (
+                    sensor_id INT IDENTITY(1,1) PRIMARY KEY,
+                    name NVARCHAR(150) NOT NULL,
+                    sensor_kind NVARCHAR(40) NOT NULL CONSTRAINT DF_es_kind DEFAULT 'temperature',
+                    host_type NVARCHAR(30) NOT NULL CONSTRAINT DF_es_host DEFAULT 'standalone',
+                    cooling_unit_id INT NULL,
+                    pdu_id INT NULL,
+                    device_id INT NULL,
+                    cabinet_id INT NULL,
+                    room_id INT NULL,
+                    location_label NVARCHAR(150) NULL,
+                    placement NVARCHAR(40) NULL,
+                    unit NVARCHAR(20) NULL,
+                    ashrae_metric NVARCHAR(40) NULL,
+                    warn_low DECIMAL(12,4) NULL,
+                    warn_high DECIMAL(12,4) NULL,
+                    crit_low DECIMAL(12,4) NULL,
+                    crit_high DECIMAL(12,4) NULL,
+                    snmp_oid NVARCHAR(255) NULL,
+                    snmp_site_template_id INT NULL,
+                    last_value DECIMAL(14,4) NULL,
+                    last_seen_at DATETIME2 NULL,
+                    notes NVARCHAR(500) NULL,
+                    is_active BIT NOT NULL CONSTRAINT DF_es_active DEFAULT 1,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_es_created DEFAULT SYSUTCDATETIME(),
+                    updated_at DATETIME2 NOT NULL CONSTRAINT DF_es_updated DEFAULT SYSUTCDATETIME()
+                )"
+            );
+            self::ensureTable(
+                'env_readings',
+                "CREATE TABLE env_readings (
+                    reading_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                    sensor_id INT NOT NULL,
+                    value DECIMAL(14,4) NOT NULL,
+                    recorded_at DATETIME2 NOT NULL CONSTRAINT DF_er_at DEFAULT SYSUTCDATETIME()
+                )"
+            );
+
             // Rare idempotent reshapes / backfills (not only ADD column)
             self::runIdempotentReshapes();
 
@@ -530,7 +623,19 @@ class Schema
             'cabinets' => ['audit_interval_days'],
             'role_group_maps' => ['map_id', 'role_id', 'auth_source', 'group_id'],
             'auth_sessions' => ['session_id', 'user_id', 'last_seen_at', 'expires_at'],
+            'cooling_units' => [
+                'cooling_unit_id', 'name', 'unit_type', 'unit_role', 'cooling_medium',
+                'room_id', 'pos_x', 'pos_y', 'snmp_enabled', 'primary_ip',
+            ],
+            'env_sensors' => [
+                'sensor_id', 'name', 'sensor_kind', 'host_type', 'room_id',
+                'cooling_unit_id', 'pdu_id', 'last_value',
+            ],
+            'env_readings' => ['reading_id', 'sensor_id', 'value', 'recorded_at'],
         ];
+        $core = array_values(array_unique(array_merge($core, [
+            'cooling_units', 'env_sensors', 'env_readings',
+        ])));
         return ['core_tables' => $core, 'tables' => $managed];
     }
 

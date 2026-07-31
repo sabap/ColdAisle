@@ -68,6 +68,7 @@ function layout_header(string $title, array $user, string $active = ''): void
                 'cabinets' => ['Cabinets', 'pages/cabinets.php', '▤'],
                 'devices' => ['Devices', 'pages/devices.php', '🖥'],
                 'power' => ['Power', 'pages/power.php', '⚡'],
+                'cooling' => ['Cooling', 'pages/cooling.php', '❄'],
                 'cables' => ['Cabling', 'pages/cables.php', '🔌'],
                 'snmp' => ['SNMP', 'pages/snmp.php', '📡'],
                 'disposals' => ['Decommission', 'pages/disposals.php', '🗑'],
@@ -78,13 +79,15 @@ function layout_header(string $title, array $user, string $active = ''): void
             ];
             $devicesActive = in_array($active, ['devices', 'device_templates'], true);
             $powerActive = in_array($active, ['power', 'power_zones', 'power_pdus', 'power_pdu_templates'], true);
+            $coolingActive = in_array($active, ['cooling', 'cooling_units', 'env_sensors'], true);
             foreach ($nav as $key => [$label, $href, $icon]):
                 if (!AuthManager::canViewNav($user, $key)) {
                     continue;
                 }
                 $cls = ($active === $key
                     || ($key === 'devices' && $devicesActive)
-                    || ($key === 'power' && $powerActive)) ? 'active' : '';
+                    || ($key === 'power' && $powerActive)
+                    || ($key === 'cooling' && $coolingActive)) ? 'active' : '';
             ?>
                 <a class="nav-item <?= $cls ?>" href="<?= App::e(App::url($href)) ?>">
                     <span class="nav-icon"><?= $icon ?></span>
@@ -116,6 +119,20 @@ function layout_header(string $title, array $user, string $active = ''): void
                     <a class="nav-item nav-sub <?= $active === 'power_pdu_templates' ? 'active' : '' ?>"
                        href="<?= App::e(App::url('pages/power_pdu_templates.php')) ?>">
                         <span class="nav-icon"></span><span>PDU Templates</span>
+                    </a>
+                <?php endif; ?>
+                <?php if ($key === 'cooling'): ?>
+                    <a class="nav-item nav-sub <?= $active === 'cooling' ? 'active' : '' ?>"
+                       href="<?= App::e(App::url('pages/cooling.php')) ?>">
+                        <span class="nav-icon"></span><span>Dashboard</span>
+                    </a>
+                    <a class="nav-item nav-sub <?= $active === 'cooling_units' ? 'active' : '' ?>"
+                       href="<?= App::e(App::url('pages/cooling_units.php')) ?>">
+                        <span class="nav-icon"></span><span>Air &amp; pumps</span>
+                    </a>
+                    <a class="nav-item nav-sub <?= $active === 'env_sensors' ? 'active' : '' ?>"
+                       href="<?= App::e(App::url('pages/env_sensors.php')) ?>">
+                        <span class="nav-icon"></span><span>Env sensors</span>
                     </a>
                 <?php endif; ?>
             <?php endforeach; ?>
