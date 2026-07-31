@@ -80,39 +80,27 @@ Historical note commits:
 
 | Field | Value |
 |-------|--------|
-| **Status** | open |
+| **Status** | **done (foundation)** (release **0.3.5**) — SNMP poll worker + threshold mail alerts deferred |
 | **Requested** | 2026-07-29 (user) |
 | **Source** | `BACKLOG.md` |
 | **Priority** | product expansion (post power/SNMP foundation) |
 
 **Goal:** Track cooling plant and room environment alongside power — so ColdAisle covers thermal/air as well as electrical load.
 
-**Desired capabilities (v1 sketch — confirm scope when implementing)**
+**Shipped in foundation (0.3.5)**
 
-1. **Environment sensors / points**  
-   - Temperature, humidity (and optionally dew point, differential pressure, airflow)  
-   - Placement: site / DC / room / row / rack (or free “zone”)  
-   - Status from last poll + short history charts (reuse power-history patterns where practical)
+- Nav section **Cooling** (dashboard, Air & pumps, Env sensors) with `view_cooling` / `edit_cooling`
+- `cooling_units` inventory (CRAC/CRAH/in-row/chiller/CW & AC pumps/CDU) with primary/standby pairs, medium, capacity, warranty, SNMP fields, floor placement like PDUs
+- `env_sensors` + `env_readings` with host types (standalone / cooling unit / PDU / cabinet / room), thresholds, manual readings
+- ASHRAE TC 9.9 class guidance on units (not a compliance engine)
+- Floor plan palette + place/move/unplace cooling footprints
 
-2. **Cooling equipment inventory**  
-   - CRAC/CRAH, in-row coolers, chillers, CDUs, leak detectors as first-class assets (or typed “environment devices”)  
-   - Optional link to power PDUs / circuits that feed them  
+**Still open (follow-up slices)**
 
-3. **SNMP / poll integration**  
-   - Site OID templates for common environmental probes (e.g. APC NetBotz-class, Vertiv, generic temp/humidity OIDs)  
-   - Scheduled poll via existing worker (or shared scheduler)  
-   - Alerts/digests for high temp, high humidity, sensor offline (extend PowerAlertService patterns or a sibling EnvironmentAlertService)
-
-4. **UI**  
-   - Nav area under Power or a sibling **Environment / Cooling** section  
-   - Room or floor overlay later (optional): heat/humidity callouts — not required for v1  
-
-**Implementer notes**
-
-- Reuse: `SnmpPoller` / site OID templates, history sample tables (or parallel `env_readings`), MailService digests, Settings retention.  
-- Prefer additive schema (`env_sensors`, `cooling_units`, readings JSON or typed columns) rather than overloading `pdus`.  
-- Units: °C default with optional °F display; humidity %RH.  
-- Don’t invent BMS/BACnet full stack in v1 unless requested — SNMP + manual entry first.
+1. **SNMP poll end-to-end** for cooling units + env probes (site OID templates, worker, last_poll_json)  
+2. **Threshold alerts / digests** via mail (high temp/humidity, offline sensors)  
+3. History charts (reuse power-history patterns)  
+4. Optional heat/humidity floor overlay  
 
 **Out of scope (unless asked later)**
 
@@ -121,13 +109,13 @@ Historical note commits:
 - Automatic cooling control (setpoints / BMS write)  
 - ASHRAE envelope compliance engine (reports can come later)
 
-**Acceptance (when built)**
+**Acceptance**
 
-- [ ] Can define at least temp (+ humidity) points and see last value + recent history  
-- [ ] Can inventory cooling units and associate them with rooms/rows  
+- [x] Can define temp (+ humidity) points and see last value + recent history (manual readings)  
+- [x] Can inventory cooling units and associate them with rooms; active/standby without zones  
 - [ ] SNMP poll path works for at least one probe template end-to-end  
 - [ ] Threshold alert (e.g. high temp) can notify via existing mail settings  
-- [ ] Power features remain unaffected  
+- [x] Power features remain unaffected  
 
 ---
 

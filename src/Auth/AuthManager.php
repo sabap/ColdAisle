@@ -29,6 +29,7 @@ class AuthManager
         'view_cabinets',
         'view_devices',
         'view_power',
+        'view_cooling',
         'view_cables',
         'view_snmp',
         'view_disposals',
@@ -39,6 +40,7 @@ class AuthManager
         'edit_devices_dept',
         'edit_infrastructure', // floorplan, DCs, rooms, rows, cabinets
         'edit_power',
+        'edit_cooling',
         'edit_cables',
         'edit_templates',
         'edit_disposals',
@@ -60,6 +62,9 @@ class AuthManager
         'power_zones' => 'view_power',
         'power_pdus' => 'view_power',
         'power_pdu_templates' => 'view_power',
+        'cooling' => 'view_cooling',
+        'cooling_units' => 'view_cooling',
+        'env_sensors' => 'view_cooling',
         'cables' => 'view_cables',
         'snmp' => 'view_snmp',
         'disposals' => 'view_disposals',
@@ -78,7 +83,7 @@ class AuthManager
     {
         $viewAll = [
             'view_dashboard', 'view_floorplan', 'view_datacenters', 'view_cabinets',
-            'view_devices', 'view_power', 'view_cables', 'view_snmp', 'view_disposals',
+            'view_devices', 'view_power', 'view_cooling', 'view_cables', 'view_snmp', 'view_disposals',
             'view_audits', 'view_reports', 'view_notifications',
         ];
 
@@ -95,11 +100,12 @@ class AuthManager
                 ]),
             ],
             'Data Center Admin' => [
-                'description' => 'View all; modify zones, rows, cabinets, devices, power, cabling, lifecycle',
+                'description' => 'View all; modify zones, rows, cabinets, devices, power, cooling, cabling, lifecycle',
                 'permissions' => array_merge($viewAll, [
                     'edit_devices_all',
                     'edit_infrastructure',
                     'edit_power',
+                    'edit_cooling',
                     'edit_cables',
                     'edit_templates',
                     'edit_disposals',
@@ -493,6 +499,7 @@ class AuthManager
             'cabinets' => ['view_cabinets', 'edit_infrastructure'],
             'devices' => ['view_devices', 'edit_devices_all', 'edit_devices_dept'],
             'power' => ['view_power', 'edit_power'],
+            'cooling' => ['view_cooling', 'edit_cooling'],
             'cables' => ['view_cables', 'edit_cables'],
             'reports' => ['view_reports'],
             'audits' => ['view_audits', 'edit_audits'],
@@ -518,6 +525,7 @@ class AuthManager
                 'view_datacenters' => ['edit_infrastructure'],
                 'view_floorplan' => ['edit_infrastructure'],
                 'view_power' => ['edit_power'],
+                'view_cooling' => ['edit_cooling'],
                 'view_cables' => ['edit_cables'],
                 'view_disposals' => ['edit_disposals'],
                 'view_audits' => ['edit_audits'],
@@ -594,6 +602,11 @@ class AuthManager
     public static function canEditPower(array $user): bool
     {
         return self::can($user, 'edit_power');
+    }
+
+    public static function canEditCooling(array $user): bool
+    {
+        return self::can($user, 'edit_cooling');
     }
 
     public static function canEditCables(array $user): bool

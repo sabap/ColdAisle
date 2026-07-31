@@ -91,6 +91,18 @@ layout_header('Floor Planner', $user, 'floorplan');
             <div id="pduUnplacedList" class="palette-list palette-list-compact">
                 <p class="text-muted" style="font-size:.75rem;margin:0">Load a room to see unplaced row PDUs.</p>
             </div>
+
+            <h3 style="margin-top:1rem;font-size:.95rem">Cooling</h3>
+            <p class="text-muted" style="font-size:.72rem;margin:.25rem 0 .5rem">
+                Place CRAC/CRAH, in-row, or pump footprints, or drag existing unplaced units.
+            </p>
+            <div id="coolingPresetList" class="palette-list palette-list-compact">
+                <!-- cooling presets filled by floorplan.js -->
+            </div>
+            <h4 style="margin:.85rem 0 .35rem;font-size:.82rem;color:var(--muted)">Unplaced cooling</h4>
+            <div id="coolingUnplacedList" class="palette-list palette-list-compact">
+                <p class="text-muted" style="font-size:.75rem;margin:0">Load a room to see unplaced units.</p>
+            </div>
         </div>
         <div class="planner-stage">
             <div class="planner-canvas-wrap" id="plannerCanvasWrap">
@@ -111,5 +123,5 @@ layout_header('Floor Planner', $user, 'floorplan');
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=4"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=19"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=20"></script>
 <?php layout_footer(); ?>

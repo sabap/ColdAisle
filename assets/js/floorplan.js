@@ -19,12 +19,23 @@
   const DRAG_TEXT_PREFIX = 'COLDAISLE_CAB:';
   const DRAG_MIME_PDU = 'application/x-coldaisle-pdu';
   const DRAG_TEXT_PREFIX_PDU = 'COLDAISLE_PDU:';
+  const DRAG_MIME_COOLING = 'application/x-coldaisle-cooling';
+  const DRAG_TEXT_PREFIX_COOLING = 'COLDAISLE_COOL:';
 
   /** Thin footprint presets for row/room power (not cabinet SKUs). */
   const PDU_FOOTPRINT_PRESETS = [
     { key: 'rpp', name: 'Floor RPP / panel', width_mm: 600, depth_mm: 300, height_mm: 1800, color_hex: '#b45309', pdu_scope: 'row' },
     { key: 'busway', name: 'Busway drop box', width_mm: 300, depth_mm: 300, height_mm: 400, color_hex: '#a16207', pdu_scope: 'row' },
     { key: 'wall', name: 'Wall panel', width_mm: 800, depth_mm: 200, height_mm: 1200, color_hex: '#92400e', pdu_scope: 'row' },
+  ];
+
+  /** Cooling unit footprint presets (CRAC/CRAH/pump). */
+  const COOLING_FOOTPRINT_PRESETS = [
+    { key: 'crac', name: 'CRAC (DX)', unit_type: 'crac', cooling_medium: 'dx', width_mm: 1200, depth_mm: 900, height_mm: 2000, color_hex: '#0ea5e9', unit_role: 'primary' },
+    { key: 'crah', name: 'CRAH (chilled water)', unit_type: 'crah', cooling_medium: 'chilled_water', width_mm: 1200, depth_mm: 900, height_mm: 2000, color_hex: '#0284c7', unit_role: 'primary' },
+    { key: 'in_row', name: 'In-row cooler', unit_type: 'in_row', cooling_medium: 'chilled_water', width_mm: 300, depth_mm: 1200, height_mm: 2000, color_hex: '#38bdf8', unit_role: 'primary' },
+    { key: 'cw_pump', name: 'Chilled-water pump', unit_type: 'chilled_water_pump', cooling_medium: 'chilled_water', width_mm: 600, depth_mm: 600, height_mm: 1200, color_hex: '#0369a1', unit_role: 'shared' },
+    { key: 'ac_pump', name: 'AC / condenser pump', unit_type: 'ac_pump', cooling_medium: 'dx', width_mm: 600, depth_mm: 600, height_mm: 1200, color_hex: '#0c4a6e', unit_role: 'shared' },
   ];
 
   function initPlanner(root) {
@@ -44,10 +55,13 @@
     let cabinets = [];
     let floorPdus = []; // placed row/room PDUs on this room
     let unplacedPdus = []; // available to place
+    let floorCooling = []; // placed cooling units
+    let unplacedCooling = []; // available to place
     let roomRows = []; // cabinet_rows for current room
     let powerZones = []; // zones for DC (row → zone)
     let selectedId = null; // primary cabinet selection (props panel focus)
     let selectedPduId = null; // selected floor PDU (exclusive with cabinets)
+    let selectedCoolingId = null; // selected cooling unit
     const selectedIds = new Set(); // multi-select cabinets (SHIFT+click)
     let drag = null;
     let show3d = false;
@@ -55,6 +69,7 @@
     let units = (window.ColdAisle && window.ColdAisle.lengthUnits) || 'metric';
     let pendingTemplate = null; // cabinet template
     let pendingPdu = null; // { kind: 'preset'|'existing', ... }
+    let pendingCooling = null; // { kind: 'preset'|'existing', ... }
     let zoom = 1;
     let showGrid = true;
     let snapToGrid = true;
@@ -65,6 +80,8 @@
     const unlockedIds = new Set();
     /** PDU IDs unlocked for drag/move on the plan. */
     const unlockedPduIds = new Set();
+    /** Cooling unit IDs unlocked for drag/move. */
+    const unlockedCoolingIds = new Set();
     const DRAG_THRESHOLD_PX = 6; // ignore tiny pointer jitter when unlocked
     let pan = null; // { lastX, lastY, pointerId } — drag empty floor to scroll view
     let nudgeAmount = 1;
@@ -570,14 +587,19 @@
         drawCompass();
       }
 
-      if (pendingTemplate || pendingPdu) {
-        ctx.fillStyle = pendingPdu ? '#f59e0b' : '#3b82f6';
+      if (pendingTemplate || pendingPdu || pendingCooling) {
+        ctx.fillStyle = pendingCooling ? '#0ea5e9' : (pendingPdu ? '#f59e0b' : '#3b82f6');
         ctx.font = '11px Segoe UI';
-        const msg = pendingPdu
-          ? 'Click on the floor to place: ' + (pendingPdu.name || 'PDU')
-          : 'Click on the floor to place the selected template…';
+        let msg = 'Click on the floor to place the selected template…';
+        if (pendingCooling) msg = 'Click on the floor to place: ' + (pendingCooling.name || 'Cooling');
+        else if (pendingPdu) msg = 'Click on the floor to place: ' + (pendingPdu.name || 'PDU');
         ctx.fillText(msg, ORIGIN, canvas.height - 10);
       }
+
+      // Cooling under PDUs / cabinets
+      floorCooling.forEach(function (u) {
+        drawFloorCooling(u);
+      });
 
       // Row/room PDUs under cabinets so racks paint on top when overlapping
       floorPdus.forEach(function (p) {
@@ -701,8 +723,65 @@
       ctx.restore();
     }
 
+    function coolingRect(u) {
+      return cabRect({
+        width_mm: u.width_mm || 1200,
+        depth_mm: u.depth_mm || 900,
+        pos_x: u.pos_x,
+        pos_y: u.pos_y,
+      });
+    }
+
+    function coolingRotation(u) {
+      if (u.front_facing) return facingToRotation(u.front_facing);
+      return Number(u.rotation_deg) || 0;
+    }
+
+    function drawFloorCooling(u) {
+      const r = coolingRect(u);
+      const selected = Number(selectedCoolingId) === Number(u.cooling_unit_id);
+      const rot = coolingRotation(u);
+      const body = u.color_hex || '#0ea5e9';
+      const border = selected ? '#fbbf24' : '#38bdf8';
+
+      ctx.save();
+      ctx.translate(r.x + r.w / 2, r.y + r.d / 2);
+      ctx.rotate((rot * Math.PI) / 180);
+
+      ctx.fillStyle = body;
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = border;
+      ctx.lineWidth = selected ? 3 : 1.5;
+      ctx.fillRect(-r.w / 2, -r.d / 2, r.w, r.d);
+      ctx.globalAlpha = 1;
+      ctx.strokeRect(-r.w / 2, -r.d / 2, r.w, r.d);
+
+      // Front strip (cooling)
+      ctx.fillStyle = '#7dd3fc';
+      ctx.fillRect(-r.w / 2, -r.d / 2, r.w, Math.max(3, 4 * zoom));
+
+      ctx.fillStyle = '#e0f2fe';
+      ctx.font = 'bold ' + Math.max(9, Math.round(10 * Math.min(zoom, 1.4))) + 'px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('❄', 0, -4);
+      ctx.font = 'bold ' + Math.max(8, Math.round(9 * Math.min(zoom, 1.3))) + 'px Segoe UI';
+      ctx.fillText(String(u.name || 'Cooling').slice(0, 12), 0, 10);
+      ctx.font = Math.max(7, Math.round(8 * Math.min(zoom, 1.2))) + 'px Segoe UI';
+      ctx.fillStyle = '#bae6fd';
+      const sub = (u.unit_type || 'crac') + (u.unit_role ? ' · ' + String(u.unit_role).slice(0, 8) : '');
+      ctx.fillText(sub, 0, 22);
+
+      if (selected && !isCoolingPositionLocked(u)) {
+        ctx.fillStyle = '#22c55e';
+        ctx.font = 'bold 11px Segoe UI';
+        ctx.fillText('🔓', r.w / 2 - 8, -r.d / 2 + 12);
+      }
+      ctx.restore();
+    }
+
     /**
-     * @returns {{type:'cabinet', obj:object}|{type:'pdu', obj:object}|null}
+     * @returns {{type:'cabinet', obj:object}|{type:'pdu', obj:object}|{type:'cooling', obj:object}|null}
      */
     function hitTest(mx, my) {
       // Cabinets first (drawn on top)
@@ -718,7 +797,36 @@
           return { type: 'pdu', obj: floorPdus[i] };
         }
       }
+      for (let i = floorCooling.length - 1; i >= 0; i--) {
+        const r = coolingRect(floorCooling[i]);
+        if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.d) {
+          return { type: 'cooling', obj: floorCooling[i] };
+        }
+      }
       return null;
+    }
+
+    function isCoolingPositionLocked(uOrId) {
+      if (uOrId == null) return true;
+      const id = typeof uOrId === 'object' ? Number(uOrId.cooling_unit_id) : Number(uOrId);
+      if (!id) return true;
+      return !unlockedCoolingIds.has(id);
+    }
+
+    function setCoolingPositionLocked(uOrId, locked) {
+      const id = typeof uOrId === 'object' ? Number(uOrId.cooling_unit_id) : Number(uOrId);
+      if (!id) return;
+      if (locked) unlockedCoolingIds.delete(id);
+      else unlockedCoolingIds.add(id);
+    }
+
+    function selectCooling(u) {
+      selectedIds.clear();
+      selectedId = null;
+      selectedPduId = null;
+      selectedCoolingId = u ? Number(u.cooling_unit_id) : null;
+      renderProps();
+      draw();
     }
 
     function isPduPositionLocked(pOrId) {
@@ -737,6 +845,7 @@
 
     function selectPdu(p) {
       selectedIds.clear();
+      selectedCoolingId = null;
       selectedId = null;
       selectedPduId = p ? Number(p.pdu_id) : null;
       renderProps();
@@ -762,6 +871,7 @@
       opts = opts || {};
       const additive = !!opts.additive;
       selectedPduId = null; // exclusive with PDU selection
+      selectedCoolingId = null;
       if (!c) {
         if (!additive) {
           selectedIds.clear();
@@ -1135,6 +1245,10 @@
     }
 
     function renderProps() {
+      if (selectedCoolingId) {
+        renderCoolingProps();
+        return;
+      }
       if (selectedPduId) {
         renderPduProps();
         return;
@@ -1147,7 +1261,7 @@
       const c = cabinets.find(function (x) { return Number(x.cabinet_id) === Number(selectedId); });
       if (!c) {
         if (!room) {
-          propsEl.innerHTML = '<p class="text-muted">Select a room, then drop a cabinet or row PDU from the palette.</p>';
+          propsEl.innerHTML = '<p class="text-muted">Select a room, then drop a cabinet, PDU, or cooling unit from the palette.</p>';
           return;
         }
         propsEl.innerHTML =
@@ -1600,6 +1714,187 @@
         renderProps();
         draw();
         ColdAisle.toast('PDU removed from plan (still in Power → PDUs)', 'success');
+      } catch (e) {
+        ColdAisle.toast(e.message || 'Unplace failed', 'error');
+      }
+    }
+
+    function renderCoolingProps() {
+      const u = floorCooling.find(function (x) { return Number(x.cooling_unit_id) === Number(selectedCoolingId); });
+      if (!u) {
+        selectedCoolingId = null;
+        renderProps();
+        return;
+      }
+      const facing = (u.front_facing || rotationToFacing(u.rotation_deg) || 'north').toLowerCase();
+      const locked = isCoolingPositionLocked(u);
+      const posRo = locked ? ' readonly' : '';
+      const posStyle = locked ? ' style="opacity:.75;background:var(--surface-2)"' : '';
+      const base = (window.ColdAisle && window.ColdAisle.baseUrl ? window.ColdAisle.baseUrl.replace(/\/$/, '') : '');
+      const unitUrl = base + '/pages/cooling_units.php?id=' + encodeURIComponent(u.cooling_unit_id);
+
+      propsEl.innerHTML =
+        '<h3 style="margin-top:0">Cooling unit' +
+        (locked
+          ? ' <span class="badge" style="background:#475569;color:#e2e8f0">🔒 Locked</span>'
+          : ' <span class="badge" style="background:#16a34a;color:#fff">🔓 Unlocked</span>') +
+        '</h3>' +
+        '<p class="text-muted" style="font-size:.8rem;margin-top:0">' +
+        'CRAC/CRAH/pump · type <strong>' + esc(u.unit_type || 'crac') + '</strong>' +
+        (u.unit_role ? ' · ' + esc(u.unit_role) : '') +
+        (u.cooling_medium ? ' · ' + esc(u.cooling_medium) : '') +
+        '</p>' +
+        '<div class="form-row" style="margin-bottom:.65rem">' +
+        '<button type="button" class="btn ' + (locked ? 'btn-primary' : 'btn-secondary') + ' btn-sm" id="fc_lock" style="width:100%">' +
+        (locked ? '🔓 Unlock position' : '🔒 Lock position') +
+        '</button></div>' +
+        '<div class="form-row"><label>Name</label>' +
+        '<input class="form-control" id="fc_name" value="' + esc(u.name || '') + '"></div>' +
+        '<div class="form-row"><label>Front faces</label>' +
+        '<select class="form-control" id="fc_facing">' +
+        ['north', 'east', 'south', 'west'].map(function (f) {
+          return '<option value="' + f + '"' + (facing === f ? ' selected' : '') + '>' + f.charAt(0).toUpperCase() + f.slice(1) + '</option>';
+        }).join('') +
+        '</select></div>' +
+        '<div class="form-row"><label>Width (' + sizeLabel() + ')</label>' +
+        '<input class="form-control" type="number" step="0.1" id="fc_w" value="' + fmtSize(u.width_mm || 1200) + '"></div>' +
+        '<div class="form-row"><label>Depth (' + sizeLabel() + ')</label>' +
+        '<input class="form-control" type="number" step="0.1" id="fc_d" value="' + fmtSize(u.depth_mm || 900) + '"></div>' +
+        '<div class="form-row"><label>Pos X (' + lengthLabel() + ')</label>' +
+        '<input class="form-control" type="number" step="0.0001" id="fc_x" data-user-edited="0" value="' + fmtLen(u.pos_x) + '"' + posRo + posStyle + '></div>' +
+        '<div class="form-row"><label>Pos Y (' + lengthLabel() + ')</label>' +
+        '<input class="form-control" type="number" step="0.0001" id="fc_y" data-user-edited="0" value="' + fmtLen(u.pos_y) + '"' + posRo + posStyle + '></div>' +
+        '<div class="form-row"><label>Color</label>' +
+        '<input class="form-control" type="color" id="fc_color" value="' + esc(u.color_hex || '#0ea5e9') + '"></div>' +
+        '<div class="flex gap-1" style="flex-wrap:wrap;margin-top:.75rem">' +
+        '<button type="button" class="btn btn-primary btn-sm" id="fc_save">Save</button>' +
+        '<button type="button" class="btn btn-secondary btn-sm" id="fc_rot_l" title="Rotate left">↶</button>' +
+        '<button type="button" class="btn btn-secondary btn-sm" id="fc_rot_r" title="Rotate right">↷</button>' +
+        '<a class="btn btn-secondary btn-sm" href="' + unitUrl + '">Open unit</a>' +
+        '<button type="button" class="btn btn-ghost btn-sm" id="fc_unplace">Remove from plan</button>' +
+        '</div>';
+
+      const lockBtn = propsEl.querySelector('#fc_lock');
+      if (lockBtn) {
+        lockBtn.onclick = function () {
+          setCoolingPositionLocked(u, !isCoolingPositionLocked(u));
+          renderCoolingProps();
+          draw();
+        };
+      }
+      const saveBtn = propsEl.querySelector('#fc_save');
+      if (saveBtn) saveBtn.onclick = function () { saveFloorCooling(u); };
+      const unplaceBtn = propsEl.querySelector('#fc_unplace');
+      if (unplaceBtn) unplaceBtn.onclick = function () { unplaceFloorCooling(u); };
+      const rotL = propsEl.querySelector('#fc_rot_l');
+      const rotR = propsEl.querySelector('#fc_rot_r');
+      if (rotL) rotL.onclick = function () { rotateFloorCooling(u, -90); };
+      if (rotR) rotR.onclick = function () { rotateFloorCooling(u, 90); };
+      ['fc_x', 'fc_y'].forEach(function (id) {
+        const el = propsEl.querySelector('#' + id);
+        if (el) el.addEventListener('input', function () { el.dataset.userEdited = '1'; });
+      });
+    }
+
+    async function saveFloorCooling(u) {
+      if (!u) return;
+      const locked = isCoolingPositionLocked(u);
+      const facingEl = propsEl.querySelector('#fc_facing');
+      const facing = facingEl ? facingEl.value : (u.front_facing || 'north');
+      const payload = {
+        cooling_unit_id: Number(u.cooling_unit_id),
+        name: (propsEl.querySelector('#fc_name') || {}).value || u.name,
+        front_facing: facing,
+        rotation_deg: facingToRotation(facing),
+        width_mm: displayToMm((propsEl.querySelector('#fc_w') || {}).value),
+        depth_mm: displayToMm((propsEl.querySelector('#fc_d') || {}).value),
+        color_hex: (propsEl.querySelector('#fc_color') || {}).value || u.color_hex,
+      };
+      if (!locked) {
+        const xEl = propsEl.querySelector('#fc_x');
+        const yEl = propsEl.querySelector('#fc_y');
+        let posX = Number(u.pos_x) || 0;
+        let posY = Number(u.pos_y) || 0;
+        if (xEl && xEl.dataset.userEdited === '1') posX = displayToM(xEl.value);
+        if (yEl && yEl.dataset.userEdited === '1') posY = displayToM(yEl.value);
+        const sn = snapCabinetPosition(posX, posY, {
+          width_mm: payload.width_mm,
+          depth_mm: payload.depth_mm,
+          front_facing: facing,
+          rotation_deg: payload.rotation_deg,
+        }, false);
+        payload.pos_x = sn.x;
+        payload.pos_y = sn.y;
+      }
+      try {
+        const res = await ColdAisle.api('api/floorplan.php?action=update_floor_cooling', {
+          method: 'POST',
+          body: payload,
+        });
+        const updated = (res && res.cooling_unit) || payload;
+        Object.assign(u, updated);
+        if (u.front_facing) u.rotation_deg = facingToRotation(u.front_facing);
+        setCoolingPositionLocked(u, true);
+        renderCoolingProps();
+        draw();
+        refresh3d();
+        ColdAisle.toast('Cooling unit saved (position locked)', 'success');
+      } catch (e) {
+        ColdAisle.toast(e.message || 'Save failed', 'error');
+      }
+    }
+
+    async function rotateFloorCooling(u, delta) {
+      if (!u || isCoolingPositionLocked(u)) {
+        ColdAisle.toast('Unlock position to rotate', 'info');
+        return;
+      }
+      let deg = (coolingRotation(u) + delta) % 360;
+      if (deg < 0) deg += 360;
+      u.front_facing = rotationToFacing(deg);
+      u.rotation_deg = facingToRotation(u.front_facing);
+      const sn = snapCabinetPosition(Number(u.pos_x) || 0, Number(u.pos_y) || 0, u, true);
+      u.pos_x = sn.x;
+      u.pos_y = sn.y;
+      try {
+        await ColdAisle.api('api/floorplan.php?action=update_floor_cooling', {
+          method: 'POST',
+          body: {
+            cooling_unit_id: Number(u.cooling_unit_id),
+            front_facing: u.front_facing,
+            rotation_deg: u.rotation_deg,
+            pos_x: u.pos_x,
+            pos_y: u.pos_y,
+          },
+        });
+        renderCoolingProps();
+        draw();
+      } catch (e) {
+        ColdAisle.toast(e.message || 'Rotate failed', 'error');
+      }
+    }
+
+    async function unplaceFloorCooling(u) {
+      if (!u || !confirm('Remove this cooling unit from the floor plan? The inventory record is kept.')) return;
+      try {
+        await ColdAisle.api('api/floorplan.php?action=unplace_cooling', {
+          method: 'POST',
+          body: { cooling_unit_id: Number(u.cooling_unit_id) },
+        });
+        floorCooling = floorCooling.filter(function (x) { return Number(x.cooling_unit_id) !== Number(u.cooling_unit_id); });
+        unlockedCoolingIds.delete(Number(u.cooling_unit_id));
+        const copy = Object.assign({}, u);
+        copy.pos_x = null;
+        copy.pos_y = null;
+        unplacedCooling.push(copy);
+        unplacedCooling.sort(function (a, b) {
+          return String(a.name || '').localeCompare(String(b.name || ''));
+        });
+        selectedCoolingId = null;
+        renderUnplacedCoolingPalette();
+        renderProps();
+        draw();
+        ColdAisle.toast('Cooling unit removed from plan (still in Cooling → Air & pumps)', 'success');
       } catch (e) {
         ColdAisle.toast(e.message || 'Unplace failed', 'error');
       }
@@ -2317,8 +2612,11 @@
         cabinets = [];
         floorPdus = [];
         unplacedPdus = [];
+        floorCooling = [];
+        unplacedCooling = [];
         propsEl.innerHTML = '<p class="text-muted">Create a room first under Data Centers.</p>';
         renderUnplacedPduPalette();
+        renderUnplacedCoolingPalette();
         draw();
         return;
       }
@@ -2328,13 +2626,17 @@
         cabinets = data.cabinets || [];
         floorPdus = data.placed_pdus || [];
         unplacedPdus = data.unplaced_pdus || [];
+        floorCooling = data.placed_cooling || [];
+        unplacedCooling = data.unplaced_cooling || [];
         roomRows = data.rows || [];
         powerZones = data.zones || [];
         unlockedIds.clear(); // all placed racks load locked
         unlockedPduIds.clear();
+        unlockedCoolingIds.clear();
         selectedIds.clear();
         selectedId = null;
         selectedPduId = null;
+        selectedCoolingId = null;
         northEdge = String((room && room.north_edge) || 'top').toLowerCase();
         if (data.units === 'imperial' || data.units === 'metric') {
           units = data.units;
@@ -2365,13 +2667,28 @@
           if (!p.height_mm) p.height_mm = 1800;
           if (!p.color_hex) p.color_hex = p.zone_color || '#b45309';
         });
+        floorCooling.forEach(function (u) {
+          if (!u.front_facing && u.rotation_deg != null) {
+            u.front_facing = rotationToFacing(u.rotation_deg);
+          }
+          if (u.front_facing) {
+            u.rotation_deg = facingToRotation(u.front_facing);
+          }
+          if (!u.width_mm) u.width_mm = 1200;
+          if (!u.depth_mm) u.depth_mm = 900;
+          if (!u.height_mm) u.height_mm = 2000;
+          if (!u.color_hex) u.color_hex = '#0ea5e9';
+        });
         selectedId = null;
         pendingTemplate = null;
         pendingPdu = null;
+        pendingCooling = null;
         clearPaletteSelection();
         updateToolbarButtons();
         renderPduPresetPalette();
         renderUnplacedPduPalette();
+        renderCoolingPresetPalette();
+        renderUnplacedCoolingPalette();
         renderProps();
         resizeCanvas();
         refresh3d();
@@ -2568,6 +2885,187 @@
       }
     }
 
+    function renderCoolingPresetPalette() {
+      const list = root.querySelector('#coolingPresetList');
+      if (!list) return;
+      list.innerHTML = '';
+      COOLING_FOOTPRINT_PRESETS.forEach(function (pr) {
+        const el = document.createElement('div');
+        el.className = 'palette-item cooling-preset';
+        el.draggable = true;
+        el.dataset.coolingKind = 'preset';
+        el.dataset.presetKey = pr.key;
+        el.dataset.name = pr.name;
+        el.dataset.unitType = pr.unit_type || 'crac';
+        el.dataset.medium = pr.cooling_medium || 'dx';
+        el.dataset.role = pr.unit_role || 'primary';
+        el.dataset.width = String(pr.width_mm);
+        el.dataset.depth = String(pr.depth_mm);
+        el.dataset.height = String(pr.height_mm || 2000);
+        el.dataset.color = pr.color_hex;
+        el.dataset.facing = 'north';
+        const iconW = Math.max(22, Math.min(48, Math.round(pr.width_mm / 25)));
+        const iconH = Math.max(16, Math.min(40, Math.round(pr.depth_mm / 20)));
+        el.innerHTML =
+          '<div class="rack-icon" style="width:' + iconW + 'px;height:' + iconH + 'px;background:' + pr.color_hex +
+          ';margin:0 auto .25rem"></div>' +
+          '<div class="palette-title">❄ ' + esc(pr.name) + '</div>' +
+          '<small class="text-muted palette-size">' + pr.width_mm + '×' + pr.depth_mm +
+          ' × H' + (pr.height_mm || 2000) + ' mm</small>';
+        list.appendChild(el);
+        bindCoolingPaletteItem(el);
+      });
+    }
+
+    function renderUnplacedCoolingPalette() {
+      const list = root.querySelector('#coolingUnplacedList');
+      if (!list) return;
+      list.innerHTML = '';
+      if (!unplacedCooling.length) {
+        list.innerHTML = '<p class="text-muted" style="font-size:.75rem;margin:0">No unplaced cooling units for this DC.</p>';
+        return;
+      }
+      unplacedCooling.forEach(function (u) {
+        const el = document.createElement('div');
+        el.className = 'palette-item cooling-unplaced';
+        el.draggable = true;
+        el.dataset.coolingKind = 'existing';
+        el.dataset.coolingId = String(u.cooling_unit_id);
+        el.dataset.name = u.name || ('Unit ' + u.cooling_unit_id);
+        el.dataset.unitType = u.unit_type || 'crac';
+        el.dataset.medium = u.cooling_medium || 'dx';
+        el.dataset.role = u.unit_role || 'primary';
+        el.dataset.width = String(u.width_mm || 1200);
+        el.dataset.depth = String(u.depth_mm || 900);
+        el.dataset.height = String(u.height_mm || 2000);
+        el.dataset.color = u.color_hex || '#0ea5e9';
+        el.dataset.facing = u.front_facing || 'north';
+        el.innerHTML =
+          '<div class="palette-title">❄ ' + esc(u.name || ('Unit #' + u.cooling_unit_id)) + '</div>' +
+          '<small class="text-muted">' + esc(u.unit_type || 'crac') +
+          (u.unit_role ? ' · ' + esc(u.unit_role) : '') + '</small>';
+        list.appendChild(el);
+        bindCoolingPaletteItem(el);
+      });
+    }
+
+    function coolingPayloadFromItem(item) {
+      const kind = item.dataset.coolingKind || 'preset';
+      return {
+        kind: kind,
+        cooling_unit_id: kind === 'existing' ? parseInt(item.dataset.coolingId || '0', 10) : null,
+        name: item.dataset.name || 'Cooling unit',
+        unit_type: item.dataset.unitType || 'crac',
+        cooling_medium: item.dataset.medium || 'dx',
+        unit_role: item.dataset.role || 'primary',
+        width_mm: parseInt(item.dataset.width || '1200', 10),
+        depth_mm: parseInt(item.dataset.depth || '900', 10),
+        height_mm: parseInt(item.dataset.height || '2000', 10),
+        color_hex: item.dataset.color || '#0ea5e9',
+        front_facing: item.dataset.facing || 'north',
+      };
+    }
+
+    function bindCoolingPaletteItem(item) {
+      item.setAttribute('draggable', 'true');
+      item.addEventListener('dragstart', function (e) {
+        const payload = coolingPayloadFromItem(item);
+        const json = JSON.stringify(payload);
+        try { e.dataTransfer.setData(DRAG_MIME_COOLING, json); } catch (err) { /* ignore */ }
+        e.dataTransfer.setData('text/plain', DRAG_TEXT_PREFIX_COOLING + json);
+        e.dataTransfer.effectAllowed = 'copy';
+        item.classList.add('dragging');
+      });
+      item.addEventListener('dragend', function () { item.classList.remove('dragging'); });
+      item.addEventListener('click', function () {
+        clearPaletteSelection();
+        item.classList.add('selected');
+        pendingTemplate = null;
+        pendingPdu = null;
+        pendingCooling = coolingPayloadFromItem(item);
+        draw();
+        ColdAisle.toast('Click on the floor plan to place: ' + (pendingCooling.name || 'Cooling'), 'info');
+      });
+    }
+
+    async function placeCoolingAt(posX, posY, payload) {
+      if (!room || !roomId()) {
+        ColdAisle.toast('Select a room first', 'error');
+        return;
+      }
+      const defs = payload || {};
+      const facing = defs.front_facing || 'north';
+      const draft = {
+        width_mm: defs.width_mm || 1200,
+        depth_mm: defs.depth_mm || 900,
+        height_mm: defs.height_mm || 2000,
+        front_facing: facing,
+        rotation_deg: facingToRotation(facing),
+      };
+      const sn = snapCabinetPosition(posX, posY, draft, false);
+      try {
+        let res;
+        if (defs.kind === 'existing' && defs.cooling_unit_id) {
+          res = await ColdAisle.api('api/floorplan.php?action=place_cooling', {
+            method: 'POST',
+            body: {
+              cooling_unit_id: Number(defs.cooling_unit_id),
+              room_id: roomId(),
+              pos_x: sn.x,
+              pos_y: sn.y,
+              width_mm: draft.width_mm,
+              depth_mm: draft.depth_mm,
+              height_mm: draft.height_mm,
+              front_facing: facing,
+              rotation_deg: draft.rotation_deg,
+              color_hex: defs.color_hex || '#0ea5e9',
+            },
+          });
+          unplacedCooling = unplacedCooling.filter(function (x) {
+            return Number(x.cooling_unit_id) !== Number(defs.cooling_unit_id);
+          });
+          renderUnplacedCoolingPalette();
+        } else {
+          res = await ColdAisle.api('api/floorplan.php?action=create_floor_cooling', {
+            method: 'POST',
+            body: {
+              room_id: roomId(),
+              name: defs.name || ('Cooling ' + (floorCooling.length + 1)),
+              unit_type: defs.unit_type || 'crac',
+              cooling_medium: defs.cooling_medium || 'dx',
+              unit_role: defs.unit_role || 'primary',
+              pos_x: sn.x,
+              pos_y: sn.y,
+              width_mm: draft.width_mm,
+              depth_mm: draft.depth_mm,
+              height_mm: draft.height_mm,
+              front_facing: facing,
+              rotation_deg: draft.rotation_deg,
+              color_hex: defs.color_hex || '#0ea5e9',
+            },
+          });
+        }
+        if (!res || !res.cooling_unit) {
+          throw new Error('Server did not return the cooling unit');
+        }
+        const u = res.cooling_unit;
+        if (!u.width_mm) u.width_mm = draft.width_mm;
+        if (!u.depth_mm) u.depth_mm = draft.depth_mm;
+        if (!u.height_mm) u.height_mm = draft.height_mm;
+        floorCooling.push(u);
+        setCoolingPositionLocked(u, false);
+        selectCooling(u);
+        draw();
+        refresh3d();
+        ColdAisle.toast(
+          (defs.kind === 'existing' ? 'Cooling unit placed' : 'Cooling unit created') + ' (unlocked — adjust then Save)',
+          'success'
+        );
+      } catch (e) {
+        ColdAisle.toast(e.message || 'Failed to place cooling unit', 'error');
+      }
+    }
+
     async function createCabinetAt(posX, posY, defaults) {
       if (!room || !roomId()) {
         ColdAisle.toast('Select a room first', 'error');
@@ -2666,6 +3164,7 @@
         el.classList.remove('selected');
       });
       pendingPdu = null;
+      pendingCooling = null;
     }
 
     function refresh3d() {
@@ -2674,6 +3173,7 @@
       view3dInstance = ColdAisle3D.mount(view3d, {
         cabinets: cabinets,
         pdus: floorPdus,
+        cooling: floorCooling,
         rooms: room ? [room] : [],
         interactive: true,
         textureFaces: 'both',
@@ -2701,9 +3201,16 @@
 
       if (!isLeft) return;
 
-      if ((pendingTemplate || pendingPdu) && !hit) {
+      if ((pendingTemplate || pendingPdu || pendingCooling) && !hit) {
         const w = worldFromCanvas(pt.x, pt.y);
-        if (pendingPdu) {
+        if (pendingCooling) {
+          const coolTmpl = pendingCooling;
+          pendingCooling = null;
+          pendingPdu = null;
+          pendingTemplate = null;
+          clearPaletteSelection();
+          placeCoolingAt(w.x, w.y, coolTmpl);
+        } else if (pendingPdu) {
           const pduTmpl = pendingPdu;
           pendingPdu = null;
           pendingTemplate = null;
@@ -2718,7 +3225,31 @@
         return;
       }
 
-      if (hit && hit.type === 'pdu') {
+      if (hit && hit.type === 'cooling') {
+        const cu = hit.obj;
+        selectCooling(cu);
+        pan = null;
+        if (!isCoolingPositionLocked(cu) && !e.shiftKey) {
+          const r = coolingRect(cu);
+          drag = {
+            kind: 'cooling',
+            id: Number(cu.cooling_unit_id),
+            ox: pt.x - r.x,
+            oy: pt.y - r.y,
+            startX: pt.x,
+            startY: pt.y,
+            active: false,
+            startWorld: {
+              x: Number(cu.pos_x) || 0,
+              y: Number(cu.pos_y) || 0,
+            },
+          };
+          try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+        } else {
+          drag = null;
+        }
+        updateCanvasCursor(true);
+      } else if (hit && hit.type === 'pdu') {
         const pdu = hit.obj;
         selectPdu(pdu);
         pan = null;
@@ -2816,6 +3347,31 @@
       }
 
       if (!drag) return;
+      if (drag.kind === 'cooling') {
+        const u = floorCooling.find(function (x) { return Number(x.cooling_unit_id) === drag.id; });
+        if (!u || isCoolingPositionLocked(u)) {
+          drag = null;
+          return;
+        }
+        const ptC = canvasPoint(e);
+        if (!drag.active) {
+          const dx = ptC.x - drag.startX;
+          const dy = ptC.y - drag.startY;
+          if ((dx * dx + dy * dy) < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) return;
+          drag.active = true;
+        }
+        let x = (ptC.x - drag.ox - ORIGIN) / scale();
+        let y = (ptC.y - drag.oy - ORIGIN) / scale();
+        const sn = snapCabinetPosition(x, y, u, false);
+        u.pos_x = sn.x;
+        u.pos_y = sn.y;
+        const xEl = propsEl.querySelector('#fc_x');
+        const yEl = propsEl.querySelector('#fc_y');
+        if (xEl) xEl.value = fmtLen(u.pos_x);
+        if (yEl) yEl.value = fmtLen(u.pos_y);
+        draw();
+        return;
+      }
       if (drag.kind === 'pdu') {
         const p = floorPdus.find(function (x) { return Number(x.pdu_id) === drag.id; });
         if (!p || isPduPositionLocked(p)) {
@@ -2890,6 +3446,17 @@
       const kind = drag.kind || 'cabinet';
       const dragId = drag.id;
       drag = null;
+      if (kind === 'cooling') {
+        const u = floorCooling.find(function (x) { return Number(x.cooling_unit_id) === Number(dragId); });
+        if (!u || !wasActive || isCoolingPositionLocked(u)) {
+          updateCanvasCursor();
+          return;
+        }
+        draw();
+        updateCanvasCursor();
+        ColdAisle.toast('Cooling position updated — click Save to keep & lock', 'info');
+        return;
+      }
       if (kind === 'pdu') {
         const p = floorPdus.find(function (x) { return Number(x.pdu_id) === Number(dragId); });
         if (!p || !wasActive || isPduPositionLocked(p)) {
@@ -2948,6 +3515,8 @@
     renderVendorPalette();
     renderPduPresetPalette();
     renderUnplacedPduPalette();
+    renderCoolingPresetPalette();
+    renderUnplacedCoolingPalette();
 
     canvas.addEventListener('dragover', function (e) {
       e.preventDefault();
@@ -2966,14 +3535,45 @@
       }
       // text/plain may be cabinet or pdu
       if (raw.indexOf(DRAG_TEXT_PREFIX) === 0) return null;
+      if (raw.indexOf(DRAG_TEXT_PREFIX_COOLING) === 0) return null;
       try {
         const o = JSON.parse(raw);
-        if (o && (o.kind === 'preset' || o.kind === 'existing' || o.pdu_id)) return o;
+        if (o && (o.kind === 'preset' || o.kind === 'existing' || o.pdu_id) && !o.cooling_unit_id && !o.unit_type) return o;
+      } catch (e4) { /* ignore */ }
+      return null;
+    }
+
+    function parseCoolingDropData(dt) {
+      if (!dt) return null;
+      let raw = '';
+      try { raw = dt.getData(DRAG_MIME_COOLING) || ''; } catch (e) { /* ignore */ }
+      if (!raw) {
+        try { raw = dt.getData('text/plain') || dt.getData('Text') || ''; } catch (e2) { raw = ''; }
+      }
+      if (!raw) return null;
+      if (raw.indexOf(DRAG_TEXT_PREFIX_COOLING) === 0) {
+        try { return JSON.parse(raw.slice(DRAG_TEXT_PREFIX_COOLING.length)); } catch (e3) { return null; }
+      }
+      if (raw.indexOf(DRAG_TEXT_PREFIX) === 0 || raw.indexOf(DRAG_TEXT_PREFIX_PDU) === 0) return null;
+      try {
+        const o = JSON.parse(raw);
+        if (o && (o.cooling_unit_id || o.unit_type || o.cooling_medium)) return o;
       } catch (e4) { /* ignore */ }
       return null;
     }
 
     function handlePlannerDrop(e) {
+      const coolDefaults = parseCoolingDropData(e.dataTransfer);
+      if (coolDefaults) {
+        const ptC = canvasPoint(e);
+        const wC = worldFromCanvas(ptC.x, ptC.y);
+        placeCoolingAt(wC.x, wC.y, coolDefaults);
+        pendingTemplate = null;
+        pendingPdu = null;
+        pendingCooling = null;
+        clearPaletteSelection();
+        return true;
+      }
       const pduDefaults = parsePduDropData(e.dataTransfer);
       if (pduDefaults) {
         const pt = canvasPoint(e);
@@ -2981,6 +3581,7 @@
         placePduAt(w.x, w.y, pduDefaults);
         pendingTemplate = null;
         pendingPdu = null;
+        pendingCooling = null;
         clearPaletteSelection();
         return true;
       }
@@ -2991,6 +3592,7 @@
       createCabinetAt(w2.x, w2.y, defaults);
       pendingTemplate = null;
       pendingPdu = null;
+      pendingCooling = null;
       clearPaletteSelection();
       return true;
     }
