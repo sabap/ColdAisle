@@ -9,21 +9,31 @@ require_once __DIR__ . '/SnmpPoller.php';
 
 class SnmpDiscover
 {
-    /** Enterprise / system roots to walk (bounded). */
+    /**
+     * Enterprise / system roots to walk (bounded).
+     * Narrow trees first so env managers / probes fill the candidate budget before
+     * a broad PowerNet walk exhausts MAX_OIDS (or hangs IIS).
+     */
     private const WALK_ROOTS = [
-        '1.3.6.1.2.1.1',           // MIB-II system
-        '1.3.6.1.4.1.318',         // APC / Schneider (PDU + Environmental / PowerNet)
-        '1.3.6.1.4.1.318.1.1.10',  // APC Environmental Monitoring (AP9340 / IEM / probes)
-        '1.3.6.1.4.1.318.1.1.25',  // APC Universal I/O / modular sensors (when present)
-        '1.3.6.1.4.1.3808',        // CyberPower
-        '1.3.6.1.4.1.13742',       // Raritan
-        '1.3.6.1.4.1.21239',       // Vertiv / Geist
-        '1.3.6.1.4.1.1718',        // Server Technology
-        '1.3.6.1.4.1.99999',       // ColdAisle lab agent
+        '1.3.6.1.2.1.1',              // MIB-II system
+        '1.3.6.1.4.1.318.1.1.10',     // APC Environmental Monitoring (AP9340 / IEM / probes)
+        '1.3.6.1.4.1.318.1.1.25',     // APC Universal I/O / modular sensors
+        '1.3.6.1.4.1.318.1.1.26',     // APC rPDU2 (metered PDUs)
+        '1.3.6.1.4.1.318.1.1.12',     // APC rPDU
+        '1.3.6.1.4.1.318.1.1.3',      // APC UPS-ish (when present)
+        '1.3.6.1.4.1.3808',           // CyberPower
+        '1.3.6.1.4.1.13742',          // Raritan
+        '1.3.6.1.4.1.21239',          // Vertiv / Geist
+        '1.3.6.1.4.1.1718',           // Server Technology
+        '1.3.6.1.4.1.99999',          // ColdAisle lab agent
+        // Broad APC last — can be huge; only fills remaining MAX_OIDS budget
+        '1.3.6.1.4.1.318',
     ];
 
     private const MAX_OIDS = 400;
-    private const WALK_TIMEOUT_SEC = 8;
+    /** Per-walk timeout passed to snmp*_real_walk (microseconds). */
+    private const WALK_TIMEOUT_USEC = 3_000_000;
+    private const WALK_RETRIES = 0;
     /** Candidates shown in Discover UI (high-signal only). */
     private const MAX_DISPLAY_CANDIDATES = 40;
     /** Minimum score to appear in the Discover table. */
@@ -55,17 +65,42 @@ class SnmpDiscover
             throw new RuntimeException('PHP SNMP extension is not available.');
         }
 
+        // Avoid IIS FastCGI 500 from PHP timeouts on slow agents
+        @ini_set('max_execution_time', '90');
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(90);
+        }
+
+        $version = strtolower(trim((string)($creds['snmp_version'] ?? '3')));
+        if ($version === 'v3') {
+            $version = '3';
+        }
+        if ($version === '3') {
+            $secName = trim((string)($creds['security_name'] ?? ''));
+            if ($secName === '') {
+                throw new RuntimeException(
+                    'SNMPv3 security name (user) is empty. Save SNMP version 3 and a credential profile '
+                    . '(or enter the v3 user) on the device, then try Discover again.'
+                );
+            }
+        }
+
         // Load uploaded vendor MIBs so walks can resolve symbolic names when available
         $mibsLoaded = 0;
         if (class_exists('MibService')) {
-            $mibsLoaded = MibService::loadAll();
+            try {
+                $mibsLoaded = MibService::loadAll();
+            } catch (Throwable $e) {
+                App::log('SnmpDiscover MIB load: ' . $e->getMessage(), 'warning');
+                $mibsLoaded = 0;
+            }
         }
 
-        @ini_set('max_execution_time', '60');
-
         $port = (int)($creds['port'] ?? 161);
+        if ($port <= 0 || $port > 65535) {
+            $port = 161;
+        }
         $hostPort = $host . ($port !== 161 ? ':' . $port : '');
-        $version = strtolower((string)($creds['snmp_version'] ?? '3'));
 
         // Values as plain numbers when possible
         @snmp_set_quick_print(true);
@@ -107,6 +142,13 @@ class SnmpDiscover
             '1.3.6.1.4.1.318.1.1.26.9.4.3.1.6.1.1', // module-index style Current.1.1
             '1.3.6.1.4.1.3808.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.3808.1.1.1.4.2.5.0',
+            // APC Integrated Environmental Monitor / AP9340-class probe tables (common instances)
+            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.4.1',  // iemStatusProbeCurrentTemp (example index)
+            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.6.1',  // iemStatusProbeCurrentHumid
+            '1.3.6.1.4.1.318.1.1.10.4.2.3.1.5.1',  // emStatusProbe* style (varies by firmware)
+            '1.3.6.1.4.1.318.1.1.10.4.2.3.1.6.1',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.1', // uioSensorStatusTemperature-ish
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.4.1', // uioSensorStatusHumidity-ish
         ];
         foreach ($leafGets as $oid) {
             if (isset($collected[$oid])) {
@@ -180,12 +222,12 @@ class SnmpDiscover
             }
             $scored[] = [
                 'oid' => $mapOid,
-                'name' => $name,
-                'module' => $module,
-                'value' => is_scalar($raw) ? (string)$raw : json_encode($raw),
+                'name' => $name !== null ? self::utf8Safe($name) : null,
+                'module' => $module !== null ? self::utf8Safe($module) : null,
+                'value' => self::utf8Safe(is_scalar($raw) ? (string)$raw : (json_encode($raw) ?: '')),
                 'numeric' => $num,
                 'score' => $score,
-                'hint' => self::hintFor($mapOid, $name, $raw, $num),
+                'hint' => self::utf8Safe(self::hintFor($mapOid, $name, $raw, $num)),
             ];
         }
         usort($scored, static function ($a, $b) {
@@ -308,21 +350,53 @@ class SnmpDiscover
             $msg .= ' Offline MIB index built but no walk OIDs matched (different enterprise tree or incomplete IMPORT chain in the MIB file).';
         }
 
+        // Sanitize map values for JSON (OID strings are ASCII; metric keys may include vendor text)
+        $safeProposed = [];
+        foreach ($proposed as $k => $v) {
+            $safeProposed[self::utf8Safe((string)$k)] = self::utf8Safe((string)$v);
+        }
+
         return [
             'ok' => true,
-            'host' => $host,
-            'sysDescr' => is_string($sysDescr) ? $sysDescr : null,
+            'host' => self::utf8Safe($host),
+            'sysDescr' => is_string($sysDescr) ? self::utf8Safe($sysDescr) : null,
             'candidates' => $candidates,
-            'proposed_map' => $proposed,
-            'serial_no' => $serialHit['value'] ?? null,
+            'proposed_map' => $safeProposed,
+            'serial_no' => isset($serialHit['value']) ? self::utf8Safe((string)$serialHit['value']) : null,
             'serial_oid' => $serialHit['oid'] ?? null,
             'walk_count' => count($collected),
             'named_count' => $namedCount,
             'mibs_loaded' => $mibsLoaded,
             'mib_index_size' => $indexSize,
             'mib_index_hits' => $indexHits,
-            'message' => $msg,
+            'message' => self::utf8Safe($msg),
         ];
+    }
+
+    /** Make SNMP / MIB strings safe for JSON responses (Windows Net-SNMP often returns latin-1). */
+    public static function utf8Safe(string $s): string
+    {
+        if ($s === '') {
+            return '';
+        }
+        // Strip NULs and most C0 controls (keep tab/LF/CR)
+        $s = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', '', $s) ?? $s;
+        if (function_exists('mb_check_encoding') && mb_check_encoding($s, 'UTF-8')) {
+            return $s;
+        }
+        if (function_exists('mb_convert_encoding')) {
+            $converted = @mb_convert_encoding($s, 'UTF-8', 'UTF-8, ISO-8859-1, Windows-1252');
+            if (is_string($converted) && $converted !== '') {
+                return $converted;
+            }
+        }
+        if (function_exists('iconv')) {
+            $converted = @iconv('UTF-8', 'UTF-8//IGNORE', $s);
+            if (is_string($converted)) {
+                return $converted;
+            }
+        }
+        return preg_replace('/[^\x09\x0A\x0D\x20-\x7E]/', '?', $s) ?? $s;
     }
 
     /**
@@ -595,20 +669,24 @@ class SnmpDiscover
         try {
             if ($version === '3' && function_exists('snmp3_get')) {
                 $sec = self::secLevel($creds);
+                $authProto = self::normalizeSnmpProtocol((string)($creds['auth_protocol'] ?? 'SHA'), 'auth');
+                $privProto = self::normalizeSnmpProtocol((string)($creds['priv_protocol'] ?? 'AES'), 'priv');
                 return @snmp3_get(
                     $hostPort,
                     (string)($creds['security_name'] ?? ''),
                     $sec,
-                    (string)($creds['auth_protocol'] ?: 'SHA'),
+                    $authProto,
                     (string)($creds['auth_passphrase'] ?? ''),
-                    (string)($creds['priv_protocol'] ?: 'AES'),
+                    $privProto,
                     (string)($creds['priv_passphrase'] ?? ''),
-                    $oid
+                    $oid,
+                    self::WALK_TIMEOUT_USEC,
+                    self::WALK_RETRIES
                 );
             }
             if (function_exists('snmp2_get')) {
                 $community = (string)($creds['community'] ?? $creds['security_name'] ?? 'public');
-                return @snmp2_get($hostPort, $community, $oid);
+                return @snmp2_get($hostPort, $community, $oid, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
             }
         } catch (Throwable $e) {
             return null;
@@ -622,19 +700,23 @@ class SnmpDiscover
         $result = false;
         if ($version === '3' && function_exists('snmp3_real_walk')) {
             $sec = self::secLevel($creds);
+            $authProto = self::normalizeSnmpProtocol((string)($creds['auth_protocol'] ?? 'SHA'), 'auth');
+            $privProto = self::normalizeSnmpProtocol((string)($creds['priv_protocol'] ?? 'AES'), 'priv');
             $result = @snmp3_real_walk(
                 $hostPort,
                 (string)($creds['security_name'] ?? ''),
                 $sec,
-                (string)($creds['auth_protocol'] ?: 'SHA'),
+                $authProto,
                 (string)($creds['auth_passphrase'] ?? ''),
-                (string)($creds['priv_protocol'] ?: 'AES'),
+                $privProto,
                 (string)($creds['priv_passphrase'] ?? ''),
-                $root
+                $root,
+                self::WALK_TIMEOUT_USEC,
+                self::WALK_RETRIES
             );
         } elseif (function_exists('snmprealwalk')) {
             $community = (string)($creds['community'] ?? $creds['security_name'] ?? 'public');
-            $result = @snmprealwalk($hostPort, $community, $root);
+            $result = @snmprealwalk($hostPort, $community, $root, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
         }
         if ($result === false || !is_array($result)) {
             throw new RuntimeException('Walk failed for ' . $root);
@@ -644,6 +726,16 @@ class SnmpDiscover
 
     private static function secLevel(array $creds): string
     {
+        // Prefer explicit level from device/profile when valid
+        $explicit = strtolower(trim((string)($creds['security_level'] ?? $creds['snmp_v3_sec_level'] ?? '')));
+        $explicit = str_replace([' ', '_'], '', $explicit);
+        if (in_array($explicit, ['noauthnopriv', 'authnopriv', 'authpriv'], true)) {
+            return match ($explicit) {
+                'authpriv' => 'authPriv',
+                'authnopriv' => 'authNoPriv',
+                default => 'noAuthNoPriv',
+            };
+        }
         $auth = trim((string)($creds['auth_passphrase'] ?? ''));
         $priv = trim((string)($creds['priv_passphrase'] ?? ''));
         if ($auth !== '' && $priv !== '') {
@@ -653,6 +745,33 @@ class SnmpDiscover
             return 'authNoPriv';
         }
         return 'noAuthNoPriv';
+    }
+
+    /** Normalize auth/priv protocol names for PHP snmp3_* (expects MD5/SHA/AES…). */
+    private static function normalizeSnmpProtocol(string $proto, string $kind): string
+    {
+        $p = strtoupper(trim($proto));
+        $p = str_replace(['-', ' '], '', $p);
+        if ($kind === 'auth') {
+            $map = [
+                'MD5' => 'MD5',
+                'SHA' => 'SHA',
+                'SHA1' => 'SHA',
+                'SHA224' => 'SHA224',
+                'SHA256' => 'SHA256',
+                'SHA384' => 'SHA384',
+                'SHA512' => 'SHA512',
+            ];
+            return $map[$p] ?? ($p !== '' ? $p : 'SHA');
+        }
+        $map = [
+            'DES' => 'DES',
+            'AES' => 'AES',
+            'AES128' => 'AES',
+            'AES192' => 'AES192',
+            'AES256' => 'AES256',
+        ];
+        return $map[$p] ?? ($p !== '' ? $p : 'AES');
     }
 
     /**
@@ -1580,13 +1699,14 @@ class SnmpDiscover
             'port' => 161,
             'snmp_version' => $version,
             'security_name' => (string)($device['snmp_v3_user'] ?? ''),
+            'security_level' => (string)($device['snmp_v3_sec_level'] ?? ''),
             'auth_protocol' => (string)($device['snmp_v3_auth_proto'] ?? 'SHA'),
             'auth_passphrase' => (string)(Crypto::decryptQuiet($device['snmp_v3_auth_pass'] ?? null) ?? ''),
             'priv_protocol' => (string)($device['snmp_v3_priv_proto'] ?? 'AES'),
             'priv_passphrase' => (string)(Crypto::decryptQuiet($device['snmp_v3_priv_pass'] ?? null) ?? ''),
             'community' => (string)(Crypto::decryptQuiet($device['snmp_community'] ?? null) ?? 'public'),
         ];
-        // Profile overrides when set
+        // Profile overrides when set (same rules as device Save)
         if (!empty($device['snmp_v3_profile_id'])) {
             try {
                 $prof = Database::fetchOne(
@@ -1594,9 +1714,18 @@ class SnmpDiscover
                     [(int)$device['snmp_v3_profile_id']]
                 );
                 if ($prof) {
-                    $creds['security_name'] = (string)($prof['security_name'] ?? $creds['security_name']);
-                    $creds['auth_protocol'] = (string)($prof['auth_protocol'] ?? $creds['auth_protocol']);
-                    $creds['priv_protocol'] = (string)($prof['priv_protocol'] ?? $creds['priv_protocol']);
+                    if (trim((string)($prof['security_name'] ?? '')) !== '') {
+                        $creds['security_name'] = (string)$prof['security_name'];
+                    }
+                    if (trim((string)($prof['security_level'] ?? '')) !== '') {
+                        $creds['security_level'] = (string)$prof['security_level'];
+                    }
+                    if (trim((string)($prof['auth_protocol'] ?? '')) !== '') {
+                        $creds['auth_protocol'] = (string)$prof['auth_protocol'];
+                    }
+                    if (trim((string)($prof['priv_protocol'] ?? '')) !== '') {
+                        $creds['priv_protocol'] = (string)$prof['priv_protocol'];
+                    }
                     if (!empty($prof['auth_passphrase'])) {
                         $creds['auth_passphrase'] = (string)(Crypto::decryptQuiet((string)$prof['auth_passphrase']) ?? '');
                     }
