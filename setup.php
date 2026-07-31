@@ -103,8 +103,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($tmp === '' || !is_uploaded_file($tmp)) {
                 throw new RuntimeException('Invalid upload.');
             }
-            if (!preg_match('/\.zip$/i', $orig)) {
-                throw new RuntimeException('Backup must be a .zip file from Settings → Site backup.');
+            if (!preg_match('/\.(zip|caisle)$/i', $orig)) {
+                throw new RuntimeException('Backup must be a .zip or encrypted .caisle file from Settings → Site backup.');
             }
 
             // Stage upload under storage (survives long restore)
@@ -112,15 +112,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!is_dir($stageDir) && !@mkdir($stageDir, 0775, true)) {
                 throw new RuntimeException('Cannot write storage/backups for restore staging.');
             }
-            $stagePath = $stageDir . '/restore_upload_' . date('Ymd_His') . '.zip';
+            $ext = preg_match('/\.caisle$/i', $orig) ? 'caisle' : 'zip';
+            $stagePath = $stageDir . '/restore_upload_' . date('Ymd_His') . '.' . $ext;
             if (!@move_uploaded_file($tmp, $stagePath)) {
                 throw new RuntimeException('Could not store uploaded backup.');
             }
 
-            $inspect = SiteBackupService::inspect($stagePath);
+            $backupPassword = (string)($_POST['backup_password'] ?? '');
+            $inspect = SiteBackupService::inspect($stagePath, $backupPassword !== '' ? $backupPassword : null);
+            if (!empty($inspect['encrypted']) && empty($inspect['app_version'])) {
+                // Encrypted stub without password — try with provided password
+                if ($backupPassword === '') {
+                    throw new RuntimeException(
+                        'This backup is encrypted. Enter the encryption password used when it was created.'
+                    );
+                }
+                $inspect = SiteBackupService::inspect($stagePath, $backupPassword);
+            }
             $success[] = 'Package OK'
                 . (isset($inspect['app_version']) ? ' (source v' . $inspect['app_version'] . ')' : '')
-                . ' · format ' . ($inspect['format_version'] ?? '?');
+                . ' · format ' . ($inspect['format_version'] ?? '?')
+                . (!empty($inspect['encrypted']) || SiteBackupService::isEncryptedPackage($stagePath) ? ' · encrypted' : '');
 
             $dbCfg = [
                 'host' => $form['sql_host'],
@@ -136,6 +148,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'create_database' => $form['create_database'],
                 'base_url' => rtrim($form['base_url'], '/'),
                 'timezone' => $form['timezone'] !== '' ? $form['timezone'] : 'UTC',
+                'password' => $backupPassword,
             ]);
             $success[] = $result['message'] ?? 'Restore complete.';
             $success[] = 'Sign in with an account from the backup (not a new setup admin).';
@@ -509,7 +522,7 @@ function req_badge(bool $ok): string
         <?php elseif ($step === 2 && $mode === 'restore'): ?>
             <h2>Restore from site backup</h2>
             <p class="hint">
-                Upload a <code>coldaisle-site_*.zip</code> from the source server.
+                Upload a <code>coldaisle-site_*.zip</code> or encrypted <code>*.caisle</code> from the source server.
                 Provide SQL details for <em>this</em> environment. Log in later with an account from the backup.
             </p>
             <form method="post" enctype="multipart/form-data">
@@ -581,9 +594,17 @@ function req_badge(bool $ok): string
                     <label class="check-label"><input type="checkbox" name="sql_trust_cert" <?= $form['sql_trust_cert'] ? 'checked' : '' ?>> Trust server certificate</label>
                 </div>
                 <div class="form-row">
-                    <label>Backup ZIP</label>
-                    <input type="file" name="backup_file" accept=".zip,application/zip" required>
+                    <label>Backup file (.zip or .caisle)</label>
+                    <input type="file" name="backup_file" accept=".zip,.caisle,application/zip,application/octet-stream" required>
                     <p class="hint">Large files may need higher <code>upload_max_filesize</code> / <code>post_max_size</code> in php.ini.</p>
+                </div>
+                <div class="form-row">
+                    <label>Backup encryption password (if encrypted)</label>
+                    <input type="password" name="backup_password" value="" autocomplete="off"
+                           placeholder="Leave blank for unencrypted .zip">
+                    <p class="hint">
+                        Required only for <code>.caisle</code> packages. This password is not the SQL password and is not stored after restore.
+                    </p>
                 </div>
                 <div class="btn-row">
                     <button type="submit" name="action" value="test_connection" class="btn btn-secondary">Test Connection</button>

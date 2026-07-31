@@ -10,6 +10,9 @@
  *   uploads/…                 — storage/uploads tree
  *
  * Does not include: config.php DB password, storage/logs, storage/backups.
+ *
+ * Optional whole-package encryption (AES-256-GCM + PBKDF2): produces a .caisle file.
+ * The restore password is NOT stored anywhere — operators must retain it.
  */
 declare(strict_types=1);
 
@@ -17,11 +20,19 @@ class SiteBackupService
 {
     public const FORMAT_VERSION = 1;
     public const PACKAGE_PREFIX = 'coldaisle-site';
+    /** Magic header for encrypted packages (7 bytes). */
+    public const ENC_MAGIC = 'CAISLE1';
+    public const ENC_PBKDF2_ITERS = 200000;
 
     /**
-     * Create a site backup ZIP. Returns absolute path under storage/backups/.
+     * Create a site backup ZIP (or encrypted .caisle). Returns absolute path under storage/backups/.
      *
-     * @param array{include_audit?:bool,include_readings?:bool} $options
+     * @param array{
+     *   include_audit?:bool,
+     *   include_readings?:bool,
+     *   encrypt?:bool,
+     *   password?:string
+     * } $options
      */
     public static function export(array $options = []): string
     {
@@ -30,6 +41,16 @@ class SiteBackupService
         }
         $includeAudit = array_key_exists('include_audit', $options) ? (bool)$options['include_audit'] : true;
         $includeReadings = array_key_exists('include_readings', $options) ? (bool)$options['include_readings'] : true;
+        $encrypt = !empty($options['encrypt']);
+        $password = (string)($options['password'] ?? '');
+        if ($encrypt) {
+            if (strlen($password) < 8) {
+                throw new RuntimeException('Encryption password must be at least 8 characters.');
+            }
+            if (!function_exists('openssl_encrypt')) {
+                throw new RuntimeException('OpenSSL is required to encrypt backups.');
+            }
+        }
 
         $dir = App::ROOT . '/storage/backups';
         if (!is_dir($dir) && !@mkdir($dir, 0775, true)) {
@@ -122,6 +143,7 @@ class SiteBackupService
                 'options' => [
                     'include_audit' => $includeAudit,
                     'include_readings' => $includeReadings,
+                    'encrypted' => $encrypt,
                 ],
                 'has_app_key' => $appKey !== '',
             ];
@@ -131,7 +153,16 @@ class SiteBackupService
             );
 
             self::zipDirectory($staging, $zipPath);
-            App::log('Site backup created: ' . basename($zipPath), 'info');
+            $finalPath = $zipPath;
+            if ($encrypt) {
+                $encPath = $dir . DIRECTORY_SEPARATOR . $baseName . '.caisle';
+                self::encryptPackageFile($zipPath, $encPath, $password);
+                @unlink($zipPath);
+                $finalPath = $encPath;
+                App::log('Site backup created (encrypted): ' . basename($finalPath), 'info');
+            } else {
+                App::log('Site backup created: ' . basename($finalPath), 'info');
+            }
             if (class_exists('StorageHousekeepingService')) {
                 try {
                     StorageHousekeepingService::run(false);
@@ -139,7 +170,7 @@ class SiteBackupService
                     App::log('Housekeeping after site backup: ' . $e->getMessage(), 'warning');
                 }
             }
-            return $zipPath;
+            return $finalPath;
         } finally {
             self::rrmdir($staging);
         }
@@ -159,9 +190,22 @@ class SiteBackupService
         }
 
         $work = self::makeWorkDir('restore');
+        $plainZip = null;
 
         try {
-            self::extractZip($zipPath, $work);
+            $extractFrom = $zipPath;
+            if (self::isEncryptedPackage($zipPath)) {
+                $password = (string)($options['password'] ?? '');
+                if ($password === '') {
+                    throw new RuntimeException(
+                        'This backup is encrypted. Enter the encryption password used when the backup was created.'
+                    );
+                }
+                $plainZip = $work . DIRECTORY_SEPARATOR . 'package.zip';
+                self::decryptPackageFile($zipPath, $plainZip, $password);
+                $extractFrom = $plainZip;
+            }
+            self::extractZip($extractFrom, $work);
             $root = self::findPackageRoot($work);
             $manifestPath = $root . '/manifest.json';
             if (!is_file($manifestPath)) {
@@ -368,8 +412,97 @@ class SiteBackupService
         }
     }
 
-    /** Validate a package without restoring. */
-    public static function inspect(string $zipPath): array
+    /**
+     * Validate a package without restoring.
+     * Encrypted packages return a stub unless $password is provided.
+     *
+     * @return array<string,mixed>
+     */
+    public static function inspect(string $zipPath, ?string $password = null): array
+    {
+        if (self::isEncryptedPackage($zipPath)) {
+            if ($password === null || $password === '') {
+                return [
+                    'format' => 'coldaisle-site-backup',
+                    'encrypted' => true,
+                    'format_version' => self::FORMAT_VERSION,
+                    'message' => 'Encrypted package — password required to inspect or restore.',
+                ];
+            }
+            $work = self::makeWorkDir('inspect-enc');
+            try {
+                $plain = $work . DIRECTORY_SEPARATOR . 'package.zip';
+                self::decryptPackageFile($zipPath, $plain, $password);
+                return self::inspectPlainZip($plain);
+            } finally {
+                self::rrmdir($work);
+            }
+        }
+        return self::inspectPlainZip($zipPath);
+    }
+
+    public static function isEncryptedPackage(string $path): bool
+    {
+        if (!is_file($path) || filesize($path) < 7 + 16 + 12 + 16 + 1) {
+            return false;
+        }
+        $fh = @fopen($path, 'rb');
+        if ($fh === false) {
+            return false;
+        }
+        $magic = (string)fread($fh, 7);
+        fclose($fh);
+        return $magic === self::ENC_MAGIC;
+    }
+
+    /**
+     * AES-256-GCM whole-file encryption. Output: MAGIC|salt(16)|nonce(12)|tag(16)|ciphertext
+     */
+    public static function encryptPackageFile(string $plainPath, string $outPath, string $password): void
+    {
+        $data = @file_get_contents($plainPath);
+        if ($data === false || $data === '') {
+            throw new RuntimeException('Cannot read backup zip for encryption.');
+        }
+        $salt = random_bytes(16);
+        $key = hash_pbkdf2('sha256', $password, $salt, self::ENC_PBKDF2_ITERS, 32, true);
+        $nonce = random_bytes(12);
+        $tag = '';
+        $cipher = openssl_encrypt($data, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag, '', 16);
+        if ($cipher === false || strlen($tag) !== 16) {
+            throw new RuntimeException('Backup encryption failed.');
+        }
+        $blob = self::ENC_MAGIC . $salt . $nonce . $tag . $cipher;
+        if (@file_put_contents($outPath, $blob) === false) {
+            throw new RuntimeException('Could not write encrypted backup file.');
+        }
+    }
+
+    public static function decryptPackageFile(string $encPath, string $outZipPath, string $password): void
+    {
+        $raw = @file_get_contents($encPath);
+        if ($raw === false || strlen($raw) < 7 + 16 + 12 + 16 + 1) {
+            throw new RuntimeException('Encrypted backup file is missing or truncated.');
+        }
+        if (substr($raw, 0, 7) !== self::ENC_MAGIC) {
+            throw new RuntimeException('Not a ColdAisle encrypted backup (.caisle).');
+        }
+        $salt = substr($raw, 7, 16);
+        $nonce = substr($raw, 23, 12);
+        $tag = substr($raw, 35, 16);
+        $cipher = substr($raw, 51);
+        $key = hash_pbkdf2('sha256', $password, $salt, self::ENC_PBKDF2_ITERS, 32, true);
+        $plain = openssl_decrypt($cipher, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $nonce, $tag);
+        if ($plain === false) {
+            throw new RuntimeException('Decryption failed — wrong password or corrupt file.');
+        }
+        if (@file_put_contents($outZipPath, $plain) === false) {
+            throw new RuntimeException('Could not write decrypted backup zip.');
+        }
+    }
+
+    /** @return array<string,mixed> */
+    private static function inspectPlainZip(string $zipPath): array
     {
         $work = self::makeWorkDir('inspect');
         try {
@@ -379,6 +512,7 @@ class SiteBackupService
             if (!is_array($manifest)) {
                 throw new RuntimeException('Invalid or missing manifest.');
             }
+            $manifest['encrypted'] = false;
             return $manifest;
         } finally {
             self::rrmdir($work);
