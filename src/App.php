@@ -122,7 +122,10 @@ class App
         if (!$cliLight && !$light) {
             $tPhase = hrtime(true);
             try {
-                Schema::ensure();
+                $ens = Schema::ensure(false);
+                if (is_array($ens) && empty($ens['ok']) && !empty($ens['error'])) {
+                    self::log('Schema ensure: ' . (string)$ens['error'], 'warning');
+                }
             } catch (Throwable $e) {
                 // Non-fatal: features depending on new columns degrade gracefully
                 self::log('Schema ensure: ' . $e->getMessage(), 'warning');

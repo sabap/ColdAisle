@@ -5,8 +5,7 @@
  * Additive ensureColumn/ensureTable is cumulative: jumping many versions still
  * converges to latest desired shape without replaying intermediate releases.
  *
- * Deferred work (schema status UI / ensure log / rare reshapes): see BACKLOG.md
- * “Schema status / hardening pass” — do not implement until requested.
+ * Ops visibility: Schema::status() / Settings → Schema health.
  */
 declare(strict_types=1);
 
@@ -14,21 +13,42 @@ class Schema
 {
     private static bool $ensured = false;
 
-    public static function ensure(): void
+    /** Max ensure-run log lines kept on disk. */
+    private const ENSURE_LOG_MAX = 40;
+
+    /**
+     * Run additive schema ensure.
+     *
+     * @param bool $force Re-run even when this app version already has a success stamp
+     * @return array{ok:bool,skipped:bool,ms:float,error:?string,version:string}
+     */
+    public static function ensure(bool $force = false): array
     {
-        if (self::$ensured) {
-            return;
+        $version = class_exists('App') ? App::VERSION : '0';
+        $result = [
+            'ok' => true,
+            'skipped' => false,
+            'ms' => 0.0,
+            'error' => null,
+            'version' => $version,
+        ];
+
+        if (!$force && self::$ensured) {
+            $result['skipped'] = true;
+            return $result;
         }
         self::$ensured = true;
 
         // Skip catalog chatter when this app version already ensured successfully.
         // (IIS FastCGI often uses a fresh PHP process per request — static alone is not enough.)
         $stampDir = App::ROOT . '/storage/tmp';
-        $stamp = $stampDir . '/schema_ok_' . preg_replace('/[^0-9A-Za-z._-]/', '_', App::VERSION) . '.flag';
-        if (is_file($stamp)) {
-            return;
+        $stamp = self::stampPath($version);
+        if (!$force && is_file($stamp)) {
+            $result['skipped'] = true;
+            return $result;
         }
 
+        $t0 = hrtime(true);
         try {
             self::ensureColumn(
                 'datacenters',
@@ -410,14 +430,346 @@ class Schema
                 "DATETIME2 NOT NULL CONSTRAINT DF_auth_sess_seen2 DEFAULT SYSUTCDATETIME()"
             );
 
+            // Rare idempotent reshapes / backfills (not only ADD column)
+            self::runIdempotentReshapes();
+
             // Mark this app version as schema-ready (skips catalog probes on next request)
             if (!is_dir($stampDir)) {
                 @mkdir($stampDir, 0775, true);
             }
-            @file_put_contents($stamp, date('c') . "\n");
+            $ms = (hrtime(true) - $t0) / 1e6;
+            $stampBody = json_encode([
+                'version' => $version,
+                'ok' => true,
+                'at' => gmdate('c'),
+                'ms' => round($ms, 1),
+            ], JSON_UNESCAPED_SLASHES);
+            @file_put_contents($stamp, ($stampBody ?: date('c')) . "\n");
+            self::recordEnsureRun(true, $ms, null, $force);
+            $result['ms'] = round($ms, 1);
+            return $result;
         } catch (Throwable $e) {
+            $ms = (hrtime(true) - $t0) / 1e6;
             App::log('Schema ensure failed: ' . $e->getMessage(), 'error');
+            self::recordEnsureRun(false, $ms, $e->getMessage(), $force);
+            // Allow retry on next request
+            self::$ensured = false;
+            if (is_file($stamp)) {
+                @unlink($stamp);
+            }
+            $result['ok'] = false;
+            $result['ms'] = round($ms, 1);
+            $result['error'] = $e->getMessage();
+            return $result;
         }
+    }
+
+    public static function stampPath(?string $version = null): string
+    {
+        $version = $version ?? (class_exists('App') ? App::VERSION : '0');
+        $safe = preg_replace('/[^0-9A-Za-z._-]/', '_', $version) ?? '0';
+        return App::ROOT . '/storage/tmp/schema_ok_' . $safe . '.flag';
+    }
+
+    /**
+     * Clear success stamp so the next ensure() re-probes the catalog.
+     */
+    public static function clearStamp(?string $version = null): void
+    {
+        $p = self::stampPath($version);
+        if (is_file($p)) {
+            @unlink($p);
+        }
+        self::$ensured = false;
+    }
+
+    /**
+     * Expected tables/columns managed by ensure() plus core install tables.
+     * Used by Settings → Schema health (not a full sql/schema.sql dump).
+     *
+     * @return array{core_tables:list<string>,tables:array<string,list<string>>}
+     */
+    public static function expectedInventory(): array
+    {
+        $core = [
+            'settings', 'roles', 'users', 'auth_sessions', 'audit_log',
+            'departments', 'sites', 'datacenters', 'rooms', 'cabinet_rows', 'cabinets',
+            'manufacturers', 'device_templates', 'devices', 'device_ports',
+            'power_zones', 'pdus', 'pdu_outlets', 'notifications',
+        ];
+        $managed = [
+            'datacenters' => ['north_edge'],
+            'cabinet_rows' => ['zone_id', 'color_hex'],
+            'departments' => ['color_hex'],
+            'department_group_maps' => ['map_id', 'department_id', 'auth_source', 'group_id'],
+            'devices' => [
+                'parent_device_id', 'manufacture_date', 'weight_kg', 'num_data_ports', 'num_power_ports',
+                'warranty_provider', 'tags', 'snmp_version', 'snmp_community', 'snmp_fail_count',
+                'snmp_v3_profile_id', 'snmp_site_template_id', 'snmp_auto_poll',
+                'snmp_last_poll_at', 'snmp_last_poll_watts', 'snmp_last_poll_amps',
+            ],
+            'snmp_site_oid_templates' => ['template_id', 'name', 'oid_map'],
+            'pdu_templates' => ['template_id', 'name', 'fields_json'],
+            'snmp_v3_profiles' => ['profile_id', 'name', 'security_name'],
+            'device_notes' => ['note_id', 'device_id', 'note_text'],
+            'pdus' => [
+                'mount_style', 'position_u', 'u_height', 'snmp_community', 'phases',
+                'output_mode', 'snmp_site_template_id', 'snmp_auto_poll', 'pdu_template_id',
+                'last_poll_phases', 'room_id', 'pos_x', 'pos_y',
+            ],
+            'pdu_outlets' => ['rated_amps', 'device_power_supply_id'],
+            'power_alert_state' => ['alert_key', 'pdu_id', 'severity'],
+            'power_alert_queue' => ['queue_id', 'alert_key', 'pdu_id'],
+            'pdu_breakers' => ['breaker_id', 'pdu_id', 'slots_json'],
+            'device_power_supplies' => ['power_supply_id', 'device_id', 'name'],
+            'device_templates' => ['power_supplies_json'],
+            'import_id_map' => ['map_id', 'source', 'entity_type', 'source_id', 'local_id'],
+            'disposal_vendors' => ['vendor_id', 'name'],
+            'disposals' => ['stage', 'vendor_id', 'change_ticket'],
+            'cabinet_audits' => ['cabinet_audit_id', 'cabinet_id', 'audited_at'],
+            'cabinets' => ['audit_interval_days'],
+            'role_group_maps' => ['map_id', 'role_id', 'auth_source', 'group_id'],
+            'auth_sessions' => ['session_id', 'user_id', 'last_seen_at', 'expires_at'],
+        ];
+        return ['core_tables' => $core, 'tables' => $managed];
+    }
+
+    /**
+     * Compare expected inventory to live SQL Server catalog.
+     *
+     * @return array{
+     *   app_version:string,
+     *   ok:bool,
+     *   stamp:array{exists:bool,path:string,at:?string,version:?string,ms:?float},
+     *   last_ensure:?array,
+     *   ensure_log:list<array>,
+     *   missing_tables:list<string>,
+     *   missing_columns:list<array{table:string,column:string}>,
+     *   present_tables:int,
+     *   checked_tables:int,
+     *   checked_columns:int,
+     *   live_table_count:int
+     * }
+     */
+    public static function status(): array
+    {
+        $inv = self::expectedInventory();
+        $version = class_exists('App') ? App::VERSION : '0';
+        $stampPath = self::stampPath($version);
+        $stampMeta = self::readStampMeta($stampPath);
+
+        $liveTables = [];
+        $liveColumns = []; // table => set of column names
+        try {
+            $trows = Database::fetchAll(
+                "SELECT t.name AS table_name
+                 FROM sys.tables t
+                 WHERE SCHEMA_NAME(t.schema_id) = 'dbo'
+                 ORDER BY t.name"
+            );
+            foreach ($trows as $r) {
+                $liveTables[strtolower((string)$r['table_name'])] = (string)$r['table_name'];
+            }
+            $crows = Database::fetchAll(
+                "SELECT t.name AS table_name, c.name AS column_name
+                 FROM sys.columns c
+                 INNER JOIN sys.tables t ON t.object_id = c.object_id
+                 WHERE SCHEMA_NAME(t.schema_id) = 'dbo'"
+            );
+            foreach ($crows as $r) {
+                $tn = strtolower((string)$r['table_name']);
+                $liveColumns[$tn][(string)$r['column_name']] = true;
+            }
+        } catch (Throwable $e) {
+            return [
+                'app_version' => $version,
+                'ok' => false,
+                'stamp' => $stampMeta,
+                'last_ensure' => self::lastEnsureFromSettings(),
+                'ensure_log' => self::readEnsureLog(10),
+                'missing_tables' => ['(could not read catalog: ' . $e->getMessage() . ')'],
+                'missing_columns' => [],
+                'present_tables' => 0,
+                'checked_tables' => 0,
+                'checked_columns' => 0,
+                'live_table_count' => 0,
+                'error' => $e->getMessage(),
+            ];
+        }
+
+        $missingTables = [];
+        $missingColumns = [];
+        $checkedTables = 0;
+        $checkedColumns = 0;
+        $present = 0;
+
+        $allTables = array_values(array_unique(array_merge(
+            $inv['core_tables'],
+            array_keys($inv['tables'])
+        )));
+        sort($allTables);
+
+        foreach ($allTables as $table) {
+            $checkedTables++;
+            $key = strtolower($table);
+            if (!isset($liveTables[$key])) {
+                $missingTables[] = $table;
+                continue;
+            }
+            $present++;
+            $cols = $inv['tables'][$table] ?? [];
+            foreach ($cols as $col) {
+                $checkedColumns++;
+                if (empty($liveColumns[$key][$col])) {
+                    $missingColumns[] = ['table' => $table, 'column' => $col];
+                }
+            }
+        }
+
+        $ok = $missingTables === [] && $missingColumns === [];
+
+        return [
+            'app_version' => $version,
+            'ok' => $ok,
+            'stamp' => $stampMeta,
+            'last_ensure' => self::lastEnsureFromSettings(),
+            'ensure_log' => self::readEnsureLog(12),
+            'missing_tables' => $missingTables,
+            'missing_columns' => $missingColumns,
+            'present_tables' => $present,
+            'checked_tables' => $checkedTables,
+            'checked_columns' => $checkedColumns,
+            'live_table_count' => count($liveTables),
+        ];
+    }
+
+    /**
+     * Idempotent fixes that are not pure ADD column (backfills, soft constraints).
+     */
+    private static function runIdempotentReshapes(): void
+    {
+        // Presence: if last_seen_at somehow null on legacy rows, copy created_at
+        try {
+            Database::query(
+                "UPDATE auth_sessions
+                 SET last_seen_at = created_at
+                 WHERE last_seen_at IS NULL AND created_at IS NOT NULL"
+            );
+        } catch (Throwable $e) {
+            // table/column may not exist yet mid-ensure
+        }
+
+        // PDU breakers: empty slots_json → [] so JSON consumers never see NULL
+        try {
+            Database::query(
+                "UPDATE pdu_breakers
+                 SET slots_json = '[]'
+                 WHERE slots_json IS NULL OR LTRIM(RTRIM(slots_json)) = ''"
+            );
+        } catch (Throwable $e) {
+            // ignore
+        }
+    }
+
+    private static function recordEnsureRun(bool $ok, float $ms, ?string $error, bool $force): void
+    {
+        $entry = [
+            'at' => gmdate('c'),
+            'version' => class_exists('App') ? App::VERSION : '0',
+            'ok' => $ok,
+            'ms' => round($ms, 1),
+            'force' => $force,
+            'error' => $error,
+        ];
+        try {
+            if (class_exists('SettingsService', false)) {
+                SettingsService::set('schema_last_ensure_json', json_encode($entry, JSON_UNESCAPED_SLASHES) ?: '{}', 'schema');
+                SettingsService::set('schema_version', (string)$entry['version'], 'schema');
+            }
+        } catch (Throwable $e) {
+            // ignore
+        }
+        $dir = App::ROOT . '/storage/tmp';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        $logFile = $dir . '/schema_ensure_log.jsonl';
+        @file_put_contents($logFile, json_encode($entry, JSON_UNESCAPED_SLASHES) . "\n", FILE_APPEND | LOCK_EX);
+        // Trim log
+        try {
+            $lines = @file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+            if (count($lines) > self::ENSURE_LOG_MAX) {
+                $lines = array_slice($lines, -self::ENSURE_LOG_MAX);
+                @file_put_contents($logFile, implode("\n", $lines) . "\n", LOCK_EX);
+            }
+        } catch (Throwable $e) {
+            // ignore
+        }
+    }
+
+    /** @return list<array<string,mixed>> */
+    private static function readEnsureLog(int $limit = 12): array
+    {
+        $logFile = App::ROOT . '/storage/tmp/schema_ensure_log.jsonl';
+        if (!is_file($logFile)) {
+            return [];
+        }
+        $lines = @file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+        $lines = array_slice($lines, -$limit);
+        $out = [];
+        foreach (array_reverse($lines) as $line) {
+            $j = json_decode($line, true);
+            if (is_array($j)) {
+                $out[] = $j;
+            }
+        }
+        return $out;
+    }
+
+    private static function lastEnsureFromSettings(): ?array
+    {
+        try {
+            if (!class_exists('SettingsService', false)) {
+                return null;
+            }
+            $raw = SettingsService::get('schema_last_ensure_json', '');
+            if ($raw === '' || $raw === null) {
+                return null;
+            }
+            $j = json_decode((string)$raw, true);
+            return is_array($j) ? $j : null;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    /** @return array{exists:bool,path:string,at:?string,version:?string,ms:?float} */
+    private static function readStampMeta(string $path): array
+    {
+        $meta = [
+            'exists' => is_file($path),
+            'path' => $path,
+            'at' => null,
+            'version' => null,
+            'ms' => null,
+        ];
+        if (!is_file($path)) {
+            return $meta;
+        }
+        $raw = trim((string)@file_get_contents($path));
+        if ($raw === '') {
+            $meta['at'] = gmdate('c', (int)@filemtime($path));
+            return $meta;
+        }
+        $j = json_decode($raw, true);
+        if (is_array($j)) {
+            $meta['at'] = isset($j['at']) ? (string)$j['at'] : null;
+            $meta['version'] = isset($j['version']) ? (string)$j['version'] : null;
+            $meta['ms'] = isset($j['ms']) ? (float)$j['ms'] : null;
+        } else {
+            $meta['at'] = $raw;
+        }
+        return $meta;
     }
 
     /**

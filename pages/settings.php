@@ -161,6 +161,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             App::redirect('pages/settings.php#diagnostics');
         }
 
+        if ($section === 'schema_ensure') {
+            if (!AuthManager::isAdmin($user)) {
+                throw new RuntimeException('Only Global Admin can run schema ensure.');
+            }
+            Schema::clearStamp();
+            $run = Schema::ensure(true);
+            if (!empty($run['ok'])) {
+                App::flash(
+                    'success',
+                    'Schema ensure completed for v' . App::VERSION
+                    . ' in ' . ($run['ms'] ?? 0) . ' ms.'
+                );
+            } else {
+                App::flash(
+                    'error',
+                    'Schema ensure failed: ' . ($run['error'] ?? 'unknown error')
+                );
+            }
+            App::redirect('pages/settings.php#schema');
+        }
+
         if ($section === 'mail') {
             if (!class_exists('MailService')) {
                 throw new RuntimeException('MailService is not installed on this host. Deploy src/Services/MailService.php.');
@@ -503,7 +524,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         if (!in_array($section, [
             'update_check', 'update_apply', 'update_backup_now', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
             'power_alerts', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
-            'diagnostics',
+            'diagnostics', 'schema_ensure',
         ], true)) {
             $export = var_export($config, true);
             $php = "<?php\n/** ColdAisle configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
@@ -523,6 +544,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#security';
     } elseif ($secPost === 'diagnostics') {
         $redirHash = '#diagnostics';
+    } elseif ($secPost === 'schema_ensure') {
+        $redirHash = '#schema';
     } elseif ($secPost === 'export_site_backup') {
         $redirHash = '#backup';
     } elseif ($secPost === 'snmp_schedule') {
