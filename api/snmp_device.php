@@ -341,13 +341,22 @@ try {
             if (!empty($env['skipped_dead'])) {
                 $bits[] = 'Skipped ' . (int)$env['skipped_dead'] . ' dead/empty probe slot(s).';
             }
+            $memLive = 0;
             $uioLive = 0;
             if (!empty($result['probe_meta']) && is_array($result['probe_meta'])) {
                 foreach ($result['probe_meta'] as $pm) {
-                    if (($pm['source'] ?? '') === 'uio' && !empty($pm['live'])) {
+                    if (empty($pm['live'])) {
+                        continue;
+                    }
+                    if (($pm['source'] ?? '') === 'mem') {
+                        $memLive++;
+                    } elseif (($pm['source'] ?? '') === 'uio') {
                         $uioLive++;
                     }
                 }
+            }
+            if ($memLive > 0) {
+                $bits[] = $memLive . ' MEM modular sensor(s) live.';
             }
             if ($uioLive > 0) {
                 $bits[] = $uioLive . ' UIO expansion sensor(s) live.';

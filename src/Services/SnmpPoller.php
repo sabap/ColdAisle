@@ -303,14 +303,17 @@ class SnmpPoller
                 $metrics = $exp['metrics'];
                 $probeNames = $exp['probe_names'];
                 $probeMeta = $exp['probe_meta'] ?? [];
-                // TH expansion modules often report on Universal I/O sensor table, not EMS R# slots
+                // AP9340 TH modules: Modular Env Manager table (module.sensor), then UIO fallback
                 try {
-                    $uio = EnvSensorPoll::expandUioSensors($session, $metrics, $probeNames, $probeMeta);
-                    $metrics = $uio['metrics'];
-                    $probeNames = $uio['probe_names'];
-                    $probeMeta = $uio['probe_meta'];
+                    $mem = EnvSensorPoll::expandMemSensors($session, $metrics, $probeNames, $probeMeta);
+                    $metrics = $mem['metrics'];
+                    $probeNames = $mem['probe_names'];
+                    $probeMeta = $mem['probe_meta'];
+                    if (!empty($mem['mem_count'])) {
+                        App::log('EnvSensorPoll mem_count=' . (int)$mem['mem_count'], 'info');
+                    }
                 } catch (Throwable $e2) {
-                    App::log('UIO sensor expand: ' . $e2->getMessage(), 'warning');
+                    App::log('MEM/UIO sensor expand: ' . $e2->getMessage(), 'warning');
                 }
                 $got['metrics'] = $metrics;
                 $got['ok'] = max((int)$got['ok'], count($metrics));

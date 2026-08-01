@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **AP9340 TH expansion temps:** poll Modular Env Manager table `1.3.6.1.4.1.318.1.1.10.4.2.3` (module.sensor — matches TH02:3 etc.); use high-precision tenths when present; map by name/module; EMS R# slots were empty placeholders.
+
 ---
 
 ## [0.3.23] - 2026-08-01
