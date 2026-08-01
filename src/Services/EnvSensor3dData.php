@@ -22,62 +22,41 @@ class EnvSensor3dData
      */
     public static function forFloor(float $radiusM = self::DEFAULT_RADIUS_M, ?int $roomId = null): array
     {
-        try {
-            $sql = "SELECT s.sensor_id, s.name, s.sensor_kind, s.placement, s.host_type,
-                           s.last_value, s.last_humidity, s.unit, s.last_seen_at,
-                           s.pos_x AS s_pos_x, s.pos_y AS s_pos_y, s.pos_z AS s_pos_z,
-                           s.cabinet_id AS s_cabinet_id, s.device_id,
-                           d.cabinet_id AS d_cabinet_id, d.position_u, d.u_height,
-                           c.cabinet_id, c.name AS cabinet_name,
-                           c.pos_x AS c_pos_x, c.pos_y AS c_pos_y, c.pos_z AS c_pos_z,
-                           c.rotation_deg, c.width_mm, c.depth_mm, c.u_height AS c_u_height,
-                           c.room_id AS c_room_id,
-                           d.front_facing AS d_front_facing
-                    FROM env_sensors s
-                    LEFT JOIN devices d ON d.device_id = s.device_id AND d.is_active = 1
-                    LEFT JOIN cabinets c ON c.cabinet_id = COALESCE(s.cabinet_id, d.cabinet_id)
-                         AND c.is_active = 1
-                    WHERE s.is_active = 1
-                      AND s.last_value IS NOT NULL";
-            $params = [];
-            if ($roomId !== null && $roomId > 0) {
-                $sql .= ' AND c.room_id = ?';
-                $params[] = $roomId;
-            }
-            $sql .= ' ORDER BY s.name';
-            $rows = Database::fetchAll($sql, $params);
-        } catch (Throwable $e) {
-            App::log('EnvSensor3dData: ' . $e->getMessage(), 'warning');
+        $rows = self::loadSensorRows($roomId);
+        if ($rows === []) {
             return [];
         }
 
         $out = [];
+        $skipped = 0;
         foreach ($rows as $r) {
             $placed = self::resolvePosition($r);
             if ($placed === null) {
+                $skipped++;
                 continue;
             }
-            $temp = is_numeric($r['last_value'] ?? null) ? (float)$r['last_value'] : null;
+            $temp = self::toFloat($r['last_value'] ?? null);
             if ($temp === null) {
+                $skipped++;
                 continue;
             }
             // Only temperature-ish kinds drive heat color
             $kind = (string)($r['sensor_kind'] ?? 'temperature');
-            if ($kind === 'humidity' || $kind === 'leak' || $kind === 'airflow') {
+            if (in_array($kind, ['humidity', 'leak', 'airflow', 'differential_pressure'], true)) {
                 continue;
             }
-            $hum = isset($r['last_humidity']) && $r['last_humidity'] !== null && $r['last_humidity'] !== ''
-                ? (float)$r['last_humidity']
-                : null;
+            $hum = self::toFloat($r['last_humidity'] ?? null);
 
             $out[] = [
                 'sensor_id' => (int)$r['sensor_id'],
                 'name' => (string)$r['name'],
                 'sensor_kind' => $kind,
-                'placement' => $r['placement'] !== null ? (string)$r['placement'] : null,
+                'placement' => $r['placement'] !== null && $r['placement'] !== ''
+                    ? (string)$r['placement']
+                    : null,
                 'temp' => round($temp, 2),
                 'humidity' => $hum !== null ? round($hum, 1) : null,
-                'unit' => $r['unit'] !== null ? (string)$r['unit'] : '°C',
+                'unit' => $r['unit'] !== null && $r['unit'] !== '' ? (string)$r['unit'] : '°C',
                 'pos_x' => round($placed['x'], 3),
                 'pos_y' => round($placed['y'], 3),
                 'pos_z' => round($placed['z'], 3),
@@ -87,7 +66,128 @@ class EnvSensor3dData
                 'cabinet_name' => $placed['cabinet_name'],
             ];
         }
+
+        if ($out === [] && $skipped > 0) {
+            App::log(
+                'EnvSensor3dData: 0 placeable of ' . count($rows)
+                . ' sensors with values (need cabinet on floor plan with pos_x/pos_y)',
+                'info'
+            );
+        }
+
         return $out;
+    }
+
+    /**
+     * Diagnostic summary for UI.
+     *
+     * @return array{placeable:int,with_value:int,no_cabinet:int,cabinet_unplaced:int}
+     */
+    public static function diagnostics(?int $roomId = null): array
+    {
+        $rows = self::loadSensorRows($roomId);
+        $placeable = 0;
+        $noCabinet = 0;
+        $unplaced = 0;
+        foreach ($rows as $r) {
+            $p = self::resolvePosition($r);
+            if ($p !== null) {
+                $placeable++;
+                continue;
+            }
+            $cid = self::cabinetIdFromRow($r);
+            if ($cid < 1) {
+                $noCabinet++;
+            } else {
+                $unplaced++;
+            }
+        }
+        return [
+            'placeable' => $placeable,
+            'with_value' => count($rows),
+            'no_cabinet' => $noCabinet,
+            'cabinet_unplaced' => $unplaced,
+        ];
+    }
+
+    /**
+     * @return list<array<string,mixed>>
+     */
+    private static function loadSensorRows(?int $roomId): array
+    {
+        // Avoid fragile columns (last_humidity / front_facing) that break the whole query
+        $sql = "SELECT s.sensor_id, s.name, s.sensor_kind, s.placement, s.host_type,
+                       s.last_value, s.unit, s.last_seen_at,
+                       s.pos_x AS s_pos_x, s.pos_y AS s_pos_y, s.pos_z AS s_pos_z,
+                       s.cabinet_id AS s_cabinet_id, s.device_id,
+                       d.cabinet_id AS d_cabinet_id, d.position_u, d.u_height,
+                       c.cabinet_id AS c_cabinet_id, c.name AS cabinet_name,
+                       c.pos_x AS c_pos_x, c.pos_y AS c_pos_y, c.pos_z AS c_pos_z,
+                       c.rotation_deg, c.width_mm, c.depth_mm, c.u_height AS c_u_height,
+                       c.room_id AS c_room_id
+                FROM env_sensors s
+                LEFT JOIN devices d ON d.device_id = s.device_id AND d.is_active = 1
+                LEFT JOIN cabinets c ON c.cabinet_id = COALESCE(s.cabinet_id, d.cabinet_id)
+                     AND c.is_active = 1
+                WHERE s.is_active = 1
+                  AND s.last_value IS NOT NULL";
+        $params = [];
+        if ($roomId !== null && $roomId > 0) {
+            $sql .= ' AND (c.room_id = ? OR (c.room_id IS NULL AND s.cabinet_id IS NOT NULL))';
+            $params[] = $roomId;
+        }
+        $sql .= ' ORDER BY s.name';
+
+        try {
+            $rows = Database::fetchAll($sql, $params);
+        } catch (Throwable $e) {
+            App::log('EnvSensor3dData load: ' . $e->getMessage(), 'warning');
+            return [];
+        }
+
+        // Optional humidity column
+        try {
+            $hum = Database::fetchAll(
+                'SELECT sensor_id, last_humidity FROM env_sensors WHERE is_active = 1 AND last_humidity IS NOT NULL'
+            );
+            $byId = [];
+            foreach ($hum as $h) {
+                $byId[(int)$h['sensor_id']] = $h['last_humidity'];
+            }
+            foreach ($rows as &$r) {
+                $id = (int)$r['sensor_id'];
+                $r['last_humidity'] = $byId[$id] ?? null;
+            }
+            unset($r);
+        } catch (Throwable $e) {
+            foreach ($rows as &$r) {
+                $r['last_humidity'] = null;
+            }
+            unset($r);
+        }
+
+        return $rows;
+    }
+
+    private static function cabinetIdFromRow(array $r): int
+    {
+        foreach (['c_cabinet_id', 'cabinet_id', 's_cabinet_id', 'd_cabinet_id'] as $k) {
+            if (isset($r[$k]) && (int)$r[$k] > 0) {
+                return (int)$r[$k];
+            }
+        }
+        return 0;
+    }
+
+    private static function toFloat($v): ?float
+    {
+        if ($v === null || $v === '') {
+            return null;
+        }
+        if (is_numeric($v)) {
+            return (float)$v;
+        }
+        return null;
     }
 
     /**
@@ -97,65 +197,75 @@ class EnvSensor3dData
     public static function resolvePosition(array $r): ?array
     {
         // Explicit sensor coordinates win
-        if ($r['s_pos_x'] !== null && $r['s_pos_x'] !== ''
-            && $r['s_pos_y'] !== null && $r['s_pos_y'] !== ''
+        if (self::toFloat($r['s_pos_x'] ?? null) !== null
+            && self::toFloat($r['s_pos_y'] ?? null) !== null
         ) {
-            $z = ($r['s_pos_z'] !== null && $r['s_pos_z'] !== '')
-                ? (float)$r['s_pos_z']
-                : 1.0;
+            $z = self::toFloat($r['s_pos_z'] ?? null);
             return [
                 'x' => (float)$r['s_pos_x'],
                 'y' => (float)$r['s_pos_y'],
-                'z' => $z,
+                'z' => $z !== null ? $z : 1.0,
                 'derived' => false,
-                'cabinet_id' => isset($r['cabinet_id']) ? (int)$r['cabinet_id'] : null,
+                'cabinet_id' => self::cabinetIdFromRow($r) ?: null,
                 'cabinet_name' => isset($r['cabinet_name']) ? (string)$r['cabinet_name'] : null,
             ];
         }
 
-        $cid = (int)($r['cabinet_id'] ?? 0);
-        // Sensors hosted on the MM often still belong to a TH expansion rack — place by name
-        $cabRow = null;
-        if ($cid > 0 && $r['c_pos_x'] !== null && $r['c_pos_x'] !== ''
-            && $r['c_pos_y'] !== null && $r['c_pos_y'] !== ''
-        ) {
-            $cabRow = $r;
-        }
+        // Prefer TH expansion cabinet from sensor name when host is MM-only
         $name = (string)($r['name'] ?? '');
+        $cab = null;
         if (preg_match('/\bTH\s*0*(\d+)/i', $name, $tm)) {
-            $mod = (int)$tm[1];
-            $expCab = self::findExpansionCabinet($mod);
-            if ($expCab) {
-                $cabRow = array_merge($r, $expCab);
-                $cid = (int)$expCab['cabinet_id'];
+            $cab = self::findExpansionCabinet((int)$tm[1]);
+        }
+
+        if (!$cab) {
+            $cid = self::cabinetIdFromRow($r);
+            if ($cid < 1) {
+                return null;
+            }
+            // Use join row if placed; else load cabinet
+            if (self::toFloat($r['c_pos_x'] ?? null) !== null
+                && self::toFloat($r['c_pos_y'] ?? null) !== null
+            ) {
+                $cab = [
+                    'cabinet_id' => $cid,
+                    'cabinet_name' => $r['cabinet_name'] ?? null,
+                    'c_pos_x' => $r['c_pos_x'],
+                    'c_pos_y' => $r['c_pos_y'],
+                    'c_pos_z' => $r['c_pos_z'] ?? null,
+                    'rotation_deg' => $r['rotation_deg'] ?? 0,
+                    'width_mm' => $r['width_mm'] ?? 600,
+                    'depth_mm' => $r['depth_mm'] ?? 1200,
+                    'c_u_height' => $r['c_u_height'] ?? 42,
+                ];
+            } else {
+                $cab = self::loadCabinet($cid);
             }
         }
-        if ($cid < 1 || !$cabRow) {
-            return null;
-        }
-        // Cabinet must be on the floor plan
-        if ($cabRow['c_pos_x'] === null || $cabRow['c_pos_x'] === ''
-            || $cabRow['c_pos_y'] === null || $cabRow['c_pos_y'] === ''
+
+        if (!$cab || self::toFloat($cab['c_pos_x'] ?? null) === null
+            || self::toFloat($cab['c_pos_y'] ?? null) === null
         ) {
             return null;
         }
-        $r = $cabRow;
 
-        $w = max(0.4, ((float)($r['width_mm'] ?? 600)) / 1000.0);
-        $d = max(0.6, ((float)($r['depth_mm'] ?? 1200)) / 1000.0);
-        $uH = max(1, (int)($r['c_u_height'] ?? 42));
+        $w = max(0.4, ((float)($cab['width_mm'] ?? 600)) / 1000.0);
+        $d = max(0.6, ((float)($cab['depth_mm'] ?? 1200)) / 1000.0);
+        $uH = max(1, (int)($cab['c_u_height'] ?? $cab['u_height'] ?? 42));
         $rackH = $uH * 0.04445;
-        $cx = (float)$r['c_pos_x'] + $w / 2.0;
-        $cy = (float)$r['c_pos_y'] + $d / 2.0; // plan Y → Three.js Z
-        $rot = ((float)($r['rotation_deg'] ?? 0)) * M_PI / 180.0;
+        $cx = (float)$cab['c_pos_x'] + $w / 2.0;
+        $cy = (float)$cab['c_pos_y'] + $d / 2.0;
+        $rot = ((float)($cab['rotation_deg'] ?? 0)) * M_PI / 180.0;
 
-        // Front direction in plan (matches dcim-3d: local +Z is front face)
         $fx = sin($rot);
         $fz = cos($rot);
 
-        $placement = strtolower((string)($r['placement'] ?? 'equipment_intake'));
-        $offset = 0.45; // meters beyond cabinet face
-        $side = 1.0; // +1 front, -1 rear
+        $placement = strtolower(trim((string)($r['placement'] ?? 'equipment_intake')));
+        // Normalize UI labels that might use spaces
+        $placement = str_replace([' ', '-'], '_', $placement);
+
+        $offset = 0.45;
+        $side = 1.0;
 
         switch ($placement) {
             case 'exhaust':
@@ -183,12 +293,10 @@ class EnvSensor3dData
                 break;
         }
 
-        // Face is at half-depth; then step into aisle
         $dist = ($d / 2.0) + $offset;
         $x = $cx + $fx * $side * $dist;
         $y = $cy + $fz * $side * $dist;
 
-        // Height: mid of device U if known, else mid-rack; underfloor near floor
         $z = $rackH * 0.45;
         if ($placement === 'underfloor') {
             $z = 0.25;
@@ -196,24 +304,46 @@ class EnvSensor3dData
             $posU = (int)$r['position_u'];
             $uHt = max(1, (int)($r['u_height'] ?? 1));
             $midU = $posU + ($uHt - 1) / 2.0;
-            // U1 near floor: z grows with U from bottom
             $z = max(0.2, min($rackH - 0.1, ($midU - 0.5) * 0.04445));
         }
+
+        $cid = (int)($cab['cabinet_id'] ?? 0);
 
         return [
             'x' => $x,
             'y' => $y,
             'z' => $z,
             'derived' => true,
-            'cabinet_id' => $cid,
-            'cabinet_name' => isset($r['cabinet_name']) ? (string)$r['cabinet_name'] : null,
+            'cabinet_id' => $cid > 0 ? $cid : null,
+            'cabinet_name' => isset($cab['cabinet_name']) ? (string)$cab['cabinet_name'] : null,
         ];
+    }
+
+    /** @return array<string,mixed>|null */
+    private static function loadCabinet(int $cabinetId): ?array
+    {
+        if ($cabinetId < 1) {
+            return null;
+        }
+        try {
+            $row = Database::fetchOne(
+                'SELECT cabinet_id, name AS cabinet_name,
+                        pos_x AS c_pos_x, pos_y AS c_pos_y, pos_z AS c_pos_z,
+                        rotation_deg, width_mm, depth_mm, u_height AS c_u_height, room_id AS c_room_id
+                 FROM cabinets
+                 WHERE cabinet_id = ? AND is_active = 1',
+                [$cabinetId]
+            );
+            return $row ?: null;
+        } catch (Throwable $e) {
+            return null;
+        }
     }
 
     /**
      * Find floor-placed cabinet for TH expansion module N (env_module device).
      *
-     * @return array<string,mixed>|null keys cabinet_id, cabinet_name, c_pos_*, width_mm, …
+     * @return array<string,mixed>|null
      */
     private static function findExpansionCabinet(int $moduleNum): ?array
     {
@@ -224,15 +354,7 @@ class EnvSensor3dData
         if (array_key_exists($moduleNum, $cache)) {
             return $cache[$moduleNum];
         }
-        $patterns = [
-            '%TH' . sprintf('%02d', $moduleNum) . '%',
-            '%TH' . $moduleNum . '%',
-            '%[' . sprintf('%02d', $moduleNum) . ']%',
-            '%[0' . $moduleNum . ']%',
-            '%EXP%' . $moduleNum . '%',
-        ];
         try {
-            // Prefer env_module devices with TH in label
             $row = Database::fetchOne(
                 "SELECT TOP 1 c.cabinet_id, c.name AS cabinet_name,
                         c.pos_x AS c_pos_x, c.pos_y AS c_pos_y, c.pos_z AS c_pos_z,
@@ -250,14 +372,13 @@ class EnvSensor3dData
                    )
                  ORDER BY CASE WHEN d.device_type = 'env_module' THEN 0 ELSE 1 END, d.label",
                 [
-                    $patterns[0],
-                    $patterns[1],
-                    $patterns[2],
-                    $patterns[0],
+                    '%TH' . sprintf('%02d', $moduleNum) . '%',
+                    '%TH' . $moduleNum . '%',
+                    '%[' . sprintf('%02d', $moduleNum) . ']%',
+                    '%TH' . sprintf('%02d', $moduleNum) . '%',
                 ]
             );
             if (!$row) {
-                // Fallback: Nth env_module on floor by name sort
                 $mods = Database::fetchAll(
                     "SELECT c.cabinet_id, c.name AS cabinet_name,
                             c.pos_x AS c_pos_x, c.pos_y AS c_pos_y, c.pos_z AS c_pos_z,
@@ -268,8 +389,7 @@ class EnvSensor3dData
                        AND c.pos_x IS NOT NULL AND c.pos_y IS NOT NULL
                      ORDER BY d.label"
                 );
-                $idx = $moduleNum - 1;
-                $row = $mods[$idx] ?? null;
+                $row = $mods[$moduleNum - 1] ?? null;
             }
         } catch (Throwable $e) {
             $row = null;

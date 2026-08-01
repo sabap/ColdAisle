@@ -643,6 +643,7 @@
       return c;
     }
 
+    var heatCount = 0;
     envSensors.forEach(function (s) {
       var temp = Number(s.temp);
       if (isNaN(temp)) return;
@@ -652,6 +653,7 @@
       var y = Number(s.pos_z);
       if (isNaN(x) || isNaN(z)) return;
       if (isNaN(y)) y = 1.0;
+      heatCount++;
 
       var color = tempToColor(temp);
       // Soft sphere — slightly flattened so floor stays readable
@@ -712,6 +714,23 @@
       lab.userData = { envSensor: s, kind: 'label' };
       heatGroup.add(lab);
     });
+
+    if (heatCount > 0 && statusEl) {
+      var prev = statusEl.textContent || '';
+      if (prev.indexOf('Ready') >= 0 || prev === '' || prev.indexOf('Building') >= 0) {
+        // brief note after load
+        setTimeout(function () {
+          if (!statusEl || cancelled) return;
+          statusEl.style.display = '';
+          statusEl.textContent = heatCount + ' heat sphere(s)';
+          setTimeout(function () {
+            if (statusEl && statusEl.parentNode && statusEl.textContent.indexOf('heat') >= 0) {
+              statusEl.style.display = 'none';
+            }
+          }, 2200);
+        }, 1200);
+      }
+    }
 
     if (!cabinets.length && !floorPdus.length) {
       var c2 = document.createElement('canvas');
