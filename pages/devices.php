@@ -1186,15 +1186,29 @@ if ($action === 'new' || $id) {
                     </div>
                 </div>
 
-                <?php if ($envSensors || $isEnvHostType): ?>
+                <?php
+                $canEditEnv = AuthManager::canEditCooling($user);
+                $canViewEnv = AuthManager::can($user, 'view_cooling');
+                if ($envSensors || $isEnvHostType):
+                    require_once dirname(__DIR__) . '/includes/cooling_helpers.php';
+                    $envKinds = env_sensor_kinds();
+                    $envPlacements = env_sensor_placements();
+                ?>
                 <div class="card view-pane" id="deviceEnvCard">
                     <div class="card-header flex-between">
                         <h2>Environment</h2>
-                        <div class="flex gap-1">
-                            <?php if (AuthManager::can($user, 'view_cooling')): ?>
+                        <div class="flex gap-1" style="flex-wrap:wrap">
+                            <?php if ($canEditEnv): ?>
+                            <button type="button" class="btn btn-primary btn-sm"
+                                    data-ca-modal-open="addEnvSensorDevice"
+                                    id="btnAddEnvSensorDevice">
+                                Add sensor
+                            </button>
+                            <?php endif; ?>
+                            <?php if ($canViewEnv): ?>
                             <a class="btn btn-secondary btn-sm"
-                               href="<?= App::e(App::url('pages/env_sensors.php?device_id=' . (int)$device['device_id'] . '&host_type=device')) ?>">
-                                <?= $envSensors ? 'Manage sensors' : 'Add sensors' ?>
+                               href="<?= App::e(App::url('pages/env_sensors.php?device_id=' . (int)$device['device_id'])) ?>">
+                                All sensors
                             </a>
                             <a class="btn btn-ghost btn-sm" href="<?= App::e(App::url('pages/cooling.php')) ?>">Cooling dashboard</a>
                             <?php endif; ?>
@@ -1204,12 +1218,13 @@ if ($action === 'new' || $id) {
                         <?php if (!$envSensors): ?>
                             <p class="text-muted mb-0" style="font-size:.88rem">
                                 No environmental points linked to this device yet.
-                                <?php if ($isEnvHostType): ?>
-                                    This is an environmental host — add probes under Cooling → Env sensors
-                                    (host type <strong>Device</strong>), then Discover OIDs on the SNMP card.
+                                <?php if ($canEditEnv): ?>
+                                    Use <strong>Add sensor</strong> to create probes here (popup).
+                                    SNMP OIDs are optional — the site template on this device feeds values later.
+                                <?php elseif ($isEnvHostType): ?>
+                                    This is an environmental host — ask an editor to add probes, or open Cooling → Env sensors.
                                 <?php else: ?>
-                                    Link sensors with host type <strong>Device</strong> to attach AP9340 / probe ports here.
-                                    You can also change the device type to <strong>Environmental monitor</strong> if this is an env manager.
+                                    Link sensors with host type <strong>Device</strong> to attach probes here.
                                 <?php endif; ?>
                             </p>
                         <?php else: ?>
@@ -1223,11 +1238,7 @@ if ($action === 'new' || $id) {
                                 </tr>
                                 </thead>
                                 <tbody>
-                                <?php
-                                require_once dirname(__DIR__) . '/includes/cooling_helpers.php';
-                                $envKinds = env_sensor_kinds();
-                                $envPlacements = env_sensor_placements();
-                                foreach ($envSensors as $es):
+                                <?php foreach ($envSensors as $es):
                                     $ev = $es['last_value'] !== null && $es['last_value'] !== '' ? (float)$es['last_value'] : null;
                                     $est = env_sensor_threshold_status($ev, $es);
                                     $ebadge = match ($est) {
@@ -1266,6 +1277,53 @@ if ($action === 'new' || $id) {
                         <?php endif; ?>
                     </div>
                 </div>
+                <?php if ($canEditEnv):
+                    // Dropdown data for shared add-sensor modal
+                    $kinds = env_sensor_kinds();
+                    $hosts = env_sensor_hosts();
+                    $placements = env_sensor_placements();
+                    $rooms = [];
+                    $coolingUnits = [];
+                    $pdus = [];
+                    $cabinets = [];
+                    $devices = [];
+                    try {
+                        $rooms = Database::fetchAll(
+                            'SELECT r.room_id, r.name, dc.name AS dc_name
+                             FROM rooms r
+                             INNER JOIN datacenters dc ON dc.datacenter_id = r.datacenter_id
+                             ORDER BY dc.name, r.name'
+                        );
+                        $coolingUnits = Database::fetchAll(
+                            'SELECT cooling_unit_id, name FROM cooling_units WHERE is_active = 1 ORDER BY name'
+                        );
+                        $pdus = Database::fetchAll(
+                            'SELECT pdu_id, name FROM pdus WHERE is_active = 1 ORDER BY name'
+                        );
+                        $cabinets = Database::fetchAll(
+                            'SELECT cabinet_id, name FROM cabinets WHERE is_active = 1 ORDER BY name'
+                        );
+                        $devices = Database::fetchAll(
+                            "SELECT device_id, label, device_type, cabinet_id, position_u, manufacturer, model, mgmt_ip, primary_ip
+                             FROM devices WHERE is_active = 1
+                             ORDER BY
+                               CASE WHEN device_type IN ('env_monitor','env_module') THEN 0 ELSE 1 END,
+                               label"
+                        );
+                    } catch (Throwable $e) {
+                        // partial ok
+                    }
+                    $edit = [
+                        'host_type' => 'device',
+                        'device_id' => (int)$device['device_id'],
+                        'cabinet_id' => !empty($device['cabinet_id']) ? (int)$device['cabinet_id'] : null,
+                        'sensor_kind' => 'temp_humidity',
+                        'unit' => '°C / %RH',
+                    ];
+                    $modalId = 'addEnvSensorDevice';
+                    $autoOpen = false;
+                    require __DIR__ . '/_env_sensor_add_modal.php';
+                endif; ?>
                 <?php endif; ?>
 
                 <?php if (!empty($device['snmp_version'])):

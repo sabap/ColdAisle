@@ -10,8 +10,13 @@ $formAction = $formAction ?? 'add_sensor';
 $isUpdate = $formAction === 'update_sensor';
 $hostType = (string)($edit['host_type'] ?? 'standalone');
 $devices = $devices ?? [];
+// Unique id when modal is embedded on device pages
+$formId = $envFormId ?? ($formId ?? 'envSensorForm');
+// When embedded off env_sensors.php, POST must still hit that page
+$formActionUrl = $envFormPostUrl ?? null;
 ?>
-<form method="post" class="form-grid form-grid-3" id="envSensorForm">
+<form method="post" class="form-grid form-grid-3" id="<?= App::e($formId) ?>"
+    <?php if ($formActionUrl): ?>action="<?= App::e($formActionUrl) ?>"<?php endif; ?>>
     <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
     <input type="hidden" name="action" value="<?= App::e($formAction) ?>">
     <?php if ($isUpdate): ?>
@@ -22,7 +27,7 @@ $devices = $devices ?? [];
         <input class="form-control" name="name" required value="<?= App::e($edit['name'] ?? '') ?>"
                placeholder="e.g. Cold aisle row A / AP9340 probe 1 temp"></div>
     <div class="form-row"><label>Kind</label>
-        <select class="form-control" name="sensor_kind" id="env_sensor_kind">
+        <select class="form-control" name="sensor_kind">
             <?php foreach ($kinds as $val => $lab): ?>
                 <option value="<?= App::e($val) ?>" <?= ($edit['sensor_kind'] ?? 'temperature') === $val ? 'selected' : '' ?>>
                     <?= App::e($lab) ?>
@@ -34,11 +39,11 @@ $devices = $devices ?? [];
         </p>
     </div>
     <div class="form-row"><label>Unit</label>
-        <input class="form-control" name="unit" id="env_sensor_unit"
+        <input class="form-control" name="unit"
                value="<?= App::e($edit['unit'] ?? '°C') ?>"
                placeholder="°C, %RH, °C / %RH, Pa…"></div>
     <div class="form-row"><label>Host type</label>
-        <select class="form-control" name="host_type" id="env_host_type">
+        <select class="form-control" name="host_type">
             <?php foreach ($hosts as $val => $lab): ?>
                 <option value="<?= App::e($val) ?>" <?= $hostType === $val ? 'selected' : '' ?>>
                     <?= App::e($lab) ?>
@@ -50,7 +55,7 @@ $devices = $devices ?? [];
         </p>
     </div>
     <div class="form-row env-host-field" data-hosts="device"><label>Host device</label>
-        <select class="form-control" name="device_id" id="env_device_id">
+        <select class="form-control" name="device_id">
             <option value="">— Select device —</option>
             <?php foreach ($devices as $d):
                 $dlab = $d['label'];
@@ -98,7 +103,7 @@ $devices = $devices ?? [];
         </select>
     </div>
     <div class="form-row env-host-field" data-hosts="cabinet device"><label>Cabinet (location)</label>
-        <select class="form-control" name="cabinet_id" id="env_cabinet_id">
+        <select class="form-control" name="cabinet_id">
             <option value="">—</option>
             <?php foreach ($cabinets as $c): ?>
                 <option value="<?= (int)$c['cabinet_id'] ?>"
@@ -183,14 +188,14 @@ $devices = $devices ?? [];
 </form>
 <script>
 (function () {
-  var form = document.getElementById('envSensorForm');
+  var form = document.getElementById(<?= json_encode($formId, JSON_UNESCAPED_SLASHES) ?>);
   if (!form) return;
-  // When two forms exist (edit page + modal), scope to this form's elements
-  var sel = form.querySelector('#env_host_type') || document.getElementById('env_host_type');
-  var dev = form.querySelector('#env_device_id') || document.getElementById('env_device_id');
-  var cab = form.querySelector('#env_cabinet_id') || document.getElementById('env_cabinet_id');
-  var kind = form.querySelector('#env_sensor_kind');
-  var unit = form.querySelector('#env_sensor_unit');
+  // Scope selectors to this form (device page + list page can both embed it)
+  var sel = form.querySelector('[name="host_type"]');
+  var dev = form.querySelector('[name="device_id"]');
+  var cab = form.querySelector('[name="cabinet_id"]');
+  var kind = form.querySelector('[name="sensor_kind"]');
+  var unit = form.querySelector('[name="unit"]');
   var unitDefaults = {
     temperature: '°C',
     humidity: '%RH',
@@ -222,7 +227,6 @@ $devices = $devices ?? [];
     if (!kind || !unit) return;
     var def = unitDefaults[kind.value];
     if (def === undefined) return;
-    // Only auto-fill when empty or still a known default (don't clobber custom units)
     var cur = (unit.value || '').trim();
     var known = Object.keys(unitDefaults).map(function (k) { return unitDefaults[k]; });
     if (cur === '' || known.indexOf(cur) >= 0) {
