@@ -213,11 +213,11 @@ layout_header('Dashboard', $user, 'dashboard');
                 <?php if (count($envSensors3d) > 0): ?>
                     <?= count($envSensors3d) ?> sensor(s) on plan · cabinet + placement · not CFD
                 <?php elseif ((int)($envHeatDiag['with_value'] ?? 0) > 0 && (int)($envHeatDiag['cabinet_unplaced'] ?? 0) > 0): ?>
-                    <?= (int)$envHeatDiag['with_value'] ?> sensor(s) have values, but
-                    <strong><?= (int)$envHeatDiag['cabinet_unplaced'] ?></strong> need a floor-placed rack
-                    (TH sensors use expansion-module cabinets — place those racks on the Floor Plan).
+                    <?= (int)$envHeatDiag['cabinet_unplaced'] ?> sensor(s) use a cabinet that is
+                    <strong>not on the floor plan</strong> — place that rack under Floor Plan
+                    (spheres use each sensor’s Cabinet field, not the MM/TH module rack).
                 <?php elseif ((int)($envHeatDiag['with_value'] ?? 0) > 0 && (int)($envHeatDiag['no_cabinet'] ?? 0) > 0): ?>
-                    Sensors need a <strong>cabinet</strong> (or host device in a cabinet) to place spheres.
+                    Set <strong>Cabinet</strong> on each sensor (the IT rack where the probe sits).
                 <?php elseif ((int)($envHeatDiag['with_value'] ?? 0) < 1): ?>
                     No sensor readings yet — Poll the env manager first.
                 <?php else: ?>
