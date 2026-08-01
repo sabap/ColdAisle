@@ -437,6 +437,61 @@ function env_sensor_fields_from_post(array $post): array
 }
 
 /**
+ * Display label for a sensor's host (device name, PDU name, …).
+ * Expects optional join columns: device_label, cooling_unit_name, pdu_name, cabinet_name, room_name.
+ *
+ * @param array<string,mixed> $sensor
+ * @param array<string,string> $hostTypes from env_sensor_hosts()
+ */
+function env_sensor_host_display(array $sensor, array $hostTypes = []): string
+{
+    if ($hostTypes === []) {
+        $hostTypes = env_sensor_hosts();
+    }
+    $type = (string)($sensor['host_type'] ?? 'standalone');
+    $typeLabel = $hostTypes[$type] ?? $type;
+
+    return match ($type) {
+        'device' => trim((string)($sensor['device_label'] ?? '')) !== ''
+            ? (string)$sensor['device_label']
+            : ($typeLabel . (!empty($sensor['device_id']) ? ' #' . (int)$sensor['device_id'] : '')),
+        'cooling_unit' => trim((string)($sensor['cooling_unit_name'] ?? '')) !== ''
+            ? (string)$sensor['cooling_unit_name']
+            : $typeLabel,
+        'pdu' => trim((string)($sensor['pdu_name'] ?? '')) !== ''
+            ? (string)$sensor['pdu_name']
+            : $typeLabel,
+        'cabinet' => trim((string)($sensor['cabinet_name'] ?? '')) !== ''
+            ? (string)$sensor['cabinet_name']
+            : $typeLabel,
+        'room' => trim((string)($sensor['room_name'] ?? '')) !== ''
+            ? (string)$sensor['room_name']
+            : $typeLabel,
+        default => $typeLabel,
+    };
+}
+
+/**
+ * Short kind label for dense tables.
+ */
+function env_sensor_kind_short(string $kind, array $kinds = []): string
+{
+    if ($kinds === []) {
+        $kinds = env_sensor_kinds();
+    }
+    return match ($kind) {
+        'temp_humidity' => 'Temp + RH',
+        'temperature' => 'Temp',
+        'humidity' => 'Humidity',
+        'dew_point' => 'Dew point',
+        'differential_pressure' => 'ΔP',
+        'airflow' => 'Airflow',
+        'leak' => 'Leak',
+        default => $kinds[$kind] ?? $kind,
+    };
+}
+
+/**
  * Human status for a sensor last value vs thresholds.
  *
  * @return 'ok'|'warn'|'crit'|'unknown'
