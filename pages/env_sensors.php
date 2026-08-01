@@ -323,7 +323,8 @@ layout_header('Environmental sensors', $user, 'env_sensors');
         </p>
     </div>
     <?php if ($canEdit): ?>
-        <button type="button" class="btn btn-primary" data-modal-open="addEnvSensor">Add sensor</button>
+        <button type="button" class="btn btn-primary" data-ca-modal-open="addEnvSensor"
+                id="btnAddEnvSensor">Add sensor</button>
     <?php endif; ?>
 </div>
 
@@ -386,52 +387,25 @@ layout_header('Environmental sensors', $user, 'env_sensors');
     </div>
 </div>
 
-<?php if ($canEdit): ?>
-<div class="modal-overlay" id="addEnvSensor" hidden>
-    <div class="modal-panel modal-panel-wide" role="dialog" aria-modal="true" aria-labelledby="addEnvSensorTitle">
-        <div class="modal-header">
-            <h2 id="addEnvSensorTitle">Add environmental sensor</h2>
-            <button type="button" class="modal-close" data-modal-close aria-label="Close">&times;</button>
-        </div>
-        <div class="modal-body">
-            <?php
-            $edit = [];
-            if ($filterCu > 0) {
-                $edit = ['host_type' => 'cooling_unit', 'cooling_unit_id' => $filterCu];
-            } elseif ($filterDevice > 0) {
-                $edit = ['host_type' => $prefillHost !== '' ? $prefillHost : 'device', 'device_id' => $filterDevice];
-                foreach ($devices as $dv) {
-                    if ((int)$dv['device_id'] === $filterDevice) {
-                        if (!empty($dv['cabinet_id'])) {
-                            $edit['cabinet_id'] = (int)$dv['cabinet_id'];
-                        }
-                        break;
-                    }
+<?php if ($canEdit):
+    $edit = [];
+    if ($filterCu > 0) {
+        $edit = ['host_type' => 'cooling_unit', 'cooling_unit_id' => $filterCu];
+    } elseif ($filterDevice > 0) {
+        $edit = ['host_type' => $prefillHost !== '' ? $prefillHost : 'device', 'device_id' => $filterDevice];
+        foreach ($devices as $dv) {
+            if ((int)$dv['device_id'] === $filterDevice) {
+                if (!empty($dv['cabinet_id'])) {
+                    $edit['cabinet_id'] = (int)$dv['cabinet_id'];
                 }
+                break;
             }
-            $formAction = 'add_sensor';
-            require __DIR__ . '/_env_sensor_form.php';
-            ?>
-        </div>
-    </div>
-</div>
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-  // Open add modal when deep-linked from a device
-  if (window.location.search.indexOf('device_id=') >= 0 && window.ColdAisle && ColdAisle.openModal) {
-    ColdAisle.openModal('addEnvSensor');
-  }
-  // Click outside panel closes
-  var overlay = document.getElementById('addEnvSensor');
-  if (overlay) {
-    overlay.addEventListener('click', function (e) {
-      if (e.target === overlay && ColdAisle.closeModal) {
-        ColdAisle.closeModal(overlay);
-      }
-    });
-  }
-});
-</script>
-<?php endif; ?>
+        }
+    }
+    $modalId = 'addEnvSensor';
+    // Prefer in-page modal on device pages; only auto-open if ?open=1 (legacy deep links)
+    $autoOpen = isset($_GET['open']) && (string)$_GET['open'] === '1';
+    require __DIR__ . '/_env_sensor_add_modal.php';
+endif; ?>
 
 <?php layout_footer(); ?>

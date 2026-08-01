@@ -1363,7 +1363,15 @@ body.modal-open { overflow: hidden; }
   padding: 2rem 1rem;
   overflow-y: auto;
 }
-.modal-overlay[hidden] { display: none !important; }
+.modal-overlay[hidden],
+.modal-overlay[hidden=""],
+.modal-overlay[style*="display: none"] {
+  display: none !important;
+}
+/* When open script sets display:flex + removes hidden */
+.modal-overlay:not([hidden]) {
+  display: flex;
+}
 .modal-panel {
   width: min(640px, 100%);
   background: var(--surface);

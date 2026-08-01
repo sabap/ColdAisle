@@ -97,6 +97,7 @@
       if (!el) return;
       el.hidden = false;
       el.removeAttribute('hidden');
+      el.style.display = 'flex';
       document.body.classList.add('modal-open');
     },
     closeModal: function (el) {
@@ -107,6 +108,7 @@
       if (!el) return;
       el.hidden = true;
       el.setAttribute('hidden', '');
+      el.style.display = 'none';
       // Keep body lock if another modal is still open
       var anyOpen = document.querySelector(
         '.modal-overlay:not([hidden]), .app-modal:not([hidden]), .modal:not([hidden])'
@@ -117,22 +119,32 @@
     },
     initModals: function (root) {
       root = root || document;
-      root.querySelectorAll('[data-modal-open]').forEach(function (btn) {
+      root.querySelectorAll('[data-modal-open], [data-ca-modal-open]').forEach(function (btn) {
         if (btn._caModalBound) return;
         btn._caModalBound = true;
         btn.addEventListener('click', function (e) {
           e.preventDefault();
-          var id = btn.getAttribute('data-modal-open');
+          var id = btn.getAttribute('data-ca-modal-open') || btn.getAttribute('data-modal-open');
           if (id) {
+            // Prefer page-local openers (self-contained modals)
+            if (typeof window['caOpen_' + id] === 'function') {
+              window['caOpen_' + id]();
+              return;
+            }
             api.openModal(id);
           }
         });
       });
-      root.querySelectorAll('[data-modal-close]').forEach(function (btn) {
+      root.querySelectorAll('[data-modal-close], [data-ca-modal-close]').forEach(function (btn) {
         if (btn._caModalCloseBound) return;
         btn._caModalCloseBound = true;
         btn.addEventListener('click', function (e) {
           e.preventDefault();
+          var mid = btn.getAttribute('data-ca-modal-close');
+          if (mid && typeof window['caClose_' + mid] === 'function') {
+            window['caClose_' + mid]();
+            return;
+          }
           var modal = btn.closest('.modal-overlay, .app-modal, .modal');
           api.closeModal(modal);
         });
