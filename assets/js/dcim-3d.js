@@ -643,11 +643,37 @@
       return c;
     }
 
+    /** Soft radial alpha texture (center opaque → edge fully transparent). */
+    function softGlowTexture(hexColor) {
+      var c = document.createElement('canvas');
+      c.width = 256;
+      c.height = 256;
+      var ctx = c.getContext('2d');
+      var col = new THREE.Color(hexColor);
+      var r0 = Math.round(col.r * 255);
+      var g0 = Math.round(col.g * 255);
+      var b0 = Math.round(col.b * 255);
+      var g = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+      // Extremely soft falloff: solid-ish core, long feathered edge
+      g.addColorStop(0.0, 'rgba(' + r0 + ',' + g0 + ',' + b0 + ',0.55)');
+      g.addColorStop(0.15, 'rgba(' + r0 + ',' + g0 + ',' + b0 + ',0.35)');
+      g.addColorStop(0.4, 'rgba(' + r0 + ',' + g0 + ',' + b0 + ',0.14)');
+      g.addColorStop(0.7, 'rgba(' + r0 + ',' + g0 + ',' + b0 + ',0.04)');
+      g.addColorStop(1.0, 'rgba(' + r0 + ',' + g0 + ',' + b0 + ',0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 256, 256);
+      var tex = new THREE.CanvasTexture(c);
+      tex.needsUpdate = true;
+      return tex;
+    }
+
     var heatCount = 0;
     envSensors.forEach(function (s) {
       var temp = Number(s.temp);
       if (isNaN(temp)) return;
-      var r = Number(s.radius_m) || 1.83; // ~6 ft
+      // Default ~3 ft (half of original 6 ft); server may still send radius_m
+      var r = Number(s.radius_m);
+      if (isNaN(r) || r <= 0) r = 0.915;
       var x = Number(s.pos_x);
       var z = Number(s.pos_y); // plan Y → scene Z
       var y = Number(s.pos_z);
@@ -656,37 +682,52 @@
       heatCount++;
 
       var color = tempToColor(temp);
-      // Soft sphere — slightly flattened so floor stays readable
-      var geo = new THREE.SphereGeometry(r, 24, 16);
-      var mat = new THREE.MeshBasicMaterial({
-        color: color,
-        transparent: true,
-        opacity: 0.16,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-      });
-      var mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(x, Math.max(0.35, y), z);
-      mesh.scale.set(1, 0.72, 1); // elliptical influence volume
-      mesh.userData = { envSensor: s, kind: 'heat' };
-      mesh.renderOrder = 1;
-      heatGroup.add(mesh);
+      var cy = Math.max(0.35, y);
+      var glowTex = softGlowTexture(color.getHex());
 
-      // Small core marker
+      // Soft volumetric feel: nested spheres with decreasing size/opacity + feathered map
+      // Outer shell is almost invisible at edge (gradient alpha → 0)
+      var shells = [
+        { scale: 1.0, opacity: 0.55 },
+        { scale: 0.72, opacity: 0.4 },
+        { scale: 0.42, opacity: 0.35 },
+      ];
+      shells.forEach(function (shell, si) {
+        var geo = new THREE.SphereGeometry(r * shell.scale, 28, 18);
+        var mat = new THREE.MeshBasicMaterial({
+          map: glowTex,
+          color: 0xffffff,
+          transparent: true,
+          opacity: shell.opacity,
+          depthWrite: false,
+          depthTest: true,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        });
+        var mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(x, cy, z);
+        mesh.scale.set(1, 0.7, 1); // slightly flattened
+        mesh.userData = { envSensor: s, kind: 'heat', shell: si };
+        mesh.renderOrder = 2 + si;
+        heatGroup.add(mesh);
+      });
+
+      // Small solid core for location cue
       var core = new THREE.Mesh(
-        new THREE.SphereGeometry(0.08, 12, 10),
+        new THREE.SphereGeometry(0.06, 12, 10),
         new THREE.MeshBasicMaterial({
           color: color,
           transparent: true,
-          opacity: 0.85,
+          opacity: 0.9,
           depthWrite: false,
         })
       );
-      core.position.copy(mesh.position);
+      core.position.set(x, cy, z);
       core.userData = { envSensor: s, kind: 'core' };
+      core.renderOrder = 5;
       heatGroup.add(core);
 
-      // Temp label (billboard-ish, flat on XZ then tilt toward camera is hard without update — flat top label)
+      // Temp label
       var lc = document.createElement('canvas');
       lc.width = 256;
       lc.height = 64;
@@ -706,12 +747,13 @@
       lctx.fillText(String(s.name || '').slice(0, 22), 128, 50);
       var ltex = new THREE.CanvasTexture(lc);
       var lab = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.55, 0.14),
+        new THREE.PlaneGeometry(0.5, 0.13),
         new THREE.MeshBasicMaterial({ map: ltex, transparent: true, depthWrite: false })
       );
-      lab.position.set(x, mesh.position.y + 0.22, z);
+      lab.position.set(x, cy + 0.18, z);
       lab.rotation.x = -Math.PI / 2;
       lab.userData = { envSensor: s, kind: 'label' };
+      lab.renderOrder = 6;
       heatGroup.add(lab);
     });
 

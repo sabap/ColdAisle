@@ -7,8 +7,8 @@ declare(strict_types=1);
 
 class EnvSensor3dData
 {
-    /** Default heat influence radius (meters) — ~6 ft */
-    public const DEFAULT_RADIUS_M = 1.83;
+    /** Default heat influence radius (meters) — ~3 ft (half of original 6 ft) */
+    public const DEFAULT_RADIUS_M = 0.915;
 
     /**
      * Sensors with last temperature that can be placed in a room.

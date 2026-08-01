@@ -84,7 +84,7 @@ try {
     $pdus3d = [];
 }
 
-// Env heat spheres (cabinet + placement → soft 6 ft influence)
+// Env heat spheres (cabinet + placement → soft ~3 ft influence)
 $envSensors3d = [];
 $envHeatDiag = ['placeable' => 0, 'with_value' => 0, 'no_cabinet' => 0, 'cabinet_unplaced' => 0];
 try {
@@ -207,7 +207,7 @@ layout_header('Dashboard', $user, 'dashboard');
             <label class="text-muted" style="font-size:.85rem;display:flex;align-items:center;gap:.4rem;cursor:pointer;margin:0">
                 <input type="checkbox" id="dash3dHeatToggle" checked
                     <?= count($envSensors3d) < 1 ? 'disabled' : '' ?>>
-                Temp heat spheres (~6 ft)
+                Temp heat spheres (~3 ft)
             </label>
             <span class="text-muted" style="font-size:.78rem" id="dash3dHeatHint">
                 <?php if (count($envSensors3d) > 0): ?>
@@ -307,7 +307,7 @@ layout_header('Dashboard', $user, 'dashboard');
     if (!el) return;
     el.classList.add('dash-3d-loading');
     var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=7') ?>;
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=8') ?>;
     loadScript(threeUrl)
       .then(function () { return loadScript(app3d); })
       .then(function () {
