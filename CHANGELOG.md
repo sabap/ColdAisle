@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.3.13] - 2026-08-01
+
+### Bug fixes
+
+- **Discover bare Internal Server Error (IIS):** stop walking the full EMS tree (`318.1.1.10`); leaf-GET first with short timeouts and a wall-clock budget; probe EMS OIDs before PDU OIDs so AP9340 does not spend 20s timing out power leaves; skip walks when live temp/humidity already found; v1 uses `snmpget`; step log in `storage/logs/snmp_discover_last.txt`; UI points at that log for non-JSON 500s.
+
+---
 ## [0.3.12] - 2026-08-01
 
 ### Enhancements
