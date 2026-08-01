@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.22] - 2026-08-01
+
+### Bug fixes
+
 - **EMS expansion 0°C readings:** use PowerNet **L#/R#** probe serials (local MM vs remote TH), skip dead/no-comms slots, treat temps as whole degrees (not tenths), re-map sticky wrong indexes, show slot snapshot + match list on Poll.
 
 ---
-
 ## [0.3.21] - 2026-08-01
 
 ### Bug fixes
