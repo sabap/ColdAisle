@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **EMS / AP9340 Discover:** filter out probe *config/threshold* OIDs; walk live status tables; propose `temperature.N` / `humidity.N` map keys from status readings.
+
 ### Bug fixes
 
 ---
