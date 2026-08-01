@@ -233,15 +233,213 @@ class EnvSensorPoll
     }
 
     /**
-     * Universal I/O sensor status table — TH expansion modules on AP9340-class gear.
-     * OID: 1.3.6.1.4.1.318.1.1.25.1.2.1 (INDEX portID.sensorID)
-     *   .3 name  .5 °F  .6 °C  .7 humidity  .10 comm
+     * Modular Environmental Manager (MEM) status table — AP9340 MM + TH expansion modules.
+     * OID: 1.3.6.1.4.1.318.1.1.10.4.2.3.1  INDEX { moduleNumber, sensorNumber }
+     *   .3 name  .4 location  .5 temperature (whole °)  .6 humidity
+     *   .7 comm  .9 temperatureHighPrec (tenths of °)
+     *
+     * Module/sensor map to UI labels: MM:N → module 0 (or 1) sensor N; TH02:3 → module 2 sensor 3.
      *
      * @param array<string,mixed> $session
      * @param array<string,array{numeric:?float,raw?:mixed,oid?:string}> $metrics
      * @param array<int,string> $probeNames
      * @param array<int,array<string,mixed>> $probeMeta
-     * @return array{metrics:array,probe_names:array,probe_meta:array,uio_count:int}
+     * @return array{metrics:array,probe_names:array,probe_meta:array,mem_count:int,uio_count:int}
+     */
+    public static function expandMemSensors(
+        array $session,
+        array $metrics,
+        array $probeNames,
+        array $probeMeta
+    ): array {
+        $entry = '1.3.6.1.4.1.318.1.1.10.4.2.3.1';
+        // Prefer high-precision (tenths), fall back to whole degrees
+        $tempHi = SnmpPoller::sessionWalk($session, $entry . '.9');
+        $tempLo = SnmpPoller::sessionWalk($session, $entry . '.5');
+        $humWalk = SnmpPoller::sessionWalk($session, $entry . '.6');
+        $nameWalk = SnmpPoller::sessionWalk($session, $entry . '.3');
+        $locWalk = SnmpPoller::sessionWalk($session, $entry . '.4');
+        $commWalk = SnmpPoller::sessionWalk($session, $entry . '.7');
+
+        $suffixes = [];
+        foreach ([$tempHi, $tempLo, $nameWalk, $humWalk] as $walk) {
+            foreach (array_keys($walk) as $suf) {
+                $suffixes[(string)$suf] = true;
+            }
+        }
+        if (!$suffixes) {
+            App::log('EnvSensorPoll MEM: no memSensorsStatus rows (walk empty)', 'info');
+            // Still try legacy UIO table
+            $uio = self::expandUioSensors($session, $metrics, $probeNames, $probeMeta);
+            $uio['mem_count'] = 0;
+            return $uio;
+        }
+
+        $nextIdx = 200;
+        foreach (array_keys($probeMeta) as $i) {
+            $nextIdx = max($nextIdx, (int)$i + 1);
+        }
+        if ($nextIdx < 200) {
+            $nextIdx = 200;
+        }
+
+        $memCount = 0;
+        $seen = [];
+        foreach (array_keys($suffixes) as $suffix) {
+            $suffix = trim((string)$suffix, '.');
+            if (!preg_match('/(\d+)\.(\d+)$/', $suffix, $m)) {
+                continue;
+            }
+            $module = (int)$m[1];
+            $sensor = (int)$m[2];
+            $key = $module . '.' . $sensor;
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+
+            $temp = null;
+            $rawTemp = null;
+            // High precision tenths first
+            foreach ([$suffix, $key] as $sk) {
+                if (isset($tempHi[$sk])) {
+                    $rawTemp = $tempHi[$sk];
+                    $n = SnmpPoller::sessionToNumber($rawTemp);
+                    if ($n !== null && $n > -500 && $n < 2000) {
+                        $temp = round(((float)$n) / 10.0, 1);
+                        break;
+                    }
+                }
+            }
+            if ($temp === null) {
+                foreach ([$suffix, $key] as $sk) {
+                    if (isset($tempLo[$sk])) {
+                        $rawTemp = $tempLo[$sk];
+                        $n = SnmpPoller::sessionToNumber($rawTemp);
+                        if ($n !== null && $n > -100 && $n < 200) {
+                            $temp = self::normalizeEmsTemperature((float)$n);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            $hum = null;
+            foreach ([$suffix, $key] as $sk) {
+                if (isset($humWalk[$sk])) {
+                    $hn = SnmpPoller::sessionToNumber($humWalk[$sk]);
+                    if ($hn !== null && $hn > -1 && $hn <= 1000) {
+                        $hum = self::normalizeEmsHumidity((float)$hn);
+                        break;
+                    }
+                }
+            }
+
+            $name = null;
+            foreach ([$suffix, $key] as $sk) {
+                if (isset($nameWalk[$sk])) {
+                    $label = self::cleanProbeName($nameWalk[$sk]);
+                    if ($label !== '' && self::isPlausibleProbeName($label)) {
+                        $name = $label;
+                        break;
+                    }
+                }
+            }
+            if ($name === null) {
+                // Synthesize from module/sensor — module 0/1 often manager
+                if ($module <= 1 && $sensor >= 1) {
+                    $name = sprintf('Temp Sensor MM:%d', $sensor);
+                } else {
+                    $name = sprintf('Temp Sensor TH%02d:%d', $module, $sensor);
+                }
+            }
+
+            $location = null;
+            foreach ([$suffix, $key] as $sk) {
+                if (isset($locWalk[$sk])) {
+                    $location = self::cleanProbeName($locWalk[$sk]);
+                    if ($location !== '') {
+                        break;
+                    }
+                }
+            }
+
+            $comm = null;
+            foreach ([$suffix, $key] as $sk) {
+                if (isset($commWalk[$sk])) {
+                    $cn = SnmpPoller::sessionToNumber($commWalk[$sk]);
+                    if ($cn !== null) {
+                        $comm = (int)$cn;
+                        break;
+                    }
+                }
+            }
+
+            // Skip not-installed empty sockets
+            if ($comm === 1 && ($temp === null || abs($temp) < 0.05)
+                && ($hum === null || abs($hum) < 0.05)
+            ) {
+                continue;
+            }
+
+            $live = self::isProbeLive($temp, $hum, $comm);
+            if (!$live && $temp !== null && abs($temp) >= 0.05) {
+                $live = true;
+            }
+            // Installed but no reading yet — still register for name matching
+            if (!$live && $name !== null && $comm === self::COMM_ESTABLISHED) {
+                $live = ($temp !== null || $hum !== null);
+            }
+
+            $idx = $nextIdx++;
+            $serial = 'M' . $module . 'S' . $sensor;
+            if ($temp !== null) {
+                $metrics['temperature.' . $idx] = [
+                    'numeric' => $temp,
+                    'raw' => $rawTemp,
+                    'oid' => $entry . '.5.' . $module . '.' . $sensor,
+                ];
+            }
+            if ($hum !== null) {
+                $metrics['humidity.' . $idx] = [
+                    'numeric' => $hum,
+                    'raw' => $hum,
+                    'oid' => $entry . '.6.' . $module . '.' . $sensor,
+                ];
+            }
+            $probeNames[$idx] = $name;
+            $probeMeta[$idx] = [
+                'temp' => $temp,
+                'hum' => $hum,
+                'name' => $name,
+                'serial' => $serial,
+                'comm' => $comm,
+                'live' => $live,
+                'source' => 'mem',
+                'mem_module' => $module,
+                'mem_sensor' => $sensor,
+                'location' => $location,
+            ];
+            $memCount++;
+        }
+
+        App::log('EnvSensorPoll MEM sensors: ' . $memCount . ' row(s)', 'info');
+
+        // Optional UIO add-on
+        $uio = self::expandUioSensors($session, $metrics, $probeNames, $probeMeta);
+        $uio['mem_count'] = $memCount;
+        return $uio;
+    }
+
+    /**
+     * Universal I/O sensor status table (legacy / some SKUs).
+     * OID: 1.3.6.1.4.1.318.1.1.25.1.2.1 (INDEX portID.sensorID)
+     *
+     * @param array<string,mixed> $session
+     * @param array<string,array{numeric:?float,raw?:mixed,oid?:string}> $metrics
+     * @param array<int,string> $probeNames
+     * @param array<int,array<string,mixed>> $probeMeta
+     * @return array{metrics:array,probe_names:array,probe_meta:array,uio_count:int,mem_count?:int}
      */
     public static function expandUioSensors(
         array $session,
@@ -252,10 +450,8 @@ class EnvSensorPoll
         $entry = '1.3.6.1.4.1.318.1.1.25.1.2.1';
         $tempC = SnmpPoller::sessionWalk($session, $entry . '.6');
         if (!$tempC) {
-            // Try °F column and convert
             $tempF = SnmpPoller::sessionWalk($session, $entry . '.5');
             if (!$tempF) {
-                App::log('EnvSensorPoll UIO: no uioSensorStatus temperature rows', 'info');
                 return [
                     'metrics' => $metrics,
                     'probe_names' => $probeNames,
@@ -269,7 +465,6 @@ class EnvSensorPoll
                 if ($n === null || $n < -50) {
                     continue;
                 }
-                // Invalid / lost often -1; skip
                 if ($n <= -1 && $n > -2) {
                     continue;
                 }
@@ -281,7 +476,6 @@ class EnvSensorPoll
         $nameWalk = SnmpPoller::sessionWalk($session, $entry . '.3');
         $commWalk = SnmpPoller::sessionWalk($session, $entry . '.10');
 
-        // Allocate synthetic EMS-style indexes after existing EMS ones
         $nextIdx = 100;
         foreach (array_keys($probeMeta) as $i) {
             $nextIdx = max($nextIdx, (int)$i + 1);
@@ -294,11 +488,8 @@ class EnvSensorPoll
         $seen = [];
         foreach ($tempC as $suffix => $rawOrNum) {
             $suffix = trim((string)$suffix, '.');
-            if (!preg_match('/^(\d+)\.(\d+)$/', $suffix, $m)) {
-                // Sometimes full OID ends with port.sensor
-                if (!preg_match('/(\d+)\.(\d+)$/', $suffix, $m)) {
-                    continue;
-                }
+            if (!preg_match('/(\d+)\.(\d+)$/', $suffix, $m)) {
+                continue;
             }
             $port = (int)$m[1];
             $sid = (int)$m[2];
@@ -308,26 +499,24 @@ class EnvSensorPoll
             }
             $seen[$key] = true;
 
-            if (is_numeric($rawOrNum) && !is_string($rawOrNum)) {
+            if (is_float($rawOrNum) || is_int($rawOrNum)) {
                 $temp = self::normalizeEmsTemperature((float)$rawOrNum);
             } else {
                 $n = SnmpPoller::sessionToNumber($rawOrNum);
                 if ($n === null || $n <= -1) {
-                    continue; // -1 = invalid per MIB
+                    continue;
                 }
                 $temp = self::normalizeEmsTemperature((float)$n);
             }
 
             $hum = null;
-            if (isset($humWalk[$suffix])) {
-                $hn = SnmpPoller::sessionToNumber($humWalk[$suffix]);
-                if ($hn !== null && $hn > -1) {
-                    $hum = self::normalizeEmsHumidity((float)$hn);
-                }
-            } elseif (isset($humWalk[$key])) {
-                $hn = SnmpPoller::sessionToNumber($humWalk[$key]);
-                if ($hn !== null && $hn > -1) {
-                    $hum = self::normalizeEmsHumidity((float)$hn);
+            foreach ([$suffix, $key] as $hk) {
+                if (isset($humWalk[$hk])) {
+                    $hn = SnmpPoller::sessionToNumber($humWalk[$hk]);
+                    if ($hn !== null && $hn > -1) {
+                        $hum = self::normalizeEmsHumidity((float)$hn);
+                        break;
+                    }
                 }
             }
 
@@ -357,22 +546,19 @@ class EnvSensorPoll
             }
 
             $live = self::isProbeLive($temp, $hum, $comm);
-            // UIO: -1 invalid already skipped; still allow live non-zero
             if (!$live && $temp !== null && abs($temp) >= 0.05) {
                 $live = true;
             }
 
             $idx = $nextIdx++;
-            $serial = 'U' . $port . 'S' . $sid; // synthetic, not L/R
-            $tKey = 'temperature.' . $idx;
-            $hKey = 'humidity.' . $idx;
-            $metrics[$tKey] = [
+            $serial = 'U' . $port . 'S' . $sid;
+            $metrics['temperature.' . $idx] = [
                 'numeric' => $temp,
                 'raw' => $rawOrNum,
                 'oid' => $entry . '.6.' . $port . '.' . $sid,
             ];
             if ($hum !== null) {
-                $metrics[$hKey] = [
+                $metrics['humidity.' . $idx] = [
                     'numeric' => $hum,
                     'raw' => $hum,
                     'oid' => $entry . '.7.' . $port . '.' . $sid,
@@ -480,7 +666,7 @@ class EnvSensorPoll
         );
 
         $snapshot = [];
-        // Prefer showing live + UIO slots first in toast
+        // Prefer showing live MEM/UIO first in toast
         $snapOrder = $probeMeta;
         uasort($snapOrder, static function (array $a, array $b): int {
             $la = !empty($a['live']) ? 0 : 1;
@@ -488,16 +674,26 @@ class EnvSensorPoll
             if ($la !== $lb) {
                 return $la <=> $lb;
             }
-            $sa = (($a['source'] ?? '') === 'uio') ? 0 : 1;
-            $sb = (($b['source'] ?? '') === 'uio') ? 0 : 1;
-            return $sa <=> $sb;
+            $rank = static function (array $p): int {
+                return match ($p['source'] ?? 'ems') {
+                    'mem' => 0,
+                    'uio' => 1,
+                    default => 2,
+                };
+            };
+            return $rank($a) <=> $rank($b);
         });
         foreach ($snapOrder as $i => $pm) {
             if ($pm['serial'] === null && $pm['temp'] === null && $pm['name'] === null) {
                 continue;
             }
-            $src = ($pm['source'] ?? 'ems') === 'uio' ? 'UIO' : 'EMS';
-            $snapshot[] = $src . $i . ':' . ($pm['serial'] ?? '?')
+            $src = match ($pm['source'] ?? 'ems') {
+                'mem' => 'MEM',
+                'uio' => 'UIO',
+                default => 'EMS',
+            };
+            $label = $pm['name'] ?? ($pm['serial'] ?? '?');
+            $snapshot[] = $src . ':' . $label
                 . '=' . ($pm['temp'] !== null ? self::fmt((float)$pm['temp']) : '—')
                 . '°'
                 . (!empty($pm['live']) ? '' : '(dead)');
@@ -876,11 +1072,34 @@ class EnvSensorPoll
                     }
                 }
             }
-            // TH01:1 → prefer UIO (expansion) rows: port=module or sensor=port
+            // TH01:1 / TH02:3 → MEM module.sensor (primary for AP9340 expansions)
             if (preg_match('/\bTH\s*0*(\d+)\s*:?\s*(\d+)\b/i', $sensorName, $m)) {
                 $mod = (int)$m[1];
                 $port = (int)$m[2];
-                // UIO: portID often = expansion module / bank, sensorID = probe on that bank
+                foreach ($probeMeta as $i => $pm) {
+                    if (($pm['source'] ?? '') !== 'mem') {
+                        continue;
+                    }
+                    $mm = (int)($pm['mem_module'] ?? -1);
+                    $ms = (int)($pm['mem_sensor'] ?? -1);
+                    // Module number often matches TH index (1,2,3); allow 0-based module too
+                    if ($ms === $port && ($mm === $mod || $mm === $mod - 1 || $mm === $mod + 1)
+                        && !empty($pm['live'])
+                    ) {
+                        return (int)$i;
+                    }
+                }
+                foreach ($probeMeta as $i => $pm) {
+                    if (($pm['source'] ?? '') !== 'mem' || empty($pm['live'])) {
+                        continue;
+                    }
+                    $mm = (int)($pm['mem_module'] ?? -1);
+                    $ms = (int)($pm['mem_sensor'] ?? -1);
+                    if ($mm === $mod && $ms === $port) {
+                        return (int)$i;
+                    }
+                }
+                // UIO fallback
                 foreach ($probeMeta as $i => $pm) {
                     if (($pm['source'] ?? '') !== 'uio' || empty($pm['live'])) {
                         continue;
@@ -891,21 +1110,7 @@ class EnvSensorPoll
                         return (int)$i;
                     }
                 }
-                // UIO port-only match when one sensor per port
-                foreach ($probeMeta as $i => $pm) {
-                    if (($pm['source'] ?? '') !== 'uio' || empty($pm['live'])) {
-                        continue;
-                    }
-                    $up = (int)($pm['uio_port'] ?? 0);
-                    $us = (int)($pm['uio_sensor'] ?? 0);
-                    if ($up === $mod && $us === 1 && $port === 1) {
-                        return (int)$i;
-                    }
-                    if ($us === $port && $mod === $up) {
-                        return (int)$i;
-                    }
-                }
-                // EMS remote R# (0- or 1-based)
+                // EMS remote R# (last resort)
                 foreach (['R' . $port, 'R' . max(0, $port - 1)] as $wantR) {
                     foreach ($probeMeta as $i => $pm) {
                         if (isset($pm['serial']) && strtoupper((string)$pm['serial']) === $wantR
@@ -916,11 +1121,25 @@ class EnvSensorPoll
                     }
                 }
             }
+            // MM:N via MEM manager module (0 or 1)
+            if (preg_match('/\bMM\s*:?\s*(\d+)\b/i', $sensorName, $m)) {
+                $port = (int)$m[1];
+                foreach ($probeMeta as $i => $pm) {
+                    if (($pm['source'] ?? '') !== 'mem' || empty($pm['live'])) {
+                        continue;
+                    }
+                    $mm = (int)($pm['mem_module'] ?? -99);
+                    $ms = (int)($pm['mem_sensor'] ?? -99);
+                    if ($ms === $port && ($mm === 0 || $mm === 1)) {
+                        return (int)$i;
+                    }
+                }
+            }
         }
 
         $sensorNorm = self::normalizeLabel($sensorName);
 
-        // 2) Exact / strong name match — require MM/TH token agreement when present
+        // 2) Exact / strong name match — prefer MEM/live over empty EMS placeholders
         if ($probeNames && $sensorNorm !== '') {
             $sensorIsTh = (bool)preg_match('/\bth\d+\b/', $sensorNorm);
             $sensorIsMm = (bool)preg_match('/\bmm\b/', $sensorNorm);
@@ -931,9 +1150,9 @@ class EnvSensorPoll
                 if ($pnorm === '') {
                     continue;
                 }
+                $pm = $probeMeta[$i] ?? [];
                 $probeIsTh = (bool)preg_match('/\bth\d+\b/', $pnorm);
                 $probeIsMm = (bool)preg_match('/\bmm\b/', $pnorm);
-                // Don't match TH sensor to MM-only label (or reverse) on weak scores
                 if ($sensorIsTh && $probeIsMm && !$probeIsTh) {
                     continue;
                 }
@@ -957,6 +1176,17 @@ class EnvSensorPoll
                     && preg_match('/\b' . preg_quote($sm[1], '/') . '\b/', $pnorm)
                 ) {
                     $score += 30;
+                }
+                // Prefer live modular rows over dead EMS R#/L# placeholders with same name
+                if (!empty($pm['live'])) {
+                    $score += 25;
+                } else {
+                    $score -= 40;
+                }
+                if (($pm['source'] ?? '') === 'mem') {
+                    $score += 20;
+                } elseif (($pm['source'] ?? '') === 'uio') {
+                    $score += 10;
                 }
                 if ($score > $bestScore) {
                     $bestScore = $score;
@@ -1224,8 +1454,15 @@ class EnvSensorPoll
             // Prefer non-zero temps when choosing free slots
             $ser = strtoupper((string)($pm['serial'] ?? ''));
             $src = (string)($pm['source'] ?? 'ems');
-            if ($src === 'uio' || preg_match('/^U\d+S\d+$/', $ser)) {
-                $freeRemote[] = $ix; // expansion / UIO
+            if ($src === 'mem' || $src === 'uio' || preg_match('/^M\d+S\d+$/', $ser)
+                || preg_match('/^U\d+S\d+$/', $ser)
+            ) {
+                // MEM manager module (0/1) → local pool; higher modules → expansion
+                if ($src === 'mem' && (int)($pm['mem_module'] ?? 99) <= 1) {
+                    $freeLocal[] = $ix;
+                } else {
+                    $freeRemote[] = $ix;
+                }
             } elseif (preg_match('/^L\d+$/', $ser) || (
                 isset($probeNames[$ix]) && preg_match('/\bmm\b/i', $probeNames[$ix])
                 && !preg_match('/\bth\d+/i', $probeNames[$ix])
