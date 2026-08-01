@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Device Poll now (v1/v2c):** pass the device community into the SNMP session (Discover already did; Poll incorrectly used empty → `public`). Clearer error when *all* OIDs fail vs a single missing probe.
+
 ---
 
 ## [0.3.15] - 2026-08-01

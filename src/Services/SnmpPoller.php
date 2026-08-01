@@ -246,23 +246,44 @@ class SnmpPoller
             throw new RuntimeException('Device has no management/primary IP for SNMP.');
         }
 
+        $ver = strtolower(trim((string)($creds['snmp_version'] ?? '3')));
+        if ($ver === 'v3') {
+            $ver = '3';
+        }
+        if ($ver === '2' || $ver === 'v2c') {
+            $ver = '2c';
+        }
+        if ($ver === 'v1') {
+            $ver = '1';
+        }
+        // openSession treats the "user" arg as community for v1/v2c (same as PDU poll)
+        $communityOrUser = ($ver === '3')
+            ? (string)($creds['security_name'] ?? '')
+            : (string)($creds['community'] ?? $creds['security_name'] ?? 'public');
+
         $session = self::openSession(
             $creds['host'],
             (int)$creds['port'],
-            $creds['snmp_version'] ?? '3',
-            $creds['security_name'] ?? '',
+            $ver,
+            $communityOrUser,
             $creds['auth_protocol'] ?? '',
             $creds['auth_passphrase'] ?? '',
             $creds['priv_protocol'] ?? '',
             $creds['priv_passphrase'] ?? '',
-            (string)($device['snmp_v3_context'] ?? '')
+            (string)($device['snmp_v3_context'] ?? $creds['context'] ?? '')
         );
 
         $got = self::collectOidMap($session, $oidMap);
         self::closeSession($session);
 
         if ($got['ok'] === 0) {
-            throw new RuntimeException($got['last_error'] ?: 'All SNMP GETs failed for device');
+            $detail = $got['last_error'] ?: 'no response';
+            throw new RuntimeException(
+                'All SNMP GETs failed for this device (template has OIDs but none answered). '
+                . 'Last error: ' . $detail
+                . '. Check SNMP version, community (v1/v2c) or v3 user, and that UDP/161 is open from IIS. '
+                . 'Missing probes (e.g. humidity.4 when only 3 probes exist) are soft-failed only when other OIDs succeed — this is a total auth/reachability failure, not “sensors not created”.'
+            );
         }
 
         Database::update('devices', [
@@ -1237,11 +1258,19 @@ class SnmpPoller
                 $session['privPass'] ?: '',
                 $oid
             );
-        } elseif (function_exists('snmp2_get')) {
-            // For v2c, security_name is used as community
-            $result = @snmp2_get($host, $session['user'] ?: 'public', $oid);
         } else {
-            throw new RuntimeException('No SNMP get function available');
+            // v1 / v2c — session user holds community string
+            $community = (string)($session['user'] ?: 'public');
+            $ver = strtolower((string)($session['version'] ?? '2c'));
+            if (($ver === '1' || $ver === 'v1') && function_exists('snmpget')) {
+                $result = @snmpget($host, $community, $oid);
+            } elseif (function_exists('snmp2_get')) {
+                $result = @snmp2_get($host, $community, $oid);
+            } elseif (function_exists('snmpget')) {
+                $result = @snmpget($host, $community, $oid);
+            } else {
+                throw new RuntimeException('No SNMP get function available');
+            }
         }
 
         if ($result === false) {
