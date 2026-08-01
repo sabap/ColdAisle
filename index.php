@@ -86,12 +86,15 @@ try {
 
 // Env heat spheres (cabinet + placement → soft 6 ft influence)
 $envSensors3d = [];
+$envHeatDiag = ['placeable' => 0, 'with_value' => 0, 'no_cabinet' => 0, 'cabinet_unplaced' => 0];
 try {
     if (class_exists('EnvSensor3dData')) {
         $envSensors3d = EnvSensor3dData::forFloor();
+        $envHeatDiag = EnvSensor3dData::diagnostics();
     }
 } catch (Throwable $e) {
     $envSensors3d = [];
+    App::log('Dashboard env 3d: ' . $e->getMessage(), 'warning');
 }
 
 $rooms = Database::fetchAll(
@@ -202,16 +205,31 @@ layout_header('Dashboard', $user, 'dashboard');
         </div>
         <div class="card-header" style="border-top:1px solid var(--border);padding:.5rem 1rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
             <label class="text-muted" style="font-size:.85rem;display:flex;align-items:center;gap:.4rem;cursor:pointer;margin:0">
-                <input type="checkbox" id="dash3dHeatToggle" checked>
+                <input type="checkbox" id="dash3dHeatToggle" checked
+                    <?= count($envSensors3d) < 1 ? 'disabled' : '' ?>>
                 Temp heat spheres (~6 ft)
             </label>
-            <span class="text-muted" style="font-size:.78rem">From env sensors · cabinet + placement · not CFD</span>
+            <span class="text-muted" style="font-size:.78rem" id="dash3dHeatHint">
+                <?php if (count($envSensors3d) > 0): ?>
+                    <?= count($envSensors3d) ?> sensor(s) on plan · cabinet + placement · not CFD
+                <?php elseif ((int)($envHeatDiag['with_value'] ?? 0) > 0 && (int)($envHeatDiag['cabinet_unplaced'] ?? 0) > 0): ?>
+                    <?= (int)$envHeatDiag['with_value'] ?> sensor(s) have values, but their
+                    <strong>cabinets are not on the floor plan</strong>
+                    (place the rack under Floor Plan — you do not re-add sensors).
+                <?php elseif ((int)($envHeatDiag['with_value'] ?? 0) > 0 && (int)($envHeatDiag['no_cabinet'] ?? 0) > 0): ?>
+                    Sensors need a <strong>cabinet</strong> (or host device in a cabinet) to place spheres.
+                <?php elseif ((int)($envHeatDiag['with_value'] ?? 0) < 1): ?>
+                    No sensor readings yet — Poll the env manager first.
+                <?php else: ?>
+                    No placeable heat sensors yet.
+                <?php endif; ?>
+            </span>
         </div>
         <div class="panel-3d" id="dashboard-3d"
-             data-cabinets='<?= App::e(json_encode($cabinets3d)) ?>'
-             data-pdus='<?= App::e(json_encode($pdus3d)) ?>'
-             data-rooms='<?= App::e(json_encode($rooms)) ?>'
-             data-env-sensors='<?= App::e(json_encode($envSensors3d)) ?>'></div>
+             data-cabinets='<?= App::e(json_encode($cabinets3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
+             data-pdus='<?= App::e(json_encode($pdus3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
+             data-rooms='<?= App::e(json_encode($rooms, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
+             data-env-sensors='<?= App::e(json_encode($envSensors3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'></div>
     </div>
 
     <div class="card">
@@ -289,7 +307,7 @@ layout_header('Dashboard', $user, 'dashboard');
     if (!el) return;
     el.classList.add('dash-3d-loading');
     var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=6') ?>;
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=7') ?>;
     loadScript(threeUrl)
       .then(function () { return loadScript(app3d); })
       .then(function () {
