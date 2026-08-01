@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.28] - 2026-08-01
+
+### Bug fixes
+
 - **3D heat spheres missing:** harden env→cabinet resolution (no fragile SQL columns); show dashboard hint when sensors have values but cabinets are not placed on the floor plan.
 
 ---
-
 ## [0.3.27] - 2026-08-01
 
 ### New features
