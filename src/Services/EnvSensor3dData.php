@@ -276,60 +276,50 @@ class EnvSensor3dData
         $cy = (float)$cab['c_pos_y'] + $d / 2.0;
         $rot = ((float)($cab['rotation_deg'] ?? 0)) * M_PI / 180.0;
 
+        // Front face direction (matches dcim-3d: local +Z is front)
         $fx = sin($rot);
         $fz = cos($rot);
-        // Lateral (along rack face) for multi-port modules so spheres don't fully stack
-        $lx = cos($rot);
-        $lz = -sin($rot);
 
         $placement = strtolower(trim((string)($r['placement'] ?? 'equipment_intake')));
         $placement = str_replace([' ', '-'], '_', $placement);
 
-        $offset = 0.45;
-        $side = 1.0;
+        // Core sits on the cabinet face center (edge), not out in the aisle.
+        // Tiny epsilon keeps the core visible just outside the mesh.
+        $faceEps = 0.04;
+        $side = 1.0; // +1 front face, -1 rear face, 0 footprint center
 
         switch ($placement) {
             case 'exhaust':
             case 'hot_aisle':
             case 'return_air':
                 $side = -1.0;
-                $offset = 0.50;
                 break;
             case 'cold_aisle':
             case 'equipment_intake':
             case 'intake':
             case 'supply_air':
                 $side = 1.0;
-                $offset = 0.45;
                 break;
             case 'underfloor':
-                $side = 0.0;
-                $offset = 0.0;
-                break;
             case 'ambient':
             case 'other':
             default:
-                $side = 1.0;
-                $offset = 0.35;
+                // Center of footprint for ambient/unknown; intake still default above
+                if ($placement === 'underfloor' || $placement === 'ambient' || $placement === 'other') {
+                    $side = 0.0;
+                } else {
+                    $side = 1.0;
+                }
                 break;
         }
 
-        $dist = ($d / 2.0) + $offset;
+        // Face center = cabinet center ± half-depth along front axis (no lateral bias)
+        $dist = ($side === 0.0) ? 0.0 : (($d / 2.0) + $faceEps);
         $x = $cx + $fx * $side * $dist;
         $y = $cy + $fz * $side * $dist;
 
-        // Spread ports along face: port 1 left … port 6 right (~12 cm steps)
-        $port = $thPort;
-        if ($port === null && preg_match('/\bMM\s*:?\s*(\d+)\b/i', $name, $mm)) {
-            $port = (int)$mm[1];
-        }
-        if ($port !== null && $port >= 1) {
-            $lat = (($port - 1) - 2.5) * 0.12; // center around mid-rack
-            $x += $lx * $lat;
-            $y += $lz * $lat;
-        }
-
-        $z = $rackH * 0.45;
+        // Mid-height on the face (center of rack), not port-skewed to one edge
+        $z = $rackH * 0.5;
         if ($placement === 'underfloor') {
             $z = 0.25;
         } elseif (!empty($r['position_u'])) {
@@ -337,9 +327,6 @@ class EnvSensor3dData
             $uHt = max(1, (int)($r['u_height'] ?? 1));
             $midU = $posU + ($uHt - 1) / 2.0;
             $z = max(0.2, min($rackH - 0.1, ($midU - 0.5) * 0.04445));
-        } elseif ($port !== null) {
-            // Slight vertical stagger by port so labels separate
-            $z = max(0.4, min($rackH - 0.2, 0.5 + ($port - 1) * 0.12));
         }
 
         $cid = (int)($cab['cabinet_id'] ?? 0);
