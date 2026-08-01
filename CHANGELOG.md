@@ -13,6 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+### Enhancements
+
+### Bug fixes
+
+---
+
+## [0.3.17] - 2026-08-01
+
+### New features
+
 - **Env sensor kind:** Temperature + humidity (combo) for dual probes (TH/MM combo sensors).
 
 ### Enhancements
@@ -24,7 +34,6 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **Env sensors / Cooling units Add button:** wire `data-modal-open` and restyle broken modals so Add sensor / Add unit open correctly.
 
 ---
-
 ## [0.3.16] - 2026-08-01
 
 ### Bug fixes
