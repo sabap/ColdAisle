@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Device SNMP version reverts to v3 after Save:** choosing v1/v2c now clears the SNMPv3 credential profile so it cannot force version 3 on the next save.
+
 ---
 
 ## [0.3.10] - 2026-07-31

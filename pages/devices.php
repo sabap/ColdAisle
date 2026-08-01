@@ -202,10 +202,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         $data['parent_device_id'] = null;
     }
 
-    // Apply SNMPv3 credential profile onto the device (authoritative when a profile is chosen).
-    // Passphrases are never sent from the browser when using a profile — always copy from the profile row.
+    // Normalize version early (posted value wins over any lingering v3 profile)
+    $snmpVerPosted = strtolower(trim((string)($data['snmp_version'] ?? '')));
+    if ($snmpVerPosted === 'v1') {
+        $snmpVerPosted = '1';
+        $data['snmp_version'] = '1';
+    }
+    if ($snmpVerPosted === 'v2c' || $snmpVerPosted === '2') {
+        $snmpVerPosted = '2c';
+        $data['snmp_version'] = '2c';
+    }
+    if ($snmpVerPosted === 'v3') {
+        $snmpVerPosted = '3';
+        $data['snmp_version'] = '3';
+    }
+    $wantsV3 = ($snmpVerPosted === '3');
+
+    // Switching to v1/v2c/disabled: drop profile so it cannot force version back to 3 on save
+    if (!$wantsV3) {
+        $data['snmp_v3_profile_id'] = null;
+    }
+
+    // Apply SNMPv3 credential profile only when version is explicitly SNMPv3
     $appliedSnmpProfile = false;
-    if (!empty($data['snmp_v3_profile_id'])) {
+    if ($wantsV3 && !empty($data['snmp_v3_profile_id'])) {
         try {
             $prof = Database::fetchOne(
                 'SELECT * FROM snmp_v3_profiles WHERE profile_id = ? AND is_active = 1',
@@ -262,8 +282,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
     if (!empty($data['snmp_v3_priv_proto'])) {
         $data['snmp_v3_priv_proto'] = strtoupper((string)$data['snmp_v3_priv_proto']);
     }
-    // Selecting any SNMPv3 field without version → force v3 so Discover/creds work
-    if (empty($data['snmp_version'])
+    // Only auto-promote to v3 when version was left blank (not when user chose 1/2c)
+    if ($snmpVerPosted === ''
         && (!empty($data['snmp_v3_user']) || !empty($data['snmp_v3_profile_id']) || !empty($data['snmp_v3_sec_level']))
     ) {
         $data['snmp_version'] = '3';
@@ -2522,6 +2542,10 @@ if ($action === 'new' || $id) {
             document.querySelectorAll('.snmp-v3-fields').forEach(function (el) {
                 el.style.display = v3 ? '' : 'none';
             });
+            // Leaving v3: clear profile so Save does not re-apply it and force version 3
+            if (!v3 && snmpProf) {
+                snmpProf.value = '';
+            }
         }
         function setSnmpField(id, val) {
             var el = document.getElementById(id);
@@ -2554,6 +2578,7 @@ if ($action === 'new' || $id) {
             if (!snmpProf) return;
             var opt = snmpProf.options[snmpProf.selectedIndex];
             if (!opt || !opt.value) return;
+            // Only apply when user is on SNMPv3 (do not override v1/v2c)
             if (snmpVer && snmpVer.value !== '3') {
                 snmpVer.value = '3';
                 toggleSnmpV3Fields();
@@ -2574,15 +2599,19 @@ if ($action === 'new' || $id) {
         if (snmpVer) snmpVer.addEventListener('change', toggleSnmpV3Fields);
         if (snmpProf) snmpProf.addEventListener('change', applySnmpProfile);
         toggleSnmpV3Fields();
-        // If a profile is already selected on load, fill fields so the form matches the profile
-        if (snmpProf && snmpProf.value) {
+        // If already on v3 with a profile selected, fill fields from the profile
+        if (snmpVer && snmpVer.value === '3' && snmpProf && snmpProf.value) {
             applySnmpProfile();
         }
-        // Before submit: re-apply profile so version=3 and non-secret fields are never blank
+        // Before submit: only re-apply profile when staying on SNMPv3
         if (deviceForm) {
             deviceForm.addEventListener('submit', function () {
-                if (snmpProf && snmpProf.value) {
+                if (snmpVer && snmpVer.value === '3' && snmpProf && snmpProf.value) {
                     applySnmpProfile();
+                }
+                // Ensure profile is not posted when not on v3 (hidden fields still submit)
+                if (snmpVer && snmpVer.value !== '3' && snmpProf) {
+                    snmpProf.value = '';
                 }
             });
         }
