@@ -213,9 +213,9 @@ layout_header('Dashboard', $user, 'dashboard');
                 <?php if (count($envSensors3d) > 0): ?>
                     <?= count($envSensors3d) ?> sensor(s) on plan · cabinet + placement · not CFD
                 <?php elseif ((int)($envHeatDiag['with_value'] ?? 0) > 0 && (int)($envHeatDiag['cabinet_unplaced'] ?? 0) > 0): ?>
-                    <?= (int)$envHeatDiag['with_value'] ?> sensor(s) have values, but their
-                    <strong>cabinets are not on the floor plan</strong>
-                    (place the rack under Floor Plan — you do not re-add sensors).
+                    <?= (int)$envHeatDiag['with_value'] ?> sensor(s) have values, but
+                    <strong><?= (int)$envHeatDiag['cabinet_unplaced'] ?></strong> need a floor-placed rack
+                    (TH sensors use expansion-module cabinets — place those racks on the Floor Plan).
                 <?php elseif ((int)($envHeatDiag['with_value'] ?? 0) > 0 && (int)($envHeatDiag['no_cabinet'] ?? 0) > 0): ?>
                     Sensors need a <strong>cabinet</strong> (or host device in a cabinet) to place spheres.
                 <?php elseif ((int)($envHeatDiag['with_value'] ?? 0) < 1): ?>

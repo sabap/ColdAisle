@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Heat spheres stacked on MM rack:** TH0N sensors no longer fall back to the management module cabinet; resolve expansion device/rack by label (`TH01`, `[01]`, EXP…), optional location match, and lateral offset by port so probes separate along the face.
+
 ---
 
 ## [0.3.28] - 2026-08-01
