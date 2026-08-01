@@ -1294,7 +1294,10 @@ class SnmpDiscover
         }
 
         // Value fallbacks only for real numeric samples — never for "AP8861"
-        if (!$hints && !$nonMetric && $num !== null) {
+        // Skip on env/EMS trees so temperature readings never become "possible watts"
+        $isEnvTree = (bool)preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.(10|25)\./', $oid)
+            || (bool)preg_match('/\btemp|temperature|humid|humidity|probe|ems|iem|environmental\b/', $s);
+        if (!$hints && !$nonMetric && $num !== null && !$isEnvTree) {
             if (str_contains($oid, '.318.') && $num <= 100) {
                 $hints[] = 'possible load %';
             }
@@ -1345,7 +1348,30 @@ class SnmpDiscover
             $map[$k] = $oid;
         }
 
-        $pick = static function (array $c) use (&$watts, &$wattsScore, &$amps, &$ampsX10): void {
+        // OIDs already claimed as env metrics must never become watts/amps
+        $envOids = [];
+        foreach ($map as $k => $oid) {
+            if (preg_match('/^(temperature|humidity|dew_?point)\./i', (string)$k)) {
+                $envOids[(string)$oid] = true;
+            }
+        }
+        $isEnvOid = static function (string $oid, string $hay) use ($envOids): bool {
+            if (isset($envOids[$oid])) {
+                return true;
+            }
+            // APC EMS / IEM / UIO env trees — not power
+            if (preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.(10|25)\./', $oid)) {
+                return true;
+            }
+            if (preg_match('/\btemp|temperature|humid|humidity|dewpoint|probe|ems|iem|envmon|environmental\b/', $hay)
+                && !preg_match('/\bwatt|activepower|realpower|devicepower|phasepower\b/', $hay)
+            ) {
+                return true;
+            }
+            return false;
+        };
+
+        $pick = static function (array $c) use (&$watts, &$wattsScore, &$amps, &$ampsX10, $isEnvOid): void {
             $oid = $c['oid'];
             $hint = strtolower($c['hint'] ?? '');
             $name = strtolower((string)($c['name'] ?? ''));
@@ -1356,17 +1382,25 @@ class SnmpDiscover
             if (preg_match('/config|thresh|threshold|reset|timestamp|powerfactor|powersupply|properties/', $hay)) {
                 return;
             }
+            if ($isEnvOid($oid, $hay)) {
+                return;
+            }
 
             // Prefer device/total power — skip pure phase-instance leaves when we already map phases
             $isPhaseLeaf = (bool)preg_match('/phasestatus|phase\d|\.phase/i', $hay)
                 || (bool)preg_match('/\.[123]$/', $oid);
 
+            // Require power-ish name/hint — never assign watts from bare numeric range alone
             $looksWatts = str_contains($hay, 'watt')
                 || str_contains($hay, 'mib: watts')
                 || str_contains($hay, 'identdevicepowerwatts')
                 || (str_contains($hay, 'identdevicepower') && !str_contains($hay, 'factor') && !str_contains($hay, 'va'))
                 || str_starts_with($oid, '1.3.6.1.4.1.99999.2.1')
-                || ($n !== null && $n >= 50 && $n <= 100000 && str_contains($hint, 'possible watts'));
+                || (str_contains($hint, 'possible watts')
+                    && $n !== null && $n >= 50 && $n <= 100000
+                    && !str_contains($hint, 'temperature')
+                    && !str_contains($hint, 'humidity')
+                    && !str_contains($hint, 'environmental'));
 
             if ($looksWatts) {
                 if (str_contains($hay, 'outlet')) {
@@ -1417,21 +1451,37 @@ class SnmpDiscover
             $pick($c);
         }
 
-        // Fallbacks: highest-scoring enterprise numeric OIDs (not phase leaves if phases mapped)
+        // Fallback watts only with explicit power signal — never steal temperature OIDs
+        // (previously: first enterprise numeric ≥20 → often EMS temp.1).
         if ($watts === null) {
             foreach ($candidates as $c) {
-                if ($c['numeric'] !== null && $c['numeric'] >= 20 && $c['score'] >= 5
-                    && str_starts_with($c['oid'], '1.3.6.1.4.1.')) {
-                    if ($phaseKeys && preg_match('/\.[123]$/', $c['oid'])) {
-                        continue;
-                    }
-                    $hay = strtolower((string)($c['name'] ?? ''));
-                    if (preg_match('/config|threshold|factor|supply/', $hay)) {
-                        continue;
-                    }
-                    $watts = $c['oid'];
-                    break;
+                if ($c['numeric'] === null || $c['numeric'] < 20 || ($c['score'] ?? 0) < 8) {
+                    continue;
                 }
+                if (!str_starts_with((string)$c['oid'], '1.3.6.1.4.1.')) {
+                    continue;
+                }
+                if ($phaseKeys && preg_match('/\.[123]$/', (string)$c['oid'])) {
+                    continue;
+                }
+                $hay = strtolower((string)($c['name'] ?? '') . ' ' . (string)($c['hint'] ?? ''));
+                if ($isEnvOid((string)$c['oid'], $hay)) {
+                    continue;
+                }
+                if (preg_match('/config|threshold|factor|supply|temp|humid|probe/', $hay)) {
+                    continue;
+                }
+                // Require power keyword or known PDU trees (not bare numeric)
+                $oid = (string)$c['oid'];
+                $powerish = (bool)preg_match('/watt|activepower|realpower|devicepower|phasepower|statuspower|identdevicepower/', $hay)
+                    || (bool)preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.(1|12|26)\./', $oid)
+                    || str_starts_with($oid, '1.3.6.1.4.1.99999.2.1')
+                    || str_starts_with($oid, '1.3.6.1.4.1.3808.');
+                if (!$powerish) {
+                    continue;
+                }
+                $watts = $oid;
+                break;
             }
         }
         if ($ampsX10 !== null) {
