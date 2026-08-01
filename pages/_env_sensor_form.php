@@ -22,17 +22,21 @@ $devices = $devices ?? [];
         <input class="form-control" name="name" required value="<?= App::e($edit['name'] ?? '') ?>"
                placeholder="e.g. Cold aisle row A / AP9340 probe 1 temp"></div>
     <div class="form-row"><label>Kind</label>
-        <select class="form-control" name="sensor_kind">
+        <select class="form-control" name="sensor_kind" id="env_sensor_kind">
             <?php foreach ($kinds as $val => $lab): ?>
                 <option value="<?= App::e($val) ?>" <?= ($edit['sensor_kind'] ?? 'temperature') === $val ? 'selected' : '' ?>>
                     <?= App::e($lab) ?>
                 </option>
             <?php endforeach; ?>
         </select>
+        <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+            Use <strong>Temperature + humidity (combo)</strong> for dual probes (e.g. TH01 port). Poll will fill both metrics later.
+        </p>
     </div>
     <div class="form-row"><label>Unit</label>
-        <input class="form-control" name="unit" value="<?= App::e($edit['unit'] ?? '°C') ?>"
-               placeholder="°C, %RH, Pa…"></div>
+        <input class="form-control" name="unit" id="env_sensor_unit"
+               value="<?= App::e($edit['unit'] ?? '°C') ?>"
+               placeholder="°C, %RH, °C / %RH, Pa…"></div>
     <div class="form-row"><label>Host type</label>
         <select class="form-control" name="host_type" id="env_host_type">
             <?php foreach ($hosts as $val => $lab): ?>
@@ -144,13 +148,21 @@ $devices = $devices ?? [];
         <input class="form-control" type="number" step="any" name="crit_high"
                value="<?= App::e((string)($edit['crit_high'] ?? '')) ?>"></div>
 
-    <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">SNMP (optional)</h4></div>
-    <div class="form-row"><label>OID</label>
-        <input class="form-control" name="snmp_oid" value="<?= App::e($edit['snmp_oid'] ?? '') ?>"
-               placeholder="Numeric OID from Discover / PowerNet"></div>
-    <div class="form-row"><label>Index / instance</label>
+    <div class="form-row full">
+        <h4 class="mt-0" style="margin-bottom:.35rem;font-size:.95rem;color:var(--muted)">SNMP (optional — safe to leave blank)</h4>
+        <p class="text-muted" style="font-size:.8rem;margin:0 0 .5rem;max-width:40rem">
+            You do <strong>not</strong> need these to create sensors. Poll will later match sensors to the
+            <strong>site OID template</strong> on the Env Manager (MM) using a probe number or map key.
+            <br>Examples for Index: <code>1</code> (probe 1), <code>MM:1</code>, or map key <code>temperature.1</code>.
+            Full numeric OID is only needed if this sensor is polled outside a site template.
+        </p>
+    </div>
+    <div class="form-row"><label>Probe / map key</label>
         <input class="form-control" name="snmp_index" value="<?= App::e($edit['snmp_index'] ?? '') ?>"
-               placeholder="e.g. probe #1 table index"></div>
+               placeholder="e.g. 1  or  TH01:1  or  temperature.1"></div>
+    <div class="form-row"><label>Full OID (advanced)</label>
+        <input class="form-control" name="snmp_oid" value="<?= App::e($edit['snmp_oid'] ?? '') ?>"
+               placeholder="Usually blank if host device has a site template"></div>
     <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">3D / floor position (optional)</h4></div>
     <div class="form-row"><label>Pos X (m)</label>
         <input class="form-control" type="number" step="0.001" name="pos_x"
@@ -171,13 +183,28 @@ $devices = $devices ?? [];
 </form>
 <script>
 (function () {
-  var sel = document.getElementById('env_host_type');
-  var dev = document.getElementById('env_device_id');
-  var cab = document.getElementById('env_cabinet_id');
-  if (!sel) return;
+  var form = document.getElementById('envSensorForm');
+  if (!form) return;
+  // When two forms exist (edit page + modal), scope to this form's elements
+  var sel = form.querySelector('#env_host_type') || document.getElementById('env_host_type');
+  var dev = form.querySelector('#env_device_id') || document.getElementById('env_device_id');
+  var cab = form.querySelector('#env_cabinet_id') || document.getElementById('env_cabinet_id');
+  var kind = form.querySelector('#env_sensor_kind');
+  var unit = form.querySelector('#env_sensor_unit');
+  var unitDefaults = {
+    temperature: '°C',
+    humidity: '%RH',
+    temp_humidity: '°C / %RH',
+    dew_point: '°C',
+    differential_pressure: 'Pa',
+    airflow: 'CFM',
+    leak: 'state',
+    other: ''
+  };
   function sync() {
+    if (!sel) return;
     var h = sel.value;
-    document.querySelectorAll('#envSensorForm .env-host-field').forEach(function (row) {
+    form.querySelectorAll('.env-host-field').forEach(function (row) {
       var hosts = (row.getAttribute('data-hosts') || '').split(/\s+/);
       row.style.display = hosts.indexOf(h) >= 0 ? '' : 'none';
     });
@@ -191,8 +218,20 @@ $devices = $devices ?? [];
       cab.value = cid;
     }
   }
-  sel.addEventListener('change', sync);
+  function syncUnitFromKind() {
+    if (!kind || !unit) return;
+    var def = unitDefaults[kind.value];
+    if (def === undefined) return;
+    // Only auto-fill when empty or still a known default (don't clobber custom units)
+    var cur = (unit.value || '').trim();
+    var known = Object.keys(unitDefaults).map(function (k) { return unitDefaults[k]; });
+    if (cur === '' || known.indexOf(cur) >= 0) {
+      unit.value = def;
+    }
+  }
+  if (sel) sel.addEventListener('change', sync);
   if (dev) dev.addEventListener('change', fillCabFromDevice);
+  if (kind) kind.addEventListener('change', syncUnitFromKind);
   sync();
   fillCabFromDevice();
 })();

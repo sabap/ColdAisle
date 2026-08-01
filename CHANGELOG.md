@@ -13,9 +13,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Env sensor kind:** Temperature + humidity (combo) for dual probes (TH/MM combo sensors).
+
 ### Enhancements
 
+- **Env sensor form:** clearer SNMP help (OID/index optional; probe/map key examples); unit auto-fills from kind.
+
 ### Bug fixes
+
+- **Env sensors / Cooling units Add button:** wire `data-modal-open` and restyle broken modals so Add sensor / Add unit open correctly.
 
 ---
 

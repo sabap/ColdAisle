@@ -1301,6 +1301,56 @@ button.rack-device.rack-pdu-btn:hover {
 
 /* Modal overlay */
 body.modal-open { overflow: hidden; }
+/* Legacy bare .modal (cooling/env pages) — same shell as .modal-overlay */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 8000;
+  background: rgba(2, 6, 23, 0.72);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 2rem 1rem;
+  overflow-y: auto;
+}
+.modal[hidden] { display: none !important; }
+.modal .modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.modal .modal-dialog {
+  position: relative;
+  z-index: 1;
+  width: min(920px, 100%);
+  margin: 0 auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 4rem);
+  overflow: hidden;
+}
+.modal .modal-dialog.modal-lg { width: min(920px, 100%); }
+.modal .modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .9rem 1.15rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.modal .modal-header h3 { margin: 0; font-size: 1.1rem; }
+.modal .modal-body {
+  padding: 1rem 1.15rem;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
 .modal-overlay {
   position: fixed;
   inset: 0;
