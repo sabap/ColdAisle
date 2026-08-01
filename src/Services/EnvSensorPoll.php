@@ -7,15 +7,16 @@ declare(strict_types=1);
 
 class EnvSensorPoll
 {
-    /** APC PowerNet emsProbeStatus* columns (AP9340 / similar). */
+    /**
+     * APC PowerNet EMSProbeStatusEntry (powernet MIB):
+     *  .1 index  .2 name  .3 temperature  .4 highTempThresh  .5 lowTempThresh  .6 humidity
+     * Earlier bug used .4/.5 as "names" → all probes showed "59" (threshold).
+     */
     private const EMS_TEMP_OID = '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3';
     private const EMS_HUM_OID = '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6';
-    /** Probe name / label columns tried in order */
-    private const EMS_NAME_OIDS = [
-        '1.3.6.1.4.1.318.1.1.10.3.13.1.1.4',
-        '1.3.6.1.4.1.318.1.1.10.3.13.1.1.5',
-        '1.3.6.1.4.1.318.1.1.10.3.13.1.1.2',
-    ];
+    private const EMS_STATUS_NAME_OID = '1.3.6.1.4.1.318.1.1.10.3.13.1.1.2';
+    /** Config table names (often more descriptive): emsProbeConfigProbeName */
+    private const EMS_CONFIG_NAME_OID = '1.3.6.1.4.1.318.1.1.10.3.7.1.1.2';
     private const MAX_PROBE_INDEX = 32;
     private const MISS_STREAK_STOP = 3;
 
@@ -77,11 +78,12 @@ class EnvSensorPoll
                 }
             }
 
-            foreach (self::EMS_NAME_OIDS as $nameBase) {
+            // Status name (.2) first, then config name — never thresh columns (.4/.5)
+            foreach ([self::EMS_STATUS_NAME_OID, self::EMS_CONFIG_NAME_OID] as $nameBase) {
                 try {
                     $raw = SnmpPoller::sessionGet($session, $nameBase . '.' . $i);
                     $label = self::cleanProbeName($raw);
-                    if ($label !== '') {
+                    if ($label !== '' && self::isPlausibleProbeName($label)) {
                         $gotName = $label;
                         $metrics['probe_name.' . $i] = [
                             'numeric' => null,
@@ -198,10 +200,16 @@ class EnvSensorPoll
         $usedTemp = [];
         $usedHum = [];
 
+        // Pre-assign ordered fallbacks for sensors that still lack a name match
+        $orderMap = self::buildOrderFallbackMap($sensors, $envMetrics, $probeNames);
+
         foreach ($sensors as $sensor) {
             $sid = (int)$sensor['sensor_id'];
             $kind = strtolower((string)($sensor['sensor_kind'] ?? 'temperature'));
             $inst = self::matchSensorToProbeIndex($sensor, $envMetrics, $probeNames);
+            if ($inst === null && isset($orderMap[$sid])) {
+                $inst = $orderMap[$sid];
+            }
             $tempVal = null;
             $humVal = null;
             $mapKeyTemp = null;
@@ -657,16 +665,125 @@ class EnvSensorPoll
             return '';
         }
         $s = is_string($raw) ? $raw : (string)$raw;
-        // Strip SNMP type prefixes: STRING: "foo"
-        if (preg_match('/^["\']?(?:STRING|OCTET\s*STRING)\s*:\s*["\']?(.*)["\']?\s*$/i', trim($s), $m)) {
+        // Strip SNMP type prefixes: STRING: "foo" / Hex-STRING: …
+        if (preg_match(
+            '/^(?:STRING|OCTET\s*STRING|Hex-STRING|DisplayString)\s*:\s*(.*)$/i',
+            trim($s),
+            $m
+        )) {
             $s = $m[1];
         }
+        // INTEGER / Gauge etc. are not names
+        if (preg_match('/^(?:INTEGER|Integer32|Gauge32|Counter(?:32|64)|Unsigned32)\s*:/i', trim($s))) {
+            return '';
+        }
         $s = trim($s, " \t\n\r\0\x0B\"'");
-        // Drop empty / not-present style
         if ($s === '' || strcasecmp($s, 'null') === 0 || $s === '""') {
             return '';
         }
         return $s;
+    }
+
+    /**
+     * Reject threshold/enum leftovers (e.g. "59") so they never become probe labels.
+     */
+    public static function isPlausibleProbeName(string $label): bool
+    {
+        $t = trim($label);
+        if ($t === '') {
+            return false;
+        }
+        // Pure numbers are almost always wrong column (temp/thresh/status)
+        if (preg_match('/^[-+]?\d+(?:\.\d+)?$/', $t)) {
+            return false;
+        }
+        // Need at least one letter
+        if (!preg_match('/[A-Za-z]/', $t)) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * When SNMP names are missing/useless, map sensors in rack order to probe indexes
+     * that have temperature (or humidity): MM ports first, then TH01, TH02, …
+     *
+     * @param list<array<string,mixed>> $sensors
+     * @param array{temperature:array<int,float>,humidity:array<int,float>} $envMetrics
+     * @param array<int,string> $probeNames
+     * @return array<int,int> sensor_id => probe index
+     */
+    public static function buildOrderFallbackMap(
+        array $sensors,
+        array $envMetrics,
+        array $probeNames
+    ): array {
+        // Probe indexes that have live data, ascending
+        $indexes = [];
+        foreach (array_keys($envMetrics['temperature'] + $envMetrics['humidity']) as $i) {
+            $indexes[] = (int)$i;
+        }
+        $indexes = array_values(array_unique($indexes));
+        sort($indexes, SORT_NUMERIC);
+        if (!$indexes) {
+            return [];
+        }
+
+        // Sensors still unmatched by name/index — skip those already resolvable
+        $pending = [];
+        $claimed = [];
+        foreach ($sensors as $s) {
+            $sid = (int)($s['sensor_id'] ?? 0);
+            if ($sid < 1) {
+                continue;
+            }
+            $hit = self::matchSensorToProbeIndex($s, $envMetrics, $probeNames);
+            if ($hit !== null) {
+                $claimed[$hit] = true;
+                continue;
+            }
+            $pending[] = $s;
+        }
+        if (!$pending) {
+            return [];
+        }
+
+        $free = [];
+        foreach ($indexes as $ix) {
+            if (empty($claimed[$ix])) {
+                $free[] = $ix;
+            }
+        }
+        if (!$free) {
+            return [];
+        }
+
+        usort($pending, static function (array $a, array $b): int {
+            return self::sensorSortKey($a) <=> self::sensorSortKey($b);
+        });
+
+        $map = [];
+        $n = min(count($pending), count($free));
+        for ($i = 0; $i < $n; $i++) {
+            $map[(int)$pending[$i]['sensor_id']] = $free[$i];
+        }
+        return $map;
+    }
+
+    /**
+     * Sort key: MM before TH, module number, port, then name.
+     * @return array{0:int,1:int,2:int,3:string}
+     */
+    public static function sensorSortKey(array $sensor): array
+    {
+        $name = (string)($sensor['name'] ?? '');
+        if (preg_match('/\bMM\s*:?\s*(\d+)\b/i', $name, $m)) {
+            return [0, 0, (int)$m[1], strtolower($name)];
+        }
+        if (preg_match('/\bTH\s*0*(\d+)\s*:?\s*(\d+)\b/i', $name, $m)) {
+            return [1, (int)$m[1], (int)$m[2], strtolower($name)];
+        }
+        return [9, 0, 0, strtolower($name)];
     }
 
     public static function normalizeLabel(string $s): string
