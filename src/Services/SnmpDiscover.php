@@ -15,15 +15,20 @@ class SnmpDiscover
      * Broad 1.3.6.1.4.1.318 is intentionally omitted (too large for IIS Discover).
      */
     private const WALK_ROOTS = [
-        '1.3.6.1.2.1.1',              // MIB-II system
-        '1.3.6.1.4.1.318.1.1.10',     // APC Environmental Monitoring (AP9340 / IEM)
-        '1.3.6.1.4.1.318.1.1.25',     // APC Universal I/O
-        '1.3.6.1.4.1.318.1.1.26',     // APC rPDU2
-        '1.3.6.1.4.1.318.1.1.12',     // APC rPDU
-        '1.3.6.1.4.1.3808.1.1.1',     // CyberPower power (narrow)
-        '1.3.6.1.4.1.13742.1',        // Raritan (narrow)
-        '1.3.6.1.4.1.21239.2',        // Vertiv / Geist (narrow)
-        '1.3.6.1.4.1.99999',          // ColdAisle lab agent
+        '1.3.6.1.2.1.1',                  // MIB-II system
+        // APC EMS / AP9340 — status tables before broad config
+        '1.3.6.1.4.1.318.1.1.10.3.13',    // emsProbeStatus* (live temp/humidity)
+        '1.3.6.1.4.1.318.1.1.10.3.5',     // alternate EMS probe status branch
+        '1.3.6.1.4.1.318.1.1.10.2.3',     // IEM status probes
+        '1.3.6.1.4.1.318.1.1.10.3.1',     // emsIdent (serial)
+        '1.3.6.1.4.1.318.1.1.10',         // rest of env manager tree
+        '1.3.6.1.4.1.318.1.1.25',         // APC Universal I/O
+        '1.3.6.1.4.1.318.1.1.26',         // APC rPDU2
+        '1.3.6.1.4.1.318.1.1.12',         // APC rPDU
+        '1.3.6.1.4.1.3808.1.1.1',         // CyberPower power (narrow)
+        '1.3.6.1.4.1.13742.1',            // Raritan (narrow)
+        '1.3.6.1.4.1.21239.2',            // Vertiv / Geist (narrow)
+        '1.3.6.1.4.1.99999',              // ColdAisle lab agent
     ];
 
     private const MAX_OIDS = 300;
@@ -157,13 +162,21 @@ class SnmpDiscover
             '1.3.6.1.4.1.318.1.1.26.9.4.3.1.3.1',
             '1.3.6.1.4.1.3808.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.3808.1.1.1.4.2.5.0',
-            // APC env / AP9340-class probe instances
-            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.4.1',
-            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.6.1',
-            '1.3.6.1.4.1.318.1.1.10.4.2.3.1.5.1',
-            '1.3.6.1.4.1.318.1.1.10.4.2.3.1.6.1',
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.1',
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.4.1',
+            // APC EMS / AP9340 live status (common PowerNet columns × probe index 1–4)
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.1', // emsProbeStatusProbeTemperature.1
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.2',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.3',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.4',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.1', // emsProbeStatusProbeHumidity.1
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.2',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.3',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.4',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.4.1', // name / status variants
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.5.1',
+            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.4.1', // IEM status temp
+            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.6.1', // IEM status humid
+            '1.3.6.1.4.1.318.1.1.10.3.5.1.1.3.1',
+            '1.3.6.1.4.1.318.1.1.10.3.5.1.1.6.1',
         ];
         foreach ($leafGets as $oid) {
             if (isset($collected[$oid])) {
@@ -914,21 +927,29 @@ class SnmpDiscover
             }
         }
 
-        // Config / write / audit — never useful as map candidates in the UI list
+        // Config / write / audit — never useful as map candidates in the UI list.
+        // APC EMS names are camelCase (emsProbeConfig…Thresh) so match without \bconfig\b.
         if (preg_match(
-            '/\bconfig\b|threshold|nearoverload|overloadpower|lowload|'
+            '/config|thresh|threshold|nearoverload|overloadpower|lowload|'
             . 'reset|timestamp|starttime|start_time|'
             . 'orientation|displayorientation|hardwarerev|firmwarerev|'
             . 'identmodel|identserial|identname|partnumber|'
             . 'trap|notification|control\b|initiate|'
             . 'phaseconfig|deviceconfig|outletconfig|'
             . 'index\b|numphases|numoutlets|module\b|'
-            . 'peakpowerstart|peakcurrentstart|peakpowerreset|peakcurrentreset/',
+            . 'peakpowerstart|peakcurrentstart|peakpowerreset|peakcurrentreset|'
+            . 'probeconfig|highhum|lowhum|maxtemp|mintemp|maxhum|minhum/',
             $s
         )) {
+            // Keep live *status* temp/humidity (not config thresh)
+            if (preg_match('/status.*(temp|humid|dew)|probe.*status.*(temp|humid)|currenttemp|currenthumid|sensorstatus(temp|humid)/', $s)
+                && !preg_match('/config|thresh/', $s)
+            ) {
+                return false;
+            }
             // Keep useful rating / max phase current (not a threshold alarm point)
             if (preg_match('/maxphasecurrentrating|identdevicerating|devicerating|maxcurrentrating/', $s)
-                && !preg_match('/threshold|near|overload|lowload|reset/', $s)
+                && !preg_match('/threshold|thresh|near|overload|lowload|reset/', $s)
             ) {
                 return false;
             }
@@ -1012,18 +1033,30 @@ class SnmpDiscover
             if (preg_match('/statusvoltage|phasestatusvoltage|phasetophase|(?<![a-z])voltage(?![a-z])/', $s)) {
                 $score += 8;
             }
-            if (preg_match('/\btemp|temperature\b/', $s)) {
-                $score += 4;
-            }
-            // Environmental manager / probes (AP9340, IEM, uio, NetBotz-class under PowerNet)
-            if (preg_match('/\bhumid|humidity|dewpoint|dew.?point|probe|iemstatus|iemconfig|emstatus|emconfig|uio|sensorstatus|envmon|environmental\b/', $s)) {
-                $score += 14;
-            }
-            if (preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.(10|25)\./', $s)
-                || str_contains($s, '1.3.6.1.4.1.318.1.1.10.')
-                || str_contains($s, '1.3.6.1.4.1.318.1.1.25.')
+            // Live temperature / humidity status (env managers) — not config thresh
+            if (preg_match('/(status|current).*(temp|temperature)|(temp|temperature).*(status|current)|probetemperature|probestatustemp/', $s)
+                && !preg_match('/config|thresh/', $s)
             ) {
-                $score += 10;
+                $score += 28;
+            }
+            if (preg_match('/(status|current).*(humid|humidity)|(humid|humidity).*(status|current)|probehumidity|probestatushumid/', $s)
+                && !preg_match('/config|thresh/', $s)
+            ) {
+                $score += 28;
+            }
+            if (preg_match('/\btemp|temperature\b/', $s) && !preg_match('/config|thresh/', $s)) {
+                $score += 8;
+            }
+            // Environmental manager / probes (AP9340 EMS / IEM / uio) — live only
+            if (preg_match('/emsprobestatus|iemstatus|emstatus|uio.*status|sensorstatus|probe.*status/', $s)
+                && !preg_match('/config|thresh/', $s)
+            ) {
+                $score += 18;
+            }
+            if (preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.10\.(2|3)\.(5|13|2)/', $oid)
+                || preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.10\.3\.13\./', $oid)
+            ) {
+                $score += 12; // EMS/IEM status table branches
             }
             // Prefer phase/device totals over bulk outlet sensors
             if (preg_match('/phasestatus|identdevice|devicestatus|phasetophase/', $s)) {
@@ -1215,6 +1248,10 @@ class SnmpDiscover
         foreach (self::proposeOutletMapKeys($candidates) as $k => $oid) {
             $map[$k] = $oid;
         }
+        // Env manager live temp/humidity per probe index
+        foreach (self::proposeEnvMapKeys($candidates) as $k => $oid) {
+            $map[$k] = $oid;
+        }
 
         $pick = static function (array $c) use (&$watts, &$wattsScore, &$amps, &$ampsX10): void {
             $oid = $c['oid'];
@@ -1224,7 +1261,7 @@ class SnmpDiscover
             $hay = $name . ' ' . $hint;
             $sc = (int)($c['score'] ?? 0);
 
-            if (preg_match('/config|threshold|reset|timestamp|powerfactor|powersupply|properties/', $hay)) {
+            if (preg_match('/config|thresh|threshold|reset|timestamp|powerfactor|powersupply|properties/', $hay)) {
                 return;
             }
 
@@ -1569,6 +1606,64 @@ class SnmpDiscover
             }
         }
         return $proposed;
+    }
+
+    /**
+     * Live env probe metrics for APC EMS / IEM / generic status temps.
+     * Keys: temperature.1 … humidity.1 … (instance from OID suffix).
+     *
+     * @param list<array{oid:string,name?:?string,hint?:string,score?:int,numeric?:?float}> $candidates
+     * @return array<string,string>
+     */
+    private static function proposeEnvMapKeys(array $candidates): array
+    {
+        $out = [];
+        foreach ($candidates as $c) {
+            $oid = (string)($c['oid'] ?? '');
+            $name = strtolower((string)($c['name'] ?? ''));
+            $hint = strtolower((string)($c['hint'] ?? ''));
+            $hay = $name . ' ' . $hint . ' ' . $oid;
+            if ($oid === '' || preg_match('/config|thresh|threshold|reset/', $hay)) {
+                continue;
+            }
+            $inst = '1';
+            if (preg_match('/\.(\d+)$/', $oid, $m)) {
+                $inst = $m[1];
+            }
+            $isTemp = (bool)preg_match(
+                '/(status|current).*(temp|temperature)|(temp|temperature).*(status|current)|probetemperature|statustemp/',
+                $hay
+            );
+            $isHum = (bool)preg_match(
+                '/(status|current).*(humid|humidity)|(humid|humidity).*(status|current)|probehumidity|statushumid/',
+                $hay
+            );
+            // Known APC EMS status column bases (PowerNet emsProbeStatus*)
+            if (preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.10\.3\.13\.1\.1\.3(?:\.|$)/', $oid)
+                || preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.10\.2\.3\.2\.1\.4(?:\.|$)/', $oid)
+            ) {
+                $isTemp = true;
+            }
+            if (preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.10\.3\.13\.1\.1\.6(?:\.|$)/', $oid)
+                || preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.10\.2\.3\.2\.1\.6(?:\.|$)/', $oid)
+            ) {
+                $isHum = true;
+            }
+            if ($isTemp) {
+                $key = 'temperature.' . $inst;
+                if (!isset($out[$key]) || ((int)($c['score'] ?? 0) > 20)) {
+                    $out[$key] = $oid;
+                }
+            }
+            if ($isHum) {
+                $key = 'humidity.' . $inst;
+                if (!isset($out[$key]) || ((int)($c['score'] ?? 0) > 20)) {
+                    $out[$key] = $oid;
+                }
+            }
+        }
+        // Prefer base map keys without forcing every index when only .1 exists
+        return $out;
     }
 
     /**
