@@ -724,31 +724,21 @@ class EnvSensorPoll
         $usedTemp = [];
         $usedHum = [];
 
-        // L/R + name + order (prefer live remotes for TH)
-        $orderMap = self::buildOrderFallbackMap($sensors, $liveEnv, $probeNames, $probeMeta);
+        // Exclusive assignment: exact name → module.port → free live slots (no two sensors share a probe)
+        $assignMap = self::assignSensorsExclusively($sensors, $probeNames, $probeMeta, $liveEnv);
 
         foreach ($sensors as $sensor) {
             $sid = (int)$sensor['sensor_id'];
             $kind = strtolower((string)($sensor['sensor_kind'] ?? 'temperature'));
-            $inst = self::matchSensorToProbeIndex($sensor, $liveEnv, $probeNames, $probeMeta);
-            if ($inst === null && isset($orderMap[$sid])) {
-                $inst = $orderMap[$sid];
-            }
+            $inst = $assignMap[$sid] ?? null;
             $tempVal = null;
             $humVal = null;
             $mapKeyTemp = null;
             $mapKeyHum = null;
 
             if ($inst !== null && isset($probeMeta[$inst]) && empty($probeMeta[$inst]['live'])) {
-                // Don't pin a sensor to a dead/empty slot
                 $skippedDead++;
                 $inst = null;
-                if (isset($orderMap[$sid])) {
-                    $alt = $orderMap[$sid];
-                    if (!isset($probeMeta[$alt]) || !empty($probeMeta[$alt]['live'])) {
-                        $inst = $alt;
-                    }
-                }
             }
 
             if ($inst !== null) {
@@ -768,28 +758,9 @@ class EnvSensorPoll
                 }
             }
 
-            // Explicit map key still wins if present and valid
-            $idxRaw = strtolower(trim((string)($sensor['snmp_index'] ?? '')));
-            if (preg_match('/^(temperature|temp)\.(\d+)$/', $idxRaw, $m)) {
-                $i = (int)$m[2];
-                if (isset($envMetrics['temperature'][$i])) {
-                    $tempVal = $envMetrics['temperature'][$i];
-                    $mapKeyTemp = 'temperature.' . $i;
-                    $inst = $i;
-                }
-            }
-            if (preg_match('/^(humidity|humid)\.(\d+)$/', $idxRaw, $m)) {
-                $i = (int)$m[2];
-                if (isset($envMetrics['humidity'][$i])) {
-                    $humVal = $envMetrics['humidity'][$i];
-                    $mapKeyHum = 'humidity.' . $i;
-                    $inst = $i;
-                }
-            }
-
-            // Exact OID match
+            // Explicit full OID still allowed (rare)
             $oid = ltrim(trim((string)($sensor['snmp_oid'] ?? '')), '.');
-            if ($oid !== '') {
+            if ($oid !== '' && $inst === null) {
                 foreach ($metrics as $mk => $meta) {
                     $moid = ltrim((string)($meta['oid'] ?? ''), '.');
                     if ($moid === '' || $moid !== $oid) {
@@ -1015,6 +986,129 @@ class EnvSensorPoll
     }
 
     /**
+     * Assign each env sensor to at most one live probe (no collisions).
+     * Priority: exact name (MEM) → TH0X:Y module.sensor → MM:N → free live leftovers.
+     *
+     * @param list<array<string,mixed>> $sensors
+     * @param array<int,string> $probeNames
+     * @param array<int,array<string,mixed>> $probeMeta
+     * @param array{temperature:array<int,float>,humidity:array<int,float>} $liveEnv
+     * @return array<int,int> sensor_id => probe index
+     */
+    public static function assignSensorsExclusively(
+        array $sensors,
+        array $probeNames,
+        array $probeMeta,
+        array $liveEnv
+    ): array {
+        $map = [];
+        $claimed = [];
+
+        $claim = static function (int $sensorId, int $probeIdx) use (&$map, &$claimed): bool {
+            if ($sensorId < 1 || isset($claimed[$probeIdx]) || isset($map[$sensorId])) {
+                return false;
+            }
+            $map[$sensorId] = $probeIdx;
+            $claimed[$probeIdx] = $sensorId;
+            return true;
+        };
+
+        // Pass 1: exact display name on live MEM (or any live) rows
+        foreach ($sensors as $s) {
+            $sid = (int)($s['sensor_id'] ?? 0);
+            $want = self::normalizeLabel((string)($s['name'] ?? ''));
+            if ($sid < 1 || $want === '') {
+                continue;
+            }
+            $best = null;
+            $bestRank = 999;
+            foreach ($probeMeta as $i => $pm) {
+                if (empty($pm['live'])) {
+                    continue;
+                }
+                $pn = self::normalizeLabel((string)($pm['name'] ?? ($probeNames[$i] ?? '')));
+                if ($pn === '' || $pn !== $want) {
+                    continue;
+                }
+                $rank = match ($pm['source'] ?? 'ems') {
+                    'mem' => 0,
+                    'uio' => 1,
+                    default => 2,
+                };
+                if ($rank < $bestRank) {
+                    $bestRank = $rank;
+                    $best = (int)$i;
+                }
+            }
+            if ($best !== null) {
+                $claim($sid, $best);
+            }
+        }
+
+        // Pass 2: TH0X:Y → MEM module X sensor Y (exact)
+        foreach ($sensors as $s) {
+            $sid = (int)($s['sensor_id'] ?? 0);
+            if ($sid < 1 || isset($map[$sid])) {
+                continue;
+            }
+            $name = (string)($s['name'] ?? '');
+            if (!preg_match('/\bTH\s*0*(\d+)\s*:?\s*(\d+)\b/i', $name, $m)) {
+                continue;
+            }
+            $mod = (int)$m[1];
+            $port = (int)$m[2];
+            foreach ($probeMeta as $i => $pm) {
+                if (empty($pm['live']) || ($pm['source'] ?? '') !== 'mem') {
+                    continue;
+                }
+                if ((int)($pm['mem_module'] ?? -1) === $mod
+                    && (int)($pm['mem_sensor'] ?? -1) === $port
+                ) {
+                    if ($claim($sid, (int)$i)) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Pass 3: MM:N → MEM module 0 or 1, sensor N
+        foreach ($sensors as $s) {
+            $sid = (int)($s['sensor_id'] ?? 0);
+            if ($sid < 1 || isset($map[$sid])) {
+                continue;
+            }
+            $name = (string)($s['name'] ?? '');
+            if (!preg_match('/\bMM\s*:?\s*(\d+)\b/i', $name, $m)) {
+                continue;
+            }
+            $port = (int)$m[1];
+            foreach ($probeMeta as $i => $pm) {
+                if (empty($pm['live']) || ($pm['source'] ?? '') !== 'mem') {
+                    continue;
+                }
+                $mm = (int)($pm['mem_module'] ?? -99);
+                $ms = (int)($pm['mem_sensor'] ?? -99);
+                if ($ms === $port && ($mm === 0 || $mm === 1)) {
+                    if ($claim($sid, (int)$i)) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Pass 4: leftover free live probes by order (MM then TH)
+        $order = self::buildOrderFallbackMap($sensors, $liveEnv, $probeNames, $probeMeta);
+        foreach ($order as $sid => $probeIdx) {
+            if (isset($map[$sid]) || isset($claimed[$probeIdx])) {
+                continue;
+            }
+            $claim((int)$sid, (int)$probeIdx);
+        }
+
+        return $map;
+    }
+
+    /**
      * Resolve which EMS table index a sensor row maps to.
      * Prefer L#/R# serial (local MM vs remote TH), then probe names.
      *
@@ -1077,24 +1171,12 @@ class EnvSensorPoll
                 $mod = (int)$m[1];
                 $port = (int)$m[2];
                 foreach ($probeMeta as $i => $pm) {
-                    if (($pm['source'] ?? '') !== 'mem') {
-                        continue;
-                    }
-                    $mm = (int)($pm['mem_module'] ?? -1);
-                    $ms = (int)($pm['mem_sensor'] ?? -1);
-                    // Module number often matches TH index (1,2,3); allow 0-based module too
-                    if ($ms === $port && ($mm === $mod || $mm === $mod - 1 || $mm === $mod + 1)
-                        && !empty($pm['live'])
-                    ) {
-                        return (int)$i;
-                    }
-                }
-                foreach ($probeMeta as $i => $pm) {
                     if (($pm['source'] ?? '') !== 'mem' || empty($pm['live'])) {
                         continue;
                     }
                     $mm = (int)($pm['mem_module'] ?? -1);
                     $ms = (int)($pm['mem_sensor'] ?? -1);
+                    // Exact module + port only (no ±1 guessing — that caused TH01:3 / TH02:3 collisions)
                     if ($mm === $mod && $ms === $port) {
                         return (int)$i;
                     }
