@@ -303,7 +303,11 @@ try {
             if (!empty($env['probes'])) {
                 $bits[] = (int)$env['probes'] . ' EMS probe(s) seen.';
             }
-            if (!empty($result['probe_names']) && is_array($result['probe_names'])) {
+            // Prefer L#/R# + temp snapshot (shows which slots are live vs 0° dead)
+            if (!empty($env['snapshot']) && is_array($env['snapshot'])) {
+                $bits[] = 'Slots: ' . implode(', ', array_slice($env['snapshot'], 0, 12))
+                    . (count($env['snapshot']) > 12 ? '…' : '') . '.';
+            } elseif (!empty($result['probe_names']) && is_array($result['probe_names'])) {
                 $sample = [];
                 foreach ($result['probe_names'] as $pi => $pn) {
                     $sample[] = $pi . '=' . $pn;
@@ -325,10 +329,17 @@ try {
                     $envBit .= ' of ' . (int)$env['candidates'] . ' candidate(s)';
                 }
                 $bits[] = $envBit . '.';
+                if (!empty($env['matched']) && is_array($env['matched'])) {
+                    $bits[] = 'Map: ' . implode('; ', array_slice($env['matched'], 0, 8))
+                        . (count($env['matched']) > 8 ? '…' : '') . '.';
+                }
             } elseif (!empty($env['keys']) || !empty($env['probes'])) {
                 $bits[] = 'EMS probes answered but no env sensors matched by name/index '
                     . '(candidates=' . (int)($env['candidates'] ?? 0) . '). '
                     . 'Name sensors like the EMS probe labels, or set Probe/map key to the SNMP index.';
+            }
+            if (!empty($env['skipped_dead'])) {
+                $bits[] = 'Skipped ' . (int)$env['skipped_dead'] . ' dead/empty probe slot(s).';
             }
             if ($fresh && $fresh['snmp_last_poll_watts'] !== null) {
                 $w = (float)$fresh['snmp_last_poll_watts'];

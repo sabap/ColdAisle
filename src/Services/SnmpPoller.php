@@ -278,6 +278,7 @@ class SnmpPoller
         // Expand APC EMS probe table (MM + TH expansion modules share one flat index)
         // while session is open — template may only list probes 1–4.
         $probeNames = [];
+        $probeMeta = [];
         $metrics = is_array($got['metrics'] ?? null) ? $got['metrics'] : [];
         try {
             require_once __DIR__ . '/EnvSensorPoll.php';
@@ -296,15 +297,18 @@ class SnmpPoller
             if (preg_match('/ap9340|env_monitor|environmental|ems/', $sys)) {
                 $looksEms = true;
             }
+            $probeMeta = [];
             if ($looksEms) {
                 $exp = EnvSensorPoll::expandApcEmsProbes($session, $metrics);
                 $metrics = $exp['metrics'];
                 $probeNames = $exp['probe_names'];
+                $probeMeta = $exp['probe_meta'] ?? [];
                 $got['metrics'] = $metrics;
                 $got['ok'] = max((int)$got['ok'], count($metrics));
             }
         } catch (Throwable $e) {
             App::log('EMS probe expand: ' . $e->getMessage(), 'warning');
+            $probeMeta = [];
         }
 
         self::closeSession($session);
@@ -335,7 +339,8 @@ class SnmpPoller
                 $templateId,
                 $metrics,
                 $oidMap,
-                $probeNames
+                $probeNames,
+                $probeMeta ?? []
             );
         } catch (Throwable $e) {
             App::log('EnvSensorPoll device_id=' . (int)$device['device_id'] . ': ' . $e->getMessage(), 'warning');
@@ -349,6 +354,7 @@ class SnmpPoller
             'failed' => $got['failed'],
             'metrics' => $metrics,
             'probe_names' => $probeNames,
+            'probe_meta' => $probeMeta ?? [],
             'env' => $env,
         ];
     }
