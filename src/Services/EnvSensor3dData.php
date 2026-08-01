@@ -116,6 +116,8 @@ class EnvSensor3dData
     private static function loadSensorRows(?int $roomId): array
     {
         // Avoid fragile columns (last_humidity / front_facing) that break the whole query
+        // Join floor coords for the sensor's own cabinet_id first (deployed rack).
+        // Device join is only for fallback when sensor.cabinet_id is empty.
         $sql = "SELECT s.sensor_id, s.name, s.sensor_kind, s.placement, s.host_type,
                        s.location_label, s.last_value, s.unit, s.last_seen_at,
                        s.pos_x AS s_pos_x, s.pos_y AS s_pos_y, s.pos_z AS s_pos_z,
@@ -128,13 +130,19 @@ class EnvSensor3dData
                        c.room_id AS c_room_id
                 FROM env_sensors s
                 LEFT JOIN devices d ON d.device_id = s.device_id AND d.is_active = 1
-                LEFT JOIN cabinets c ON c.cabinet_id = COALESCE(s.cabinet_id, d.cabinet_id)
-                     AND c.is_active = 1
+                LEFT JOIN cabinets c ON c.cabinet_id = s.cabinet_id AND c.is_active = 1
                 WHERE s.is_active = 1
                   AND s.last_value IS NOT NULL";
         $params = [];
         if ($roomId !== null && $roomId > 0) {
-            $sql .= ' AND (c.room_id = ? OR (c.room_id IS NULL AND s.cabinet_id IS NOT NULL))';
+            // Room filter: sensor cabinet in room, or host device cabinet in room if sensor cab empty
+            $sql .= ' AND (
+                c.room_id = ?
+                OR (s.cabinet_id IS NULL AND d.cabinet_id IN (
+                    SELECT cabinet_id FROM cabinets WHERE room_id = ? AND is_active = 1
+                ))
+            )';
+            $params[] = $roomId;
             $params[] = $roomId;
         }
         $sql .= ' ORDER BY s.name';
@@ -172,7 +180,8 @@ class EnvSensor3dData
 
     private static function cabinetIdFromRow(array $r): int
     {
-        foreach (['c_cabinet_id', 'cabinet_id', 's_cabinet_id', 'd_cabinet_id'] as $k) {
+        // Sensor property first, then host device — never invent from TH name
+        foreach (['s_cabinet_id', 'd_cabinet_id', 'c_cabinet_id', 'cabinet_id'] as $k) {
             if (isset($r[$k]) && (int)$r[$k] > 0) {
                 return (int)$r[$k];
             }
@@ -213,76 +222,44 @@ class EnvSensor3dData
         }
 
         $name = (string)($r['name'] ?? '');
-        $thMod = null;
         $thPort = null;
-        if (preg_match('/\bTH\s*0*(\d+)\s*:?\s*(\d+)\b/i', $name, $tm)) {
-            $thMod = (int)$tm[1];
-            $thPort = (int)$tm[2];
-        } elseif (preg_match('/\bTH\s*0*(\d+)\b/i', $name, $tm)) {
-            $thMod = (int)$tm[1];
+        if (preg_match('/\bTH\s*0*\d+\s*:?\s*(\d+)\b/i', $name, $tm)) {
+            $thPort = (int)$tm[1];
+        } elseif (preg_match('/\bMM\s*:?\s*(\d+)\b/i', $name, $tm)) {
+            $thPort = (int)$tm[1];
         }
-        $isTh = $thMod !== null;
-        $isMm = (bool)preg_match('/\bMM\s*:?\s*\d+/i', $name);
+
+        // 1) Prefer the cabinet stored on the sensor (deployed rack in properties)
+        // 2) Else host device cabinet (only if sensor.cabinet_id empty)
+        // Do NOT map TH0N → expansion-module device rack by name — that ignored the
+        // per-sensor "Cabinet" field and stacked probes on MM/TH chassis locations.
+        $cid = (int)($r['s_cabinet_id'] ?? 0);
+        if ($cid < 1) {
+            $cid = (int)($r['d_cabinet_id'] ?? 0);
+        }
+        if ($cid < 1) {
+            return null;
+        }
 
         $cab = null;
-
-        // 1) TH sensors: ALWAYS resolve expansion rack — never fall back to MM host cabinet
-        if ($isTh && $thMod !== null) {
-            $cab = self::findExpansionCabinet($thMod);
-            if (!$cab) {
-                $cab = self::findCabinetByLocationLabel(
-                    (string)($r['location_label'] ?? $r['placement'] ?? '')
-                );
-            }
-            if (!$cab) {
-                // Do not stack on MM — unplaceable until expansion rack is known
-                App::log(
-                    'EnvSensor3dData: no floor cabinet for expansion TH'
-                    . sprintf('%02d', $thMod) . ' (' . $name . ')',
-                    'info'
-                );
-                return null;
-            }
-        }
-
-        // 2) MM / other: host device or sensor cabinet
-        if (!$cab) {
-            $cid = self::cabinetIdFromRow($r);
-            // Host device cabinet if sensor cabinet empty
-            if ($cid < 1 && !empty($r['device_id'])) {
-                try {
-                    $devCab = Database::fetchOne(
-                        'SELECT cabinet_id FROM devices WHERE device_id = ? AND is_active = 1',
-                        [(int)$r['device_id']]
-                    );
-                    if ($devCab && (int)($devCab['cabinet_id'] ?? 0) > 0) {
-                        $cid = (int)$devCab['cabinet_id'];
-                    }
-                } catch (Throwable $e) {
-                    // ignore
-                }
-            }
-            if ($cid < 1) {
-                return null;
-            }
-            if (self::toFloat($r['c_pos_x'] ?? null) !== null
-                && self::toFloat($r['c_pos_y'] ?? null) !== null
-                && (int)($r['c_cabinet_id'] ?? $r['cabinet_id'] ?? 0) === $cid
-            ) {
-                $cab = [
-                    'cabinet_id' => $cid,
-                    'cabinet_name' => $r['cabinet_name'] ?? null,
-                    'c_pos_x' => $r['c_pos_x'],
-                    'c_pos_y' => $r['c_pos_y'],
-                    'c_pos_z' => $r['c_pos_z'] ?? null,
-                    'rotation_deg' => $r['rotation_deg'] ?? 0,
-                    'width_mm' => $r['width_mm'] ?? 600,
-                    'depth_mm' => $r['depth_mm'] ?? 1200,
-                    'c_u_height' => $r['c_u_height'] ?? 42,
-                ];
-            } else {
-                $cab = self::loadCabinet($cid);
-            }
+        $joinedCabId = (int)($r['c_cabinet_id'] ?? 0);
+        if ($joinedCabId === $cid
+            && self::toFloat($r['c_pos_x'] ?? null) !== null
+            && self::toFloat($r['c_pos_y'] ?? null) !== null
+        ) {
+            $cab = [
+                'cabinet_id' => $cid,
+                'cabinet_name' => $r['cabinet_name'] ?? null,
+                'c_pos_x' => $r['c_pos_x'],
+                'c_pos_y' => $r['c_pos_y'],
+                'c_pos_z' => $r['c_pos_z'] ?? null,
+                'rotation_deg' => $r['rotation_deg'] ?? 0,
+                'width_mm' => $r['width_mm'] ?? 600,
+                'depth_mm' => $r['depth_mm'] ?? 1200,
+                'c_u_height' => $r['c_u_height'] ?? 42,
+            ];
+        } else {
+            $cab = self::loadCabinet($cid);
         }
 
         if (!$cab || self::toFloat($cab['c_pos_x'] ?? null) === null
@@ -398,222 +375,4 @@ class EnvSensor3dData
         }
     }
 
-    /**
-     * Match location labels like Z2-RA-R5 / Z1-RB-R8 to a floor-placed cabinet name.
-     *
-     * @return array<string,mixed>|null
-     */
-    private static function findCabinetByLocationLabel(string $label): ?array
-    {
-        $label = trim($label);
-        if ($label === '') {
-            return null;
-        }
-        // Extract rack-ish tokens: RA, RB, R5, R8, ROW A, etc.
-        $tokens = [];
-        if (preg_match_all('/\bR[A-Z]\b|\bR\d+\b|\bROW\s*[A-Z]\b/i', $label, $m)) {
-            foreach ($m[0] as $t) {
-                $tokens[] = strtoupper(preg_replace('/\s+/', '', $t) ?? $t);
-            }
-        }
-        if ($tokens === []) {
-            // whole label as soft match
-            $tokens[] = $label;
-        }
-        try {
-            $cabs = Database::fetchAll(
-                'SELECT cabinet_id, name AS cabinet_name,
-                        pos_x AS c_pos_x, pos_y AS c_pos_y, pos_z AS c_pos_z,
-                        rotation_deg, width_mm, depth_mm, u_height AS c_u_height, room_id AS c_room_id
-                 FROM cabinets
-                 WHERE is_active = 1 AND pos_x IS NOT NULL AND pos_y IS NOT NULL'
-            );
-        } catch (Throwable $e) {
-            return null;
-        }
-        $best = null;
-        $bestScore = 0;
-        foreach ($cabs as $c) {
-            $cn = strtoupper((string)($c['cabinet_name'] ?? ''));
-            $score = 0;
-            foreach ($tokens as $t) {
-                $t = strtoupper((string)$t);
-                if ($t !== '' && str_contains($cn, $t)) {
-                    $score += 2;
-                }
-            }
-            // Prefer names that look like rack IDs
-            if ($score > $bestScore) {
-                $bestScore = $score;
-                $best = $c;
-            }
-        }
-        return $bestScore >= 2 ? $best : null;
-    }
-
-    /**
-     * Floor-placed cabinet for TH expansion module N.
-     * Matches device labels like TH01, TH-EXP-ROWA [01], EXP 01, etc.
-     *
-     * @return array<string,mixed>|null
-     */
-    private static function findExpansionCabinet(int $moduleNum): ?array
-    {
-        if ($moduleNum < 1) {
-            return null;
-        }
-        static $cache = [];
-        if (array_key_exists($moduleNum, $cache)) {
-            return $cache[$moduleNum];
-        }
-
-        $nn = sprintf('%02d', $moduleNum);
-        $n = (string)$moduleNum;
-        $patterns = [
-            '%TH' . $nn . '%',
-            '%TH-' . $nn . '%',
-            '%TH ' . $nn . '%',
-            '%TH' . $n . '%',
-            '%[' . $nn . ']%',
-            '%[ ' . $nn . ' ]%',
-            '%[0' . $n . ']%',
-            '%[' . $n . ']%',
-            '%EXP%' . $nn . '%',
-            '%EXP%' . $n . '%',
-            '%EXPANSION%' . $nn . '%',
-            '%ROW%' . $nn . '%',
-        ];
-
-        try {
-            // All placed env modules / monitors — score in PHP for flexible matching
-            $devs = Database::fetchAll(
-                "SELECT d.device_id, d.label, d.model, d.device_type, d.cabinet_id,
-                        c.cabinet_id AS cab_id, c.name AS cabinet_name,
-                        c.pos_x AS c_pos_x, c.pos_y AS c_pos_y, c.pos_z AS c_pos_z,
-                        c.rotation_deg, c.width_mm, c.depth_mm, c.u_height AS c_u_height, c.room_id AS c_room_id
-                 FROM devices d
-                 INNER JOIN cabinets c ON c.cabinet_id = d.cabinet_id AND c.is_active = 1
-                 WHERE d.is_active = 1
-                   AND c.pos_x IS NOT NULL AND c.pos_y IS NOT NULL
-                   AND d.device_type IN ('env_module', 'env_monitor', 'other', 'chassis')
-                 ORDER BY d.label"
-            );
-            $best = null;
-            $bestScore = 0;
-            foreach ($devs as $d) {
-                $hay = strtoupper(
-                    (string)($d['label'] ?? '') . ' ' . (string)($d['model'] ?? '')
-                    . ' ' . (string)($d['cabinet_name'] ?? '')
-                );
-                $score = 0;
-                $type = (string)($d['device_type'] ?? '');
-                if ($type === 'env_module') {
-                    $score += 5;
-                }
-                if (preg_match('/\bTH\s*0*' . $moduleNum . '\b/', $hay)
-                    || preg_match('/\bTH0*' . $nn . '\b/', $hay)
-                ) {
-                    $score += 50;
-                }
-                if (str_contains($hay, '[' . $nn . ']') || str_contains($hay, '[0' . $n . ']')
-                    || str_contains($hay, '[' . $n . ']')
-                ) {
-                    $score += 40;
-                }
-                if (str_contains($hay, 'EXP') && (
-                    str_contains($hay, $nn) || preg_match('/\b0*' . $moduleNum . '\b/', $hay)
-                )) {
-                    $score += 25;
-                }
-                // Penalize pure management modules when looking for expansions
-                if (str_contains($hay, 'MGR') || str_contains($hay, 'MANAG')
-                    || str_contains($hay, 'AP9340') && $type === 'env_monitor'
-                ) {
-                    $score -= 30;
-                }
-                if ($score > $bestScore) {
-                    $bestScore = $score;
-                    $best = [
-                        'cabinet_id' => (int)$d['cab_id'],
-                        'cabinet_name' => $d['cabinet_name'] ?? null,
-                        'c_pos_x' => $d['c_pos_x'],
-                        'c_pos_y' => $d['c_pos_y'],
-                        'c_pos_z' => $d['c_pos_z'],
-                        'rotation_deg' => $d['rotation_deg'] ?? 0,
-                        'width_mm' => $d['width_mm'] ?? 600,
-                        'depth_mm' => $d['depth_mm'] ?? 1200,
-                        'c_u_height' => $d['c_u_height'] ?? 42,
-                        'c_room_id' => $d['c_room_id'] ?? null,
-                    ];
-                }
-            }
-
-            // Also score cabinets by name alone (device may be typed wrong)
-            if ($bestScore < 20) {
-                $cabs = Database::fetchAll(
-                    'SELECT cabinet_id, name AS cabinet_name,
-                            pos_x AS c_pos_x, pos_y AS c_pos_y, pos_z AS c_pos_z,
-                            rotation_deg, width_mm, depth_mm, u_height AS c_u_height, room_id AS c_room_id
-                     FROM cabinets
-                     WHERE is_active = 1 AND pos_x IS NOT NULL AND pos_y IS NOT NULL'
-                );
-                foreach ($cabs as $c) {
-                    $hay = strtoupper((string)($c['cabinet_name'] ?? ''));
-                    $score = 0;
-                    if (preg_match('/\bTH\s*0*' . $moduleNum . '\b/', $hay)) {
-                        $score += 40;
-                    }
-                    if (str_contains($hay, '[' . $nn . ']') || str_contains($hay, 'EXP')) {
-                        $score += 15;
-                    }
-                    if ($score > $bestScore) {
-                        $bestScore = $score;
-                        $best = $c;
-                        $best['cabinet_id'] = (int)$c['cabinet_id'];
-                    }
-                }
-            }
-
-            // Ordered fallback: env_modules only (never MM)
-            if ($bestScore < 20) {
-                $mods = [];
-                foreach ($devs as $d) {
-                    if (($d['device_type'] ?? '') !== 'env_module') {
-                        continue;
-                    }
-                    $hay = strtoupper((string)($d['label'] ?? ''));
-                    if (str_contains($hay, 'MGR') || str_contains($hay, 'MANAG')) {
-                        continue;
-                    }
-                    $mods[] = [
-                        'cabinet_id' => (int)$d['cab_id'],
-                        'cabinet_name' => $d['cabinet_name'] ?? null,
-                        'c_pos_x' => $d['c_pos_x'],
-                        'c_pos_y' => $d['c_pos_y'],
-                        'c_pos_z' => $d['c_pos_z'],
-                        'rotation_deg' => $d['rotation_deg'] ?? 0,
-                        'width_mm' => $d['width_mm'] ?? 600,
-                        'depth_mm' => $d['depth_mm'] ?? 1200,
-                        'c_u_height' => $d['c_u_height'] ?? 42,
-                    ];
-                }
-                // Sort by label already from SQL order of $devs — re-fetch sorted
-                usort($mods, static function ($a, $b) {
-                    return strcmp((string)($a['cabinet_name'] ?? ''), (string)($b['cabinet_name'] ?? ''));
-                });
-                if (isset($mods[$moduleNum - 1])) {
-                    $best = $mods[$moduleNum - 1];
-                    $bestScore = 20;
-                }
-            }
-
-            $row = $bestScore >= 20 ? $best : null;
-        } catch (Throwable $e) {
-            App::log('findExpansionCabinet: ' . $e->getMessage(), 'warning');
-            $row = null;
-        }
-
-        $cache[$moduleNum] = $row ?: null;
-        return $cache[$moduleNum];
-    }
 }

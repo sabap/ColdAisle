@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Heat sphere positions:** use each env sensor’s **Cabinet** property (deployed rack), not the management/expansion module chassis location.
+
 ---
 
 ## [0.3.29] - 2026-08-01
