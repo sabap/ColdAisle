@@ -43,7 +43,19 @@
       let data;
       try { data = text ? JSON.parse(text) : {}; } catch (e) { data = { raw: text }; }
       if (!res.ok) {
-        const err = new Error((data && data.error) || res.statusText || 'Request failed');
+        let msg = (data && data.error) || '';
+        // IIS often returns HTML "Internal Server Error" with no JSON body
+        if (!msg && data && data.raw) {
+          const raw = String(data.raw).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          msg = raw.slice(0, 240) || res.statusText || 'Request failed';
+        }
+        if (!msg) {
+          msg = res.statusText || ('HTTP ' + res.status);
+        }
+        if (res.status === 500 && (!data || !data.error)) {
+          msg += ' — check storage/logs/app.log and snmp_discover_last.txt on the server';
+        }
+        const err = new Error(msg);
         err.status = res.status;
         err.data = data;
         throw err;
