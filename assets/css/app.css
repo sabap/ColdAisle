@@ -667,18 +667,95 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
 
 /* Tables */
 .table-wrap { overflow-x: auto; }
-table.data {
-  width: 100%; border-collapse: collapse; font-size: .9rem;
+table.data,
+table.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .9rem;
 }
-table.data th, table.data td {
-  padding: .65rem .9rem; text-align: left; border-bottom: 1px solid var(--border);
+table.data th, table.data td,
+table.table th, table.table td {
+  padding: .7rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
 }
-table.data th {
-  background: var(--surface-2); color: var(--muted); font-weight: 600;
-  font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap;
+table.data th,
+table.table th {
+  background: var(--surface-2);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: .78rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  white-space: nowrap;
 }
-table.data tr:hover td { background: var(--surface-2); }
-table.data .actions { white-space: nowrap; }
+table.data tr:hover td,
+table.table tbody tr:hover td {
+  background: var(--surface-2);
+}
+table.data .actions,
+table.table .actions {
+  white-space: nowrap;
+}
+table.table-sm th,
+table.table-sm td {
+  padding: .45rem .7rem;
+  font-size: .86rem;
+}
+
+/* Env sensors list — readable columns, real host names */
+.env-sensors-table-wrap {
+  overflow-x: auto;
+}
+table.table-env-sensors {
+  min-width: 720px;
+  table-layout: fixed;
+}
+table.table-env-sensors th,
+table.table-env-sensors td {
+  padding: .85rem 1.1rem;
+  line-height: 1.35;
+}
+table.table-env-sensors .col-name { width: 24%; }
+table.table-env-sensors .col-kind { width: 10%; }
+table.table-env-sensors .col-host { width: 22%; }
+table.table-env-sensors .col-place { width: 16%; }
+table.table-env-sensors .col-value { width: 18%; }
+table.table-env-sensors .col-status { width: 10%; text-align: center; }
+table.table-env-sensors .col-status .badge {
+  min-width: 2.5rem;
+}
+table.table-env-sensors .env-sensor-sub {
+  font-size: .75rem;
+  margin-top: .2rem;
+  line-height: 1.25;
+  word-break: break-word;
+}
+table.table-env-sensors .env-sensor-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+table.table-env-sensors .env-sensor-rh {
+  font-weight: 500;
+  margin-left: .15rem;
+}
+table.table-env-sensors .col-host a {
+  font-weight: 500;
+  color: var(--accent, #38bdf8);
+  text-decoration: none;
+}
+table.table-env-sensors .col-host a:hover {
+  text-decoration: underline;
+}
+table.table-env-sensors .col-name a {
+  color: var(--accent, #38bdf8);
+  text-decoration: none;
+}
+table.table-env-sensors .col-name a:hover {
+  text-decoration: underline;
+}
 
 /* Alerts */
 .alert { padding: .75rem 1rem; border-radius: 8px; margin-bottom: .75rem; border: 1px solid transparent; }

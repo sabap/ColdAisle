@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Env sensors table:** show actual host **device name** (linked), not only “Device (env manager…)”; roomier columns, short kind labels, placement/cabinet and last-seen subtext.
+
 ### Bug fixes
 
 ---

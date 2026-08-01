@@ -310,17 +310,45 @@ if ($filterDevice > 0) {
 $sensors = [];
 try {
     $sensors = Database::fetchAll(
-        "SELECT s.*, rm.name AS room_name, cu.name AS cooling_unit_name, p.name AS pdu_name
+        "SELECT s.*,
+                rm.name AS room_name,
+                cu.name AS cooling_unit_name,
+                p.name AS pdu_name,
+                d.label AS device_label,
+                d.device_type AS device_type,
+                cab.name AS cabinet_name
          FROM env_sensors s
          LEFT JOIN rooms rm ON rm.room_id = s.room_id
          LEFT JOIN cooling_units cu ON cu.cooling_unit_id = s.cooling_unit_id
          LEFT JOIN pdus p ON p.pdu_id = s.pdu_id
+         LEFT JOIN devices d ON d.device_id = s.device_id
+         LEFT JOIN cabinets cab ON cab.cabinet_id = COALESCE(s.cabinet_id, d.cabinet_id)
          WHERE $where
          ORDER BY s.name",
         $params
     );
 } catch (Throwable $e) {
-    $sensors = [];
+    // Fallback without cabinet join if COALESCE/schema varies
+    try {
+        $sensors = Database::fetchAll(
+            "SELECT s.*,
+                    rm.name AS room_name,
+                    cu.name AS cooling_unit_name,
+                    p.name AS pdu_name,
+                    d.label AS device_label,
+                    d.device_type AS device_type
+             FROM env_sensors s
+             LEFT JOIN rooms rm ON rm.room_id = s.room_id
+             LEFT JOIN cooling_units cu ON cu.cooling_unit_id = s.cooling_unit_id
+             LEFT JOIN pdus p ON p.pdu_id = s.pdu_id
+             LEFT JOIN devices d ON d.device_id = s.device_id
+             WHERE $where
+             ORDER BY s.name",
+            $params
+        );
+    } catch (Throwable $e2) {
+        $sensors = [];
+    }
 }
 
 layout_header('Environmental sensors', $user, 'env_sensors');
@@ -329,8 +357,8 @@ layout_header('Environmental sensors', $user, 'env_sensors');
 <div class="flex-between mb-2">
     <div>
         <p class="text-muted mb-0" style="font-size:.92rem">
-            Temperature, humidity, and related points — standalone monitors, PDU probe ports, or cooling-unit mounts.
-            Thresholds and manual readings first; SNMP OIDs optional for later poll integration.
+            Temperature, humidity, and related points linked to env managers, expansion modules, PDUs, or rooms.
+            Values refresh when the host device is polled (or via manual reading).
         </p>
     </div>
     <?php if ($canEdit): ?>
@@ -344,16 +372,16 @@ layout_header('Environmental sensors', $user, 'env_sensors');
         <?php if (!$sensors): ?>
             <p class="text-muted p-2 mb-0">No sensors yet. Add cold-aisle or supply-air points as needed.</p>
         <?php else: ?>
-            <div class="table-wrap">
-                <table class="table">
+            <div class="table-wrap env-sensors-table-wrap">
+                <table class="table table-env-sensors">
                     <thead>
                     <tr>
-                        <th>Name</th>
-                        <th>Kind</th>
-                        <th>Host</th>
-                        <th>Placement</th>
-                        <th>Last value</th>
-                        <th>Status</th>
+                        <th class="col-name">Name</th>
+                        <th class="col-kind">Kind</th>
+                        <th class="col-host">Host</th>
+                        <th class="col-place">Placement</th>
+                        <th class="col-value">Last value</th>
+                        <th class="col-status">Status</th>
                     </tr>
                     </thead>
                     <tbody>
@@ -366,36 +394,65 @@ layout_header('Environmental sensors', $user, 'env_sensors');
                             'ok' => 'badge-success',
                             default => 'badge-muted',
                         };
-                        $hostLabel = match ($s['host_type'] ?? '') {
-                            'cooling_unit' => $s['cooling_unit_name'] ?? 'Cooling unit',
-                            'pdu' => $s['pdu_name'] ?? 'PDU',
-                            'room' => $s['room_name'] ?? 'Room',
-                            default => $hosts[$s['host_type'] ?? ''] ?? ($s['host_type'] ?? '—'),
-                        };
+                        $hostLabel = env_sensor_host_display($s, $hosts);
+                        $kindKey = (string)($s['sensor_kind'] ?? '');
+                        $kindFull = $kinds[$kindKey] ?? $kindKey;
+                        $kindShort = env_sensor_kind_short($kindKey, $kinds);
+                        $deviceId = (int)($s['device_id'] ?? 0);
                         ?>
                         <tr>
-                            <td>
+                            <td class="col-name">
                                 <a href="<?= App::e(App::url('pages/env_sensors.php?id=' . (int)$s['sensor_id'])) ?>">
                                     <strong><?= App::e($s['name']) ?></strong>
                                 </a>
+                                <?php if (!empty($s['location_label'])): ?>
+                                    <div class="text-muted env-sensor-sub"><?= App::e((string)$s['location_label']) ?></div>
+                                <?php endif; ?>
                             </td>
-                            <td><?= App::e($kinds[$s['sensor_kind'] ?? ''] ?? '—') ?></td>
-                            <td class="text-muted" style="font-size:.85rem"><?= App::e((string)$hostLabel) ?></td>
-                            <td><?= App::e($placements[$s['placement'] ?? ''] ?? '—') ?></td>
-                            <td>
-                                <?php if ($val !== null): ?>
-                                    <?= App::e(rtrim(rtrim(number_format($val, 2, '.', ''), '0'), '.')) ?>
-                                    <?php
-                                    $humL = $s['last_humidity'] ?? null;
-                                    if (($s['sensor_kind'] ?? '') === 'temp_humidity' && $humL !== null && $humL !== ''):
-                                        ?>
-                                        °C / <?= App::e(rtrim(rtrim(number_format((float)$humL, 1, '.', ''), '0'), '.')) ?>%RH
-                                    <?php else: ?>
-                                        <?= App::e((string)($s['unit'] ?? '')) ?>
+                            <td class="col-kind" title="<?= App::e($kindFull) ?>">
+                                <?= App::e($kindShort) ?>
+                            </td>
+                            <td class="col-host">
+                                <?php if ($deviceId > 0 && ($s['host_type'] ?? '') === 'device'): ?>
+                                    <a href="<?= App::e(App::url('pages/devices.php?id=' . $deviceId)) ?>">
+                                        <?= App::e($hostLabel) ?>
+                                    </a>
+                                    <?php if (!empty($s['device_type'])): ?>
+                                        <div class="text-muted env-sensor-sub"><?= App::e((string)$s['device_type']) ?></div>
                                     <?php endif; ?>
-                                <?php else: ?>—<?php endif; ?>
+                                <?php else: ?>
+                                    <?= App::e($hostLabel !== '' ? $hostLabel : '—') ?>
+                                    <div class="text-muted env-sensor-sub"><?= App::e($hosts[$s['host_type'] ?? ''] ?? '') ?></div>
+                                <?php endif; ?>
                             </td>
-                            <td><span class="badge <?= $badge ?>"><?= App::e($st) ?></span></td>
+                            <td class="col-place">
+                                <?= App::e($placements[$s['placement'] ?? ''] ?? '—') ?>
+                                <?php if (!empty($s['cabinet_name'])): ?>
+                                    <div class="text-muted env-sensor-sub"><?= App::e((string)$s['cabinet_name']) ?></div>
+                                <?php endif; ?>
+                            </td>
+                            <td class="col-value">
+                                <?php if ($val !== null): ?>
+                                    <span class="env-sensor-value">
+                                        <?= App::e(rtrim(rtrim(number_format($val, 1, '.', ''), '0'), '.') ?: '0') ?>
+                                        <?php
+                                        $humL = $s['last_humidity'] ?? null;
+                                        if ($kindKey === 'temp_humidity' && $humL !== null && $humL !== ''):
+                                            ?>
+                                            <span class="text-muted">°C</span>
+                                            <span class="env-sensor-rh">/ <?= App::e(rtrim(rtrim(number_format((float)$humL, 0, '.', ''), '0'), '.') ?: '0') ?>%RH</span>
+                                        <?php else: ?>
+                                            <span class="text-muted"><?= App::e((string)($s['unit'] ?? '')) ?></span>
+                                        <?php endif; ?>
+                                    </span>
+                                    <?php if (!empty($s['last_seen_at'])): ?>
+                                        <div class="text-muted env-sensor-sub"><?= App::e((string)$s['last_seen_at']) ?></div>
+                                    <?php endif; ?>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td class="col-status"><span class="badge <?= $badge ?>"><?= App::e($st) ?></span></td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
