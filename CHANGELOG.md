@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Env sensor map collisions:** exclusive assignment by exact MEM name then TH0X:Y module.sensor (no shared slots like TH01:3 and TH02:3 both on M1S3).
+
 ---
 
 ## [0.3.24] - 2026-08-01
