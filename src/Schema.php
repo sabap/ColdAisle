@@ -522,6 +522,8 @@ class Schema
             self::ensureColumn('env_sensors', 'pos_x', 'DECIMAL(10,3) NULL');
             self::ensureColumn('env_sensors', 'pos_y', 'DECIMAL(10,3) NULL');
             self::ensureColumn('env_sensors', 'pos_z', 'DECIMAL(10,3) NULL');
+            // Combo temp+humidity sensors: secondary last reading from SNMP poll
+            self::ensureColumn('env_sensors', 'last_humidity', 'DECIMAL(14,4) NULL');
             self::ensureTable(
                 'env_readings',
                 "CREATE TABLE env_readings (
@@ -531,6 +533,8 @@ class Schema
                     recorded_at DATETIME2 NOT NULL CONSTRAINT DF_er_at DEFAULT SYSUTCDATETIME()
                 )"
             );
+            // Distinguish temp vs humidity series for combo probes
+            self::ensureColumn('env_readings', 'metric', 'NVARCHAR(40) NULL');
 
             // Rare idempotent reshapes / backfills (not only ADD column)
             self::runIdempotentReshapes();

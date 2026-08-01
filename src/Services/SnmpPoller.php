@@ -293,12 +293,28 @@ class SnmpPoller
             'snmp_fail_count' => 0,
         ], 'device_id = :id', [':id' => (int)$device['device_id']]);
 
+        // Env sensors: temperature.* / humidity.* → last_value + env_readings
+        $env = ['updated' => 0, 'readings' => 0, 'unmatched' => 0, 'keys' => 0];
+        try {
+            require_once __DIR__ . '/EnvSensorPoll.php';
+            $env = EnvSensorPoll::applyFromDevicePoll(
+                (int)$device['device_id'],
+                $templateId,
+                is_array($got['metrics'] ?? null) ? $got['metrics'] : [],
+                $oidMap
+            );
+        } catch (Throwable $e) {
+            App::log('EnvSensorPoll device_id=' . (int)$device['device_id'] . ': ' . $e->getMessage(), 'warning');
+        }
+
         return [
             'watts' => $got['watts'],
             'amps' => $got['amps'],
             'phases' => $got['phases'],
             'ok' => $got['ok'],
             'failed' => $got['failed'],
+            'metrics' => $got['metrics'] ?? [],
+            'env' => $env,
         ];
     }
 
@@ -734,6 +750,8 @@ class SnmpPoller
         $ok = 0;
         $failed = 0;
         $lastErr = null;
+        /** @var array<string,array{numeric:?float,raw:mixed,oid:string}> $metrics */
+        $metrics = [];
 
         $emptyPhase = static fn(): array => [
             'watts' => null, 'amps' => null, 'volts' => null,
@@ -759,6 +777,11 @@ class SnmpPoller
                 $raw = self::get($session, ltrim($oid, '.'));
                 $num = self::toNumber($raw);
                 $num = self::applyMetricScale($metricKey, $num);
+                $metrics[$metricKey] = [
+                    'numeric' => $num,
+                    'raw' => $raw,
+                    'oid' => ltrim($oid, '.'),
+                ];
                 if ($onMetric) {
                     $onMetric((string)$metric, $raw, $num);
                 }
@@ -912,6 +935,7 @@ class SnmpPoller
             'outlets' => $outletsOut,
             'outlet_diag' => $outletDiag,
             'serial_no' => $serialNo,
+            'metrics' => $metrics,
             'ok' => $ok,
             'failed' => $failed,
             'last_error' => $lastErr,

@@ -778,8 +778,8 @@ if ($action === 'new' || $id) {
         $envSensors = [];
         try {
             $envSensors = Database::fetchAll(
-                'SELECT sensor_id, name, sensor_kind, placement, last_value, unit, last_seen_at,
-                        warn_high, crit_high, warn_low, crit_low
+                'SELECT sensor_id, name, sensor_kind, placement, last_value, last_humidity, unit, last_seen_at,
+                        warn_high, crit_high, warn_low, crit_low, snmp_index
                  FROM env_sensors
                  WHERE is_active = 1 AND device_id = ?
                  ORDER BY name',
@@ -1261,7 +1261,14 @@ if ($action === 'new' || $id) {
                                         <td>
                                             <?php if ($ev !== null): ?>
                                                 <?= App::e(rtrim(rtrim(number_format($ev, 2, '.', ''), '0'), '.')) ?>
-                                                <?= App::e((string)($es['unit'] ?? '')) ?>
+                                                <?php
+                                                $eh = $es['last_humidity'] ?? null;
+                                                if (($es['sensor_kind'] ?? '') === 'temp_humidity' && $eh !== null && $eh !== ''):
+                                                    ?>
+                                                    °C / <?= App::e(rtrim(rtrim(number_format((float)$eh, 1, '.', ''), '0'), '.')) ?>%RH
+                                                <?php else: ?>
+                                                    <?= App::e((string)($es['unit'] ?? '')) ?>
+                                                <?php endif; ?>
                                                 <span class="badge <?= $ebadge ?>"><?= App::e($est) ?></span>
                                             <?php else: ?>
                                                 <span class="text-muted">—</span>
