@@ -129,6 +129,7 @@ function env_sensor_kinds(): array
     return [
         'temperature' => 'Temperature',
         'humidity' => 'Relative humidity',
+        'temp_humidity' => 'Temperature + humidity (combo)',
         'dew_point' => 'Dew point',
         'differential_pressure' => 'Differential pressure',
         'airflow' => 'Airflow',
@@ -339,6 +340,7 @@ function env_sensor_default_unit(string $kind): string
     return match ($kind) {
         'temperature', 'dew_point' => '°C',
         'humidity' => '%RH',
+        'temp_humidity' => '°C / %RH',
         'differential_pressure' => 'Pa',
         'airflow' => 'CFM',
         'leak' => 'state',

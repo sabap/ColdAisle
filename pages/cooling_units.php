@@ -358,12 +358,11 @@ layout_header('Air units & pumps', $user, 'cooling_units');
 </div>
 
 <?php if ($canEdit): ?>
-<div class="modal" id="addCoolingUnit" hidden>
-    <div class="modal-backdrop" data-modal-close></div>
-    <div class="modal-dialog modal-lg">
+<div class="modal-overlay" id="addCoolingUnit" hidden>
+    <div class="modal-panel modal-panel-wide" role="dialog" aria-modal="true" aria-labelledby="addCoolingUnitTitle">
         <div class="modal-header">
-            <h3 class="mt-0 mb-0">Add cooling unit</h3>
-            <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">×</button>
+            <h2 id="addCoolingUnitTitle">Add cooling unit</h2>
+            <button type="button" class="modal-close" data-modal-close aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
             <?php
@@ -374,6 +373,18 @@ layout_header('Air units & pumps', $user, 'cooling_units');
         </div>
     </div>
 </div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var overlay = document.getElementById('addCoolingUnit');
+  if (overlay) {
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay && window.ColdAisle && ColdAisle.closeModal) {
+        ColdAisle.closeModal(overlay);
+      }
+    });
+  }
+});
+</script>
 <?php endif; ?>
 
 <?php layout_footer(); ?>

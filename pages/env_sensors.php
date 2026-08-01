@@ -387,12 +387,11 @@ layout_header('Environmental sensors', $user, 'env_sensors');
 </div>
 
 <?php if ($canEdit): ?>
-<div class="modal" id="addEnvSensor" hidden>
-    <div class="modal-backdrop" data-modal-close></div>
-    <div class="modal-dialog modal-lg">
+<div class="modal-overlay" id="addEnvSensor" hidden>
+    <div class="modal-panel modal-panel-wide" role="dialog" aria-modal="true" aria-labelledby="addEnvSensorTitle">
         <div class="modal-header">
-            <h3 class="mt-0 mb-0">Add environmental sensor</h3>
-            <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">×</button>
+            <h2 id="addEnvSensorTitle">Add environmental sensor</h2>
+            <button type="button" class="modal-close" data-modal-close aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
             <?php
@@ -416,16 +415,23 @@ layout_header('Environmental sensors', $user, 'env_sensors');
         </div>
     </div>
 </div>
-<?php if ($filterDevice > 0 && $canEdit): ?>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-  var m = document.getElementById('addEnvSensor');
-  if (m && window.location.search.indexOf('device_id=') >= 0) {
-    m.hidden = false;
+  // Open add modal when deep-linked from a device
+  if (window.location.search.indexOf('device_id=') >= 0 && window.ColdAisle && ColdAisle.openModal) {
+    ColdAisle.openModal('addEnvSensor');
+  }
+  // Click outside panel closes
+  var overlay = document.getElementById('addEnvSensor');
+  if (overlay) {
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay && ColdAisle.closeModal) {
+        ColdAisle.closeModal(overlay);
+      }
+    });
   }
 });
 </script>
-<?php endif; ?>
 <?php endif; ?>
 
 <?php layout_footer(); ?>

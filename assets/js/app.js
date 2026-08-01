@@ -87,12 +87,72 @@
     initTimezoneComboboxes: function (root) {
       initTimezoneComboboxes(root || document);
     },
+
+    /**
+     * Open/close page modals (id of .modal-overlay / .app-modal / .modal element).
+     * Markup: button[data-modal-open="elementId"], [data-modal-close] inside modal.
+     */
+    openModal: function (id) {
+      var el = typeof id === 'string' ? document.getElementById(id) : id;
+      if (!el) return;
+      el.hidden = false;
+      el.removeAttribute('hidden');
+      document.body.classList.add('modal-open');
+    },
+    closeModal: function (el) {
+      if (!el) return;
+      if (typeof el === 'string') {
+        el = document.getElementById(el);
+      }
+      if (!el) return;
+      el.hidden = true;
+      el.setAttribute('hidden', '');
+      // Keep body lock if another modal is still open
+      var anyOpen = document.querySelector(
+        '.modal-overlay:not([hidden]), .app-modal:not([hidden]), .modal:not([hidden])'
+      );
+      if (!anyOpen) {
+        document.body.classList.remove('modal-open');
+      }
+    },
+    initModals: function (root) {
+      root = root || document;
+      root.querySelectorAll('[data-modal-open]').forEach(function (btn) {
+        if (btn._caModalBound) return;
+        btn._caModalBound = true;
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          var id = btn.getAttribute('data-modal-open');
+          if (id) {
+            api.openModal(id);
+          }
+        });
+      });
+      root.querySelectorAll('[data-modal-close]').forEach(function (btn) {
+        if (btn._caModalCloseBound) return;
+        btn._caModalCloseBound = true;
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          var modal = btn.closest('.modal-overlay, .app-modal, .modal');
+          api.closeModal(modal);
+        });
+      });
+    },
   });
 
   window.ColdAisle = api;
   // Legacy aliases during rebrand from WinDCIM
   window.WINDCIM = api;
   window.WinDCIM = api;
+
+  // Global modal open/close for data-modal-open / data-modal-close
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () {
+      api.initModals();
+    });
+  } else {
+    api.initModals();
+  }
 
   function getTimezoneList() {
     if (Array.isArray(window.ColdAisleTimezoneList) && window.ColdAisleTimezoneList.length) {
