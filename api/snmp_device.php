@@ -300,15 +300,35 @@ try {
                 $bits[] = $result['failed'] . ' OID(s) soft-failed.';
             }
             $env = is_array($result['env'] ?? null) ? $result['env'] : [];
+            if (!empty($env['probes'])) {
+                $bits[] = (int)$env['probes'] . ' EMS probe(s) seen.';
+            }
+            if (!empty($result['probe_names']) && is_array($result['probe_names'])) {
+                $sample = [];
+                foreach ($result['probe_names'] as $pi => $pn) {
+                    $sample[] = $pi . '=' . $pn;
+                    if (count($sample) >= 6) {
+                        break;
+                    }
+                }
+                if ($sample) {
+                    $bits[] = 'Probe names: ' . implode(', ', $sample)
+                        . (count($result['probe_names']) > 6 ? '…' : '') . '.';
+                }
+            }
             if (!empty($env['updated'])) {
                 $envBit = 'Updated ' . (int)$env['updated'] . ' env sensor(s)';
                 if (!empty($env['readings'])) {
                     $envBit .= ' (' . (int)$env['readings'] . ' reading(s))';
                 }
+                if (!empty($env['candidates'])) {
+                    $envBit .= ' of ' . (int)$env['candidates'] . ' candidate(s)';
+                }
                 $bits[] = $envBit . '.';
-            } elseif (!empty($env['keys'])) {
-                $bits[] = 'Env map has ' . (int)$env['keys']
-                    . ' temp/humidity key(s) but no matching sensors (check names like MM:1 or probe/map key).';
+            } elseif (!empty($env['keys']) || !empty($env['probes'])) {
+                $bits[] = 'EMS probes answered but no env sensors matched by name/index '
+                    . '(candidates=' . (int)($env['candidates'] ?? 0) . '). '
+                    . 'Name sensors like the EMS probe labels, or set Probe/map key to the SNMP index.';
             }
             if ($fresh && $fresh['snmp_last_poll_watts'] !== null) {
                 $w = (float)$fresh['snmp_last_poll_watts'];

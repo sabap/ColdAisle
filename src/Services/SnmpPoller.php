@@ -274,6 +274,39 @@ class SnmpPoller
         );
 
         $got = self::collectOidMap($session, $oidMap);
+
+        // Expand APC EMS probe table (MM + TH expansion modules share one flat index)
+        // while session is open — template may only list probes 1–4.
+        $probeNames = [];
+        $metrics = is_array($got['metrics'] ?? null) ? $got['metrics'] : [];
+        try {
+            require_once __DIR__ . '/EnvSensorPoll.php';
+            $looksEms = false;
+            foreach ($oidMap as $k => $v) {
+                $blob = strtolower((string)$k . ' ' . (string)$v);
+                if (str_contains($blob, '318.1.1.10') || str_contains($blob, 'temperature.')
+                    || str_contains($blob, 'humidity.')
+                ) {
+                    $looksEms = true;
+                    break;
+                }
+            }
+            $sys = strtolower((string)($device['model'] ?? '') . ' ' . (string)($device['manufacturer'] ?? '')
+                . ' ' . (string)($device['device_type'] ?? ''));
+            if (preg_match('/ap9340|env_monitor|environmental|ems/', $sys)) {
+                $looksEms = true;
+            }
+            if ($looksEms) {
+                $exp = EnvSensorPoll::expandApcEmsProbes($session, $metrics);
+                $metrics = $exp['metrics'];
+                $probeNames = $exp['probe_names'];
+                $got['metrics'] = $metrics;
+                $got['ok'] = max((int)$got['ok'], count($metrics));
+            }
+        } catch (Throwable $e) {
+            App::log('EMS probe expand: ' . $e->getMessage(), 'warning');
+        }
+
         self::closeSession($session);
 
         if ($got['ok'] === 0) {
@@ -300,8 +333,9 @@ class SnmpPoller
             $env = EnvSensorPoll::applyFromDevicePoll(
                 (int)$device['device_id'],
                 $templateId,
-                is_array($got['metrics'] ?? null) ? $got['metrics'] : [],
-                $oidMap
+                $metrics,
+                $oidMap,
+                $probeNames
             );
         } catch (Throwable $e) {
             App::log('EnvSensorPoll device_id=' . (int)$device['device_id'] . ': ' . $e->getMessage(), 'warning');
@@ -313,9 +347,26 @@ class SnmpPoller
             'phases' => $got['phases'],
             'ok' => $got['ok'],
             'failed' => $got['failed'],
-            'metrics' => $got['metrics'] ?? [],
+            'metrics' => $metrics,
+            'probe_names' => $probeNames,
             'env' => $env,
         ];
+    }
+
+    /**
+     * Public wrappers so EnvSensorPoll can GET without duplicating SNMP glue.
+     * @param array<string,mixed> $session
+     * @return mixed
+     */
+    public static function sessionGet(array $session, string $oid)
+    {
+        return self::get($session, $oid);
+    }
+
+    /** @param mixed $raw */
+    public static function sessionToNumber($raw): ?float
+    {
+        return self::toNumber($raw);
     }
 
     /**
