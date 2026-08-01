@@ -341,6 +341,17 @@ try {
             if (!empty($env['skipped_dead'])) {
                 $bits[] = 'Skipped ' . (int)$env['skipped_dead'] . ' dead/empty probe slot(s).';
             }
+            $uioLive = 0;
+            if (!empty($result['probe_meta']) && is_array($result['probe_meta'])) {
+                foreach ($result['probe_meta'] as $pm) {
+                    if (($pm['source'] ?? '') === 'uio' && !empty($pm['live'])) {
+                        $uioLive++;
+                    }
+                }
+            }
+            if ($uioLive > 0) {
+                $bits[] = $uioLive . ' UIO expansion sensor(s) live.';
+            }
             if ($fresh && $fresh['snmp_last_poll_watts'] !== null) {
                 $w = (float)$fresh['snmp_last_poll_watts'];
                 $bits[] = 'Load ' . ($w >= 1000 ? number_format($w / 1000, 3) . ' kW' : rtrim(rtrim(sprintf('%.2F', $w), '0'), '.') . ' W');
