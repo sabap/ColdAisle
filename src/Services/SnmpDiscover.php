@@ -14,29 +14,33 @@ class SnmpDiscover
      * Keep this short — each root costs a full SNMP timeout on dead branches.
      * Broad 1.3.6.1.4.1.318 is intentionally omitted (too large for IIS Discover).
      */
+    /**
+     * Only narrow trees — never walk all of 318.1.1.10 (EMS config tables are huge
+     * and hang IIS FastCGI → bare "Internal Server Error").
+     */
     private const WALK_ROOTS = [
         '1.3.6.1.2.1.1',                  // MIB-II system
-        // APC EMS / AP9340 — status tables before broad config
-        '1.3.6.1.4.1.318.1.1.10.3.13',    // emsProbeStatus* (live temp/humidity)
-        '1.3.6.1.4.1.318.1.1.10.3.5',     // alternate EMS probe status branch
+        '1.3.6.1.4.1.318.1.1.10.3.13',    // emsProbeStatus* live temp/humidity
+        '1.3.6.1.4.1.318.1.1.10.3.5',     // alternate EMS probe status
         '1.3.6.1.4.1.318.1.1.10.2.3',     // IEM status probes
         '1.3.6.1.4.1.318.1.1.10.3.1',     // emsIdent (serial)
-        '1.3.6.1.4.1.318.1.1.10',         // rest of env manager tree
-        '1.3.6.1.4.1.318.1.1.25',         // APC Universal I/O
-        '1.3.6.1.4.1.318.1.1.26',         // APC rPDU2
-        '1.3.6.1.4.1.318.1.1.12',         // APC rPDU
-        '1.3.6.1.4.1.3808.1.1.1',         // CyberPower power (narrow)
-        '1.3.6.1.4.1.13742.1',            // Raritan (narrow)
-        '1.3.6.1.4.1.21239.2',            // Vertiv / Geist (narrow)
-        '1.3.6.1.4.1.99999',              // ColdAisle lab agent
+        '1.3.6.1.4.1.318.1.1.26.6',       // rPDU2 phase status (narrow)
+        '1.3.6.1.4.1.318.1.1.26.9.4',     // rPDU2 outlet metered status (narrow)
+        '1.3.6.1.4.1.99999',              // ColdAisle lab
     ];
 
-    private const MAX_OIDS = 300;
+    private const MAX_OIDS = 120;
     /** Per-request SNMP timeout (microseconds). Keep short so IIS never soft-500s. */
-    private const WALK_TIMEOUT_USEC = 1_500_000;
+    private const WALK_TIMEOUT_USEC = 800_000;
     private const WALK_RETRIES = 0;
     /** Probe GET timeout (microseconds) — fail closed agents quickly. */
-    private const PROBE_TIMEOUT_USEC = 1_200_000;
+    private const PROBE_TIMEOUT_USEC = 800_000;
+    /** Leaf exploratory GETs — shorter than probe; many will miss on wrong device type. */
+    private const LEAF_TIMEOUT_USEC = 400_000;
+    /** Wall-clock budget for leaf phase (seconds). */
+    private const LEAF_PHASE_BUDGET_SEC = 8.0;
+    /** Skip walks after this many seconds total (IIS FastCGI often ~30s). */
+    private const WALK_DEADLINE_SEC = 10.0;
     /** Candidates shown in Discover UI (high-signal only). */
     private const MAX_DISPLAY_CANDIDATES = 40;
     /** Minimum score to appear in the Discover table. */
@@ -68,11 +72,17 @@ class SnmpDiscover
             throw new RuntimeException('PHP SNMP extension is not available.');
         }
 
-        // Avoid IIS FastCGI 500 from PHP timeouts on slow agents
-        @ini_set('max_execution_time', '90');
+        // Keep well under typical IIS FastCGI activityTimeout (often 30–90s)
+        @ini_set('max_execution_time', '25');
         if (function_exists('set_time_limit')) {
-            @set_time_limit(90);
+            @set_time_limit(25);
         }
+        $discoverStarted = microtime(true);
+        $logStep = static function (string $step) use ($discoverStarted, $host): void {
+            $ms = (int)round((microtime(true) - $discoverStarted) * 1000);
+            App::log("SnmpDiscover [{$ms}ms] host={$host} step={$step}", 'info');
+        };
+        $logStep('start');
 
         // Match poll worker: clear MIBS autoload before any SNMP call (Windows hang risk)
         @putenv('MIBS=');
@@ -118,7 +128,7 @@ class SnmpDiscover
         }
         self::setOidOutputFormat('numeric');
 
-        // --- Fast probe: if this fails, do NOT walk dozens of trees (IIS 500 timeout) ---
+        // --- Fast probe: if this fails, do NOT walk trees (IIS 500 timeout) ---
         $sysDescr = self::snmpGet(
             $hostPort,
             $version,
@@ -126,6 +136,7 @@ class SnmpDiscover
             '1.3.6.1.2.1.1.1.0',
             self::PROBE_TIMEOUT_USEC
         );
+        $logStep('probe_sysDescr ' . (($sysDescr === null || $sysDescr === false) ? 'fail' : 'ok'));
         if ($sysDescr === null || $sysDescr === false) {
             $hint = $version === '3'
                 ? ' Check SNMPv3 user, auth/priv protocols, passphrases, and that UDP/161 is open from the IIS server.'
@@ -139,16 +150,42 @@ class SnmpDiscover
         $collected = [];
         $errors = [];
 
-        // Single numeric walk pass only (module pass doubles time and is flaky on Windows)
-        self::setOidOutputFormat('numeric');
-        self::collectWalks($hostPort, $version, $creds, $collected, $errors);
+        // LEAF GETS FIRST — reliable and bounded (walks are optional enrichment).
+        // Order matters: wrong-type OIDs each cost LEAF_TIMEOUT on miss; put likely
+        // device family first so we never burn 20s on PDU probes for an EMS host.
+        $sysHay = strtolower((string)$sysDescr);
+        $looksEms = (bool)preg_match(
+            '/ap9340|environmental|ems|iem|netbotz|temp|humid|sensor/i',
+            $sysHay
+        );
+        $looksPdu = (bool)preg_match('/rpdu|pdu|rack.?pdu|switched.?rack|metered/i', $sysHay);
 
-        // Targeted leaf GETs (only after probe succeeded)
-        $leafGets = [
+        $leafSys = [
             '1.3.6.1.2.1.1.3.0',
             '1.3.6.1.4.1.99999.2.1.0',
             '1.3.6.1.4.1.99999.2.2.0',
             '1.3.6.1.4.1.99999.2.3.0',
+        ];
+        // APC EMS / AP9340 live status (PowerNet columns × probe index 1–4)
+        $leafEms = [
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.1', // emsProbeStatusProbeTemperature.1
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.1', // emsProbeStatusProbeHumidity.1
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.2',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.2',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.3',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.3',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.4',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.4',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.4.1',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.5.1',
+            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.4.1', // IEM status temp
+            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.6.1', // IEM status humid
+            '1.3.6.1.4.1.318.1.1.10.3.5.1.1.3.1',
+            '1.3.6.1.4.1.318.1.1.10.3.5.1.1.6.1',
+            '1.3.6.1.4.1.318.1.1.10.3.1.1.0',     // emsIdentSerialNumber (common)
+            '1.3.6.1.4.1.318.1.1.10.3.1.2.0',
+        ];
+        $leafPdu = [
             '1.3.6.1.4.1.318.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.318.1.1.1.4.2.8.0',
             '1.3.6.1.4.1.318.1.1.12.1.6.0',
@@ -162,22 +199,21 @@ class SnmpDiscover
             '1.3.6.1.4.1.318.1.1.26.9.4.3.1.3.1',
             '1.3.6.1.4.1.3808.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.3808.1.1.1.4.2.5.0',
-            // APC EMS / AP9340 live status (common PowerNet columns × probe index 1–4)
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.1', // emsProbeStatusProbeTemperature.1
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.2',
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.3',
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.4',
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.1', // emsProbeStatusProbeHumidity.1
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.2',
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.3',
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.4',
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.4.1', // name / status variants
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.5.1',
-            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.4.1', // IEM status temp
-            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.6.1', // IEM status humid
-            '1.3.6.1.4.1.318.1.1.10.3.5.1.1.3.1',
-            '1.3.6.1.4.1.318.1.1.10.3.5.1.1.6.1',
         ];
+
+        if ($looksEms && !$looksPdu) {
+            $leafGets = array_merge($leafSys, $leafEms, $leafPdu);
+        } elseif ($looksPdu && !$looksEms) {
+            $leafGets = array_merge($leafSys, $leafPdu, $leafEms);
+        } else {
+            // Unknown / APC generic: EMS first (cheap if present), then PDU
+            $leafGets = array_merge($leafSys, $leafEms, $leafPdu);
+        }
+
+        $leafStarted = microtime(true);
+        $leafHits = 0;
+        $emsTempHits = 0;
+        $emsHumHits = 0;
         foreach ($leafGets as $oid) {
             if (isset($collected[$oid])) {
                 continue;
@@ -185,7 +221,18 @@ class SnmpDiscover
             if (count($collected) >= self::MAX_OIDS) {
                 break;
             }
-            $v = self::snmpGet($hostPort, $version, $creds, $oid);
+            if ((microtime(true) - $leafStarted) >= self::LEAF_PHASE_BUDGET_SEC) {
+                $logStep('leaf_budget_exceeded hits=' . $leafHits);
+                break;
+            }
+            // Enough EMS live metrics — stop thrashing on PDU OIDs
+            if ($emsTempHits >= 1 && $emsHumHits >= 1 && $leafHits >= 3
+                && (microtime(true) - $leafStarted) > 2.0
+            ) {
+                $logStep('leaf_early_stop ems_live hits=' . $leafHits);
+                break;
+            }
+            $v = self::snmpGet($hostPort, $version, $creds, $oid, self::LEAF_TIMEOUT_USEC);
             if ($v !== null && $v !== false) {
                 $collected[$oid] = [
                     'raw' => $v,
@@ -193,7 +240,43 @@ class SnmpDiscover
                     'module' => null,
                     'raw_key' => $oid,
                 ];
+                $leafHits++;
+                if (str_contains($oid, '10.3.13.1.1.3.') || str_contains($oid, '10.2.3.2.1.4.')
+                    || str_contains($oid, '10.3.5.1.1.3.')
+                ) {
+                    $emsTempHits++;
+                }
+                if (str_contains($oid, '10.3.13.1.1.6.') || str_contains($oid, '10.2.3.2.1.6.')
+                    || str_contains($oid, '10.3.5.1.1.6.')
+                ) {
+                    $emsHumHits++;
+                }
             }
+        }
+        $logStep('leaf_gets collected=' . count($collected) . ' hits=' . $leafHits
+            . ' emsT=' . $emsTempHits . ' emsH=' . $emsHumHits);
+
+        // Narrow walks only if still needed and under wall-clock deadline
+        $elapsed = microtime(true) - $discoverStarted;
+        $haveEmsLive = ($emsTempHits + $emsHumHits) >= 2;
+        if ($haveEmsLive) {
+            $logStep('walks_skipped have_ems_live elapsed=' . round($elapsed, 2));
+        } elseif ($elapsed < self::WALK_DEADLINE_SEC && count($collected) < self::MAX_OIDS) {
+            self::setOidOutputFormat('numeric');
+            self::collectWalks($hostPort, $version, $creds, $collected, $errors);
+            $logStep('walks collected=' . count($collected) . ' errors=' . count($errors));
+        } else {
+            $logStep('walks_skipped elapsed=' . round($elapsed, 2));
+        }
+
+        // Always keep sysDescr in collection for scoring
+        if (!isset($collected['1.3.6.1.2.1.1.1.0']) && $sysDescr !== null && $sysDescr !== false) {
+            $collected['1.3.6.1.2.1.1.1.0'] = [
+                'raw' => $sysDescr,
+                'name' => null,
+                'module' => null,
+                'raw_key' => '1.3.6.1.2.1.1.1.0',
+            ];
         }
 
         if (!$collected && ($sysDescr === null || $sysDescr === false)) {
@@ -201,9 +284,9 @@ class SnmpDiscover
             throw new RuntimeException('SNMP discovery failed: ' . $detail);
         }
 
-        // Offline MIB text index for names (no snmp_read_mib)
+        // Offline MIB text index for names (no snmp_read_mib) — cap time
         $indexSize = 0;
-        if (class_exists('MibService')) {
+        if (class_exists('MibService') && (microtime(true) - $discoverStarted) < 18.0) {
             try {
                 $indexSize = MibService::oidIndexSize();
             } catch (Throwable $e) {
@@ -211,6 +294,7 @@ class SnmpDiscover
                 $indexSize = 0;
             }
         }
+        $logStep('index_size=' . $indexSize);
 
         $scored = [];
         $namedCount = 0;
@@ -734,9 +818,18 @@ class SnmpDiscover
                 );
                 return ($r === false) ? null : $r;
             }
+            // v1 and v2c — prefer matching API; snmp2_* often works for v1 communities
+            $community = (string)($creds['community'] ?? 'public');
+            if ($version === '1' && function_exists('snmpget')) {
+                $r = @snmpget($hostPort, $community, $oid, $timeout, self::WALK_RETRIES);
+                return ($r === false) ? null : $r;
+            }
             if (function_exists('snmp2_get')) {
-                $community = (string)($creds['community'] ?? $creds['security_name'] ?? 'public');
                 $r = @snmp2_get($hostPort, $community, $oid, $timeout, self::WALK_RETRIES);
+                return ($r === false) ? null : $r;
+            }
+            if (function_exists('snmpget')) {
+                $r = @snmpget($hostPort, $community, $oid, $timeout, self::WALK_RETRIES);
                 return ($r === false) ? null : $r;
             }
         } catch (Throwable $e) {
@@ -761,16 +854,15 @@ class SnmpDiscover
                     $hostPort, $user, $sec, $authProto, $authPass, $privProto, $privPass, $root,
                     self::WALK_TIMEOUT_USEC, self::WALK_RETRIES
                 );
-                if ($result === false || !is_array($result)) {
-                    $result = @snmp3_real_walk(
-                        $hostPort, $user, $sec, $authProto, $authPass, $privProto, $privPass, $root
-                    );
-                }
-            } elseif (function_exists('snmprealwalk')) {
-                $community = (string)($creds['community'] ?? $creds['security_name'] ?? 'public');
-                $result = @snmprealwalk($hostPort, $community, $root, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
-                if ($result === false || !is_array($result)) {
-                    $result = @snmprealwalk($hostPort, $community, $root);
+            } else {
+                $community = (string)($creds['community'] ?? 'public');
+                if ($version === '1' && function_exists('snmprealwalk')) {
+                    // snmprealwalk is typically used for v1/v2c
+                    $result = @snmprealwalk($hostPort, $community, $root, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
+                } elseif (function_exists('snmp2_real_walk')) {
+                    $result = @snmp2_real_walk($hostPort, $community, $root, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
+                } elseif (function_exists('snmprealwalk')) {
+                    $result = @snmprealwalk($hostPort, $community, $root, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
                 }
             }
         } catch (Throwable $e) {
@@ -1562,6 +1654,12 @@ class SnmpDiscover
         }
 
         $hay = strtolower((string)$sysDescr) . ' ' . json_encode($proposed) . ' ' . implode(' ', array_keys($collected));
+        // EMS-only hosts (AP9340): do not probe rPDU2 outlet columns (each miss burns a timeout)
+        if (preg_match('/ap9340|environmental.?manager|ems|iem|netbotz/i', $hay)
+            && !preg_match('/rpdu|rack.?pdu|switched.?rack|metered.?rack/i', $hay)
+        ) {
+            return $proposed;
+        }
         $looksApc = (bool)preg_match('/apc|schneider|powernet|rpdu|1\.3\.6\.1\.4\.1\.318/', $hay);
         // Also probe when enterprise walk already saw rPDU2 phase / device OIDs
         if (!$looksApc) {

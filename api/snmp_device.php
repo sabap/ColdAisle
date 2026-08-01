@@ -135,13 +135,24 @@ try {
         snmp_device_can_edit($user, $dev);
 
         if ($action === 'discover') {
-            @ini_set('max_execution_time', '90');
+            @ini_set('max_execution_time', '25');
             if (function_exists('set_time_limit')) {
-                @set_time_limit(90);
+                @set_time_limit(25);
             }
             // Prevent Windows Net-SNMP MIB autoload hang (same as poll worker)
             @putenv('MIBS=');
             @putenv('MIBDIRS=' . str_replace('\\', '/', dirname(__DIR__) . '/storage/snmp/mibs'));
+
+            $stepFile = dirname(__DIR__) . '/storage/logs/snmp_discover_last.txt';
+            $mark = static function (string $s) use ($stepFile, $id): void {
+                @file_put_contents(
+                    $stepFile,
+                    date('c') . " device_id={$id} {$s}\n",
+                    LOCK_EX
+                );
+                App::log("snmp_device discover device_id={$id} {$s}", 'info');
+            };
+            $mark('begin');
 
             $prereqs = SnmpDiscover::discoverPrereqs($dev);
             if (!$prereqs['ok']) {
@@ -156,6 +167,7 @@ try {
 
             $creds = SnmpDiscover::credsFromDevice($dev);
             $ver = strtolower((string)($creds['snmp_version'] ?? ''));
+            $mark('version=' . $ver . ' host=' . ($creds['host'] ?? ''));
             if ($ver === '3' || $ver === 'v3') {
                 if (trim((string)($creds['security_name'] ?? '')) === '') {
                     App::json([
@@ -164,15 +176,23 @@ try {
                     ], 400);
                 }
             }
+            if (in_array($ver, ['1', '2c', '2'], true) && trim((string)($creds['community'] ?? '')) === '') {
+                App::json([
+                    'error' => 'SNMP community is empty. Set the read community on the device and Save.',
+                ], 400);
+            }
 
             try {
+                $mark('discover_call');
                 $result = SnmpDiscover::discover($creds);
+                $mark('discover_ok walk=' . (int)($result['walk_count'] ?? 0));
             } catch (Throwable $e) {
+                $mark('discover_fail ' . $e->getMessage());
                 App::log('Device discover failed device_id=' . $id . ': ' . $e->getMessage(), 'error');
                 App::json([
                     'error' => $e->getMessage() !== ''
                         ? $e->getMessage()
-                        : 'SNMP discovery failed (no detail). Check IP, SNMPv3 profile, and that PHP snmp extension is loaded.',
+                        : 'SNMP discovery failed (no detail). Check IP, community/v3, UDP/161 from IIS.',
                 ], 500);
             }
 
@@ -182,6 +202,7 @@ try {
                 App::json(['error' => 'Template name: ' . $e->getMessage()], 400);
             }
             $existing = SnmpDiscover::findSiteTemplateByName($templateName);
+            $mark('done template=' . $templateName);
 
             App::json([
                 'ok' => true,
