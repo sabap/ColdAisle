@@ -578,6 +578,15 @@ try {
     $paths = Database::fetchAll('SELECT * FROM cable_paths WHERE room_id = ?', [$roomId]);
     $units = SettingsService::get('length_units', 'metric');
 
+    $envSensors3d = [];
+    try {
+        if (class_exists('EnvSensor3dData')) {
+            $envSensors3d = EnvSensor3dData::forFloor(EnvSensor3dData::DEFAULT_RADIUS_M, $roomId);
+        }
+    } catch (Throwable $e) {
+        $envSensors3d = [];
+    }
+
     App::json([
         'room' => $room,
         'cabinets' => $cabinets,
@@ -587,6 +596,7 @@ try {
         'unplaced_pdus' => $unplacedPdus,
         'placed_cooling' => $placedCooling,
         'unplaced_cooling' => $unplacedCooling,
+        'env_sensors' => $envSensors3d,
         'cable_paths' => $paths,
         'units' => $units === 'imperial' ? 'imperial' : 'metric',
         'planner' => [

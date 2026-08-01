@@ -349,6 +349,8 @@
     options = options || {};
     var cabinets = options.cabinets || [];
     var floorPdus = options.pdus || options.floor_pdus || [];
+    var envSensors = options.envSensors || options.env_sensors || [];
+    var heatOverlay = options.heatOverlay !== false;
     var rooms = options.rooms || [];
     var interactive = options.interactive !== false;
     // 'front' = room overview (default, fast). 'both' = front + rear (floor planner).
@@ -618,6 +620,99 @@
       rackGroup.add(mesh);
     });
 
+    // --- Env heat spheres (cabinet-derived or explicit pos) ---
+    var heatGroup = new THREE.Group();
+    heatGroup.name = 'envHeat';
+    heatGroup.visible = heatOverlay;
+    scene.add(heatGroup);
+
+    function tempToColor(t) {
+      // Soft ASHRAE-ish band (°C): cool blue → green → yellow → red
+      var c = new THREE.Color();
+      if (t == null || isNaN(t)) {
+        c.setHex(0x64748b);
+        return c;
+      }
+      if (t <= 15) c.setHex(0x1d4ed8);
+      else if (t <= 18) c.setHex(0x0ea5e9);
+      else if (t <= 22) c.setHex(0x22c55e);
+      else if (t <= 25) c.setHex(0xa3e635);
+      else if (t <= 27) c.setHex(0xfacc15);
+      else if (t <= 30) c.setHex(0xf97316);
+      else c.setHex(0xef4444);
+      return c;
+    }
+
+    envSensors.forEach(function (s) {
+      var temp = Number(s.temp);
+      if (isNaN(temp)) return;
+      var r = Number(s.radius_m) || 1.83; // ~6 ft
+      var x = Number(s.pos_x);
+      var z = Number(s.pos_y); // plan Y → scene Z
+      var y = Number(s.pos_z);
+      if (isNaN(x) || isNaN(z)) return;
+      if (isNaN(y)) y = 1.0;
+
+      var color = tempToColor(temp);
+      // Soft sphere — slightly flattened so floor stays readable
+      var geo = new THREE.SphereGeometry(r, 24, 16);
+      var mat = new THREE.MeshBasicMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.16,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      var mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x, Math.max(0.35, y), z);
+      mesh.scale.set(1, 0.72, 1); // elliptical influence volume
+      mesh.userData = { envSensor: s, kind: 'heat' };
+      mesh.renderOrder = 1;
+      heatGroup.add(mesh);
+
+      // Small core marker
+      var core = new THREE.Mesh(
+        new THREE.SphereGeometry(0.08, 12, 10),
+        new THREE.MeshBasicMaterial({
+          color: color,
+          transparent: true,
+          opacity: 0.85,
+          depthWrite: false,
+        })
+      );
+      core.position.copy(mesh.position);
+      core.userData = { envSensor: s, kind: 'core' };
+      heatGroup.add(core);
+
+      // Temp label (billboard-ish, flat on XZ then tilt toward camera is hard without update — flat top label)
+      var lc = document.createElement('canvas');
+      lc.width = 256;
+      lc.height = 64;
+      var lctx = lc.getContext('2d');
+      lctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+      lctx.fillRect(0, 0, 256, 64);
+      lctx.fillStyle = '#e2e8f0';
+      lctx.font = 'bold 22px Segoe UI, sans-serif';
+      lctx.textAlign = 'center';
+      var tLabel = (Math.round(temp * 10) / 10) + '°';
+      if (s.humidity != null && !isNaN(Number(s.humidity))) {
+        tLabel += ' / ' + Math.round(Number(s.humidity)) + '%';
+      }
+      lctx.fillText(tLabel, 128, 28);
+      lctx.font = '14px Segoe UI, sans-serif';
+      lctx.fillStyle = '#94a3b8';
+      lctx.fillText(String(s.name || '').slice(0, 22), 128, 50);
+      var ltex = new THREE.CanvasTexture(lc);
+      var lab = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.55, 0.14),
+        new THREE.MeshBasicMaterial({ map: ltex, transparent: true, depthWrite: false })
+      );
+      lab.position.set(x, mesh.position.y + 0.22, z);
+      lab.rotation.x = -Math.PI / 2;
+      lab.userData = { envSensor: s, kind: 'label' };
+      heatGroup.add(lab);
+    });
+
     if (!cabinets.length && !floorPdus.length) {
       var c2 = document.createElement('canvas');
       c2.width = 512;
@@ -693,6 +788,10 @@
       scene: scene,
       camera: camera,
       renderer: renderer,
+      heatGroup: heatGroup,
+      setHeatOverlay: function (on) {
+        heatGroup.visible = !!on;
+      },
       dispose: function () {
         cancelled = true;
         cancelAnimationFrame(animId);
@@ -700,6 +799,15 @@
         try {
           if (statusEl && statusEl.parentNode) statusEl.parentNode.removeChild(statusEl);
         } catch (e) { /* ignore */ }
+        try {
+          heatGroup.traverse(function (obj) {
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) {
+              if (obj.material.map) obj.material.map.dispose();
+              obj.material.dispose();
+            }
+          });
+        } catch (e2) { /* ignore */ }
         renderer.dispose();
       },
     };

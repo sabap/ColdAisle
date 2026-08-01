@@ -84,6 +84,16 @@ try {
     $pdus3d = [];
 }
 
+// Env heat spheres (cabinet + placement → soft 6 ft influence)
+$envSensors3d = [];
+try {
+    if (class_exists('EnvSensor3dData')) {
+        $envSensors3d = EnvSensor3dData::forFloor();
+    }
+} catch (Throwable $e) {
+    $envSensors3d = [];
+}
+
 $rooms = Database::fetchAll(
     'SELECT r.room_id, r.name, r.width_m, r.depth_m, dc.name AS dc_name
      FROM rooms r
@@ -190,10 +200,18 @@ layout_header('Dashboard', $user, 'dashboard');
             <h2>Data Center Layout (3D)</h2>
             <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/floorplan.php')) ?>">Edit Floor Plan</a>
         </div>
+        <div class="card-header" style="border-top:1px solid var(--border);padding:.5rem 1rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+            <label class="text-muted" style="font-size:.85rem;display:flex;align-items:center;gap:.4rem;cursor:pointer;margin:0">
+                <input type="checkbox" id="dash3dHeatToggle" checked>
+                Temp heat spheres (~6 ft)
+            </label>
+            <span class="text-muted" style="font-size:.78rem">From env sensors · cabinet + placement · not CFD</span>
+        </div>
         <div class="panel-3d" id="dashboard-3d"
              data-cabinets='<?= App::e(json_encode($cabinets3d)) ?>'
              data-pdus='<?= App::e(json_encode($pdus3d)) ?>'
-             data-rooms='<?= App::e(json_encode($rooms)) ?>'></div>
+             data-rooms='<?= App::e(json_encode($rooms)) ?>'
+             data-env-sensors='<?= App::e(json_encode($envSensors3d)) ?>'></div>
     </div>
 
     <div class="card">
@@ -271,7 +289,7 @@ layout_header('Dashboard', $user, 'dashboard');
     if (!el) return;
     el.classList.add('dash-3d-loading');
     var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=5') ?>;
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=6') ?>;
     loadScript(threeUrl)
       .then(function () { return loadScript(app3d); })
       .then(function () {
@@ -279,13 +297,24 @@ layout_header('Dashboard', $user, 'dashboard');
         var cabinets = JSON.parse(el.dataset.cabinets || '[]');
         var pdus = JSON.parse(el.dataset.pdus || '[]');
         var rooms = JSON.parse(el.dataset.rooms || '[]');
-        ColdAisle3D.mount(el, {
+        var envSensors = JSON.parse(el.dataset.envSensors || '[]');
+        var heatOn = true;
+        var tog = document.getElementById('dash3dHeatToggle');
+        if (tog) heatOn = !!tog.checked;
+        var view = ColdAisle3D.mount(el, {
           cabinets: cabinets,
           pdus: pdus,
           rooms: rooms,
+          envSensors: envSensors,
+          heatOverlay: heatOn,
           interactive: true,
           textureFaces: 'front',
         });
+        if (tog && view && typeof view.setHeatOverlay === 'function') {
+          tog.addEventListener('change', function () {
+            view.setHeatOverlay(!!tog.checked);
+          });
+        }
         el.classList.remove('dash-3d-loading');
       })
       .catch(function () {

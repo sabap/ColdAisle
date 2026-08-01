@@ -57,6 +57,7 @@
     let unplacedPdus = []; // available to place
     let floorCooling = []; // placed cooling units
     let unplacedCooling = []; // available to place
+    let envSensors3d = []; // heat spheres for 3D view
     let roomRows = []; // cabinet_rows for current room
     let powerZones = []; // zones for DC (row → zone)
     let selectedId = null; // primary cabinet selection (props panel focus)
@@ -2614,6 +2615,7 @@
         unplacedPdus = [];
         floorCooling = [];
         unplacedCooling = [];
+        envSensors3d = [];
         propsEl.innerHTML = '<p class="text-muted">Create a room first under Data Centers.</p>';
         renderUnplacedPduPalette();
         renderUnplacedCoolingPalette();
@@ -2628,6 +2630,7 @@
         unplacedPdus = data.unplaced_pdus || [];
         floorCooling = data.placed_cooling || [];
         unplacedCooling = data.unplaced_cooling || [];
+        envSensors3d = data.env_sensors || [];
         roomRows = data.rows || [];
         powerZones = data.zones || [];
         unlockedIds.clear(); // all placed racks load locked
@@ -3174,6 +3177,8 @@
         cabinets: cabinets,
         pdus: floorPdus,
         cooling: floorCooling,
+        envSensors: envSensors3d,
+        heatOverlay: true,
         rooms: room ? [room] : [],
         interactive: true,
         textureFaces: 'both',
