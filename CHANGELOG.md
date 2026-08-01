@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.21] - 2026-08-01
+
+### Bug fixes
+
 - **EMS probe names were thresholds:** read `emsProbeStatusProbeName` (.2) not high-temp thresh (.4) which showed as “59”; reject numeric fake names; order-fallback maps remaining TH sensors to free probe indexes.
 
 ---
-
 ## [0.3.20] - 2026-08-01
 
 ### Bug fixes
