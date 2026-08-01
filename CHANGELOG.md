@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.15] - 2026-08-01
+
+### Bug fixes
+
 - **Discover proposed map:** stop mapping EMS temperature OIDs to `watts` (temp.1 was reused as power). Env trees and already-claimed `temperature.*` / `humidity.*` OIDs are excluded from power fallbacks.
 
 ---
-
 ## [0.3.14] - 2026-08-01
 
 ### Bug fixes
