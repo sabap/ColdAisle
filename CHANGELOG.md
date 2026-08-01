@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.23] - 2026-08-01
+
+### Bug fixes
+
 - **EMS expansion still 0°C:** walk APC **Universal I/O** sensor table (`318.1.1.25`) for TH module temps (EMS `R#` slots were empty placeholders); relax live detection; map TH01:N → UIO port/sensor; show UIO in Poll snapshot.
 
 ---
-
 ## [0.3.22] - 2026-08-01
 
 ### Bug fixes
