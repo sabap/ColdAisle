@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Heat sphere cores:** place on the cabinet face **center** (intake/exhaust edge), not offset into the aisle or shifted to the right by port index.
+
 ---
 
 ## [0.3.31] - 2026-08-01
