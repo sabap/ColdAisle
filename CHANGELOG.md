@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.20] - 2026-08-01
+
+### Bug fixes
+
 - **EMS expansion module sensors on Poll:** expand the full APC probe table (not only template 1–4), read probe **names**, match TH/MM sensors by label (not port→index 1), and include all `env_module` hosted sensors as candidates.
 
 ---
-
 ## [0.3.19] - 2026-08-01
 
 ### New features
