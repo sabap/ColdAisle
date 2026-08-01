@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **3D heat spheres:** radius halved (~3 ft); extremely soft feathered edges via nested additive shells and radial alpha falloff.
-
 ### Bug fixes
 
 ---
 
+## [0.3.31] - 2026-08-01
+
+### Enhancements
+
+- **3D heat spheres:** radius halved (~3 ft); extremely soft feathered edges via nested additive shells and radial alpha falloff.
+
+---
 ## [0.3.30] - 2026-08-01
 
 ### Bug fixes
