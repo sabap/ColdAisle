@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **3D temp heat spheres:** translucent ~6 ft influence bubbles on Dashboard (and floor-plan 3D) from env sensor last temps; position from cabinet + placement (equipment intake → cold face) or explicit coords; toggle on dashboard; not CFD.
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.27] - 2026-08-01
+
+### New features
+
+- **3D temp heat spheres:** translucent ~6 ft influence bubbles on Dashboard (and floor-plan 3D) from env sensor last temps; position from cabinet + placement (equipment intake → cold face) or explicit coords; toggle on dashboard; not CFD.
+
+---
 ## [0.3.26] - 2026-08-01
 
 ### Enhancements
