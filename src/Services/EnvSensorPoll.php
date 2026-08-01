@@ -1,24 +1,163 @@
 <?php
 /**
  * Map site-template SNMP metrics (temperature.N / humidity.N) onto env_sensors.
+ * APC EMS: one management module holds a flat probe table for MM + TH expansion modules.
  */
 declare(strict_types=1);
 
 class EnvSensorPoll
 {
+    /** APC PowerNet emsProbeStatus* columns (AP9340 / similar). */
+    private const EMS_TEMP_OID = '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3';
+    private const EMS_HUM_OID = '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6';
+    /** Probe name / label columns tried in order */
+    private const EMS_NAME_OIDS = [
+        '1.3.6.1.4.1.318.1.1.10.3.13.1.1.4',
+        '1.3.6.1.4.1.318.1.1.10.3.13.1.1.5',
+        '1.3.6.1.4.1.318.1.1.10.3.13.1.1.2',
+    ];
+    private const MAX_PROBE_INDEX = 32;
+    private const MISS_STREAK_STOP = 3;
+
+    /**
+     * Expand metrics with live EMS probe table (temp/humidity/name for indices 1..N).
+     * Call while SNMP session is still open.
+     *
+     * @param array<string,mixed> $session SnmpPoller session
+     * @param array<string,array{numeric:?float,raw?:mixed,oid?:string}> $metrics
+     * @return array{metrics:array,probe_names:array<int,string>,expanded:int}
+     */
+    public static function expandApcEmsProbes(array $session, array $metrics): array
+    {
+        $probeNames = [];
+        $expanded = 0;
+        $miss = 0;
+        $anyHit = false;
+
+        for ($i = 1; $i <= self::MAX_PROBE_INDEX; $i++) {
+            $tOid = self::EMS_TEMP_OID . '.' . $i;
+            $hOid = self::EMS_HUM_OID . '.' . $i;
+            $tKey = 'temperature.' . $i;
+            $hKey = 'humidity.' . $i;
+
+            $gotTemp = null;
+            $gotHum = null;
+            $gotName = null;
+
+            // Prefer already-collected template values
+            if (isset($metrics[$tKey]['numeric']) && $metrics[$tKey]['numeric'] !== null) {
+                $gotTemp = (float)$metrics[$tKey]['numeric'];
+            } else {
+                try {
+                    $raw = SnmpPoller::sessionGet($session, $tOid);
+                    $n = SnmpPoller::sessionToNumber($raw);
+                    if ($n !== null) {
+                        $gotTemp = self::normalizeEnvValue((float)$n, 'temperature');
+                        $metrics[$tKey] = ['numeric' => $gotTemp, 'raw' => $raw, 'oid' => $tOid];
+                        $expanded++;
+                    }
+                } catch (Throwable $e) {
+                    // miss
+                }
+            }
+
+            if (isset($metrics[$hKey]['numeric']) && $metrics[$hKey]['numeric'] !== null) {
+                $gotHum = (float)$metrics[$hKey]['numeric'];
+            } else {
+                try {
+                    $raw = SnmpPoller::sessionGet($session, $hOid);
+                    $n = SnmpPoller::sessionToNumber($raw);
+                    if ($n !== null) {
+                        $gotHum = self::normalizeEnvValue((float)$n, 'humidity');
+                        $metrics[$hKey] = ['numeric' => $gotHum, 'raw' => $raw, 'oid' => $hOid];
+                        $expanded++;
+                    }
+                } catch (Throwable $e) {
+                    // miss
+                }
+            }
+
+            foreach (self::EMS_NAME_OIDS as $nameBase) {
+                try {
+                    $raw = SnmpPoller::sessionGet($session, $nameBase . '.' . $i);
+                    $label = self::cleanProbeName($raw);
+                    if ($label !== '') {
+                        $gotName = $label;
+                        $metrics['probe_name.' . $i] = [
+                            'numeric' => null,
+                            'raw' => $raw,
+                            'oid' => $nameBase . '.' . $i,
+                        ];
+                        break;
+                    }
+                } catch (Throwable $e) {
+                    // try next name column
+                }
+            }
+            if ($gotName !== null) {
+                $probeNames[$i] = $gotName;
+            }
+
+            if ($gotTemp !== null || $gotHum !== null || $gotName !== null) {
+                $anyHit = true;
+                $miss = 0;
+            } else {
+                $miss++;
+                if ($anyHit && $miss >= self::MISS_STREAK_STOP) {
+                    break;
+                }
+                // Before first hit, still scan a few (sparse agents) but stop early if empty table
+                if (!$anyHit && $i >= 8 && $miss >= 8) {
+                    break;
+                }
+            }
+        }
+
+        if ($probeNames) {
+            App::log(
+                'EnvSensorPoll EMS probes named: ' . implode(', ', array_map(
+                    static fn($i, $n) => $i . '=' . $n,
+                    array_keys($probeNames),
+                    array_values($probeNames)
+                )),
+                'info'
+            );
+        }
+
+        return [
+            'metrics' => $metrics,
+            'probe_names' => $probeNames,
+            'expanded' => $expanded,
+        ];
+    }
+
     /**
      * After a successful device poll, write matching env metrics to sensors + history.
      *
      * @param array<string,array{numeric:?float,raw?:mixed,oid?:string}> $metrics lowercase keys
      * @param array<string,mixed> $oidMap original template map
-     * @return array{updated:int,readings:int,unmatched:int,keys:int,matched:list<string>}
+     * @param array<int,string> $probeNames SNMP probe labels by table index
+     * @return array{updated:int,readings:int,unmatched:int,keys:int,matched:list<string>,candidates:int,probes:int}
      */
     public static function applyFromDevicePoll(
         int $deviceId,
         int $templateId,
         array $metrics,
-        array $oidMap
+        array $oidMap,
+        array $probeNames = []
     ): array {
+        // Build names from metrics if expand stored probe_name.N
+        if (!$probeNames) {
+            foreach ($metrics as $k => $meta) {
+                if (preg_match('/^probe_name\.(\d+)$/', (string)$k, $m)) {
+                    $label = self::cleanProbeName($meta['raw'] ?? null);
+                    if ($label !== '') {
+                        $probeNames[(int)$m[1]] = $label;
+                    }
+                }
+            }
+        }
+
         $envMetrics = self::extractEnvMetrics($metrics);
         if (!$envMetrics['temperature'] && !$envMetrics['humidity']) {
             return [
@@ -27,11 +166,19 @@ class EnvSensorPoll
                 'unmatched' => 0,
                 'keys' => 0,
                 'matched' => [],
+                'candidates' => 0,
+                'probes' => 0,
             ];
         }
 
-        $sensors = self::loadCandidateSensors($deviceId, $templateId, $oidMap);
+        $sensors = self::loadCandidateSensors($deviceId, $templateId);
         $keyCount = count($envMetrics['temperature']) + count($envMetrics['humidity']);
+        $probeCount = max(
+            count($envMetrics['temperature']),
+            count($envMetrics['humidity']),
+            count($probeNames)
+        );
+
         if (!$sensors) {
             return [
                 'updated' => 0,
@@ -39,6 +186,8 @@ class EnvSensorPoll
                 'unmatched' => $keyCount,
                 'keys' => $keyCount,
                 'matched' => [],
+                'candidates' => 0,
+                'probes' => $probeCount,
             ];
         }
 
@@ -52,7 +201,7 @@ class EnvSensorPoll
         foreach ($sensors as $sensor) {
             $sid = (int)$sensor['sensor_id'];
             $kind = strtolower((string)($sensor['sensor_kind'] ?? 'temperature'));
-            $inst = self::resolveProbeInstance($sensor, $envMetrics);
+            $inst = self::matchSensorToProbeIndex($sensor, $envMetrics, $probeNames);
             $tempVal = null;
             $humVal = null;
             $mapKeyTemp = null;
@@ -69,7 +218,7 @@ class EnvSensorPoll
                 }
             }
 
-            // Explicit map key in snmp_index (temperature.3 / humidity.2)
+            // Explicit map key still wins if present and valid
             $idxRaw = strtolower(trim((string)($sensor['snmp_index'] ?? '')));
             if (preg_match('/^(temperature|temp)\.(\d+)$/', $idxRaw, $m)) {
                 $i = (int)$m[2];
@@ -100,12 +249,12 @@ class EnvSensorPoll
                     if ($n === null) {
                         continue;
                     }
-                    if (preg_match('/^humidity/', $mk) || str_contains($mk, 'humid')) {
-                        $humVal = self::normalizeEnvValue($n, 'humidity');
-                        $mapKeyHum = $mk;
+                    if (preg_match('/^humidity/', (string)$mk) || str_contains((string)$mk, 'humid')) {
+                        $humVal = self::normalizeEnvValue((float)$n, 'humidity');
+                        $mapKeyHum = (string)$mk;
                     } else {
-                        $tempVal = self::normalizeEnvValue($n, 'temperature');
-                        $mapKeyTemp = $mk;
+                        $tempVal = self::normalizeEnvValue((float)$n, 'temperature');
+                        $mapKeyTemp = (string)$mk;
                     }
                 }
             }
@@ -115,14 +264,10 @@ class EnvSensorPoll
             if ($kind === 'humidity') {
                 $primary = $humVal;
                 $primaryMetric = 'humidity';
-                if ($primary === null && $tempVal !== null && $mapKeyHum === null) {
-                    // mis-kinded? leave null
-                }
             } elseif ($kind === 'temp_humidity') {
                 $primary = $tempVal ?? $humVal;
                 $primaryMetric = $tempVal !== null ? 'temperature' : 'humidity';
             } else {
-                // temperature, dew_point, other → prefer temp
                 $primary = $tempVal;
                 $primaryMetric = 'temperature';
                 if ($primary === null && $kind === 'other' && $humVal !== null) {
@@ -145,15 +290,9 @@ class EnvSensorPoll
             if ($kind === 'temp_humidity' && $humVal !== null) {
                 $fields['last_humidity'] = $humVal;
             }
-            // Persist resolved index for next poll (help admin)
-            if ($inst !== null && trim((string)($sensor['snmp_index'] ?? '')) === '') {
-                if ($kind === 'humidity') {
-                    $fields['snmp_index'] = 'humidity.' . $inst;
-                } elseif ($kind === 'temp_humidity') {
-                    $fields['snmp_index'] = (string)$inst;
-                } else {
-                    $fields['snmp_index'] = 'temperature.' . $inst;
-                }
+            // Persist resolved SNMP table index (not module port alone)
+            if ($inst !== null) {
+                $fields['snmp_index'] = (string)$inst;
             }
             if ($templateId > 0 && empty($sensor['snmp_site_template_id'])) {
                 $fields['snmp_site_template_id'] = $templateId;
@@ -162,7 +301,6 @@ class EnvSensorPoll
             try {
                 Database::update('env_sensors', $fields, 'sensor_id = :id', [':id' => $sid]);
             } catch (Throwable $e) {
-                // last_humidity column may not exist yet — retry without it
                 if (isset($fields['last_humidity'])) {
                     unset($fields['last_humidity']);
                     try {
@@ -187,7 +325,6 @@ class EnvSensorPoll
                     ]);
                     $readings++;
                 } catch (Throwable $e) {
-                    // metric column optional
                     try {
                         Database::insert('env_readings', [
                             'sensor_id' => $sid,
@@ -210,27 +347,24 @@ class EnvSensorPoll
                     ]);
                     $readings++;
                 } catch (Throwable $e) {
-                    // ignore if metric column missing — humidity already in last_humidity
+                    // optional metric column
                 }
             }
 
             $updated++;
             $label = (string)($sensor['name'] ?? ('#' . $sid));
             if ($primary !== null) {
-                $matchedLabels[] = $label . '=' . self::fmt($primary)
+                $matchedLabels[] = $label . '[#' . ($inst ?? '?') . ']=' . self::fmt($primary)
                     . ($kind === 'temp_humidity' && $humVal !== null ? '/' . self::fmt($humVal) . '%RH' : '');
             }
-            if ($mapKeyTemp) {
-                $usedTemp[$inst ?? 0] = true;
+            if ($mapKeyTemp && $inst !== null) {
+                $usedTemp[$inst] = true;
             }
-            if ($mapKeyHum) {
-                $usedHum[$inst ?? 0] = true;
+            if ($mapKeyHum && $inst !== null) {
+                $usedHum[$inst] = true;
             }
         }
 
-        $envKeyCount = count($envMetrics['temperature']) + count($envMetrics['humidity']);
-        $unmatched = max(0, $envKeyCount - count($usedTemp) - count($usedHum));
-        // Recompute unmatched as sensors with no write is less useful; report unused metric keys
         $unusedKeys = 0;
         foreach ($envMetrics['temperature'] as $i => $_) {
             if (empty($usedTemp[$i])) {
@@ -243,23 +377,160 @@ class EnvSensorPoll
             }
         }
 
-        if ($updated > 0) {
-            App::log(
-                'EnvSensorPoll device_id=' . $deviceId
-                . ' updated=' . $updated
-                . ' readings=' . $readings
-                . ' keys=' . $envKeyCount,
-                'info'
-            );
-        }
+        App::log(
+            'EnvSensorPoll device_id=' . $deviceId
+            . ' candidates=' . count($sensors)
+            . ' updated=' . $updated
+            . ' readings=' . $readings
+            . ' probes=' . $probeCount
+            . ' names=' . count($probeNames),
+            'info'
+        );
 
         return [
             'updated' => $updated,
             'readings' => $readings,
             'unmatched' => $unusedKeys,
-            'keys' => $envKeyCount,
+            'keys' => $keyCount,
             'matched' => $matchedLabels,
+            'candidates' => count($sensors),
+            'probes' => $probeCount,
         ];
+    }
+
+    /**
+     * Resolve which EMS table index a sensor row maps to.
+     * Prefer SNMP probe names (TH01:1 labels) over naive port→index mapping.
+     *
+     * @param array{temperature:array<int,float>,humidity:array<int,float>} $envMetrics
+     * @param array<int,string> $probeNames
+     */
+    public static function matchSensorToProbeIndex(
+        array $sensor,
+        array $envMetrics,
+        array $probeNames
+    ): ?int {
+        $idx = trim((string)($sensor['snmp_index'] ?? ''));
+        // Pure numeric index or temperature.N — trusted when set
+        if ($idx !== '') {
+            if (preg_match('/^(?:temperature|temp|humidity|humid|rh)\.(\d+)$/i', $idx, $m)) {
+                return (int)$m[1];
+            }
+            if (preg_match('/^\d+$/', $idx)) {
+                $n = (int)$idx;
+                if (isset($envMetrics['temperature'][$n]) || isset($envMetrics['humidity'][$n])
+                    || isset($probeNames[$n])
+                ) {
+                    return $n;
+                }
+            }
+        }
+
+        $sensorName = (string)($sensor['name'] ?? '');
+        $sensorNorm = self::normalizeLabel($sensorName);
+
+        // 1) Exact / contains match against SNMP probe names
+        if ($probeNames && $sensorNorm !== '') {
+            $best = null;
+            $bestScore = 0;
+            foreach ($probeNames as $i => $pname) {
+                $pnorm = self::normalizeLabel($pname);
+                if ($pnorm === '') {
+                    continue;
+                }
+                $score = 0;
+                if ($pnorm === $sensorNorm) {
+                    $score = 100;
+                } elseif (str_contains($sensorNorm, $pnorm) || str_contains($pnorm, $sensorNorm)) {
+                    $score = 80;
+                } else {
+                    // Token overlap: TH01, 1, MM, TEMP…
+                    $st = self::labelTokens($sensorNorm);
+                    $pt = self::labelTokens($pnorm);
+                    $overlap = count(array_intersect($st, $pt));
+                    if ($overlap >= 2) {
+                        $score = 40 + ($overlap * 10);
+                    } elseif ($overlap === 1 && (in_array('mm', $st, true) || preg_match('/^th\d+$/', implode('', $st)))) {
+                        $score = 25;
+                    }
+                }
+                // Prefer TH/MM codes matching both sides
+                if (preg_match('/\b(th\d+|mm)\b/', $sensorNorm, $sm)
+                    && preg_match('/\b' . preg_quote($sm[1], '/') . '\b/', $pnorm)
+                ) {
+                    $score += 20;
+                }
+                if ($score > $bestScore) {
+                    $bestScore = $score;
+                    $best = (int)$i;
+                }
+            }
+            if ($best !== null && $bestScore >= 40) {
+                return $best;
+            }
+        }
+
+        // 2) Structured codes against probe names: TH01:1, MM:1
+        if ($probeNames) {
+            if (preg_match('/\bTH\s*0*(\d+)\s*:?\s*(\d+)\b/i', $sensorName, $m)) {
+                $mod = (int)$m[1];
+                $port = (int)$m[2];
+                $patterns = [
+                    sprintf('th%02d:%d', $mod, $port),
+                    sprintf('th%d:%d', $mod, $port),
+                    sprintf('th%02d %d', $mod, $port),
+                    sprintf('th%02d-%d', $mod, $port),
+                    sprintf('th%02d_%d', $mod, $port),
+                ];
+                foreach ($probeNames as $i => $pname) {
+                    $p = self::normalizeLabel($pname);
+                    foreach ($patterns as $pat) {
+                        if (str_contains($p, $pat) || $p === $pat) {
+                            return (int)$i;
+                        }
+                    }
+                    // "TH01" and port digit as separate tokens
+                    if (str_contains($p, sprintf('th%02d', $mod)) || str_contains($p, 'th' . $mod)) {
+                        if (preg_match('/(?:^|[^0-9])' . $port . '(?:[^0-9]|$)/', $p)) {
+                            return (int)$i;
+                        }
+                    }
+                }
+            }
+            if (preg_match('/\bMM\s*:?\s*(\d+)\b/i', $sensorName, $m)) {
+                $port = (int)$m[1];
+                foreach ($probeNames as $i => $pname) {
+                    $p = self::normalizeLabel($pname);
+                    if (str_contains($p, 'mm') && (
+                        str_contains($p, 'mm:' . $port)
+                        || str_contains($p, 'mm ' . $port)
+                        || preg_match('/\bmm\b.*\b' . $port . '\b/', $p)
+                    )) {
+                        return (int)$i;
+                    }
+                }
+                // Fallback: first probe named with MM only when port is 1
+                if ($port === 1) {
+                    foreach ($probeNames as $i => $pname) {
+                        if (str_contains(self::normalizeLabel($pname), 'mm')) {
+                            return (int)$i;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3) MM:N → SNMP index N only when no probe names (legacy template-only poll)
+        if (!$probeNames && preg_match('/\bMM\s*:?\s*(\d+)\b/i', $sensorName, $m)) {
+            $n = (int)$m[1];
+            if (isset($envMetrics['temperature'][$n]) || isset($envMetrics['humidity'][$n])) {
+                return $n;
+            }
+        }
+
+        // 4) Do NOT map TH01:1 → index 1 by port alone (collides with MM and is usually wrong)
+
+        return null;
     }
 
     /**
@@ -284,7 +555,6 @@ class EnvSensorPoll
                 $hum[(int)$m[2]] = self::normalizeEnvValue((float)$n, 'humidity');
                 continue;
             }
-            // Bare keys
             if ($k === 'temperature' || $k === 'temp') {
                 $temp[1] = self::normalizeEnvValue((float)$n, 'temperature');
             } elseif ($k === 'humidity' || $k === 'humid' || $k === 'rh') {
@@ -294,19 +564,14 @@ class EnvSensorPoll
         return ['temperature' => $temp, 'humidity' => $hum];
     }
 
-    /**
-     * APC EMS sometimes reports temp in tenths (°C × 10). Humidity is usually 0–100.
-     */
     public static function normalizeEnvValue(float $n, string $kind): float
     {
         if ($kind === 'humidity') {
-            // Some agents report RH × 10
             if ($n > 100 && $n <= 1000) {
                 return round($n / 10.0, 2);
             }
             return round($n, 2);
         }
-        // Temperature: if clearly tenths of °C (e.g. 235 → 23.5)
         if ($n >= 100 && $n <= 800) {
             return round($n / 10.0, 2);
         }
@@ -314,61 +579,71 @@ class EnvSensorPoll
     }
 
     /**
-     * @param array<string,mixed> $oidMap
+     * Sensors on the polled EMS host, all expansion modules (env_module),
+     * same site template, or any device-hosted sensor on env_* types.
+     *
      * @return list<array<string,mixed>>
      */
-    private static function loadCandidateSensors(int $deviceId, int $templateId, array $oidMap): array
+    private static function loadCandidateSensors(int $deviceId, int $templateId): array
     {
-        $oids = [];
-        foreach ($oidMap as $v) {
-            if (is_string($v) && $v !== '' && preg_match('/^\d/', ltrim($v, '.'))) {
-                $oids[] = ltrim($v, '.');
-            }
-        }
+        $seen = [];
+        $rows = [];
 
-        // Sensors on this device, on the same template, or pointing at any map OID
-        $sql = 'SELECT sensor_id, name, sensor_kind, host_type, device_id, snmp_oid, snmp_index,
-                       snmp_site_template_id, last_value, unit
-                FROM env_sensors
-                WHERE is_active = 1 AND (
+        $add = static function (array $batch) use (&$rows, &$seen): void {
+            foreach ($batch as $r) {
+                $id = (int)($r['sensor_id'] ?? 0);
+                if ($id < 1 || !empty($seen[$id])) {
+                    continue;
+                }
+                $seen[$id] = true;
+                $rows[] = $r;
+            }
+        };
+
+        try {
+            $add(Database::fetchAll(
+                'SELECT sensor_id, name, sensor_kind, host_type, device_id, snmp_oid, snmp_index,
+                        snmp_site_template_id, last_value, unit
+                 FROM env_sensors
+                 WHERE is_active = 1 AND (
                     device_id = ?
                     OR (snmp_site_template_id IS NOT NULL AND snmp_site_template_id = ?)
-                )';
-        $params = [$deviceId, $templateId > 0 ? $templateId : -1];
-        try {
-            $rows = Database::fetchAll($sql, $params);
+                 )',
+                [$deviceId, $templateId > 0 ? $templateId : -1]
+            ));
         } catch (Throwable $e) {
             return [];
         }
 
-        // Also sensors hosted on env expansion modules that share a cabinet with this device
-        // (TH modules) — match by name / snmp_index only
+        // All sensors on env expansion modules (TH) and other env monitors — single-system sites
+        // typically have one EMS; multi-EMS sites should set snmp_site_template_id / snmp_index.
         try {
-            $extra = Database::fetchAll(
+            $add(Database::fetchAll(
                 "SELECT s.sensor_id, s.name, s.sensor_kind, s.host_type, s.device_id, s.snmp_oid, s.snmp_index,
                         s.snmp_site_template_id, s.last_value, s.unit
                  FROM env_sensors s
                  INNER JOIN devices d ON d.device_id = s.device_id AND d.is_active = 1
                  WHERE s.is_active = 1
-                   AND d.device_type = 'env_module'
-                   AND s.device_id <> ?
+                   AND d.device_type IN ('env_module', 'env_monitor')
+                   AND s.device_id <> ?",
+                [$deviceId]
+            ));
+        } catch (Throwable $e) {
+            // optional
+        }
+
+        // Sensors whose name looks like EMS probes even if host type wrong
+        try {
+            $add(Database::fetchAll(
+                "SELECT sensor_id, name, sensor_kind, host_type, device_id, snmp_oid, snmp_index,
+                        snmp_site_template_id, last_value, unit
+                 FROM env_sensors
+                 WHERE is_active = 1
                    AND (
-                     s.cabinet_id IN (SELECT cabinet_id FROM devices WHERE device_id = ? AND cabinet_id IS NOT NULL)
-                     OR d.cabinet_id IN (SELECT cabinet_id FROM devices WHERE device_id = ? AND cabinet_id IS NOT NULL)
-                   )",
-                [$deviceId, $deviceId, $deviceId]
-            );
-            $seen = [];
-            foreach ($rows as $r) {
-                $seen[(int)$r['sensor_id']] = true;
-            }
-            foreach ($extra as $r) {
-                $id = (int)$r['sensor_id'];
-                if (empty($seen[$id])) {
-                    $rows[] = $r;
-                    $seen[$id] = true;
-                }
-            }
+                     name LIKE '%TH0%' OR name LIKE '%TH %' OR name LIKE '%MM:%'
+                     OR name LIKE '%MM %' OR name LIKE '%Temp Sensor%' OR name LIKE '%Humidity%'
+                   )"
+            ));
         } catch (Throwable $e) {
             // optional
         }
@@ -376,54 +651,47 @@ class EnvSensorPoll
         return $rows;
     }
 
-    /**
-     * @param array{temperature:array<int,float>,humidity:array<int,float>} $envMetrics
-     */
-    public static function resolveProbeInstance(array $sensor, array $envMetrics): ?int
+    public static function cleanProbeName($raw): string
     {
-        $idx = trim((string)($sensor['snmp_index'] ?? ''));
-        if ($idx !== '') {
-            if (preg_match('/^(?:temperature|temp|humidity|humid|rh)\.(\d+)$/i', $idx, $m)) {
-                return (int)$m[1];
-            }
-            if (preg_match('/^\d+$/', $idx)) {
-                return (int)$idx;
-            }
-            // TH01:1 style stored as index
-            if (preg_match('/:(\d+)\s*$/', $idx, $m)) {
-                return (int)$m[1];
-            }
+        if ($raw === null || $raw === false) {
+            return '';
         }
+        $s = is_string($raw) ? $raw : (string)$raw;
+        // Strip SNMP type prefixes: STRING: "foo"
+        if (preg_match('/^["\']?(?:STRING|OCTET\s*STRING)\s*:\s*["\']?(.*)["\']?\s*$/i', trim($s), $m)) {
+            $s = $m[1];
+        }
+        $s = trim($s, " \t\n\r\0\x0B\"'");
+        // Drop empty / not-present style
+        if ($s === '' || strcasecmp($s, 'null') === 0 || $s === '""') {
+            return '';
+        }
+        return $s;
+    }
 
-        $name = (string)($sensor['name'] ?? '');
-        // Temp Sensor MM:1 / MM:1 / main module : 2
-        if (preg_match('/\bMM\s*:?\s*(\d+)\b/i', $name, $m)) {
-            return (int)$m[1];
-        }
-        if (preg_match('/\b(?:probe|sensor)\s*#?\s*(\d+)\b/i', $name, $m)) {
-            return (int)$m[1];
-        }
-        // TH01:1 / TH 01:2 — use the port number as instance when it exists in metrics
-        if (preg_match('/\bTH\s*0*(\d+)\s*:?\s*(\d+)\b/i', $name, $m)) {
-            $port = (int)$m[2];
-            if (isset($envMetrics['temperature'][$port]) || isset($envMetrics['humidity'][$port])) {
-                return $port;
-            }
-            // Port-only may not match flat EMS index; try module*10+port heuristic only if that key exists
-            $mod = (int)$m[1];
-            $guess = $mod * 10 + $port;
-            if (isset($envMetrics['temperature'][$guess]) || isset($envMetrics['humidity'][$guess])) {
-                return $guess;
-            }
-            // Fall through: still return port as best effort for small deployments
-            return $port;
-        }
-        // Trailing :N
-        if (preg_match('/:(\d+)\s*$/', $name, $m)) {
-            return (int)$m[1];
-        }
+    public static function normalizeLabel(string $s): string
+    {
+        $s = strtolower(trim($s));
+        $s = preg_replace('/\s+/', ' ', $s) ?? $s;
+        $s = str_replace(['_', '-'], ' ', $s);
+        // collapse "th 01" → "th01"
+        $s = preg_replace('/\bth\s*0*(\d+)\b/', 'th$1', $s) ?? $s;
+        $s = preg_replace('/\bmm\s*:?\s*/', 'mm:', $s) ?? $s;
+        return trim($s);
+    }
 
-        return null;
+    /** @return list<string> */
+    private static function labelTokens(string $norm): array
+    {
+        $parts = preg_split('/[^a-z0-9]+/', $norm) ?: [];
+        $out = [];
+        foreach ($parts as $p) {
+            if ($p === '' || $p === 'sensor' || $p === 'temp' || $p === 'temperature' || $p === 'humidity') {
+                continue;
+            }
+            $out[] = $p;
+        }
+        return $out;
     }
 
     private static function fmt(float $n): string
