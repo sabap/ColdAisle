@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.18] - 2026-08-01
+
+### Bug fixes
+
 - **Add sensor modal:** self-contained open/close (no dependency on stale `app.js` cache); works on Env sensors list and Device → Environment card as a popup (form POSTs to env sensors). Cache-bust CSS/JS by app version.
 
 ---
-
 ## [0.3.17] - 2026-08-01
 
 ### New features
