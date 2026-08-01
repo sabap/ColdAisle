@@ -303,6 +303,15 @@ class SnmpPoller
                 $metrics = $exp['metrics'];
                 $probeNames = $exp['probe_names'];
                 $probeMeta = $exp['probe_meta'] ?? [];
+                // TH expansion modules often report on Universal I/O sensor table, not EMS R# slots
+                try {
+                    $uio = EnvSensorPoll::expandUioSensors($session, $metrics, $probeNames, $probeMeta);
+                    $metrics = $uio['metrics'];
+                    $probeNames = $uio['probe_names'];
+                    $probeMeta = $uio['probe_meta'];
+                } catch (Throwable $e2) {
+                    App::log('UIO sensor expand: ' . $e2->getMessage(), 'warning');
+                }
                 $got['metrics'] = $metrics;
                 $got['ok'] = max((int)$got['ok'], count($metrics));
             }
@@ -373,6 +382,79 @@ class SnmpPoller
     public static function sessionToNumber($raw): ?float
     {
         return self::toNumber($raw);
+    }
+
+    /**
+     * Walk a numeric OID root; returns oid-suffix => raw value map.
+     *
+     * @param array<string,mixed> $session
+     * @return array<string,mixed>
+     */
+    public static function sessionWalk(array $session, string $root): array
+    {
+        $root = ltrim($root, '.');
+        $result = false;
+        if (!empty($session['snmp']) && $session['snmp'] instanceof \SNMP) {
+            try {
+                $result = @$session['snmp']->walk($root, true);
+            } catch (Throwable $e) {
+                $result = false;
+            }
+        }
+        if ($result === false || !is_array($result)) {
+            $host = (string)($session['host'] ?? '');
+            $ver = strtolower((string)($session['version'] ?? '2c'));
+            $community = (string)($session['user'] ?? 'public');
+            try {
+                if ($ver === '3' && function_exists('snmp3_real_walk')) {
+                    $sec = 'noAuthNoPriv';
+                    if (!empty($session['authPass']) && !empty($session['privPass'])) {
+                        $sec = 'authPriv';
+                    } elseif (!empty($session['authPass'])) {
+                        $sec = 'authNoPriv';
+                    }
+                    $result = @snmp3_real_walk(
+                        $host,
+                        (string)$session['user'],
+                        $sec,
+                        (string)($session['authProto'] ?: 'SHA'),
+                        (string)($session['authPass'] ?? ''),
+                        (string)($session['privProto'] ?: 'AES'),
+                        (string)($session['privPass'] ?? ''),
+                        $root,
+                        1_500_000,
+                        0
+                    );
+                } elseif (($ver === '1' || $ver === 'v1') && function_exists('snmprealwalk')) {
+                    $result = @snmprealwalk($host, $community, $root, 1_500_000, 0);
+                } elseif (function_exists('snmp2_real_walk')) {
+                    $result = @snmp2_real_walk($host, $community, $root, 1_500_000, 0);
+                } elseif (function_exists('snmprealwalk')) {
+                    $result = @snmprealwalk($host, $community, $root, 1_500_000, 0);
+                }
+            } catch (Throwable $e) {
+                $result = false;
+            }
+        }
+        if ($result === false || !is_array($result)) {
+            return [];
+        }
+        $out = [];
+        foreach ($result as $k => $v) {
+            $key = (string)$k;
+            // Strip root prefix if present; keep trailing instance (port.sensor)
+            if (str_contains($key, $root)) {
+                $pos = strpos($key, $root);
+                $suffix = substr($key, $pos + strlen($root));
+                $suffix = ltrim($suffix, '.');
+            } elseif (preg_match('/(\d+(?:\.\d+)+)\s*$/', $key, $m)) {
+                $suffix = $m[1];
+            } else {
+                $suffix = $key;
+            }
+            $out[$suffix] = $v;
+        }
+        return $out;
     }
 
     /**
