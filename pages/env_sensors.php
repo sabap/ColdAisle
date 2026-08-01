@@ -175,12 +175,23 @@ if ($sensorId > 0) {
             <div class="value">
                 <?php if ($val !== null): ?>
                     <?= App::e(rtrim(rtrim(number_format($val, 2, '.', ''), '0'), '.')) ?>
-                    <span class="metric-unit"><?= App::e((string)($s['unit'] ?? '')) ?></span>
+                    <?php
+                    $hum = $s['last_humidity'] ?? null;
+                    if (($s['sensor_kind'] ?? '') === 'temp_humidity' && $hum !== null && $hum !== ''):
+                        $hv = (float)$hum;
+                        ?>
+                        <span class="metric-unit">°C</span>
+                        <span class="text-muted" style="font-size:.85rem;font-weight:500">
+                            / <?= App::e(rtrim(rtrim(number_format($hv, 1, '.', ''), '0'), '.')) ?>%RH
+                        </span>
+                    <?php else: ?>
+                        <span class="metric-unit"><?= App::e((string)($s['unit'] ?? '')) ?></span>
+                    <?php endif; ?>
                 <?php else: ?>
                     —
                 <?php endif; ?>
             </div>
-            <div class="sub">status: <?= App::e($st) ?></div>
+            <div class="sub">status: <?= App::e($st) ?><?= !empty($s['snmp_index']) ? ' · key ' . App::e((string)$s['snmp_index']) : '' ?></div>
         </div>
         <div class="metric-card">
             <div class="label">Host</div>
@@ -374,7 +385,14 @@ layout_header('Environmental sensors', $user, 'env_sensors');
                             <td>
                                 <?php if ($val !== null): ?>
                                     <?= App::e(rtrim(rtrim(number_format($val, 2, '.', ''), '0'), '.')) ?>
-                                    <?= App::e((string)($s['unit'] ?? '')) ?>
+                                    <?php
+                                    $humL = $s['last_humidity'] ?? null;
+                                    if (($s['sensor_kind'] ?? '') === 'temp_humidity' && $humL !== null && $humL !== ''):
+                                        ?>
+                                        °C / <?= App::e(rtrim(rtrim(number_format((float)$humL, 1, '.', ''), '0'), '.')) ?>%RH
+                                    <?php else: ?>
+                                        <?= App::e((string)($s['unit'] ?? '')) ?>
+                                    <?php endif; ?>
                                 <?php else: ?>—<?php endif; ?>
                             </td>
                             <td><span class="badge <?= $badge ?>"><?= App::e($st) ?></span></td>

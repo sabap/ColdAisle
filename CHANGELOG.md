@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Env sensor SNMP poll:** device **Poll now** / scheduler writes `temperature.*` and `humidity.*` from the site OID template into matching env sensors (`last_value`, optional `last_humidity` for combo) and `env_readings`. Matches by probe/map key, OID, or name (`MM:1`, `TH01:1`, …).
+
 ### Enhancements
 
 ### Bug fixes

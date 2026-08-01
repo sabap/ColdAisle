@@ -299,6 +299,17 @@ try {
             if ($result['failed'] > 0) {
                 $bits[] = $result['failed'] . ' OID(s) soft-failed.';
             }
+            $env = is_array($result['env'] ?? null) ? $result['env'] : [];
+            if (!empty($env['updated'])) {
+                $envBit = 'Updated ' . (int)$env['updated'] . ' env sensor(s)';
+                if (!empty($env['readings'])) {
+                    $envBit .= ' (' . (int)$env['readings'] . ' reading(s))';
+                }
+                $bits[] = $envBit . '.';
+            } elseif (!empty($env['keys'])) {
+                $bits[] = 'Env map has ' . (int)$env['keys']
+                    . ' temp/humidity key(s) but no matching sensors (check names like MM:1 or probe/map key).';
+            }
             if ($fresh && $fresh['snmp_last_poll_watts'] !== null) {
                 $w = (float)$fresh['snmp_last_poll_watts'];
                 $bits[] = 'Load ' . ($w >= 1000 ? number_format($w / 1000, 3) . ' kW' : rtrim(rtrim(sprintf('%.2F', $w), '0'), '.') . ' W');
@@ -312,6 +323,7 @@ try {
                 'snmp_last_poll_at' => $fresh['snmp_last_poll_at'] ?? null,
                 'snmp_last_poll_watts' => $fresh['snmp_last_poll_watts'] ?? null,
                 'snmp_last_poll_amps' => $fresh['snmp_last_poll_amps'] ?? null,
+                'env' => $env,
                 'message' => implode(' ', $bits),
             ]);
         }
