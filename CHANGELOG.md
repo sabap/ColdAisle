@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.3.14] - 2026-08-01
+
+### Bug fixes
+
+- **Discover hang fix shipped:** 0.3.13 tagged the notes only; this release includes the actual leaf-first / EMS-before-PDU Discover code so IIS no longer returns a bare Internal Server Error on AP9340.
+
+---
 ## [0.3.13] - 2026-08-01
 
 ### Bug fixes
