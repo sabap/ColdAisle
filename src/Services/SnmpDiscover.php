@@ -2284,4 +2284,127 @@ class SnmpDiscover
             'snmp_enabled' => 1,
         ], 'pdu_id = :id', [':id' => $pduId]);
     }
+
+    /**
+     * Pre-flight for cooling units: manufacturer, model, primary IP.
+     * @param array<string,mixed> $unit
+     * @return array{ok:bool,vendor:string,model:string,host:string,missing:list<string>}
+     */
+    public static function discoverPrereqsCooling(array $unit): array
+    {
+        $vendor = trim((string)($unit['manufacturer'] ?? ''));
+        $model = trim((string)($unit['model'] ?? ''));
+        $host = trim((string)($unit['primary_ip'] ?? ''));
+        if ($host === '') {
+            $host = trim((string)($unit['hostname'] ?? ''));
+        }
+        $missing = [];
+        if ($vendor === '') {
+            $missing[] = 'manufacturer (vendor)';
+        }
+        if ($model === '') {
+            $missing[] = 'model';
+        }
+        if ($host === '') {
+            $missing[] = 'primary IP';
+        }
+        return [
+            'ok' => $missing === [],
+            'vendor' => $vendor,
+            'model' => $model,
+            'host' => $host,
+            'missing' => $missing,
+        ];
+    }
+
+    /**
+     * Credentials from a cooling_units row (PDU-style field names).
+     * @param array<string,mixed> $unit
+     * @return array<string,mixed>
+     */
+    public static function credsFromCooling(array $unit): array
+    {
+        $host = trim((string)($unit['primary_ip'] ?? ''));
+        if ($host === '') {
+            $host = trim((string)($unit['hostname'] ?? ''));
+        }
+        $version = strtolower((string)($unit['snmp_version'] ?? '3'));
+        if ($version === 'v3') {
+            $version = '3';
+        }
+        if ($version === '2' || $version === 'v2c') {
+            $version = '2c';
+        }
+        if ($version === 'v1') {
+            $version = '1';
+        }
+        if ($version === '') {
+            $version = '3';
+        }
+        $community = (string)(Crypto::decryptQuiet($unit['snmp_community'] ?? null) ?? 'public');
+        $secName = (string)($unit['snmp_security_name'] ?? '');
+        if (($version === '1' || $version === '2c') && $secName === '') {
+            $secName = $community !== '' ? $community : 'public';
+        }
+        $creds = [
+            'host' => $host,
+            'port' => (int)($unit['snmp_port'] ?? 161) ?: 161,
+            'snmp_version' => $version,
+            'security_name' => $secName,
+            'security_level' => (string)($unit['snmp_v3_sec_level'] ?? ''),
+            'auth_protocol' => (string)($unit['snmp_auth_protocol'] ?? 'SHA'),
+            'auth_passphrase' => (string)(Crypto::decryptQuiet($unit['snmp_auth_passphrase'] ?? null) ?? ''),
+            'priv_protocol' => (string)($unit['snmp_priv_protocol'] ?? 'AES'),
+            'priv_passphrase' => (string)(Crypto::decryptQuiet($unit['snmp_priv_passphrase'] ?? null) ?? ''),
+            'community' => $community !== '' ? $community : 'public',
+            'context' => (string)($unit['snmp_context'] ?? ''),
+        ];
+        if (!empty($unit['snmp_v3_profile_id'])) {
+            try {
+                $prof = Database::fetchOne(
+                    'SELECT * FROM snmp_v3_profiles WHERE profile_id = ? AND is_active = 1',
+                    [(int)$unit['snmp_v3_profile_id']]
+                );
+                if ($prof) {
+                    if (trim((string)($prof['security_name'] ?? '')) !== '') {
+                        $creds['security_name'] = (string)$prof['security_name'];
+                    }
+                    if (trim((string)($prof['security_level'] ?? '')) !== '') {
+                        $creds['security_level'] = (string)$prof['security_level'];
+                    }
+                    if (trim((string)($prof['auth_protocol'] ?? '')) !== '') {
+                        $creds['auth_protocol'] = (string)$prof['auth_protocol'];
+                    }
+                    if (trim((string)($prof['priv_protocol'] ?? '')) !== '') {
+                        $creds['priv_protocol'] = (string)$prof['priv_protocol'];
+                    }
+                    if (!empty($prof['auth_passphrase'])) {
+                        $creds['auth_passphrase'] = (string)(Crypto::decryptQuiet((string)$prof['auth_passphrase']) ?? '');
+                    }
+                    if (!empty($prof['priv_passphrase'])) {
+                        $creds['priv_passphrase'] = (string)(Crypto::decryptQuiet((string)$prof['priv_passphrase']) ?? '');
+                    }
+                    if (!empty($prof['context_name'])) {
+                        $creds['context'] = (string)$prof['context_name'];
+                    }
+                    $creds['snmp_version'] = '3';
+                }
+            } catch (Throwable $e) {
+                // ignore
+            }
+        }
+        return $creds;
+    }
+
+    /**
+     * Assign site OID template to a cooling unit.
+     */
+    public static function assignTemplateToCooling(int $coolingUnitId, int $templateId): void
+    {
+        Database::update('cooling_units', [
+            'snmp_site_template_id' => $templateId,
+            'snmp_enabled' => 1,
+            'updated_at' => date('Y-m-d H:i:s'),
+        ], 'cooling_unit_id = :id', [':id' => $coolingUnitId]);
+    }
 }

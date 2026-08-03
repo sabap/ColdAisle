@@ -118,6 +118,37 @@ class SnmpPoller
             // columns may not exist yet
         }
 
+        // 4) Cooling units (air handlers / pumps) with site OID template
+        try {
+            $cooling = Database::fetchAll(
+                'SELECT * FROM cooling_units
+                 WHERE is_active = 1 AND snmp_auto_poll = 1
+                   AND snmp_site_template_id IS NOT NULL
+                   AND primary_ip IS NOT NULL AND primary_ip <> \'\''
+            );
+            foreach ($cooling as $cu) {
+                $last = $cu['snmp_last_poll_at'] ?? null;
+                if (class_exists('SnmpSchedulerService')
+                    && !SnmpSchedulerService::isDue(is_string($last) ? $last : null, $defaultInterval)
+                ) {
+                    $skipped++;
+                    continue;
+                }
+                try {
+                    self::pollCoolingUnit($cu);
+                    $success++;
+                } catch (Throwable $e) {
+                    $failed++;
+                    App::log(
+                        'Cooling unit SNMP poll failed for ' . ($cu['name'] ?? $cu['cooling_unit_id']) . ': ' . $e->getMessage(),
+                        'error'
+                    );
+                }
+            }
+        } catch (Throwable $e) {
+            // columns may not exist yet
+        }
+
         // After a multi-PDU cycle: flush digest only if hold window already elapsed
         // (so 84 PDUs in one event batch together; next scheduled poll also flushes).
         if (class_exists('PowerAlertService')) {
@@ -379,6 +410,114 @@ class SnmpPoller
             'probe_names' => $probeNames,
             'probe_meta' => $probeMeta ?? [],
             'env' => $env,
+        ];
+    }
+
+    /**
+     * Poll a cooling unit (air handler / pump) via its site OID template.
+     * Stores a JSON snapshot in last_poll_json (not power-specific columns).
+     *
+     * @param array<string,mixed> $unit cooling_units row
+     * @return array{ok:int,failed:int,metrics:array<string,mixed>,message:string}
+     */
+    public static function pollCoolingUnit(array $unit): array
+    {
+        require_once __DIR__ . '/SnmpDiscover.php';
+        $templateId = (int)($unit['snmp_site_template_id'] ?? 0);
+        if ($templateId < 1) {
+            throw new RuntimeException('Cooling unit has no site OID template assigned. Run Discover OIDs first.');
+        }
+        $tpl = Database::fetchOne(
+            'SELECT * FROM snmp_site_oid_templates WHERE template_id = ? AND is_active = 1',
+            [$templateId]
+        );
+        if (!$tpl) {
+            throw new RuntimeException('Site OID template not found or inactive.');
+        }
+        $oidMap = json_decode((string)($tpl['oid_map'] ?? '{}'), true) ?: [];
+        if (!$oidMap) {
+            throw new RuntimeException('Site OID template has an empty OID map.');
+        }
+
+        $creds = SnmpDiscover::credsFromCooling($unit);
+        if ($creds['host'] === '') {
+            throw new RuntimeException('Cooling unit has no primary IP for SNMP.');
+        }
+
+        $ver = strtolower(trim((string)($creds['snmp_version'] ?? '3')));
+        if ($ver === 'v3') {
+            $ver = '3';
+        }
+        if ($ver === '2' || $ver === 'v2c') {
+            $ver = '2c';
+        }
+        if ($ver === 'v1') {
+            $ver = '1';
+        }
+        $communityOrUser = ($ver === '3')
+            ? (string)($creds['security_name'] ?? '')
+            : (string)($creds['community'] ?? $creds['security_name'] ?? 'public');
+
+        $session = self::openSession(
+            $creds['host'],
+            (int)$creds['port'],
+            $ver,
+            $communityOrUser,
+            $creds['auth_protocol'] ?? '',
+            $creds['auth_passphrase'] ?? '',
+            $creds['priv_protocol'] ?? '',
+            $creds['priv_passphrase'] ?? '',
+            (string)($creds['context'] ?? $unit['snmp_context'] ?? '')
+        );
+
+        $got = self::collectOidMap($session, $oidMap);
+        self::closeSession($session);
+
+        if ((int)($got['ok'] ?? 0) === 0) {
+            $detail = $got['last_error'] ?? 'no response';
+            throw new RuntimeException(
+                'All SNMP GETs failed for this cooling unit. Last error: ' . $detail
+                . '. Check credentials, UDP/161, and the site OID template.'
+            );
+        }
+
+        $metrics = is_array($got['metrics'] ?? null) ? $got['metrics'] : [];
+        // Drop non-scalar noise; keep numbers/strings for UI
+        $clean = [];
+        foreach ($metrics as $k => $v) {
+            if (is_scalar($v) || $v === null) {
+                $clean[(string)$k] = $v;
+            }
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $snapshot = [
+            'polled_at' => $now,
+            'template_id' => $templateId,
+            'template_name' => (string)($tpl['name'] ?? ''),
+            'ok' => (int)$got['ok'],
+            'failed' => (int)($got['failed'] ?? 0),
+            'metrics' => $clean,
+        ];
+
+        Database::update('cooling_units', [
+            'snmp_last_poll_at' => $now,
+            'last_poll_json' => json_encode($snapshot, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            'updated_at' => $now,
+        ], 'cooling_unit_id = :id', [':id' => (int)$unit['cooling_unit_id']]);
+
+        $msg = 'Polled ' . (int)$got['ok'] . ' metric(s) from site template';
+        if ((int)($got['failed'] ?? 0) > 0) {
+            $msg .= ' (' . (int)$got['failed'] . ' OID soft-fail)';
+        }
+        $msg .= '.';
+
+        return [
+            'ok' => (int)$got['ok'],
+            'failed' => (int)($got['failed'] ?? 0),
+            'metrics' => $clean,
+            'message' => $msg,
+            'snapshot' => $snapshot,
         ];
     }
 

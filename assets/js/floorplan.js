@@ -918,7 +918,7 @@
     }
 
     /**
-     * Nudge selected unlocked cabinets or a floor PDU by (dx, dy) in plan meters.
+     * Nudge selected unlocked cabinets, floor PDU, or cooling unit by (dx, dy) in plan meters.
      * dirX/dirY are -1, 0, or 1 (plan axes: +X right, +Y down).
      */
     function nudgeSelected(dirX, dirY) {
@@ -930,6 +930,42 @@
       const dx = (dirX || 0) * step;
       const dy = (dirY || 0) * step;
       const unitLabel = nudgeAmount + ' ' + nudgeUnit;
+
+      // Cooling unit selection
+      if (selectedCoolingId) {
+        const u = floorCooling.find(function (x) {
+          return Number(x.cooling_unit_id) === Number(selectedCoolingId);
+        });
+        if (!u) {
+          ColdAisle.toast('Select a cabinet, PDU, or cooling unit first', 'error');
+          return;
+        }
+        if (isCoolingPositionLocked(u)) {
+          ColdAisle.toast('Cooling unit is locked — Unlock position first', 'error');
+          return;
+        }
+        const cl = clampCabinetPosition(
+          (Number(u.pos_x) || 0) + dx,
+          (Number(u.pos_y) || 0) + dy,
+          {
+            width_mm: u.width_mm || 1200,
+            depth_mm: u.depth_mm || 900,
+            pos_x: u.pos_x,
+            pos_y: u.pos_y,
+            front_facing: u.front_facing,
+            rotation_deg: u.rotation_deg,
+          }
+        );
+        u.pos_x = cl.x;
+        u.pos_y = cl.y;
+        const xEl = propsEl.querySelector('#fp_x');
+        const yEl = propsEl.querySelector('#fp_y');
+        if (xEl) xEl.value = fmtLen(u.pos_x);
+        if (yEl) yEl.value = fmtLen(u.pos_y);
+        draw();
+        ColdAisle.toast('Nudged cooling unit by ' + unitLabel + ' — Save to keep', 'info');
+        return;
+      }
 
       // Floor PDU selection takes priority when active
       if (selectedPduId) {
@@ -960,7 +996,7 @@
 
       const sel = getSelectedCabinets();
       if (!sel.length) {
-        ColdAisle.toast('Select a cabinet or floor PDU first', 'error');
+        ColdAisle.toast('Select a cabinet, floor PDU, or cooling unit first', 'error');
         return;
       }
       const unlocked = sel.filter(function (c) { return !isPositionLocked(c); });
