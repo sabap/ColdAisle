@@ -29,6 +29,22 @@ class SnmpDiscover
         '1.3.6.1.4.1.99999',              // ColdAisle lab
     ];
 
+    /**
+     * Emerson / Liebert / Vertiv thermal (LGP condition tables).
+     * Enterprise is 1.3.6.1.4.1.476 — keep roots narrow for IIS.
+     */
+    private const WALK_ROOTS_LIEBERT = [
+        '1.3.6.1.2.1.1',
+        // LGP condition present-value / label tables (iCOM / DS / PCW style)
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.10.1.2',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.30.1.2',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.50.1.2',
+        // Slightly broader LGP conditions branch if tables above empty
+        '1.3.6.1.4.1.476.1.42.3.9.20',
+        '1.3.6.1.4.1.476.1.42.3.9',
+    ];
+
     private const MAX_OIDS = 120;
     /** Per-request SNMP timeout (microseconds). Keep short so IIS never soft-500s. */
     private const WALK_TIMEOUT_USEC = 800_000;
@@ -56,14 +72,19 @@ class SnmpDiscover
      *   priv_protocol?:string,priv_passphrase?:string,context?:string,
      *   community?:string
      * } $creds
+     * @param array{family?:string} $options family: auto|cooling|power|ems (cooling prioritizes Liebert 476)
      * @return array{
      *   ok:bool,host:string,sysDescr:?string,candidates:list<array>,
      *   proposed_map:array<string,string>,walk_count:int,message:string,
      *   named_count:int
      * }
      */
-    public static function discover(array $creds): array
+    public static function discover(array $creds, array $options = []): array
     {
+        $familyHint = strtolower(trim((string)($options['family'] ?? 'auto')));
+        if (!in_array($familyHint, ['auto', 'cooling', 'power', 'ems'], true)) {
+            $familyHint = 'auto';
+        }
         $host = trim((string)($creds['host'] ?? ''));
         if ($host === '') {
             throw new RuntimeException('Host / IP is required for discovery.');
@@ -159,12 +180,48 @@ class SnmpDiscover
             $sysHay
         );
         $looksPdu = (bool)preg_match('/rpdu|pdu|rack.?pdu|switched.?rack|metered/i', $sysHay);
+        // Emerson / Liebert / Vertiv thermal (DS, PCW, PDX, iCOM, CRAH…)
+        $looksLiebert = (bool)preg_match(
+            '/liebert|emerson|vertiv|icom|liebert.?ds|liebert.?pcw|liebert.?pdx|'
+            . 'crac|crah|thermal.?management|lgp|global.?products/i',
+            $sysHay
+        );
+        if ($familyHint === 'cooling') {
+            $looksLiebert = true;
+        } elseif ($familyHint === 'ems') {
+            $looksEms = true;
+        } elseif ($familyHint === 'power') {
+            $looksPdu = true;
+        }
+        $logStep(
+            'family hint=' . $familyHint
+            . ' liebert=' . ($looksLiebert ? '1' : '0')
+            . ' ems=' . ($looksEms ? '1' : '0')
+            . ' pdu=' . ($looksPdu ? '1' : '0')
+        );
 
         $leafSys = [
             '1.3.6.1.2.1.1.3.0',
             '1.3.6.1.4.1.99999.2.1.0',
             '1.3.6.1.4.1.99999.2.2.0',
             '1.3.6.1.4.1.99999.2.3.0',
+        ];
+        // Known Liebert LGP condition IDs (common iCOM / DS community maps)
+        $leafLiebert = [
+            // Present values under condition table (…1.20.1.2.1.<id>)
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5002', // often supply air
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.4291', // often return air
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.307',  // common humidity / related
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.3104',
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.3111',
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.4240',
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.4241',
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5001',
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5003',
+            // Alternate instance path variants some cards use
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.1',
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.2',
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.3',
         ];
         // APC EMS / AP9340 live status (PowerNet columns × probe index 1–4)
         $leafEms = [
@@ -201,13 +258,16 @@ class SnmpDiscover
             '1.3.6.1.4.1.3808.1.1.1.4.2.5.0',
         ];
 
-        if ($looksEms && !$looksPdu) {
+        if ($looksLiebert) {
+            // Air handlers: Liebert first; skip thrashing on APC PDU OIDs
+            $leafGets = array_merge($leafSys, $leafLiebert, $leafEms);
+        } elseif ($looksEms && !$looksPdu) {
             $leafGets = array_merge($leafSys, $leafEms, $leafPdu);
         } elseif ($looksPdu && !$looksEms) {
             $leafGets = array_merge($leafSys, $leafPdu, $leafEms);
         } else {
-            // Unknown / APC generic: EMS first (cheap if present), then PDU
-            $leafGets = array_merge($leafSys, $leafEms, $leafPdu);
+            // Unknown / APC generic: EMS first (cheap if present), then PDU, then Liebert
+            $leafGets = array_merge($leafSys, $leafEms, $leafPdu, $leafLiebert);
         }
 
         $leafStarted = microtime(true);
@@ -259,12 +319,26 @@ class SnmpDiscover
         // Narrow walks only if still needed and under wall-clock deadline
         $elapsed = microtime(true) - $discoverStarted;
         $haveEmsLive = ($emsTempHits + $emsHumHits) >= 2;
-        if ($haveEmsLive) {
+        $liebertHits = 0;
+        foreach ($collected as $oidKey => $_) {
+            if (str_starts_with((string)$oidKey, '1.3.6.1.4.1.476.')) {
+                $liebertHits++;
+            }
+        }
+        if ($haveEmsLive && !$looksLiebert) {
             $logStep('walks_skipped have_ems_live elapsed=' . round($elapsed, 2));
+        } elseif ($looksLiebert && $liebertHits >= 4) {
+            $logStep('walks_skipped have_liebert_live hits=' . $liebertHits);
         } elseif ($elapsed < self::WALK_DEADLINE_SEC && count($collected) < self::MAX_OIDS) {
             self::setOidOutputFormat('numeric');
-            self::collectWalks($hostPort, $version, $creds, $collected, $errors);
-            $logStep('walks collected=' . count($collected) . ' errors=' . count($errors));
+            $roots = $looksLiebert ? self::WALK_ROOTS_LIEBERT : self::WALK_ROOTS;
+            // Cooling family with no Liebert hits yet: try Liebert roots even if sysDescr was generic
+            if ($familyHint === 'cooling' && !$looksLiebert) {
+                $roots = array_values(array_unique(array_merge(self::WALK_ROOTS_LIEBERT, self::WALK_ROOTS)));
+            }
+            self::collectWalks($hostPort, $version, $creds, $collected, $errors, $roots);
+            $logStep('walks collected=' . count($collected) . ' errors=' . count($errors)
+                . ' roots=' . ($looksLiebert || $familyHint === 'cooling' ? 'liebert+' : 'default'));
         } else {
             $logStep('walks_skipped elapsed=' . round($elapsed, 2));
         }
@@ -664,22 +738,27 @@ class SnmpDiscover
     /**
      * @param array<string,array{raw:mixed,name:?string,module:?string,raw_key:string}> $collected
      * @param list<string> $errors
+     * @param list<string>|null $roots walk roots (default WALK_ROOTS)
      */
     private static function collectWalks(
         string $hostPort,
         string $version,
         array $creds,
         array &$collected,
-        array &$errors
+        array &$errors,
+        ?array $roots = null
     ): void {
         $consecutiveFails = 0;
-        foreach (self::WALK_ROOTS as $root) {
+        $rootList = $roots ?? self::WALK_ROOTS;
+        foreach ($rootList as $root) {
             if (count($collected) >= self::MAX_OIDS) {
                 break;
             }
             // After several empty trees, stop — agent already answered probe; further
             // enterprise branches often just burn IIS request time.
-            if ($consecutiveFails >= 4 && count($collected) > 5) {
+            // Liebert trees: allow more misses (many sub-branches empty on some cards).
+            $failLimit = ($roots !== null && $roots !== self::WALK_ROOTS) ? 8 : 4;
+            if ($consecutiveFails >= $failLimit && count($collected) > 5) {
                 break;
             }
             try {
@@ -1062,7 +1141,7 @@ class SnmpDiscover
         $s = self::nameHaystack($oid, $name);
         $nonMetric = self::isNonMetricString($raw);
 
-        // Prefer enterprise power trees
+        // Prefer enterprise power / thermal trees
         if (str_starts_with($oid, '1.3.6.1.4.1.')) {
             $score += 2;
         }
@@ -1072,6 +1151,17 @@ class SnmpDiscover
         // APC / Schneider
         if (str_starts_with($oid, '1.3.6.1.4.1.318.')) {
             $score += 2;
+        }
+        // Emerson / Liebert / Vertiv LGP (thermal)
+        if (str_starts_with($oid, '1.3.6.1.4.1.476.')) {
+            $score += 10;
+        }
+        if (str_starts_with($oid, '1.3.6.1.4.1.476.1.42.3.9.20.')) {
+            $score += 12; // condition present-value tables
+        }
+        // Known DS/iCOM supply / return condition IDs
+        if (preg_match('/1\.3\.6\.1\.4\.1\.476\.1\.42\.3\.9\.20\.1\.20\.1\.2\.1\.(5002|4291|5001|5003)$/', $oid)) {
+            $score += 20;
         }
 
         // Model / serial / hostname strings must not rank as power metrics
@@ -1194,6 +1284,16 @@ class SnmpDiscover
             if ($num >= 50 && $num <= 200000 && preg_match('/watt|power(?!factor)|statuspower/', $s)) {
                 $score += 2;
             }
+            // Plausible °C on Liebert LGP present-value tables (often unnamed without MIBs)
+            if (str_starts_with($oid, '1.3.6.1.4.1.476.1.42.3.9.20.')
+                && $num >= -40 && $num <= 90
+            ) {
+                $score += 10;
+            }
+        }
+        // Soft demote MIB-II sysOR / uptime clutter so cooling Discover is not mostly 1.2.1.1.9.*
+        if (str_starts_with($oid, '1.3.6.1.2.1.1.9.') || str_starts_with($oid, '1.3.6.1.2.1.1.8.')) {
+            $score -= 20;
         }
 
         // Drop pure identity strings (e.g. model AP8861) even if under enterprise tree
@@ -1347,11 +1447,15 @@ class SnmpDiscover
         foreach (self::proposeEnvMapKeys($candidates) as $k => $oid) {
             $map[$k] = $oid;
         }
+        // Liebert / Vertiv air unit supply/return (LGP condition IDs)
+        foreach (self::proposeCoolingMapKeys($candidates) as $k => $oid) {
+            $map[$k] = $oid;
+        }
 
         // OIDs already claimed as env metrics must never become watts/amps
         $envOids = [];
         foreach ($map as $k => $oid) {
-            if (preg_match('/^(temperature|humidity|dew_?point)\./i', (string)$k)) {
+            if (preg_match('/^(temperature|humidity|dew_?point|supply_temp|return_temp|cooling)\./i', (string)$k)) {
                 $envOids[(string)$oid] = true;
             }
         }
@@ -1811,6 +1915,55 @@ class SnmpDiscover
             }
         }
         // Prefer base map keys without forcing every index when only .1 exists
+        return $out;
+    }
+
+    /**
+     * Liebert LGP condition present-values → cooling map keys.
+     * Known community IDs: 5002 supply, 4291 return (iCOM / DS family).
+     *
+     * @param list<array{oid:string,name?:?string,hint?:string,score?:int,numeric?:?float}> $candidates
+     * @return array<string,string>
+     */
+    private static function proposeCoolingMapKeys(array $candidates): array
+    {
+        $out = [];
+        $known = [
+            '5002' => 'supply_temp',
+            '5001' => 'supply_temp',
+            '5003' => 'supply_temp',
+            '4291' => 'return_temp',
+            '4240' => 'return_temp',
+            '4241' => 'return_temp',
+            '307' => 'humidity',
+        ];
+        foreach ($candidates as $c) {
+            $oid = (string)($c['oid'] ?? '');
+            if ($oid === '' || !str_starts_with($oid, '1.3.6.1.4.1.476.')) {
+                continue;
+            }
+            $hay = strtolower((string)($c['name'] ?? '') . ' ' . (string)($c['hint'] ?? ''));
+            $key = null;
+            if (preg_match('/\.1\.20\.1\.2\.1\.(\d+)$/', $oid, $m) && isset($known[$m[1]])) {
+                $key = $known[$m[1]];
+            } elseif (preg_match('/supply|leaving|discharge/', $hay) && preg_match('/temp/', $hay)) {
+                $key = 'supply_temp';
+            } elseif (preg_match('/return|entering/', $hay) && preg_match('/temp/', $hay)) {
+                $key = 'return_temp';
+            } elseif (preg_match('/humid/', $hay)) {
+                $key = 'humidity';
+            }
+            // Plausible temp °C without name
+            if ($key === null) {
+                $n = $c['numeric'] ?? null;
+                if ($n !== null && $n >= -20 && $n <= 60 && preg_match('/\.1\.20\.1\.2\.1\.\d+$/', $oid)) {
+                    $key = 'cooling.metric.' . preg_replace('/^.*\./', '', $oid);
+                }
+            }
+            if ($key !== null && !isset($out[$key])) {
+                $out[$key] = $oid;
+            }
+        }
         return $out;
     }
 
