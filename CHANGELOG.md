@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **Cooling Discover diagnostics:** prioritize Emerson **476** walks (with SNMPv3 context via SNMP class), skip APC leaf thrash on air units, and report when enterprise returns empty (typical MIB-view ACL on Liebert card).
-
 ### Bug fixes
 
 ---
 
+## [0.3.38] - 2026-08-03
+
+### Enhancements
+
+- **Cooling Discover diagnostics:** prioritize Emerson **476** walks (with SNMPv3 context via SNMP class), skip APC leaf thrash on air units, and report when enterprise returns empty (typical MIB-view ACL on Liebert card).
+
+---
 ## [0.3.37] - 2026-08-03
 
 ### Enhancements
