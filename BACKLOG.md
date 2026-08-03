@@ -217,10 +217,11 @@ Historical note commits:
 
 | Field | Value |
 |-------|--------|
-| **Status** | open |
+| **Status** | **done** (ship with next release; TempUnitService + Settings → General) |
 | **Requested** | 2026-08-03 (user) |
 | **Source** | chat (after env sensor refinements 0.3.33; no F/C setting today) |
 | **Priority** | product polish (site ops preference) |
+| **Delivered** | Site-wide °C/°F; store °C; convert UI/API/alerts/setpoints; humidity unchanged |
 
 **Goal:** Let the **site** choose **Celsius or Fahrenheit globally** so all env/cooling temperature UI (and related thresholds/charts) matches local practice — not a per-sensor free-text label.
 
@@ -250,15 +251,25 @@ Historical note commits:
 
 **Acceptance (when built)**
 
-- [ ] Admin can set site temperature unit to °C or °F in Settings  
-- [ ] Env sensor values, charts, and manual entry honor that unit  
-- [ ] Thresholds and alert emails use the same unit consistently  
-- [ ] SNMP-ingested temps are not double-converted or mislabeled  
-- [ ] Existing sites default to °C with no behavior change until changed  
+- [x] Admin can set site temperature unit to °C or °F in Settings  
+- [x] Env sensor values, charts, and manual entry honor that unit  
+- [x] Thresholds and alert emails use the same unit consistently  
+- [x] SNMP-ingested temps stored as °C (assumed poll scale °C); display converts only — no double-convert on write path  
+- [x] Existing sites default to °C with no behavior change until changed  
 
 ---
 
 ## Completed (keep for audit; do not re-implement)
+
+### Global temperature unit (°C / °F)
+
+| Field | Value |
+|-------|--------|
+| **Status** | **done** |
+| **Source** | backlog item #7 |
+| **Delivered** | `TempUnitService`; Settings → General; env sensors/history/charts/alerts; cooling setpoints; ASHRAE display |
+
+---
 
 ### Site backup to SMB share
 

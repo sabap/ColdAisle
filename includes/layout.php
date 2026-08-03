@@ -36,7 +36,12 @@ function layout_header(string $title, array $user, string $active = ''): void
     <link rel="apple-touch-icon" href="<?= App::e(App::url('assets/img/favicon-180.png')) ?>" sizes="180x180">
     <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=<?= App::e(preg_replace('/\W+/', '', (string)App::VERSION) . '41') ?>">
     <script>
-    window.ColdAisle = { baseUrl: <?= json_encode(App::baseUrl()) ?>, csrf: <?= json_encode($csrf) ?> };
+    window.ColdAisle = {
+      baseUrl: <?= json_encode(App::baseUrl()) ?>,
+      csrf: <?= json_encode($csrf) ?>,
+      tempUnit: <?= json_encode(class_exists('TempUnitService') ? TempUnitService::siteUnit() : 'C') ?>,
+      tempSymbol: <?= json_encode(class_exists('TempUnitService') ? TempUnitService::symbol() : '°C') ?>
+    };
     window.WINDCIM = window.ColdAisle; // legacy alias
     </script>
 </head>

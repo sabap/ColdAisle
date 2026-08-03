@@ -136,7 +136,16 @@ layout_header('Cooling & Environment', $user, 'cooling');
             <strong><?= App::e($ashraeRec['label']) ?></strong>:
             dry-bulb
             <?php if ($ashraeRec['db_c'][0] !== null): ?>
-                <?= App::e((string)$ashraeRec['db_c'][0]) ?>–<?= App::e((string)$ashraeRec['db_c'][1]) ?> °C
+                <?php
+                $ashLo = (float)$ashraeRec['db_c'][0];
+                $ashHi = (float)$ashraeRec['db_c'][1];
+                if (class_exists('TempUnitService')) {
+                    echo App::e(TempUnitService::format($ashLo, 0) . '–' . TempUnitService::format($ashHi, 0)
+                        . ' ' . TempUnitService::symbol());
+                } else {
+                    echo App::e((string)$ashLo . '–' . (string)$ashHi . ' °C');
+                }
+                ?>
             <?php else: ?>
                 site-defined
             <?php endif; ?>

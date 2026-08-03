@@ -304,8 +304,13 @@ function cooling_unit_fields_from_post(array $post): array
         'rated_kw_cooling' => $num($post['rated_kw_cooling'] ?? null),
         'rated_tons' => $num($post['rated_tons'] ?? null),
         'rated_cfm' => $num($post['rated_cfm'] ?? null),
-        'supply_temp_setpoint_c' => $num($post['supply_temp_setpoint_c'] ?? null),
-        'return_temp_setpoint_c' => $num($post['return_temp_setpoint_c'] ?? null),
+        // Setpoints stored in °C; form posts site display unit
+        'supply_temp_setpoint_c' => class_exists('TempUnitService')
+            ? TempUnitService::postToC($post['supply_temp_setpoint_c'] ?? null)
+            : $num($post['supply_temp_setpoint_c'] ?? null),
+        'return_temp_setpoint_c' => class_exists('TempUnitService')
+            ? TempUnitService::postToC($post['return_temp_setpoint_c'] ?? null)
+            : $num($post['return_temp_setpoint_c'] ?? null),
         'ashrae_class' => $ashrae,
         'status' => $status,
         'width_mm' => $intOrNull($post['width_mm'] ?? null) ?? 1200,
@@ -462,6 +467,9 @@ function cooling_null_str(mixed $v): ?string
  */
 function env_sensor_default_unit(string $kind): string
 {
+    if (class_exists('TempUnitService')) {
+        return TempUnitService::defaultUnitForKind($kind);
+    }
     return match ($kind) {
         'temperature', 'dew_point' => '°C',
         'humidity' => '%RH',
@@ -506,7 +514,13 @@ function env_sensor_fields_from_post(array $post): array
         return $n > 0 ? $n : null;
     };
 
-    $unit = cooling_null_str($post['unit'] ?? null) ?: env_sensor_default_unit($kind);
+    // Prefer site temp unit for temperature kinds; allow explicit unit override
+    $unitPosted = cooling_null_str($post['unit'] ?? null);
+    if ($unitPosted === null || $unitPosted === '') {
+        $unit = env_sensor_default_unit($kind);
+    } else {
+        $unit = $unitPosted;
+    }
 
     $fields = [
         'name' => trim((string)($post['name'] ?? '')),
@@ -534,6 +548,14 @@ function env_sensor_fields_from_post(array $post): array
         'notes' => cooling_null_str($post['notes'] ?? null),
         'is_active' => isset($post['is_active']) ? (!empty($post['is_active']) ? 1 : 0) : 1,
     ];
+
+    // Thresholds entered in site display unit → store °C for temperature kinds
+    if (class_exists('TempUnitService')) {
+        $fields = TempUnitService::thresholdsDisplayToStorage($fields, $kind);
+        if (TempUnitService::isTempKind($kind) && ($unitPosted === null || $unitPosted === '')) {
+            $fields['unit'] = TempUnitService::defaultUnitForKind($kind);
+        }
+    }
 
     // Host foreign keys — only the matching host type is populated
     switch ($host) {

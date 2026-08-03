@@ -1260,14 +1260,26 @@ if ($action === 'new' || $id) {
                                         </td>
                                         <td>
                                             <?php if ($ev !== null): ?>
-                                                <?= App::e(rtrim(rtrim(number_format($ev, 2, '.', ''), '0'), '.')) ?>
+                                                <?php
+                                                $ekind = (string)($es['sensor_kind'] ?? '');
+                                                $edisp = $ev;
+                                                $eunit = (string)($es['unit'] ?? '');
+                                                if ($ekind !== 'humidity' && class_exists('TempUnitService')
+                                                    && TempUnitService::isTempKind($ekind)
+                                                ) {
+                                                    $edisp = TempUnitService::fromC($ev) ?? $ev;
+                                                    $eunit = TempUnitService::symbol();
+                                                }
+                                                ?>
+                                                <?= App::e(rtrim(rtrim(number_format((float)$edisp, 2, '.', ''), '0'), '.')) ?>
                                                 <?php
                                                 $eh = $es['last_humidity'] ?? null;
-                                                if (($es['sensor_kind'] ?? '') === 'temp_humidity' && $eh !== null && $eh !== ''):
+                                                if ($ekind === 'temp_humidity' && $eh !== null && $eh !== ''):
                                                     ?>
-                                                    °C / <?= App::e(rtrim(rtrim(number_format((float)$eh, 1, '.', ''), '0'), '.')) ?>%RH
+                                                    <?= App::e(class_exists('TempUnitService') ? TempUnitService::symbol() : '°C') ?>
+                                                    / <?= App::e(rtrim(rtrim(number_format((float)$eh, 1, '.', ''), '0'), '.')) ?>%RH
                                                 <?php else: ?>
-                                                    <?= App::e((string)($es['unit'] ?? '')) ?>
+                                                    <?= App::e($eunit) ?>
                                                 <?php endif; ?>
                                                 <span class="badge <?= $ebadge ?>"><?= App::e($est) ?></span>
                                             <?php else: ?>

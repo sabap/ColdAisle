@@ -113,12 +113,28 @@ $selfId = (int)($edit['cooling_unit_id'] ?? 0);
     <div class="form-row"><label>Rated airflow (CFM)</label>
         <input class="form-control" type="number" step="1" name="rated_cfm"
                value="<?= App::e((string)($edit['rated_cfm'] ?? '')) ?>"></div>
-    <div class="form-row"><label>Supply setpoint (°C)</label>
+    <?php
+    $cuTempSym = class_exists('TempUnitService') ? TempUnitService::symbol() : '°C';
+    $cuSetDisp = static function ($v) {
+        if ($v === null || $v === '') {
+            return '';
+        }
+        if (!is_numeric($v)) {
+            return (string)$v;
+        }
+        if (class_exists('TempUnitService')) {
+            $d = TempUnitService::fromC((float)$v);
+            return $d === null ? '' : (string)round($d, 1);
+        }
+        return (string)$v;
+    };
+    ?>
+    <div class="form-row"><label>Supply setpoint (<?= App::e($cuTempSym) ?>)</label>
         <input class="form-control" type="number" step="0.1" name="supply_temp_setpoint_c"
-               value="<?= App::e((string)($edit['supply_temp_setpoint_c'] ?? '')) ?>"></div>
-    <div class="form-row"><label>Return setpoint (°C)</label>
+               value="<?= App::e($cuSetDisp($edit['supply_temp_setpoint_c'] ?? '')) ?>"></div>
+    <div class="form-row"><label>Return setpoint (<?= App::e($cuTempSym) ?>)</label>
         <input class="form-control" type="number" step="0.1" name="return_temp_setpoint_c"
-               value="<?= App::e((string)($edit['return_temp_setpoint_c'] ?? '')) ?>"></div>
+               value="<?= App::e($cuSetDisp($edit['return_temp_setpoint_c'] ?? '')) ?>"></div>
     <div class="form-row"><label>ASHRAE class</label>
         <select class="form-control" name="ashrae_class">
             <?php foreach ($ashrae as $val => $lab): ?>

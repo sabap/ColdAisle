@@ -16,6 +16,7 @@ require_once __DIR__ . '/Services/SettingsService.php';
 require_once __DIR__ . '/Services/Cabinet3dData.php';
 require_once __DIR__ . '/Services/EnvSensor3dData.php';
 require_once __DIR__ . '/Services/EnvSensorAlertService.php';
+require_once __DIR__ . '/Services/TempUnitService.php';
 require_once __DIR__ . '/Services/Crypto.php';
 require_once __DIR__ . '/Services/SiteBackupService.php';
 require_once __DIR__ . '/Services/SmbBackupService.php';

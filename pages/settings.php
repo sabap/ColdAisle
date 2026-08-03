@@ -41,6 +41,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             // Application name is fixed to ColdAisle (not user-configurable)
             SettingsService::set('org_name', trim($_POST['org_name'] ?? ''), 'general');
             SettingsService::set('disposal_notify_days', (string)(int)($_POST['disposal_notify_days'] ?? 7), 'lifecycle');
+            if (class_exists('TempUnitService')) {
+                TempUnitService::saveFromPost($_POST);
+            }
             $config['app_name'] = App::APP_NAME;
             $config['org_name'] = $_POST['org_name'] ?? $config['org_name'] ?? '';
             $config['timezone'] = coldaisle_normalize_timezone($_POST['timezone'] ?? 'UTC');
@@ -813,6 +816,25 @@ layout_header('Settings', $user, 'settings');
             </div>
             <div class="form-row"><label>Disposal notify (days)</label>
                 <input class="form-control" type="number" name="disposal_notify_days" value="<?= App::e(SettingsService::get('disposal_notify_days', '7')) ?>"></div>
+            <?php
+            $tempUnit = class_exists('TempUnitService') ? TempUnitService::siteUnit() : 'C';
+            ?>
+            <div class="form-row full"><label>Temperature unit (site-wide)</label>
+                <div class="flex gap-2" style="align-items:center;flex-wrap:wrap">
+                    <label style="font-weight:400;margin:0">
+                        <input type="radio" name="temp_unit" value="C" <?= $tempUnit !== 'F' ? 'checked' : '' ?>>
+                        Celsius (°C)
+                    </label>
+                    <label style="font-weight:400;margin:0">
+                        <input type="radio" name="temp_unit" value="F" <?= $tempUnit === 'F' ? 'checked' : '' ?>>
+                        Fahrenheit (°F)
+                    </label>
+                </div>
+                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                    Applies to env sensors, charts, thresholds, cooling setpoints, and alert emails.
+                    Values are stored in °C internally; humidity stays %RH. Floor-plan length units are separate.
+                </p>
+            </div>
             <div class="form-row"><button class="btn btn-primary" type="submit">Save General</button></div>
         </form>
     </div>
