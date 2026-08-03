@@ -353,8 +353,15 @@
     var heatOverlay = options.heatOverlay !== false;
     var rooms = options.rooms || [];
     var interactive = options.interactive !== false;
+    var autoRotate = !!options.autoRotate;
+    var autoRotateSpeed = Number(options.autoRotateSpeed);
+    if (!isFinite(autoRotateSpeed) || autoRotateSpeed === 0) {
+      autoRotateSpeed = 0.003;
+    }
     // 'front' = room overview (default, fast). 'both' = front + rear (floor planner).
-    var textureFaces = (options.textureFaces === 'both' || options.textureFaces === 'front')
+    // 'none' = solid racks only (public NOC — no auth for media.php faceplates).
+    var textureFaces = (options.textureFaces === 'both' || options.textureFaces === 'front'
+      || options.textureFaces === 'none')
       ? options.textureFaces
       : 'front';
     var textureConcurrency = Math.max(1, Math.min(6, Number(options.textureConcurrency) || 3));
@@ -467,7 +474,9 @@
       var front = new THREE.Mesh(frontGeo, frontMat);
       front.position.set(0, 0, d / 2 + 0.003);
       mesh.add(front);
-      faceJobs.push({ cab: cab, face: 'front', mat: frontMat });
+      if (textureFaces !== 'none') {
+        faceJobs.push({ cab: cab, face: 'front', mat: frontMat });
+      }
 
       var rearMat = new THREE.MeshStandardMaterial({
         color: 0xffffff,
@@ -832,6 +841,10 @@
     var animId;
     function animate() {
       animId = requestAnimationFrame(animate);
+      if (autoRotate && !isDown) {
+        theta += autoRotateSpeed;
+        updateCamera();
+      }
       renderer.render(scene, camera);
     }
     animate();
@@ -852,6 +865,9 @@
       heatGroup: heatGroup,
       setHeatOverlay: function (on) {
         heatGroup.visible = !!on;
+      },
+      setAutoRotate: function (on) {
+        autoRotate = !!on;
       },
       dispose: function () {
         cancelled = true;

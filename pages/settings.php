@@ -50,6 +50,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             $config['base_url'] = rtrim($_POST['base_url'] ?? '', '/');
         }
 
+        if ($section === 'noc') {
+            $tok = trim((string)($_POST['noc_access_token'] ?? ''));
+            if (!empty($_POST['noc_token_regenerate'])) {
+                try {
+                    $tok = bin2hex(random_bytes(16));
+                } catch (Throwable $e) {
+                    $tok = bin2hex(random_bytes(8));
+                }
+            }
+            // Empty = open wall (no token). Non-empty requires ?token= on page + API.
+            SettingsService::set('noc_access_token', $tok, 'noc');
+            App::flash('success', $tok === ''
+                ? 'NOC wall is open (no access token).'
+                : 'NOC access token saved. Use the URL below on TVs.');
+            App::redirect('pages/settings.php#noc');
+        }
+
         if ($section === 'ldaps') {
             $config['auth']['ldaps'] = [
                 'enabled' => !empty($_POST['ldaps_enabled']),
@@ -620,7 +637,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         // power_alerts / snmp_schedule use settings table only (redirect earlier or no config.php)
         if (!in_array($section, [
             'update_check', 'update_apply', 'update_backup_now', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
-            'power_alerts', 'env_alerts', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
+            'power_alerts', 'env_alerts', 'noc', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
             'diagnostics', 'schema_ensure', 'smb_backup_save', 'smb_backup_test',
         ], true)) {
             $export = var_export($config, true);
@@ -655,6 +672,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#power-alerts';
     } elseif ($secPost === 'env_alerts') {
         $redirHash = '#env-alerts';
+    } elseif ($secPost === 'noc') {
+        $redirHash = '#noc';
     }
     App::redirect('pages/settings.php' . $redirHash);
 }
@@ -836,6 +855,49 @@ layout_header('Settings', $user, 'settings');
                 </p>
             </div>
             <div class="form-row"><button class="btn btn-primary" type="submit">Save General</button></div>
+        </form>
+    </div>
+</div>
+
+<?php
+$nocToken = SettingsService::get('noc_access_token', '');
+$nocUrl = App::url('pages/noc.php');
+if ($nocToken !== '') {
+    $nocUrl .= (str_contains($nocUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($nocToken);
+}
+?>
+<div class="card" id="noc">
+    <div class="card-header"><h2>NOC wall display</h2></div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size:.9rem;margin-top:0">
+            Full-screen ops board for TVs: live metrics and a slowly spinning 3D floor (no login, no session timeout).
+            Metrics refresh in place every ~20s.
+        </p>
+        <p style="margin:.5rem 0">
+            <a class="btn btn-primary" href="<?= App::e($nocUrl) ?>" target="_blank" rel="noopener">Open NOC wall</a>
+        </p>
+        <p class="text-muted" style="font-size:.8rem;word-break:break-all">
+            URL: <code><?= App::e($nocUrl) ?></code>
+        </p>
+        <form method="post" class="form-grid" style="margin-top:1rem">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="noc">
+            <div class="form-row full"><label>Access token (optional)</label>
+                <input class="form-control" name="noc_access_token" value="<?= App::e($nocToken) ?>"
+                       placeholder="Leave empty for open access on trusted LAN"
+                       autocomplete="off">
+                <span class="text-muted" style="font-size:.75rem">
+                    If set, TVs must use <code>?token=…</code>. Empty = anyone who can reach the URL can view inventory metrics (no passwords).
+                    Prefer a token on untrusted networks.
+                </span>
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="noc_token_regenerate" value="1">
+                Generate a new random token on save
+            </label></div>
+            <div class="form-row full">
+                <button class="btn btn-primary" type="submit">Save NOC settings</button>
+            </div>
         </form>
     </div>
 </div>
