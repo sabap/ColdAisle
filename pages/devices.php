@@ -1482,6 +1482,12 @@ if ($action === 'new' || $id) {
                             <p class="text-muted snmp-poll-stats">
                                 Scheduled poll unlocks after Discover OIDs creates/assigns a site template.
                             </p>
+                        <?php elseif ($siteTplId > 0 && $canSnmpActions && in_array((string)($device['device_type'] ?? ''), ['env_monitor', 'env_module'], true)): ?>
+                            <p class="text-muted snmp-poll-stats">
+                                <strong>Env host:</strong> keep <em>Scheduled poll</em> on so linked env sensors
+                                refresh via the Windows task (<code>poll_snmp.php</code>).
+                                Saving a new site template turns scheduled poll on automatically for env devices.
+                            </p>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -1698,7 +1704,16 @@ if ($action === 'new' || $id) {
                             toast(data.message || 'Template saved', 'success');
                             hasTemplate = true;
                             if (btnPoll) btnPoll.disabled = false;
-                            if (autoToggle) autoToggle.disabled = false;
+                            if (autoToggle) {
+                                autoToggle.disabled = false;
+                                // Env devices auto-enable scheduled poll on template save
+                                if (data.snmp_auto_poll) {
+                                    autoToggle.checked = true;
+                                    if (autoLabel) {
+                                        autoLabel.textContent = 'Scheduled poll on';
+                                    }
+                                }
+                            }
                             var nameEl = document.getElementById('snmpTplName');
                             if (nameEl && data.template) {
                                 var lab = [data.template.vendor, data.template.model].filter(Boolean).join(' / ')

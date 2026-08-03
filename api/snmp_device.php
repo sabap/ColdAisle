@@ -261,6 +261,21 @@ try {
             // Assign to this device so Poll now / auto-poll use it
             SnmpDiscover::assignTemplateToDevice($id, (int)$saved['template_id']);
 
+            // Env managers: enable scheduled poll by default so probes keep updating
+            $autoOn = false;
+            $dtype = (string)($dev['device_type'] ?? '');
+            if (in_array($dtype, ['env_monitor', 'env_module'], true)) {
+                try {
+                    Database::update('devices', [
+                        'snmp_auto_poll' => 1,
+                        'updated_at' => date('Y-m-d H:i:s'),
+                    ], 'device_id = :id', [':id' => $id]);
+                    $autoOn = true;
+                } catch (Throwable $e) {
+                    // ignore
+                }
+            }
+
             $tpl = SnmpDiscover::getSiteTemplate((int)$saved['template_id']);
             AuditService::log(
                 (int)$user['user_id'],
@@ -268,17 +283,23 @@ try {
                 !empty($saved['overwritten']) ? 'snmp_template_overwrite' : 'snmp_template_create',
                 'device',
                 $id,
-                ['template_id' => $saved['template_id'], 'name' => $saved['name']]
+                ['template_id' => $saved['template_id'], 'name' => $saved['name'], 'snmp_auto_poll' => $autoOn]
             );
+
+            $msg = !empty($saved['overwritten'])
+                ? ('Overwrote template "' . $saved['name'] . '" and assigned to this device.')
+                : ('Created template "' . $saved['name'] . '" and assigned to this device.');
+            if ($autoOn) {
+                $msg .= ' Scheduled poll enabled for this env device (Windows task / poll_snmp.php).';
+            }
 
             App::json([
                 'ok' => true,
                 'created' => !empty($saved['created']),
                 'overwritten' => !empty($saved['overwritten']),
+                'snmp_auto_poll' => $autoOn || !empty($dev['snmp_auto_poll']),
                 'template' => snmp_device_template_public($tpl),
-                'message' => !empty($saved['overwritten'])
-                    ? ('Overwrote template "' . $saved['name'] . '" and assigned to this device.')
-                    : ('Created template "' . $saved['name'] . '" and assigned to this device.'),
+                'message' => $msg,
             ]);
         }
 
@@ -341,6 +362,15 @@ try {
             if (!empty($env['skipped_dead'])) {
                 $bits[] = 'Skipped ' . (int)$env['skipped_dead'] . ' dead/empty probe slot(s).';
             }
+            if (!empty($env['alerts']['alerted'])) {
+                $bits[] = 'Env alerts mailed: ' . (int)$env['alerts']['alerted'] . '.';
+            }
+            $autoPoll = !empty($dev['snmp_auto_poll']);
+            if (!$autoPoll && in_array((string)($dev['device_type'] ?? ''), ['env_monitor', 'env_module'], true)) {
+                $bits[] = 'Tip: enable Scheduled poll on this device so sensors refresh automatically.';
+            } elseif ($autoPoll) {
+                $bits[] = 'Scheduled poll is on.';
+            }
             $memLive = 0;
             $uioLive = 0;
             if (!empty($result['probe_meta']) && is_array($result['probe_meta'])) {
@@ -374,6 +404,7 @@ try {
                 'snmp_last_poll_at' => $fresh['snmp_last_poll_at'] ?? null,
                 'snmp_last_poll_watts' => $fresh['snmp_last_poll_watts'] ?? null,
                 'snmp_last_poll_amps' => $fresh['snmp_last_poll_amps'] ?? null,
+                'snmp_auto_poll' => !empty($dev['snmp_auto_poll']),
                 'env' => $env,
                 'message' => implode(' ', $bits),
             ]);
