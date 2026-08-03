@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Cooling Discover timeout:** shorten Liebert walk list / per-OID timeouts and enforce a wall-clock budget so Discover cannot exceed PHP max_execution_time (25s fatal on unit 2).
+
 ---
 
 ## [0.3.39] - 2026-08-03

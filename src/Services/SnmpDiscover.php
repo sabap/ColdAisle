@@ -33,36 +33,35 @@ class SnmpDiscover
      * Emerson / Liebert / Vertiv thermal (LGP condition tables).
      * Enterprise is 1.3.6.1.4.1.476 — keep roots narrow for IIS.
      */
+    /**
+     * Keep this short — empty condition roots each burn a full SNMP timeout and can
+     * blow PHP max_execution_time (25s) on slow Unity cards.
+     */
     private const WALK_ROOTS_LIEBERT = [
         // Product identity (IS-UNITY-ICOM2) — often the only LGP branch that answers
-        '1.3.6.1.4.1.476.1.42.2',
         '1.3.6.1.4.1.476.1.42.2.1',
-        '1.3.6.1.4.1.476.1.42',
-        '1.3.6.1.4.1.476',
-        // LGP condition present-value / label tables (empty on many Unity cards)
+        '1.3.6.1.4.1.476.1.42.2',
+        // One shallow condition probe (not the whole 476 / 42.3 tree)
         '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2',
-        '1.3.6.1.4.1.476.1.42.3.9.20.1.10.1.2',
-        '1.3.6.1.4.1.476.1.42.3.9.20.1.30.1.2',
-        '1.3.6.1.4.1.476.1.42.3.9.20.1.50.1.2',
-        '1.3.6.1.4.1.476.1.42.3.9.20',
-        '1.3.6.1.4.1.476.1.42.3.9',
-        '1.3.6.1.4.1.476.1.42.3',
-        // MIB-2 last (so enterprise is not starved by wall-clock)
+        // MIB-2 system
         '1.3.6.1.2.1.1',
     ];
 
     private const MAX_OIDS = 120;
     /** Per-request SNMP timeout (microseconds). Keep short so IIS never soft-500s. */
-    private const WALK_TIMEOUT_USEC = 800_000;
+    private const WALK_TIMEOUT_USEC = 600_000;
     private const WALK_RETRIES = 0;
     /** Probe GET timeout (microseconds) — fail closed agents quickly. */
-    private const PROBE_TIMEOUT_USEC = 800_000;
+    private const PROBE_TIMEOUT_USEC = 600_000;
     /** Leaf exploratory GETs — shorter than probe; many will miss on wrong device type. */
-    private const LEAF_TIMEOUT_USEC = 400_000;
+    private const LEAF_TIMEOUT_USEC = 300_000;
     /** Wall-clock budget for leaf phase (seconds). */
-    private const LEAF_PHASE_BUDGET_SEC = 8.0;
-    /** Skip walks after this many seconds total (IIS FastCGI often ~30s). */
+    private const LEAF_PHASE_BUDGET_SEC = 5.0;
+    /** Skip walks after this many seconds total (IIS FastCGI / PHP max_execution_time ~25s). */
     private const WALK_DEADLINE_SEC = 10.0;
+    /** Cooling Discover: tighter total budget so unit 2 cannot hit 25s fatal. */
+    private const COOLING_TOTAL_BUDGET_SEC = 18.0;
+    private const COOLING_WALK_DEADLINE_SEC = 12.0;
     /** Candidates shown in Discover UI (high-signal only). */
     private const MAX_DISPLAY_CANDIDATES = 40;
     /** Minimum score to appear in the Discover table. */
@@ -99,10 +98,10 @@ class SnmpDiscover
             throw new RuntimeException('PHP SNMP extension is not available.');
         }
 
-        // Keep well under typical IIS FastCGI activityTimeout (often 30–90s)
-        @ini_set('max_execution_time', '25');
+        // Stay under PHP/IIS caps; cooling walks must self-budget (see COOLING_TOTAL_BUDGET_SEC)
+        @ini_set('max_execution_time', '30');
         if (function_exists('set_time_limit')) {
-            @set_time_limit(25);
+            @set_time_limit(30);
         }
         $discoverStarted = microtime(true);
         $logStep = static function (string $step) use ($discoverStarted, $host): void {
@@ -272,8 +271,15 @@ class SnmpDiscover
 
         $coolingFocus = $looksLiebert || $familyHint === 'cooling';
         if ($coolingFocus) {
-            // Air handlers: only sys + Liebert leaves (EMS leaves burn IIS timeout and hide 476)
-            $leafGets = array_merge($leafSys, $leafLiebert);
+            // Identity leaves only (condition GETs rarely answer and burn the 25s budget)
+            $leafLiebertId = [
+                '1.3.6.1.4.1.476.1.42.2.1.1.0',
+                '1.3.6.1.4.1.476.1.42.2.1.2.0',
+                '1.3.6.1.4.1.476.1.42.2.1.3.0',
+                '1.3.6.1.4.1.476.1.42.2.1.5.0',
+                '1.3.6.1.4.1.476.1.42.2.5.1.0',
+            ];
+            $leafGets = array_merge($leafSys, $leafLiebertId);
         } elseif ($looksEms && !$looksPdu) {
             $leafGets = array_merge($leafSys, $leafEms, $leafPdu);
         } elseif ($looksPdu && !$looksEms) {
@@ -288,12 +294,17 @@ class SnmpDiscover
         $leafLiebertHits = 0;
         $emsTempHits = 0;
         $emsHumHits = 0;
-        $leafBudget = $coolingFocus ? 5.0 : self::LEAF_PHASE_BUDGET_SEC;
+        $leafBudget = $coolingFocus ? 4.0 : self::LEAF_PHASE_BUDGET_SEC;
+        $totalBudget = $coolingFocus ? self::COOLING_TOTAL_BUDGET_SEC : 22.0;
         foreach ($leafGets as $oid) {
             if (isset($collected[$oid])) {
                 continue;
             }
             if (count($collected) >= self::MAX_OIDS) {
+                break;
+            }
+            if ((microtime(true) - $discoverStarted) >= $totalBudget) {
+                $logStep('total_budget_exceeded_at_leaf');
                 break;
             }
             if ((microtime(true) - $leafStarted) >= $leafBudget) {
@@ -307,8 +318,8 @@ class SnmpDiscover
                 $logStep('leaf_early_stop ems_live hits=' . $leafHits);
                 break;
             }
-            // A few Liebert hits is enough — move on to walks for the full table
-            if ($coolingFocus && $leafLiebertHits >= 3) {
+            // Identity leaves are enough for cooling — skip remaining empty condition GETs
+            if ($coolingFocus && $leafLiebertHits >= 2) {
                 $logStep('leaf_early_stop liebert hits=' . $leafLiebertHits);
                 break;
             }
@@ -349,22 +360,48 @@ class SnmpDiscover
                 $liebertHits++;
             }
         }
-        $walkDeadline = $coolingFocus ? 18.0 : self::WALK_DEADLINE_SEC;
+        $walkDeadline = $coolingFocus ? self::COOLING_WALK_DEADLINE_SEC : self::WALK_DEADLINE_SEC;
         $walkRootStats = [];
         if ($haveEmsLive && !$coolingFocus) {
             $logStep('walks_skipped have_ems_live elapsed=' . round($elapsed, 2));
+        } elseif ($coolingFocus && $liebertHits >= 2) {
+            // Identity already from leaf GETs — only need a short system walk if missing
+            $logStep('walks_minimal have_liebert_live hits=' . $liebertHits);
+            if ($elapsed < $walkDeadline && count($collected) < self::MAX_OIDS) {
+                self::setOidOutputFormat('numeric');
+                $walkRootStats = self::collectWalks(
+                    $hostPort,
+                    $version,
+                    $creds,
+                    $collected,
+                    $errors,
+                    ['1.3.6.1.2.1.1'],
+                    $discoverStarted,
+                    $totalBudget
+                );
+            }
         } elseif ($liebertHits >= 6 && !$coolingFocus) {
             $logStep('walks_skipped have_liebert_live hits=' . $liebertHits);
-        } elseif ($elapsed < $walkDeadline && count($collected) < self::MAX_OIDS) {
+        } elseif ($elapsed < $walkDeadline && count($collected) < self::MAX_OIDS
+            && (microtime(true) - $discoverStarted) < $totalBudget
+        ) {
             self::setOidOutputFormat('numeric');
-            // Cooling: enterprise 476 first (before MIB-2 fill), then system for identity
             $roots = $coolingFocus
                 ? self::WALK_ROOTS_LIEBERT
                 : self::WALK_ROOTS;
-            if ($familyHint === 'cooling' && !$looksLiebert) {
+            if ($familyHint === 'cooling' && !$looksLiebert && !$coolingFocus) {
                 $roots = array_values(array_unique(array_merge($roots, self::WALK_ROOTS)));
             }
-            $walkRootStats = self::collectWalks($hostPort, $version, $creds, $collected, $errors, $roots);
+            $walkRootStats = self::collectWalks(
+                $hostPort,
+                $version,
+                $creds,
+                $collected,
+                $errors,
+                $roots,
+                $discoverStarted,
+                $totalBudget
+            );
             $logStep('walks collected=' . count($collected) . ' errors=' . count($errors)
                 . ' roots=' . ($coolingFocus ? 'liebert+' : 'default'));
         } else {
@@ -830,20 +867,27 @@ class SnmpDiscover
         array $creds,
         array &$collected,
         array &$errors,
-        ?array $roots = null
+        ?array $roots = null,
+        ?float $startedAt = null,
+        ?float $budgetSec = null
     ): array {
         $consecutiveFails = 0;
         $rootList = $roots ?? self::WALK_ROOTS;
         $stats = [];
+        $startedAt = $startedAt ?? microtime(true);
+        $budgetSec = $budgetSec ?? 20.0;
         foreach ($rootList as $root) {
             if (count($collected) >= self::MAX_OIDS) {
                 break;
             }
+            if ((microtime(true) - $startedAt) >= $budgetSec) {
+                $errors[] = 'walk_budget_exceeded after ' . round(microtime(true) - $startedAt, 1) . 's';
+                break;
+            }
             // After several empty trees, stop — agent already answered probe; further
             // enterprise branches often just burn IIS request time.
-            // Liebert trees: allow more misses (many sub-branches empty on some cards).
-            $failLimit = ($roots !== null && $roots !== self::WALK_ROOTS) ? 10 : 4;
-            if ($consecutiveFails >= $failLimit && count($collected) > 5) {
+            $failLimit = 3;
+            if ($consecutiveFails >= $failLimit && count($collected) > 3) {
                 break;
             }
             try {
@@ -1056,9 +1100,12 @@ class SnmpDiscover
     {
         $result = false;
         $root = ltrim($root, '.');
+        // Keep walks short — PHP SNMP walk() can ignore long timeouts on dead Unity branches
         $timeout = self::WALK_TIMEOUT_USEC;
-        if (preg_match('/^1\.3\.6\.1\.4\.1\.476(\.|$)/', $root)) {
-            $timeout = 1_500_000;
+        if (preg_match('/^1\.3\.6\.1\.4\.1\.476\.1\.42\.2/', $root)) {
+            $timeout = 800_000; // identity: small tree
+        } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.476/', $root)) {
+            $timeout = 500_000; // empty condition roots: fail fast
         }
         try {
             // Prefer SNMP class: supports SNMPv3 context + bounded timeouts
@@ -1077,6 +1124,12 @@ class SnmpDiscover
                     $sess->valueretrieval = constant('SNMP_VALUE_PLAIN');
                 }
                 $sess->exceptions_enabled = 0;
+                // Cap OIDs per walk when supported (limits hang depth on slow agents)
+                try {
+                    $sess->max_oids = 40;
+                } catch (Throwable $e) {
+                    // ignore
+                }
                 if (defined('SNMP_OID_OUTPUT_NUMERIC')) {
                     $sess->oid_output_format = constant('SNMP_OID_OUTPUT_NUMERIC');
                 }
