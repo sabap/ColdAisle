@@ -34,15 +34,21 @@ class SnmpDiscover
      * Enterprise is 1.3.6.1.4.1.476 — keep roots narrow for IIS.
      */
     private const WALK_ROOTS_LIEBERT = [
-        '1.3.6.1.2.1.1',
-        // LGP condition present-value / label tables (iCOM / DS / PCW style)
+        // Product identity (IS-UNITY-ICOM2) — often the only LGP branch that answers
+        '1.3.6.1.4.1.476.1.42.2',
+        '1.3.6.1.4.1.476.1.42.2.1',
+        '1.3.6.1.4.1.476.1.42',
+        '1.3.6.1.4.1.476',
+        // LGP condition present-value / label tables (empty on many Unity cards)
         '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2',
         '1.3.6.1.4.1.476.1.42.3.9.20.1.10.1.2',
         '1.3.6.1.4.1.476.1.42.3.9.20.1.30.1.2',
         '1.3.6.1.4.1.476.1.42.3.9.20.1.50.1.2',
-        // Slightly broader LGP conditions branch if tables above empty
         '1.3.6.1.4.1.476.1.42.3.9.20',
         '1.3.6.1.4.1.476.1.42.3.9',
+        '1.3.6.1.4.1.476.1.42.3',
+        // MIB-2 last (so enterprise is not starved by wall-clock)
+        '1.3.6.1.2.1.1',
     ];
 
     private const MAX_OIDS = 120;
@@ -206,19 +212,25 @@ class SnmpDiscover
             '1.3.6.1.4.1.99999.2.2.0',
             '1.3.6.1.4.1.99999.2.3.0',
         ];
-        // Known Liebert LGP condition IDs (common iCOM / DS community maps)
+        // Known Liebert LGP leaves (IS-UNITY-ICOM2 identity from live SolarWinds walks + classic conditions)
         $leafLiebert = [
-            // Present values under condition table (…1.20.1.2.1.<id>)
-            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5002', // often supply air
-            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.4291', // often return air
-            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.307',  // common humidity / related
+            // Product identity (answers on v2c community when condition tables do not)
+            '1.3.6.1.4.1.476.1.42.2.1.1.0', // manufacturer e.g. Vertiv
+            '1.3.6.1.4.1.476.1.42.2.1.2.0', // model e.g. IS-UNITY-ICOM2
+            '1.3.6.1.4.1.476.1.42.2.1.3.0', // firmware / version
+            '1.3.6.1.4.1.476.1.42.2.1.4.0',
+            '1.3.6.1.4.1.476.1.42.2.1.5.0',
+            '1.3.6.1.4.1.476.1.42.2.5.1.0',
+            // Present values under condition table (…1.20.1.2.1.<id>) — empty on many Unity cards
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5002',
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.4291',
+            '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.307',
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.3104',
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.3111',
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.4240',
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.4241',
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5001',
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5003',
-            // Alternate instance path variants some cards use
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.1',
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.2',
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.3',
@@ -347,13 +359,7 @@ class SnmpDiscover
             self::setOidOutputFormat('numeric');
             // Cooling: enterprise 476 first (before MIB-2 fill), then system for identity
             $roots = $coolingFocus
-                ? array_values(array_unique(array_merge(
-                    [
-                        '1.3.6.1.4.1.476',
-                        '1.3.6.1.4.1.476.1.42',
-                    ],
-                    self::WALK_ROOTS_LIEBERT
-                )))
+                ? self::WALK_ROOTS_LIEBERT
                 : self::WALK_ROOTS;
             if ($familyHint === 'cooling' && !$looksLiebert) {
                 $roots = array_values(array_unique(array_merge($roots, self::WALK_ROOTS)));
@@ -487,6 +493,17 @@ class SnmpDiscover
                 'sysUpTime' => '1.3.6.1.2.1.1.3.0',
             ];
         }
+        // Inject LGP identity OIDs from full collection (may be filtered out of score pool)
+        foreach ([
+            '1.3.6.1.4.1.476.1.42.2.1.1.0' => 'lgp_manufacturer',
+            '1.3.6.1.4.1.476.1.42.2.1.2.0' => 'lgp_model',
+            '1.3.6.1.4.1.476.1.42.2.1.3.0' => 'lgp_version',
+            '1.3.6.1.4.1.476.1.42.2.1.5.0' => 'lgp_firmware',
+        ] as $loid => $lkey) {
+            if (isset($collected[$loid]) && !isset($proposed[$lkey])) {
+                $proposed[$lkey] = $loid;
+            }
+        }
         // Always try known APC rPDU2 outlet table bases when the agent responds
         // (full enterprise walks often exhaust MAX_OIDS before 26.9 outlet tables).
         $proposed = self::injectApcOutletBases($proposed, $hostPort, $version, $creds, $sysDescr, $collected);
@@ -574,13 +591,27 @@ class SnmpDiscover
 
         $msg .= ' Enterprise objects: ' . (int)$enterpriseHits
             . ' (Liebert/Emerson 476: ' . (int)$liebertHits . ').';
+        $lgpIdentity = 0;
+        $lgpConditions = 0;
+        foreach (array_keys($collected) as $oidKey) {
+            $o = (string)$oidKey;
+            if (str_starts_with($o, '1.3.6.1.4.1.476.1.42.2')) {
+                $lgpIdentity++;
+            }
+            if (str_starts_with($o, '1.3.6.1.4.1.476.1.42.3')) {
+                $lgpConditions++;
+            }
+        }
         if ($coolingFocus && $liebertHits === 0) {
             $msg .= ' Auth works (sysDescr) but enterprise 1.3.6.1.4.1.476 returned nothing — '
-                . 'usually the SNMPv3 user MIB view on the Liebert/iCOM card only allows MIB-2. '
-                . 'On the unit web UI: allow Emerson enterprise (or “all”), and set SNMP Context on the unit in ColdAisle if the card uses one.';
+                . 'use the same community as SolarWinds (e.g. LANCOMM) for v2c, or fix VACM/AgentX for LGP. '
+                . 'Condition tables (…476.1.42.3…) are often empty on IS-UNITY-ICOM2 even when identity (…42.2…) works.';
             if ($errors) {
                 $msg .= ' Walk errors: ' . implode('; ', array_slice($errors, 0, 3)) . '.';
             }
+        } elseif ($coolingFocus && $lgpIdentity > 0 && $lgpConditions === 0) {
+            $msg .= ' LGP product identity present (…476.1.42.2…, e.g. Vertiv IS-UNITY-ICOM2) but '
+                . 'condition/measurement tables (…476.1.42.3…) are empty — no supply/return temps over SNMP until the card exposes them.';
         } elseif ($mibsLoaded > 0 && $namedCount === 0 && $indexSize === 0) {
             $msg .= ' Could not parse OBJECT-TYPE assignments from uploaded MIBs.';
         } elseif ($indexSize > 0 && $namedCount === 0 && $enterpriseHits === 0) {
@@ -820,7 +851,7 @@ class SnmpDiscover
                 $before = count($collected);
                 foreach ($walk as $key => $val) {
                     $parsed = self::parseOidKey((string)$key);
-                    $oid = $parsed['oid'];
+                    $oid = self::resolveWalkOid($parsed['oid'], (string)$root);
                     if ($oid === '') {
                         continue;
                     }
@@ -887,9 +918,16 @@ class SnmpDiscover
             $name = $m[1] . '::' . $m[2];
         }
 
-        // Full or trailing dotted numeric OID (at least two arcs: 1.3 …)
-        if (preg_match('/(\d+(?:\.\d+)+)/', $rawKey, $m)) {
-            $oid = ltrim($m[1], '.');
+        // Prefer the longest dotted numeric run (avoids "3.0" / "9.1.4.1" from partial matches)
+        if (preg_match_all('/(\d+(?:\.\d+)+)/', $rawKey, $all) && !empty($all[1])) {
+            $best = '';
+            foreach ($all[1] as $cand) {
+                $cand = ltrim((string)$cand, '.');
+                if (strlen($cand) > strlen($best)) {
+                    $best = $cand;
+                }
+            }
+            $oid = $best;
             $oid = class_exists('MibService')
                 ? MibService::normalizeNumericOid($oid)
                 : self::normalizeNumericOidLocal($oid);
@@ -908,12 +946,43 @@ class SnmpDiscover
         ];
     }
 
+    /**
+     * When walk() returns relative instance keys, join to the walk root.
+     */
+    private static function resolveWalkOid(string $oid, string $root): string
+    {
+        $oid = ltrim(trim($oid), '.');
+        $root = ltrim(trim($root), '.');
+        if ($oid === '' || $root === '') {
+            return $oid;
+        }
+        if (str_starts_with($oid, '1.3.6.1.') || str_starts_with($oid, '1.3.6.')) {
+            return $oid;
+        }
+        // Relative under root (e.g. root …1.2.1.1 + "3.0" → …1.2.1.1.3.0)
+        if (preg_match('/^\d+(?:\.\d+)*$/', $oid)) {
+            return $root . '.' . $oid;
+        }
+        return $oid;
+    }
+
     /** Fallback when MibService is unavailable. */
     private static function normalizeNumericOidLocal(string $oid): string
     {
         $oid = ltrim(trim($oid), '.');
         if (preg_match('/^3\.6\.1(?:\.|$)/', $oid)) {
             return '1.' . $oid;
+        }
+        // Common MIB-2 system tail fragments from broken walk keys
+        if (preg_match('/^(?:1\.)?([3-9](?:\.\d+)+)$/', $oid, $m)
+            && !str_starts_with($oid, '1.3.6')
+        ) {
+            $tail = $m[1];
+            if (str_starts_with($tail, '3.') || $tail === '3'
+                || str_starts_with($tail, '8.') || str_starts_with($tail, '9.')
+            ) {
+                return '1.3.6.1.2.1.1.' . $tail;
+            }
         }
         return $oid;
     }
@@ -1405,6 +1474,12 @@ class SnmpDiscover
         // Soft demote MIB-II sysOR / uptime clutter so cooling Discover is not mostly 1.2.1.1.9.*
         if (str_starts_with($oid, '1.3.6.1.2.1.1.9.') || str_starts_with($oid, '1.3.6.1.2.1.1.8.')) {
             $score -= 20;
+        }
+
+        // Liebert LGP product identity (Vertiv / IS-UNITY-ICOM2) — keep visible on cooling Discover
+        if (str_starts_with($oid, '1.3.6.1.4.1.476.1.42.2.')) {
+            $score += 30;
+            return max(1, $score);
         }
 
         // Drop pure identity strings (e.g. model AP8861) even if under enterprise tree
@@ -2048,10 +2123,20 @@ class SnmpDiscover
             '4241' => 'return_temp',
             '307' => 'humidity',
         ];
+        // Identity leaves always proposable when present (even if filtered from candidates)
+        $identityMap = [
+            '1.3.6.1.4.1.476.1.42.2.1.1.0' => 'lgp_manufacturer',
+            '1.3.6.1.4.1.476.1.42.2.1.2.0' => 'lgp_model',
+            '1.3.6.1.4.1.476.1.42.2.1.3.0' => 'lgp_version',
+            '1.3.6.1.4.1.476.1.42.2.1.5.0' => 'lgp_firmware',
+        ];
         foreach ($candidates as $c) {
             $oid = (string)($c['oid'] ?? '');
             if ($oid === '' || !str_starts_with($oid, '1.3.6.1.4.1.476.')) {
                 continue;
+            }
+            if (isset($identityMap[$oid]) && !isset($out[$identityMap[$oid]])) {
+                $out[$identityMap[$oid]] = $oid;
             }
             $hay = strtolower((string)($c['name'] ?? '') . ' ' . (string)($c['hint'] ?? ''));
             $key = null;
