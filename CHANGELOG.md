@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **NOC wall display:** public `pages/noc.php` for always-on TVs (no login / no session timeout); optional access token under Settings → NOC; live metrics via `api/noc.php` without full page refresh; slowly spinning 3D floor (top-left; solid racks without faceplate auth).
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.42] - 2026-08-03
+
+### New features
+
+- **NOC wall display:** public `pages/noc.php` for always-on TVs (no login / no session timeout); optional access token under Settings → NOC; live metrics via `api/noc.php` without full page refresh; slowly spinning 3D floor (top-left; solid racks without faceplate auth).
+
+---
 ## [0.3.41] - 2026-08-03
 
 ### New features
