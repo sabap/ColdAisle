@@ -84,6 +84,24 @@ try {
     $pdus3d = [];
 }
 
+// Floor-placed cooling / AC units for dashboard 3D (wireframe + snowflake logo)
+$cooling3d = [];
+try {
+    $cooling3d = Database::fetchAll(
+        'SELECT u.cooling_unit_id, u.name, u.unit_type, u.unit_role, u.cooling_medium,
+                u.pos_x, u.pos_y, u.pos_z, u.rotation_deg, u.front_facing,
+                u.width_mm, u.depth_mm, u.height_mm, u.color_hex, u.status,
+                r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth
+         FROM cooling_units u
+         LEFT JOIN rooms r ON r.room_id = u.room_id
+         WHERE u.is_active = 1
+           AND u.pos_x IS NOT NULL AND u.pos_y IS NOT NULL
+         ORDER BY u.name'
+    );
+} catch (Throwable $e) {
+    $cooling3d = [];
+}
+
 // Env heat spheres (cabinet + placement → soft ~3 ft influence)
 $envSensors3d = [];
 $envHeatDiag = ['placeable' => 0, 'with_value' => 0, 'no_cabinet' => 0, 'cabinet_unplaced' => 0];
@@ -228,8 +246,10 @@ layout_header('Dashboard', $user, 'dashboard');
         <div class="panel-3d" id="dashboard-3d"
              data-cabinets='<?= App::e(json_encode($cabinets3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-pdus='<?= App::e(json_encode($pdus3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
+             data-cooling='<?= App::e(json_encode($cooling3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-rooms='<?= App::e(json_encode($rooms, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
-             data-env-sensors='<?= App::e(json_encode($envSensors3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'></div>
+             data-env-sensors='<?= App::e(json_encode($envSensors3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
+             data-logo-url='<?= App::e(App::url('assets/img/logo.svg')) ?>'></div>
     </div>
 
     <div class="card">
@@ -307,23 +327,27 @@ layout_header('Dashboard', $user, 'dashboard');
     if (!el) return;
     el.classList.add('dash-3d-loading');
     var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=8') ?>;
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=10') ?>;
     loadScript(threeUrl)
       .then(function () { return loadScript(app3d); })
       .then(function () {
         if (!window.ColdAisle3D) return;
         var cabinets = JSON.parse(el.dataset.cabinets || '[]');
         var pdus = JSON.parse(el.dataset.pdus || '[]');
+        var cooling = JSON.parse(el.dataset.cooling || '[]');
         var rooms = JSON.parse(el.dataset.rooms || '[]');
         var envSensors = JSON.parse(el.dataset.envSensors || '[]');
+        var logoUrl = el.dataset.logoUrl || '';
         var heatOn = true;
         var tog = document.getElementById('dash3dHeatToggle');
         if (tog) heatOn = !!tog.checked;
         var view = ColdAisle3D.mount(el, {
           cabinets: cabinets,
           pdus: pdus,
+          cooling: cooling,
           rooms: rooms,
           envSensors: envSensors,
+          logoUrl: logoUrl,
           heatOverlay: heatOn,
           interactive: true,
           textureFaces: 'front',

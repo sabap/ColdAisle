@@ -37,9 +37,9 @@ if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
 $cssUrl = App::url('assets/css/noc.css') . '?v=3';
-$jsUrl = App::url('assets/js/noc.js') . '?v=3';
+$jsUrl = App::url('assets/js/noc.js') . '?v=5';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=9';
+$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=10';
 $org = '';
 try {
     $org = (string)SettingsService::get('org_name', '');
@@ -60,6 +60,7 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
     window.ColdAisleNoc = {
       apiUrl: <?= json_encode($apiUrl, JSON_UNESCAPED_SLASHES) ?>,
       token: <?= json_encode($gotToken, JSON_UNESCAPED_SLASHES) ?>,
+      appVersion: <?= json_encode(App::VERSION, JSON_UNESCAPED_SLASHES) ?>,
       pollMs: 20000,
       panelRotateMs: 18000,
       sceneReloadMs: 300000,
@@ -107,7 +108,7 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
       </span>
       <span id="nocUpdated">Last update: —</span>
       <span id="nocPanelHint">Panel auto-rotates</span>
-      <span><?= App::e(App::APP_NAME) ?> v<?= App::e(App::VERSION) ?></span>
+      <span id="nocAppVer"><?= App::e(App::APP_NAME) ?> v<?= App::e(App::VERSION) ?></span>
     </footer>
   </div>
   <script src="<?= App::e($jsUrl) ?>" defer></script>

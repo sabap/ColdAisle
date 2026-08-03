@@ -349,10 +349,12 @@
     options = options || {};
     var cabinets = options.cabinets || [];
     var floorPdus = options.pdus || options.floor_pdus || [];
+    var floorCooling = options.cooling || options.cooling_units || options.floor_cooling || [];
     var envSensors = options.envSensors || options.env_sensors || [];
     var heatOverlay = options.heatOverlay !== false;
     var rooms = options.rooms || [];
     var interactive = options.interactive !== false;
+    var logoUrl = options.logoUrl || (mediaBase() ? mediaBase() + '/assets/img/logo.svg' : 'assets/img/logo.svg');
     var autoRotate = !!options.autoRotate;
     var autoRotateSpeed = Number(options.autoRotateSpeed);
     if (!isFinite(autoRotateSpeed) || autoRotateSpeed === 0) {
@@ -629,6 +631,193 @@
       rackGroup.add(mesh);
     });
 
+    // Cooling / AC units — translucent body + wireframe + ColdAisle snowflake on top
+    function coolingTypeShort(t) {
+      var s = String(t || '').toLowerCase();
+      if (s === 'crac') return 'CRAC';
+      if (s === 'crah') return 'CRAH';
+      if (s === 'in_row') return 'In-row';
+      if (s === 'ahu') return 'AHU';
+      if (s === 'chiller') return 'Chiller';
+      if (s === 'cdu') return 'CDU';
+      if (s.indexOf('pump') >= 0) return 'Pump';
+      return s ? s.slice(0, 10) : 'Cooling';
+    }
+
+    function coolingDefaultHex(t) {
+      var s = String(t || '').toLowerCase();
+      if (s === 'crac' || s === 'crah' || s === 'in_row' || s === 'ahu') return '#0ea5e9';
+      if (s === 'chiller') return '#0284c7';
+      if (s === 'chilled_water_pump' || s === 'ac_pump') return '#0369a1';
+      if (s === 'cdu') return '#38bdf8';
+      return '#0ea5e9';
+    }
+
+    /** Shared canvas texture: ColdAisle logo (snowflake) for unit tops */
+    var coolingLogoTex = null;
+    var coolingLogoWaiters = [];
+    function ensureCoolingLogo(cb) {
+      if (coolingLogoTex) {
+        cb(coolingLogoTex);
+        return;
+      }
+      coolingLogoWaiters.push(cb);
+      if (coolingLogoWaiters.length > 1) return;
+      function finish(tex) {
+        coolingLogoTex = tex;
+        coolingLogoWaiters.forEach(function (fn) {
+          try { fn(tex); } catch (e) { /* ignore */ }
+        });
+        coolingLogoWaiters = [];
+      }
+      function paintFromImg(img) {
+        var c = document.createElement('canvas');
+        c.width = 256;
+        c.height = 256;
+        var ctx = c.getContext('2d');
+        ctx.clearRect(0, 0, 256, 256);
+        if (img) {
+          drawCover(ctx, img, 8, 8, 240, 240);
+        } else {
+          // Fallback 6-arm snowflake if logo asset fails to load
+          ctx.translate(128, 128);
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 10;
+          ctx.lineCap = 'round';
+          for (var a = 0; a < 6; a++) {
+            ctx.save();
+            ctx.rotate((a * Math.PI) / 3);
+            ctx.beginPath();
+            ctx.moveTo(0, -16);
+            ctx.lineTo(0, -88);
+            ctx.moveTo(0, -88);
+            ctx.lineTo(-14, -72);
+            ctx.moveTo(0, -88);
+            ctx.lineTo(14, -72);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+        var tex = new THREE.CanvasTexture(c);
+        tex.needsUpdate = true;
+        finish(tex);
+      }
+      loadImage(logoUrl).then(function (img) {
+        if (img || cancelled) {
+          paintFromImg(img);
+          return;
+        }
+        var alt = mediaBase()
+          ? mediaBase() + '/assets/img/logo-mark.png'
+          : 'assets/img/logo-mark.png';
+        loadImage(alt).then(paintFromImg);
+      });
+    }
+
+    floorCooling.forEach(function (cu) {
+      var w = mmToM(cu.width_mm) || 1.2;
+      var d = mmToM(cu.depth_mm) || 0.9;
+      var h = mmToM(cu.height_mm) || 2.0;
+      if (h < 0.1) h = 2.0;
+      var x = Number(cu.pos_x) || 0;
+      var z = Number(cu.pos_y) || 0;
+      var rot = (Number(cu.rotation_deg) || 0) * Math.PI / 180;
+      var hex = cu.color_hex || coolingDefaultHex(cu.unit_type);
+      if (!/^#[0-9A-Fa-f]{6}$/.test(String(hex))) hex = coolingDefaultHex(cu.unit_type);
+      var color = new THREE.Color(hex);
+      var role = String(cu.unit_role || '').toLowerCase();
+      var isStandby = role === 'standby';
+      var bodyOp = isStandby ? 0.22 : 0.4;
+
+      var geo = new THREE.BoxGeometry(w, h, d);
+      var mat = new THREE.MeshStandardMaterial({
+        color: color,
+        transparent: true,
+        opacity: bodyOp,
+        roughness: 0.5,
+        metalness: 0.2,
+        depthWrite: false,
+      });
+      var mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x + w / 2, h / 2, z + d / 2);
+      mesh.rotation.y = rot;
+      mesh.userData = { cooling: cu };
+
+      var edgeMat = new THREE.LineBasicMaterial({
+        color: color,
+        transparent: isStandby,
+        opacity: isStandby ? 0.55 : 1,
+      });
+      mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), edgeMat));
+
+      // Top cap
+      var topMat = new THREE.MeshStandardMaterial({
+        color: color,
+        transparent: true,
+        opacity: isStandby ? 0.35 : 0.55,
+        roughness: 0.35,
+        metalness: 0.25,
+      });
+      var top = new THREE.Mesh(
+        new THREE.PlaneGeometry(w * 0.96, d * 0.96),
+        topMat
+      );
+      top.rotation.x = -Math.PI / 2;
+      top.position.set(0, h / 2 + 0.002, 0);
+      mesh.add(top);
+
+      // ColdAisle snowflake logo centered on top
+      var logoSize = Math.min(w, d) * 0.5;
+      if (logoSize < 0.18) logoSize = Math.min(w, d) * 0.72;
+      if (logoSize > 0.9) logoSize = 0.9;
+      var logoPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(logoSize, logoSize),
+        new THREE.MeshBasicMaterial({
+          transparent: true,
+          opacity: isStandby ? 0.65 : 0.95,
+          depthWrite: false,
+          color: 0xffffff,
+        })
+      );
+      logoPlane.rotation.x = -Math.PI / 2;
+      logoPlane.position.set(0, h / 2 + 0.006, 0);
+      mesh.add(logoPlane);
+      ensureCoolingLogo(function (tex) {
+        if (cancelled || !logoPlane.material) return;
+        logoPlane.material.map = tex;
+        logoPlane.material.needsUpdate = true;
+      });
+
+      // Name label (billboard-ish flat on top, offset toward front edge)
+      var canvas = document.createElement('canvas');
+      canvas.width = 320;
+      canvas.height = 72;
+      var ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'rgba(8, 25, 42, 0.88)';
+      ctx.fillRect(0, 0, 320, 72);
+      ctx.fillStyle = '#7dd3fc';
+      ctx.font = 'bold 24px Segoe UI, sans-serif';
+      ctx.textAlign = 'center';
+      var short = coolingTypeShort(cu.unit_type);
+      var nm = String(cu.name || 'Cooling').slice(0, 16);
+      ctx.fillText(nm, 160, 30);
+      ctx.font = '18px Segoe UI, sans-serif';
+      ctx.fillStyle = isStandby ? '#94a3b8' : '#bae6fd';
+      ctx.fillText(short + (isStandby ? ' · standby' : ''), 160, 54);
+      var tex = new THREE.CanvasTexture(canvas);
+      var labelW = Math.max(w * 0.92, 0.55);
+      var label = new THREE.Mesh(
+        new THREE.PlaneGeometry(labelW, labelW * 0.24),
+        new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: true })
+      );
+      // Sit just above the logo toward one edge so both stay readable
+      label.position.set(0, h / 2 + 0.012, d * 0.28);
+      label.rotation.x = -Math.PI / 2;
+      mesh.add(label);
+
+      rackGroup.add(mesh);
+    });
+
     // --- Env heat spheres (cabinet-derived or explicit pos) ---
     var heatGroup = new THREE.Group();
     heatGroup.name = 'envHeat';
@@ -783,7 +972,7 @@
       }
     }
 
-    if (!cabinets.length && !floorPdus.length) {
+    if (!cabinets.length && !floorPdus.length && !floorCooling.length) {
       var c2 = document.createElement('canvas');
       c2.width = 512;
       c2.height = 128;
@@ -791,9 +980,9 @@
       cx.fillStyle = '#1e293b';
       cx.fillRect(0, 0, 512, 128);
       cx.fillStyle = '#94a3b8';
-      cx.font = '24px Segoe UI, sans-serif';
+      cx.font = '22px Segoe UI, sans-serif';
       cx.textAlign = 'center';
-      cx.fillText('No cabinets or PDUs on floor plan yet', 256, 70);
+      cx.fillText('No cabinets, PDUs, or cooling on floor plan yet', 256, 70);
       var tex2 = new THREE.CanvasTexture(c2);
       var plane = new THREE.Mesh(
         new THREE.PlaneGeometry(8, 2),
