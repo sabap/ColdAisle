@@ -1,7 +1,7 @@
 <?php
 /**
  * NOC wall display — no login required (optional ?token= from Settings).
- * Designed for always-on TVs; metrics refresh via JS without full page reload.
+ * 3D pinned left; right side rotates Overview / Power / Zones / Cooling.
  */
 declare(strict_types=1);
 
@@ -15,7 +15,6 @@ if (!App::isInstalled()) {
     exit;
 }
 
-// Optional shared secret (same as api/noc.php)
 $needToken = '';
 try {
     $needToken = trim((string)SettingsService::get('noc_access_token', ''));
@@ -28,7 +27,7 @@ if ($needToken !== '' && !hash_equals($needToken, $gotToken)) {
     header('Content-Type: text/html; charset=utf-8');
     echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>NOC — Forbidden</title></head><body style="font-family:sans-serif;background:#0a0f18;color:#e2e8f0;padding:2rem">';
     echo '<h1>NOC access denied</h1><p>Provide the access token in the URL: <code>?token=…</code></p>';
-    echo '<p class="text-muted">Configure under Settings → NOC wall display.</p></body></html>';
+    echo '<p>Configure under Settings → NOC wall display.</p></body></html>';
     exit;
 }
 
@@ -37,8 +36,8 @@ $apiUrl = App::url('api/noc.php');
 if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
-$cssUrl = App::url('assets/css/noc.css') . '?v=1';
-$jsUrl = App::url('assets/js/noc.js') . '?v=1';
+$cssUrl = App::url('assets/css/noc.css') . '?v=3';
+$jsUrl = App::url('assets/js/noc.js') . '?v=3';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
 $dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=9';
 $org = '';
@@ -62,6 +61,7 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
       apiUrl: <?= json_encode($apiUrl, JSON_UNESCAPED_SLASHES) ?>,
       token: <?= json_encode($gotToken, JSON_UNESCAPED_SLASHES) ?>,
       pollMs: 20000,
+      panelRotateMs: 18000,
       sceneReloadMs: 300000,
       threeUrl: <?= json_encode($threeUrl, JSON_UNESCAPED_SLASHES) ?>,
       dcim3dUrl: <?= json_encode($dcim3dUrl, JSON_UNESCAPED_SLASHES) ?>
@@ -73,7 +73,7 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
     <header class="noc-header">
       <div>
         <h1><?= App::e($org !== '' ? $org : App::APP_NAME) ?> <span class="sub">NOC</span></h1>
-        <div class="sub">Live inventory · power · environment</div>
+        <div class="sub">Live inventory · power · cooling · environment</div>
       </div>
       <div class="noc-clock" id="nocClock">—</div>
     </header>
@@ -85,8 +85,20 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
       <div class="noc-3d" id="noc3d" aria-label="3D floor overview"></div>
     </div>
 
-    <div class="noc-metrics" id="nocMetrics">
-      <!-- filled by noc.js -->
+    <div class="noc-panel-wrap">
+      <div class="noc-tabs" id="nocTabs" role="tablist">
+        <button type="button" class="noc-tab active" data-panel="overview" role="tab">Overview</button>
+        <button type="button" class="noc-tab" data-panel="power" role="tab">Power</button>
+        <button type="button" class="noc-tab" data-panel="zones" role="tab">Zones</button>
+        <button type="button" class="noc-tab" data-panel="cooling" role="tab">Cooling</button>
+        <div class="noc-rotate-track" aria-hidden="true"><i class="noc-rotate-bar" id="nocRotateBar"></i></div>
+      </div>
+      <div class="noc-panel-body" id="nocPanelBody">
+        <section class="noc-panel active" id="panel-overview" data-panel="overview"></section>
+        <section class="noc-panel" id="panel-power" data-panel="power"></section>
+        <section class="noc-panel" id="panel-zones" data-panel="zones"></section>
+        <section class="noc-panel" id="panel-cooling" data-panel="cooling"></section>
+      </div>
     </div>
 
     <footer class="noc-footer">
@@ -94,6 +106,7 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
         <span id="nocStatus">Connecting…</span>
       </span>
       <span id="nocUpdated">Last update: —</span>
+      <span id="nocPanelHint">Panel auto-rotates</span>
       <span><?= App::e(App::APP_NAME) ?> v<?= App::e(App::VERSION) ?></span>
     </footer>
   </div>
