@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Air unit SNMPv3:** enable SNMP + version **v3** now shows credential profile selector and full v3 fields (user, auth/priv, context), matching PDUs; secrets sealed; profiles from SNMP → Profiles.
+
 ---
 
 ## [0.3.33] - 2026-08-03

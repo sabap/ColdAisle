@@ -213,6 +213,51 @@ Historical note commits:
 
 ---
 
+### 7. Global temperature unit (°C / °F)
+
+| Field | Value |
+|-------|--------|
+| **Status** | open |
+| **Requested** | 2026-08-03 (user) |
+| **Source** | chat (after env sensor refinements 0.3.33; no F/C setting today) |
+| **Priority** | product polish (site ops preference) |
+
+**Goal:** Let the **site** choose **Celsius or Fahrenheit globally** so all env/cooling temperature UI (and related thresholds/charts) matches local practice — not a per-sensor free-text label.
+
+**Desired UX (v1 sketch — confirm when implementing)**
+
+1. **Settings** (General or a small “Display / units” card): **Temperature unit** = Celsius (°C) or Fahrenheit (°F). Site-wide only (not per user) unless asked later.  
+2. **Display conversion** everywhere temps are shown: env sensors list/detail, history charts, 3D heat spheres scale labels if any, cooling setpoints, ASHRAE band copy (or show dual/native carefully), alert email bodies.  
+3. **Storage convention (pick one at implement time):**  
+   - **Prefer store canonical °C** (and convert on read for display + on write when user enters °F), **or**  
+   - store as entered and tag unit (harder for charts/thresholds — avoid unless needed).  
+4. **Thresholds:** warn/crit fields follow the selected unit in the UI; convert when saving if storage is °C.  
+5. **SNMP poll:** device may report °C or °F (e.g. APC PowerNet system scale). Normalize into the storage convention so a site set to °F does not double-convert or mislabel.  
+6. **Default:** °C (current behavior) for existing installs.
+
+**Implementer notes**
+
+- Single setting key (e.g. `temp_unit` = `C` \| `F`) via `SettingsService`; read once per request helper like `App::tempUnit()` / `formatTemp($c)`.  
+- Do not invent a second unit system for humidity (%RH stays).  
+- Floor-plan metric/imperial (length) stays separate from temperature unit.  
+- Migrating existing `env_sensors.unit` strings (`°C`, `°C / %RH`) — update defaults when kind changes; do not require bulk rewrite of free-text unit if display is driven by global setting.
+
+**Out of scope (unless asked later)**
+
+- Per-user temperature preference  
+- Kelvin / Rankine  
+- Auto-detect from browser locale  
+
+**Acceptance (when built)**
+
+- [ ] Admin can set site temperature unit to °C or °F in Settings  
+- [ ] Env sensor values, charts, and manual entry honor that unit  
+- [ ] Thresholds and alert emails use the same unit consistently  
+- [ ] SNMP-ingested temps are not double-converted or mislabeled  
+- [ ] Existing sites default to °C with no behavior change until changed  
+
+---
+
 ## Completed (keep for audit; do not re-implement)
 
 ### Site backup to SMB share

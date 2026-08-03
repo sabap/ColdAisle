@@ -473,6 +473,13 @@ class Schema
                     snmp_community NVARCHAR(100) NULL,
                     snmp_port INT NULL,
                     snmp_v3_profile_id INT NULL,
+                    snmp_v3_sec_level NVARCHAR(30) NULL,
+                    snmp_security_name NVARCHAR(100) NULL,
+                    snmp_auth_protocol NVARCHAR(20) NULL,
+                    snmp_auth_passphrase NVARCHAR(255) NULL,
+                    snmp_priv_protocol NVARCHAR(20) NULL,
+                    snmp_priv_passphrase NVARCHAR(255) NULL,
+                    snmp_context NVARCHAR(100) NULL,
                     snmp_site_template_id INT NULL,
                     snmp_auto_poll BIT NOT NULL CONSTRAINT DF_cu_snmp_auto DEFAULT 0,
                     snmp_last_poll_at DATETIME2 NULL,
@@ -483,6 +490,14 @@ class Schema
                     updated_at DATETIME2 NOT NULL CONSTRAINT DF_cu_updated DEFAULT SYSUTCDATETIME()
                 )"
             );
+            // Additive SNMPv3 credential columns (installs created before full v3 form)
+            self::ensureColumn('cooling_units', 'snmp_v3_sec_level', 'NVARCHAR(30) NULL');
+            self::ensureColumn('cooling_units', 'snmp_security_name', 'NVARCHAR(100) NULL');
+            self::ensureColumn('cooling_units', 'snmp_auth_protocol', 'NVARCHAR(20) NULL');
+            self::ensureColumn('cooling_units', 'snmp_auth_passphrase', 'NVARCHAR(255) NULL');
+            self::ensureColumn('cooling_units', 'snmp_priv_protocol', 'NVARCHAR(20) NULL');
+            self::ensureColumn('cooling_units', 'snmp_priv_passphrase', 'NVARCHAR(255) NULL');
+            self::ensureColumn('cooling_units', 'snmp_context', 'NVARCHAR(100) NULL');
             self::ensureTable(
                 'env_sensors',
                 "CREATE TABLE env_sensors (

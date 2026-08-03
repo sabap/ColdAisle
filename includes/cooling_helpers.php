@@ -313,14 +313,139 @@ function cooling_unit_fields_from_post(array $post): array
         'height_mm' => $intOrNull($post['height_mm'] ?? null) ?? 2000,
         'color_hex' => cooling_null_str($post['color_hex'] ?? null) ?: cooling_default_color($type),
         'snmp_enabled' => !empty($post['snmp_enabled']) ? 1 : 0,
-        'snmp_version' => cooling_null_str($post['snmp_version'] ?? null),
+        'snmp_version' => cooling_null_str($post['snmp_version'] ?? null) ?? '2c',
         'snmp_community' => cooling_null_str($post['snmp_community'] ?? null),
         'snmp_port' => $intOrNull($post['snmp_port'] ?? null) ?? 161,
+        'snmp_v3_profile_id' => $intOrNull($post['snmp_v3_profile_id'] ?? null),
+        'snmp_v3_sec_level' => cooling_null_str($post['snmp_v3_sec_level'] ?? null),
+        'snmp_security_name' => cooling_null_str($post['snmp_security_name'] ?? null),
+        'snmp_auth_protocol' => cooling_null_str($post['snmp_auth_protocol'] ?? null),
+        // Passphrases: empty string means "keep previous" on update (resolved later)
+        'snmp_auth_passphrase' => array_key_exists('snmp_auth_passphrase', $post)
+            ? (string)($post['snmp_auth_passphrase'] ?? '')
+            : null,
+        'snmp_priv_protocol' => cooling_null_str($post['snmp_priv_protocol'] ?? null),
+        'snmp_priv_passphrase' => array_key_exists('snmp_priv_passphrase', $post)
+            ? (string)($post['snmp_priv_passphrase'] ?? '')
+            : null,
+        'snmp_context' => cooling_null_str($post['snmp_context'] ?? null),
         'snmp_site_template_id' => $intOrNull($post['snmp_site_template_id'] ?? null),
         'snmp_auto_poll' => !empty($post['snmp_auto_poll']) ? 1 : 0,
         'notes' => cooling_null_str($post['notes'] ?? null),
         'is_active' => isset($post['is_active']) ? (!empty($post['is_active']) ? 1 : 0) : 1,
     ];
+}
+
+/**
+ * Apply SNMPv3 profile + seal secrets for cooling_units save.
+ * Blank community/passphrases keep previous sealed values on update.
+ * When a profile is selected, profile passphrases replace unit secrets.
+ *
+ * @param array<string,mixed> $row
+ * @param array<string,mixed>|null $prev existing row (update) or null (create)
+ * @return array<string,mixed>
+ */
+function cooling_unit_finalize_snmp(array $row, ?array $prev = null): array
+{
+    $ver = strtolower(trim((string)($row['snmp_version'] ?? '2c')));
+    if ($ver === '') {
+        $ver = '2c';
+    }
+    $row['snmp_version'] = $ver;
+    $wantsV3 = $ver === '3';
+
+    if (!$wantsV3) {
+        $row['snmp_v3_profile_id'] = null;
+    }
+
+    $authFromProfile = false;
+    $privFromProfile = false;
+
+    // Apply credential profile (same rules as PDUs / devices)
+    if ($wantsV3 && !empty($row['snmp_v3_profile_id'])) {
+        try {
+            $prof = Database::fetchOne(
+                'SELECT * FROM snmp_v3_profiles WHERE profile_id = ? AND is_active = 1',
+                [(int)$row['snmp_v3_profile_id']]
+            );
+            if ($prof) {
+                $secName = trim((string)($prof['security_name'] ?? ''));
+                if ($secName !== '') {
+                    $row['snmp_security_name'] = $secName;
+                }
+                $lvl = trim((string)($prof['security_level'] ?? ''));
+                if ($lvl !== '') {
+                    $row['snmp_v3_sec_level'] = $lvl;
+                }
+                $authProto = trim((string)($prof['auth_protocol'] ?? ''));
+                if ($authProto !== '') {
+                    $row['snmp_auth_protocol'] = strtoupper($authProto);
+                }
+                $privProto = trim((string)($prof['priv_protocol'] ?? ''));
+                if ($privProto !== '') {
+                    $row['snmp_priv_protocol'] = strtoupper($privProto);
+                }
+                $ctx = $prof['context_name'] ?? null;
+                $row['snmp_context'] = ($ctx === null || trim((string)$ctx) === '')
+                    ? null
+                    : trim((string)$ctx);
+                // Profile passphrases are already sealed in DB — copy as-is
+                if (!empty($prof['auth_passphrase'])) {
+                    $row['snmp_auth_passphrase'] = $prof['auth_passphrase'];
+                    $authFromProfile = true;
+                }
+                if (!empty($prof['priv_passphrase'])) {
+                    $row['snmp_priv_passphrase'] = $prof['priv_passphrase'];
+                    $privFromProfile = true;
+                }
+            }
+        } catch (Throwable $e) {
+            App::log('Cooling unit SNMPv3 profile apply failed: ' . $e->getMessage(), 'warning');
+        }
+    }
+
+    if (!empty($row['snmp_auth_protocol'])) {
+        $row['snmp_auth_protocol'] = strtoupper((string)$row['snmp_auth_protocol']);
+    }
+    if (!empty($row['snmp_priv_protocol'])) {
+        $row['snmp_priv_protocol'] = strtoupper((string)$row['snmp_priv_protocol']);
+    }
+
+    $authPosted = $row['snmp_auth_passphrase'];
+    $privPosted = $row['snmp_priv_passphrase'];
+    $commPosted = $row['snmp_community'] ?? null;
+
+    // Community: blank on update keeps previous sealed value
+    if ($prev && ($commPosted === null || $commPosted === '') && !empty($prev['snmp_community'])) {
+        $row['snmp_community'] = $prev['snmp_community'];
+    }
+
+    // Passphrases: profile wins; else blank keeps previous; else create null
+    if (!$authFromProfile) {
+        if (($authPosted === null || $authPosted === '') && $prev && !empty($prev['snmp_auth_passphrase'])) {
+            $row['snmp_auth_passphrase'] = $prev['snmp_auth_passphrase'];
+        } elseif ($authPosted === null || $authPosted === '') {
+            $row['snmp_auth_passphrase'] = null;
+        }
+    }
+    if (!$privFromProfile) {
+        if (($privPosted === null || $privPosted === '') && $prev && !empty($prev['snmp_priv_passphrase'])) {
+            $row['snmp_priv_passphrase'] = $prev['snmp_priv_passphrase'];
+        } elseif ($privPosted === null || $privPosted === '') {
+            $row['snmp_priv_passphrase'] = null;
+        }
+    }
+
+    // Seal plaintext secrets (already-sealed values are left alone by Crypto::sealFields)
+    if (class_exists('Crypto')) {
+        $row = Crypto::sealFields($row, [
+            'snmp_community',
+            'snmp_auth_passphrase',
+            'snmp_priv_passphrase',
+        ]);
+    }
+
+    return $row;
 }
 
 function cooling_null_str(mixed $v): ?string
