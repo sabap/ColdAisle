@@ -167,8 +167,19 @@ $selfId = (int)($edit['cooling_unit_id'] ?? 0);
     </div>
     <div class="form-row cu-snmp-any" style="display:none"><label>Version</label>
         <select class="form-control" name="snmp_version" id="<?= App::e($snmpFormId) ?>_version">
-            <?php foreach (['2c' => 'v2c', '1' => 'v1', '3' => 'v3'] as $val => $lab): ?>
-                <option value="<?= $val ?>" <?= ($edit['snmp_version'] ?? '2c') === $val ? 'selected' : '' ?>><?= $lab ?></option>
+            <?php
+            // Keys must stay strings: bare 1/3 become int keys and break === vs DB "3"
+            $snmpVerCur = strtolower(trim((string)($edit['snmp_version'] ?? '2c')));
+            if ($snmpVerCur === '' || $snmpVerCur === 'v2c') {
+                $snmpVerCur = '2c';
+            }
+            if ($snmpVerCur === 'v3' || $snmpVerCur === 'v1') {
+                $snmpVerCur = substr($snmpVerCur, 1);
+            }
+            foreach (['2c' => 'v2c', '1' => 'v1', '3' => 'v3'] as $val => $lab):
+                $valStr = (string)$val;
+                ?>
+                <option value="<?= App::e($valStr) ?>" <?= $snmpVerCur === $valStr ? 'selected' : '' ?>><?= App::e($lab) ?></option>
             <?php endforeach; ?>
         </select>
     </div>

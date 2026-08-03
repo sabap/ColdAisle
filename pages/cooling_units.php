@@ -218,7 +218,24 @@ if ($unitId > 0) {
         <div class="metric-card">
             <div class="label">Network</div>
             <div class="value" style="font-size:1.1rem"><?= App::e((string)($u['primary_ip'] ?? '—')) ?></div>
-            <div class="sub"><?= !empty($u['snmp_enabled']) ? 'SNMP on' : 'SNMP off' ?></div>
+            <div class="sub">
+                <?php
+                if (empty($u['snmp_enabled'])) {
+                    echo 'SNMP off';
+                } else {
+                    $sv = strtolower(trim((string)($u['snmp_version'] ?? '2c')));
+                    $svLab = match ($sv) {
+                        '3', 'v3' => 'v3',
+                        '1', 'v1' => 'v1',
+                        default => 'v2c',
+                    };
+                    echo 'SNMP ' . App::e($svLab);
+                    if (in_array($sv, ['3', 'v3'], true) && !empty($u['snmp_security_name'])) {
+                        echo ' · ' . App::e((string)$u['snmp_security_name']);
+                    }
+                }
+                ?>
+            </div>
         </div>
         <div class="metric-card success">
             <div class="label">ASHRAE class</div>
