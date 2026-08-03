@@ -260,7 +260,7 @@ $selfId = (int)($edit['cooling_unit_id'] ?? 0);
     <div class="form-row full cu-snmp-any" style="display:none">
         <label>
             <input type="checkbox" name="snmp_auto_poll" value="1" <?= !empty($edit['snmp_auto_poll']) ? 'checked' : '' ?>>
-            Include in scheduled polls (when worker supports cooling)
+            Include in scheduled polls (poll_snmp.php)
         </label>
     </div>
 

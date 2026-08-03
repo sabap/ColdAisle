@@ -244,6 +244,461 @@ if ($unitId > 0) {
         </div>
     </div>
 
+    <?php
+    $siteTplId = (int)($u['snmp_site_template_id'] ?? 0);
+    $siteTpl = null;
+    if ($siteTplId > 0) {
+        try {
+            $siteTpl = Database::fetchOne(
+                'SELECT template_id, name, vendor, model FROM snmp_site_oid_templates WHERE template_id = ?',
+                [$siteTplId]
+            );
+        } catch (Throwable $e) {
+            $siteTpl = null;
+        }
+    }
+    $autoPoll = !empty($u['snmp_auto_poll']);
+    $discoverHost = trim((string)($u['primary_ip'] ?? ''));
+    $discoverReady = trim((string)($u['manufacturer'] ?? '')) !== ''
+        && trim((string)($u['model'] ?? '')) !== ''
+        && $discoverHost !== ''
+        && !empty($u['snmp_enabled']);
+    $canSnmpActions = $canEdit || AuthManager::canEditSnmp($user);
+    $lastPollSnap = null;
+    if (!empty($u['last_poll_json'])) {
+        $decoded = json_decode((string)$u['last_poll_json'], true);
+        if (is_array($decoded)) {
+            $lastPollSnap = $decoded;
+        }
+    }
+    $lastPollMetrics = is_array($lastPollSnap['metrics'] ?? null) ? $lastPollSnap['metrics'] : [];
+    ?>
+    <div class="card mb-2" id="coolingSnmpCard">
+        <div class="card-header flex-between">
+            <h3 class="mt-0 mb-0" style="font-size:1rem">SNMP</h3>
+            <?php if ($canSnmpActions): ?>
+            <div class="flex gap-1" style="align-items:center;flex-wrap:wrap">
+                <label class="snmp-toggle" title="<?= $siteTplId > 0
+                    ? 'Include this unit in the SNMP scheduler'
+                    : 'Run Discover OIDs first to assign a site template' ?>">
+                    <input type="checkbox" id="cuSnmpAutoPollToggle"
+                        <?= $autoPoll ? 'checked' : '' ?>
+                        <?= $siteTplId > 0 ? '' : 'disabled' ?>>
+                    <span class="snmp-switch" aria-hidden="true"></span>
+                    <span class="snmp-toggle-label" id="cuSnmpAutoPollLabel">
+                        Scheduled poll <?= $autoPoll ? 'on' : 'off' ?>
+                    </span>
+                </label>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnCuSnmpDiscover"
+                    <?= $discoverReady ? '' : 'disabled title="Need manufacturer, model, primary IP, and SNMP enabled"' ?>>
+                    Discover OIDs
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" id="btnCuSnmpPollNow"
+                    <?= $siteTplId > 0 ? '' : 'disabled title="Assign a site OID template first (Discover OIDs)"' ?>>
+                    Poll now
+                </button>
+            </div>
+            <?php endif; ?>
+        </div>
+        <div class="card-body">
+            <dl class="detail-grid" style="margin:0">
+                <dt>Site template</dt>
+                <dd id="cuSnmpTplName">
+                    <?php if ($siteTpl): ?>
+                        <strong><?= App::e((string)($siteTpl['name'] ?? 'Template #' . $siteTplId)) ?></strong>
+                        <?php if (!empty($siteTpl['vendor']) || !empty($siteTpl['model'])): ?>
+                            <span class="text-muted"> · <?= App::e(trim(($siteTpl['vendor'] ?? '') . ' ' . ($siteTpl['model'] ?? ''))) ?></span>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <span class="text-muted">None — Discover OIDs to create/assign</span>
+                    <?php endif; ?>
+                </dd>
+                <dt>Last poll</dt>
+                <dd id="cuSnmpLastPoll"><?= App::e((string)($u['snmp_last_poll_at'] ?? '—')) ?></dd>
+            </dl>
+            <?php if (!$discoverReady && $canSnmpActions): ?>
+                <p class="text-muted snmp-poll-stats mb-0 mt-1" style="font-size:.85rem">
+                    Discover needs manufacturer, model, primary IP, and SNMP enabled with credentials (edit unit below).
+                </p>
+            <?php elseif ($siteTplId < 1 && $canSnmpActions): ?>
+                <p class="text-muted snmp-poll-stats mb-0 mt-1" style="font-size:.85rem">
+                    Run <strong>Discover OIDs</strong>, save a site template, then use <strong>Poll now</strong>.
+                </p>
+            <?php endif; ?>
+            <?php if ($lastPollMetrics): ?>
+                <div class="mt-2">
+                    <div class="text-muted" style="font-size:.8rem;margin-bottom:.35rem">Last metrics snapshot</div>
+                    <div class="table-wrap">
+                        <table class="table table-sm" id="cuSnmpMetricsTable">
+                            <thead><tr><th>Key</th><th>Value</th></tr></thead>
+                            <tbody>
+                            <?php
+                            $n = 0;
+                            foreach ($lastPollMetrics as $mk => $mv):
+                                if ($n++ >= 24) {
+                                    break;
+                                }
+                                ?>
+                                <tr>
+                                    <td><code style="font-size:.78rem"><?= App::e((string)$mk) ?></code></td>
+                                    <td><?= App::e(is_scalar($mv) ? (string)$mv : json_encode($mv)) ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                    <?php if (count($lastPollMetrics) > 24): ?>
+                        <p class="text-muted mb-0" style="font-size:.75rem">Showing 24 of <?= count($lastPollMetrics) ?> keys.</p>
+                    <?php endif; ?>
+                </div>
+            <?php else: ?>
+                <div id="cuSnmpMetricsEmpty" class="text-muted mt-1" style="font-size:.85rem">No poll snapshot yet.</div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <?php if ($canSnmpActions): ?>
+    <div class="modal-overlay modal-overlay-glass" id="cuSnmpDiscoverModal" hidden>
+        <div class="modal-panel modal-panel-glass modal-panel-glass-wide" role="dialog" aria-modal="true" aria-labelledby="cuSnmpDiscoverTitle">
+            <div class="modal-header">
+                <h2 id="cuSnmpDiscoverTitle">Discover OIDs</h2>
+                <button type="button" class="modal-close" id="cuSnmpDiscoverClose" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="cuSnmpDiscoverLoading" hidden>
+                    <p class="text-muted">Walking SNMP roots… this may take up to a minute.</p>
+                </div>
+                <div id="cuSnmpDiscoverError" class="alert alert-error" hidden></div>
+                <div id="cuSnmpDiscoverResults" hidden>
+                    <dl class="snmp-discover-meta">
+                        <div><dt>Host</dt><dd id="cuSnmpDiscHost">—</dd></div>
+                        <div><dt>Template name</dt><dd id="cuSnmpDiscTplName">—</dd></div>
+                        <div><dt>Walk count</dt><dd id="cuSnmpDiscWalk">—</dd></div>
+                    </dl>
+                    <p class="text-muted" id="cuSnmpDiscSys" style="font-size:.85rem;word-break:break-word"></p>
+                    <p id="cuSnmpDiscMessage" style="font-size:.9rem"></p>
+                    <div id="cuSnmpExistsWarn" class="alert alert-warning" hidden></div>
+                    <h4 style="font-size:.95rem;margin:1rem 0 .5rem">Proposed OID map</h4>
+                    <ul id="cuSnmpProposedMap" class="snmp-proposed-map" style="list-style:none;padding:0;margin:0"></ul>
+                    <h4 style="font-size:.95rem;margin:1rem 0 .5rem">Candidates</h4>
+                    <div class="table-wrap" style="max-height:14rem;overflow:auto">
+                        <table class="table table-sm">
+                            <thead><tr><th>Name</th><th>OID</th><th>Value</th></tr></thead>
+                            <tbody id="cuSnmpCandidateBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="cuSnmpDiscoverCancel">Close</button>
+                <button type="button" class="btn btn-warning" id="cuSnmpDiscoverOverwrite" hidden>Overwrite template</button>
+                <button type="button" class="btn btn-primary" id="cuSnmpDiscoverCreate" disabled>Create template</button>
+            </div>
+        </div>
+    </div>
+    <script>
+    (function () {
+        var unitId = <?= (int)$unitId ?>;
+        var hasTemplate = <?= $siteTplId > 0 ? 'true' : 'false' ?>;
+        var modal = document.getElementById('cuSnmpDiscoverModal');
+        var btnDiscover = document.getElementById('btnCuSnmpDiscover');
+        var btnPoll = document.getElementById('btnCuSnmpPollNow');
+        var autoToggle = document.getElementById('cuSnmpAutoPollToggle');
+        var autoLabel = document.getElementById('cuSnmpAutoPollLabel');
+        var loadingEl = document.getElementById('cuSnmpDiscoverLoading');
+        var errEl = document.getElementById('cuSnmpDiscoverError');
+        var resEl = document.getElementById('cuSnmpDiscoverResults');
+        var createBtn = document.getElementById('cuSnmpDiscoverCreate');
+        var overwriteBtn = document.getElementById('cuSnmpDiscoverOverwrite');
+        var existsWarn = document.getElementById('cuSnmpExistsWarn');
+        var lastDiscover = null;
+
+        function toast(msg, type) {
+            if (window.ColdAisle && ColdAisle.toast) ColdAisle.toast(msg, type || 'info');
+            else alert(msg);
+        }
+        function api(body) {
+            return ColdAisle.api('api/snmp_cooling.php', { method: 'POST', body: body });
+        }
+        function openModal() {
+            if (!modal) return;
+            modal.hidden = false;
+            document.body.classList.add('modal-open');
+        }
+        function closeModal() {
+            if (!modal) return;
+            modal.hidden = true;
+            document.body.classList.remove('modal-open');
+        }
+        function showErr(msg) {
+            if (!errEl) return;
+            errEl.hidden = !msg;
+            errEl.textContent = msg || '';
+        }
+        function setLoading(on) {
+            if (loadingEl) loadingEl.hidden = !on;
+            if (resEl && on) resEl.hidden = true;
+            if (createBtn) createBtn.disabled = true;
+            if (overwriteBtn) overwriteBtn.hidden = true;
+            if (existsWarn) existsWarn.hidden = true;
+        }
+        function esc(s) {
+            var d = document.createElement('div');
+            d.textContent = s == null ? '' : String(s);
+            return d.innerHTML;
+        }
+        function renderDiscover(data) {
+            lastDiscover = data;
+            document.getElementById('cuSnmpDiscHost').textContent = data.host || '—';
+            document.getElementById('cuSnmpDiscTplName').textContent = data.template_name || '—';
+            document.getElementById('cuSnmpDiscWalk').textContent = String(data.walk_count != null ? data.walk_count : '—');
+            document.getElementById('cuSnmpDiscSys').textContent = data.sysDescr || '—';
+            document.getElementById('cuSnmpDiscMessage').textContent = data.message || '';
+
+            var mapUl = document.getElementById('cuSnmpProposedMap');
+            mapUl.innerHTML = '';
+            var map = data.proposed_map || {};
+            var keys = Object.keys(map);
+            if (!keys.length) {
+                mapUl.innerHTML = '<li class="text-muted">No proposed metrics — pick OIDs from candidates or type name=oid</li>';
+            } else {
+                keys.forEach(function (k) {
+                    var li = document.createElement('li');
+                    li.innerHTML = '<label>' + esc(k) + '</label>';
+                    var inp = document.createElement('input');
+                    inp.className = 'form-control';
+                    inp.dataset.metric = k;
+                    inp.value = map[k] || '';
+                    li.appendChild(inp);
+                    mapUl.appendChild(li);
+                });
+            }
+            var li2 = document.createElement('li');
+            li2.innerHTML = '<label class="text-muted">+ metric</label>';
+            var extra = document.createElement('input');
+            extra.className = 'form-control';
+            extra.placeholder = 'name=1.3.6… (optional)';
+            extra.id = 'cuSnmpExtraMapRow';
+            li2.appendChild(extra);
+            mapUl.appendChild(li2);
+
+            var tbody = document.getElementById('cuSnmpCandidateBody');
+            tbody.innerHTML = '';
+            (data.candidates || []).forEach(function (c) {
+                var tr = document.createElement('tr');
+                var nm = c.name || '';
+                tr.innerHTML =
+                    '<td style="font-size:.78rem;max-width:14rem;word-break:break-all">' +
+                        (nm ? '<code title="' + esc(nm) + '">' + esc(nm) + '</code>' : '<span class="text-muted">—</span>') +
+                    '</td>' +
+                    '<td style="font-size:.75rem;word-break:break-all"><code>' + esc(c.oid || '') + '</code></td>' +
+                    '<td style="font-size:.8rem">' + esc(c.value != null ? c.value : '') + '</td>';
+                tbody.appendChild(tr);
+            });
+
+            if (resEl) resEl.hidden = false;
+            if (createBtn) createBtn.disabled = false;
+            if (data.existing_template) {
+                if (existsWarn) {
+                    existsWarn.hidden = false;
+                    existsWarn.textContent = 'Template "' + (data.template_name || '') +
+                        '" already exists. Create will ask to overwrite.';
+                }
+                if (overwriteBtn) overwriteBtn.hidden = false;
+            }
+        }
+        function collectMap() {
+            var map = {};
+            var mapUl = document.getElementById('cuSnmpProposedMap');
+            if (!mapUl) return map;
+            mapUl.querySelectorAll('input[data-metric]').forEach(function (inp) {
+                var k = inp.dataset.metric;
+                var v = (inp.value || '').trim();
+                if (k && v) map[k] = v;
+            });
+            var extra = document.getElementById('cuSnmpExtraMapRow');
+            if (extra && extra.value) {
+                var parts = extra.value.split('=');
+                if (parts.length >= 2) {
+                    var ek = parts[0].trim();
+                    var ev = parts.slice(1).join('=').trim();
+                    if (ek && ev) map[ek] = ev;
+                }
+            }
+            return map;
+        }
+        function saveTemplate(overwrite) {
+            if (!lastDiscover) return;
+            var map = collectMap();
+            if (!Object.keys(map).length) {
+                showErr('OID map is empty.');
+                return;
+            }
+            createBtn.disabled = true;
+            if (overwriteBtn) overwriteBtn.disabled = true;
+            showErr('');
+            api({
+                action: 'save_template',
+                cooling_unit_id: unitId,
+                oid_map: map,
+                overwrite: !!overwrite
+            }).then(function (data) {
+                toast(data.message || 'Template saved', 'success');
+                hasTemplate = true;
+                if (btnPoll) btnPoll.disabled = false;
+                if (autoToggle) {
+                    autoToggle.disabled = false;
+                    if (data.snmp_auto_poll) {
+                        autoToggle.checked = true;
+                        if (autoLabel) autoLabel.textContent = 'Scheduled poll on';
+                    }
+                }
+                var nameEl = document.getElementById('cuSnmpTplName');
+                if (nameEl && data.template) {
+                    var lab = data.template.name || 'Template';
+                    nameEl.innerHTML = '<strong>' + esc(lab) + '</strong>';
+                }
+                closeModal();
+            }).catch(function (err) {
+                if (err.status === 409 && err.data && err.data.exists) {
+                    if (existsWarn) {
+                        existsWarn.hidden = false;
+                        existsWarn.textContent = err.data.message || 'Template exists. Overwrite?';
+                    }
+                    if (overwriteBtn) overwriteBtn.hidden = false;
+                    createBtn.disabled = false;
+                    if (overwriteBtn) overwriteBtn.disabled = false;
+                    return;
+                }
+                showErr((err && err.message) || 'Save failed');
+                createBtn.disabled = false;
+                if (overwriteBtn) overwriteBtn.disabled = false;
+            });
+        }
+
+        if (btnDiscover) {
+            btnDiscover.addEventListener('click', function () {
+                openModal();
+                setLoading(true);
+                showErr('');
+                lastDiscover = null;
+                api({ action: 'discover', cooling_unit_id: unitId })
+                    .then(function (data) {
+                        setLoading(false);
+                        renderDiscover(data);
+                    })
+                    .catch(function (err) {
+                        setLoading(false);
+                        showErr((err && err.message) || 'Discover failed');
+                        toast((err && err.message) || 'Discover failed', 'error');
+                    });
+            });
+        }
+        if (createBtn) {
+            createBtn.addEventListener('click', function () {
+                if (lastDiscover && lastDiscover.existing_template) {
+                    if (!confirm('Template "' + lastDiscover.template_name + '" already exists. Overwrite it?')) {
+                        return;
+                    }
+                    saveTemplate(true);
+                    return;
+                }
+                saveTemplate(false);
+            });
+        }
+        if (overwriteBtn) {
+            overwriteBtn.addEventListener('click', function () {
+                if (!confirm('Overwrite existing template "' +
+                    (lastDiscover && lastDiscover.template_name ? lastDiscover.template_name : '') + '"?')) {
+                    return;
+                }
+                saveTemplate(true);
+            });
+        }
+        function closeDiscover() { closeModal(); }
+        var c1 = document.getElementById('cuSnmpDiscoverClose');
+        var c2 = document.getElementById('cuSnmpDiscoverCancel');
+        if (c1) c1.addEventListener('click', closeDiscover);
+        if (c2) c2.addEventListener('click', closeDiscover);
+        if (modal) {
+            modal.addEventListener('click', function (e) {
+                if (e.target === modal) closeDiscover();
+            });
+        }
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && modal && !modal.hidden) closeDiscover();
+        });
+
+        if (btnPoll) {
+            btnPoll.addEventListener('click', function () {
+                btnPoll.disabled = true;
+                api({ action: 'poll_now', cooling_unit_id: unitId })
+                    .then(function (data) {
+                        toast(data.message || 'Poll complete', 'success');
+                        var el = document.getElementById('cuSnmpLastPoll');
+                        if (el) el.textContent = data.snmp_last_poll_at || '—';
+                        var metrics = data.metrics || {};
+                        var keys = Object.keys(metrics);
+                        if (keys.length) {
+                            var tbody = document.querySelector('#cuSnmpMetricsTable tbody');
+                            var empty = document.getElementById('cuSnmpMetricsEmpty');
+                            if (empty) empty.hidden = true;
+                            if (!tbody) {
+                                // Build table if missing
+                                var cardBody = document.querySelector('#coolingSnmpCard .card-body');
+                                if (cardBody) {
+                                    var wrap = document.createElement('div');
+                                    wrap.className = 'mt-2';
+                                    wrap.innerHTML = '<div class="text-muted" style="font-size:.8rem;margin-bottom:.35rem">Last metrics snapshot</div>' +
+                                        '<div class="table-wrap"><table class="table table-sm" id="cuSnmpMetricsTable">' +
+                                        '<thead><tr><th>Key</th><th>Value</th></tr></thead><tbody></tbody></table></div>';
+                                    cardBody.appendChild(wrap);
+                                    tbody = wrap.querySelector('tbody');
+                                }
+                            }
+                            if (tbody) {
+                                tbody.innerHTML = '';
+                                keys.slice(0, 24).forEach(function (k) {
+                                    var tr = document.createElement('tr');
+                                    tr.innerHTML = '<td><code style="font-size:.78rem">' + esc(k) + '</code></td>' +
+                                        '<td>' + esc(metrics[k]) + '</td>';
+                                    tbody.appendChild(tr);
+                                });
+                            }
+                        }
+                    })
+                    .catch(function (err) {
+                        toast((err && err.message) || 'Poll failed', 'error');
+                    })
+                    .finally(function () {
+                        btnPoll.disabled = !hasTemplate;
+                    });
+            });
+        }
+        if (autoToggle) {
+            autoToggle.addEventListener('change', function () {
+                var enabled = !!autoToggle.checked;
+                autoToggle.disabled = true;
+                api({ action: 'set_auto_poll', cooling_unit_id: unitId, enabled: enabled })
+                    .then(function (data) {
+                        toast(data.message || 'Updated', 'success');
+                        if (autoLabel) {
+                            autoLabel.textContent = 'Scheduled poll ' + (data.snmp_auto_poll ? 'on' : 'off');
+                        }
+                    })
+                    .catch(function (err) {
+                        autoToggle.checked = !enabled;
+                        toast((err && err.message) || 'Failed to update auto-poll', 'error');
+                    })
+                    .finally(function () {
+                        autoToggle.disabled = !hasTemplate;
+                    });
+            });
+        }
+    })();
+    </script>
+    <?php endif; ?>
+
     <?php if ($canEdit): ?>
     <div class="card mb-2">
         <div class="card-header"><h3 class="mt-0 mb-0" style="font-size:1rem">Edit unit</h3></div>

@@ -13,9 +13,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Air unit SNMP poll path:** Discover OIDs, save site template, **Poll now**, and scheduled poll on Cooling → Air & pumps unit detail (`api/snmp_cooling.php`); metrics snapshot in `last_poll_json`.
+
 ### Enhancements
 
 ### Bug fixes
+
+- **Floor plan cooling nudge:** arrow-key nudge works for selected air units (same as cabinets/PDUs).
 
 ---
 
