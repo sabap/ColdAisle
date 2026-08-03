@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.35] - 2026-08-03
+
+### Bug fixes
+
 - **Air unit SNMP version display:** edit form correctly selects **v3** (and v1) after save; Network metric shows version (and v3 user) instead of always looking like v2c.
 
 ---
-
 ## [0.3.34] - 2026-08-03
 
 ### Bug fixes
