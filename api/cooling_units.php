@@ -66,6 +66,7 @@ try {
             if ($row['name'] === '') {
                 App::json(['error' => 'name required'], 400);
             }
+            $row = cooling_unit_finalize_snmp($row, null);
             $id = Database::insert('cooling_units', $row);
             AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'create', 'cooling_unit', (int)$id, [
                 'name' => $row['name'],
@@ -79,7 +80,7 @@ try {
                 App::json(['error' => 'cooling_unit_id required'], 400);
             }
             $existing = Database::fetchOne(
-                'SELECT cooling_unit_id FROM cooling_units WHERE cooling_unit_id = ? AND is_active = 1',
+                'SELECT * FROM cooling_units WHERE cooling_unit_id = ? AND is_active = 1',
                 [$id]
             );
             if (!$existing) {
@@ -92,6 +93,7 @@ try {
             if ($row['standby_of_id'] === $id) {
                 $row['standby_of_id'] = null;
             }
+            $row = cooling_unit_finalize_snmp($row, $existing);
             $row['updated_at'] = date('Y-m-d H:i:s');
             Database::update('cooling_units', $row, 'cooling_unit_id = :id', [':id' => $id]);
             App::json(['cooling_unit' => cooling_unit_fetch($id)]);

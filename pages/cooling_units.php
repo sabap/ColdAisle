@@ -42,6 +42,18 @@ try {
     $peerUnits = [];
 }
 
+// Shared SNMPv3 profiles for add/edit forms
+$snmpProfiles = [];
+try {
+    $snmpProfiles = Database::fetchAll(
+        'SELECT profile_id, name, security_name, security_level,
+                auth_protocol, priv_protocol, context_name
+         FROM snmp_v3_profiles WHERE is_active = 1 ORDER BY name'
+    );
+} catch (Throwable $e) {
+    $snmpProfiles = [];
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? '')) {
     if (!$canEdit) {
         App::flash('error', 'You do not have permission to modify cooling units.');
@@ -66,14 +78,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 if ($uid <= 0) {
                     throw new RuntimeException('Unit id required.');
                 }
+                $prev = null;
+                try {
+                    $prev = Database::fetchOne(
+                        'SELECT snmp_community, snmp_auth_passphrase, snmp_priv_passphrase,
+                                snmp_v3_profile_id, snmp_version
+                         FROM cooling_units WHERE cooling_unit_id = ?',
+                        [$uid]
+                    );
+                } catch (Throwable $e) {
+                    // Pre-v3-column installs: Schema ensure adds columns
+                    try {
+                        $prev = Database::fetchOne(
+                            'SELECT snmp_community, snmp_v3_profile_id, snmp_version
+                             FROM cooling_units WHERE cooling_unit_id = ?',
+                            [$uid]
+                        );
+                    } catch (Throwable $e2) {
+                        $prev = null;
+                    }
+                }
+                $row = cooling_unit_finalize_snmp($row, $prev ?: null);
                 $row['updated_at'] = date('Y-m-d H:i:s');
                 Database::update('cooling_units', $row, 'cooling_unit_id = :id', [':id' => $uid]);
                 AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'update', 'cooling_unit', $uid, [
                     'name' => $row['name'],
                 ]);
-                App::flash('success', 'Cooling unit updated.');
+                $msg = 'Cooling unit updated.';
+                if ((string)($row['snmp_version'] ?? '') === '3' && !empty($row['snmp_v3_profile_id'])) {
+                    $msg = 'Cooling unit updated. SNMPv3 credentials applied from the selected profile.';
+                } elseif ((string)($row['snmp_version'] ?? '') === '3' && empty($row['snmp_security_name'])) {
+                    $msg = 'Cooling unit updated. SNMPv3 is set but no user/security name was saved — select a profile or enter the v3 user.';
+                }
+                App::flash('success', $msg);
                 App::redirect('pages/cooling_units.php?id=' . $uid);
             }
+            $row = cooling_unit_finalize_snmp($row, null);
             $id = Database::insert('cooling_units', $row);
             AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'create', 'cooling_unit', (int)$id, [
                 'name' => $row['name'],

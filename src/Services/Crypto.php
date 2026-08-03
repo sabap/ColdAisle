@@ -195,6 +195,7 @@ class Crypto
             ['snmp_targets', 'target_id', ['auth_passphrase', 'priv_passphrase']],
             ['devices', 'device_id', ['snmp_community', 'snmp_v3_auth_pass', 'snmp_v3_priv_pass']],
             ['pdus', 'pdu_id', ['snmp_community', 'snmp_auth_passphrase', 'snmp_priv_passphrase']],
+            ['cooling_units', 'cooling_unit_id', ['snmp_community', 'snmp_auth_passphrase', 'snmp_priv_passphrase']],
         ];
 
         foreach ($jobs as [$table, $pk, $cols]) {
