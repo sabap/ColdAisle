@@ -136,6 +136,136 @@ try {
 } catch (Throwable $e) {
 }
 
+// 24h site power series for sparkline (downsampled)
+$powerHistory = ['t' => [], 'kw' => [], 'points' => 0];
+try {
+    if (class_exists('PowerHistoryService')) {
+        $series = PowerHistoryService::series('site', null, 24);
+        $t = $series['series']['t'] ?? [];
+        $kw = $series['series']['kw'] ?? [];
+        $n = count($t);
+        // Cap ~48 points for lightweight TV clients
+        $step = $n > 48 ? (int)ceil($n / 48) : 1;
+        for ($i = 0; $i < $n; $i += $step) {
+            $powerHistory['t'][] = $t[$i];
+            $powerHistory['kw'][] = $kw[$i] ?? null;
+        }
+        $powerHistory['points'] = count($powerHistory['t']);
+        if (!empty($series['summary']['kw'])) {
+            $power['kw_avg_24h'] = $series['summary']['kw']['avg'] ?? null;
+            $power['kw_max_24h'] = $series['summary']['kw']['max'] ?? null;
+            $power['kw_min_24h'] = $series['summary']['kw']['min'] ?? null;
+        }
+    }
+} catch (Throwable $e) {
+    App::log('NOC power history: ' . $e->getMessage(), 'warning');
+}
+
+// Power zones with live load
+$zones = [];
+try {
+    $zones = Database::fetchAll(
+        'SELECT z.zone_id, z.name, z.color_hex, z.feed_type, z.max_kw, z.voltage,
+                dc.name AS dc_name,
+                (SELECT COUNT(*) FROM pdus p WHERE p.zone_id = z.zone_id AND p.is_active = 1) AS pdu_count,
+                (SELECT ISNULL(SUM(p.last_poll_watts),0) FROM pdus p
+                 WHERE p.zone_id = z.zone_id AND p.is_active = 1 AND p.last_poll_watts IS NOT NULL) AS watts
+         FROM power_zones z
+         LEFT JOIN datacenters dc ON dc.datacenter_id = z.datacenter_id
+         ORDER BY dc.name, z.name'
+    );
+    foreach ($zones as &$z) {
+        $w = (float)($z['watts'] ?? 0);
+        $z['kw'] = round($w / 1000.0, 3);
+        $maxKw = isset($z['max_kw']) && $z['max_kw'] !== null && $z['max_kw'] !== ''
+            ? (float)$z['max_kw'] : null;
+        $z['max_kw'] = $maxKw;
+        $z['util_pct'] = ($maxKw !== null && $maxKw > 0)
+            ? round(100.0 * $z['kw'] / $maxKw, 1)
+            : null;
+        $z['pdu_count'] = (int)($z['pdu_count'] ?? 0);
+        unset($z['watts']);
+    }
+    unset($z);
+} catch (Throwable $e) {
+    $zones = [];
+}
+
+// Cooling inventory snapshot (aggregates over all units; list is top N)
+$cooling = [
+    'units' => $metrics['cooling_units'],
+    'primary' => 0,
+    'standby' => 0,
+    'rated_kw' => 0.0,
+    'snmp_on' => 0,
+    'list' => [],
+];
+try {
+    $cooling['primary'] = (int)Database::fetchValue(
+        "SELECT COUNT(*) FROM cooling_units WHERE is_active = 1 AND unit_role = 'primary'"
+    );
+    $cooling['standby'] = (int)Database::fetchValue(
+        "SELECT COUNT(*) FROM cooling_units WHERE is_active = 1 AND unit_role = 'standby'"
+    );
+    $cooling['snmp_on'] = (int)Database::fetchValue(
+        'SELECT COUNT(*) FROM cooling_units WHERE is_active = 1 AND snmp_enabled = 1'
+    );
+    $cooling['rated_kw'] = round((float)Database::fetchValue(
+        'SELECT ISNULL(SUM(rated_kw_cooling),0) FROM cooling_units WHERE is_active = 1'
+    ), 1);
+    $cuRows = Database::fetchAll(
+        'SELECT TOP 12 cooling_unit_id, name, unit_type, unit_role, status,
+                rated_kw_cooling, snmp_enabled, snmp_last_poll_at, primary_ip
+         FROM cooling_units WHERE is_active = 1 ORDER BY name'
+    );
+    foreach ($cuRows as $cu) {
+        $cooling['list'][] = [
+            'name' => (string)$cu['name'],
+            'type' => (string)($cu['unit_type'] ?? ''),
+            'role' => (string)($cu['unit_role'] ?? ''),
+            'status' => (string)($cu['status'] ?? ''),
+            'rated_kw' => $cu['rated_kw_cooling'] !== null ? (float)$cu['rated_kw_cooling'] : null,
+            'snmp' => !empty($cu['snmp_enabled']),
+            'last_poll' => $cu['snmp_last_poll_at'] ?? null,
+        ];
+    }
+} catch (Throwable $e) {
+}
+
+// Hottest env sensors (for cooling panel)
+$hotSensors = [];
+try {
+    $hotRows = Database::fetchAll(
+        "SELECT TOP 8 sensor_id, name, sensor_kind, last_value, last_humidity, unit, last_seen_at,
+                warn_high, crit_high
+         FROM env_sensors
+         WHERE is_active = 1 AND last_value IS NOT NULL
+           AND sensor_kind IN ('temperature','temp_humidity','dew_point')
+         ORDER BY last_value DESC"
+    );
+    foreach ($hotRows as $hs) {
+        $cVal = (float)$hs['last_value'];
+        $disp = $cVal;
+        $sym = '°C';
+        if (class_exists('TempUnitService')) {
+            $disp = TempUnitService::fromC($cVal) ?? $cVal;
+            $sym = TempUnitService::symbol();
+        }
+        $st = function_exists('env_sensor_threshold_status')
+            ? env_sensor_threshold_status($cVal, $hs)
+            : 'unknown';
+        $hotSensors[] = [
+            'name' => (string)$hs['name'],
+            'value' => round($disp, 1),
+            'unit' => $sym,
+            'status' => $st,
+            'humidity' => isset($hs['last_humidity']) && $hs['last_humidity'] !== null && $hs['last_humidity'] !== ''
+                ? (float)$hs['last_humidity'] : null,
+        ];
+    }
+} catch (Throwable $e) {
+}
+
 $out = [
     'ok' => true,
     'updated_at' => gmdate('c'),
@@ -146,6 +276,10 @@ $out = [
     'metrics' => $metrics,
     'env' => $env,
     'power' => $power,
+    'power_history' => $powerHistory,
+    'zones' => $zones,
+    'cooling' => $cooling,
+    'hot_sensors' => $hotSensors,
 ];
 
 if ($includeScene) {
