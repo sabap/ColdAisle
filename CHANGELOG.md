@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **Site temperature unit (°C / °F):** Settings → General chooses Celsius or Fahrenheit for the whole site. Values stay stored in °C; UI, charts, thresholds, cooling setpoints, and env alert emails convert for display/entry. Humidity stays %RH.
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.41] - 2026-08-03
+
+### New features
+
+- **Site temperature unit (°C / °F):** Settings → General chooses Celsius or Fahrenheit for the whole site. Values stay stored in °C; UI, charts, thresholds, cooling setpoints, and env alert emails convert for display/entry. Humidity stays %RH.
+
+---
 ## [0.3.40] - 2026-08-03
 
 ### Bug fixes
