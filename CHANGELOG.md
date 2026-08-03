@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.3.43] - 2026-08-03
+
+### Enhancements
+
+- **NOC wall panels:** pinned spinning 3D; rotating Overview / Power (24h kW sparkline) / Zone cards / Cooling + hottest sensors; Overview mini-trend + zone chips; tab progress bar; tabs pin a panel temporarily.
+
+---
 ## [0.3.42] - 2026-08-03
 
 ### New features
