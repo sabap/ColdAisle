@@ -258,9 +258,10 @@ class SnmpDiscover
             '1.3.6.1.4.1.3808.1.1.1.4.2.5.0',
         ];
 
-        if ($looksLiebert) {
-            // Air handlers: Liebert first; skip thrashing on APC PDU OIDs
-            $leafGets = array_merge($leafSys, $leafLiebert, $leafEms);
+        $coolingFocus = $looksLiebert || $familyHint === 'cooling';
+        if ($coolingFocus) {
+            // Air handlers: only sys + Liebert leaves (EMS leaves burn IIS timeout and hide 476)
+            $leafGets = array_merge($leafSys, $leafLiebert);
         } elseif ($looksEms && !$looksPdu) {
             $leafGets = array_merge($leafSys, $leafEms, $leafPdu);
         } elseif ($looksPdu && !$looksEms) {
@@ -272,8 +273,10 @@ class SnmpDiscover
 
         $leafStarted = microtime(true);
         $leafHits = 0;
+        $leafLiebertHits = 0;
         $emsTempHits = 0;
         $emsHumHits = 0;
+        $leafBudget = $coolingFocus ? 5.0 : self::LEAF_PHASE_BUDGET_SEC;
         foreach ($leafGets as $oid) {
             if (isset($collected[$oid])) {
                 continue;
@@ -281,15 +284,20 @@ class SnmpDiscover
             if (count($collected) >= self::MAX_OIDS) {
                 break;
             }
-            if ((microtime(true) - $leafStarted) >= self::LEAF_PHASE_BUDGET_SEC) {
+            if ((microtime(true) - $leafStarted) >= $leafBudget) {
                 $logStep('leaf_budget_exceeded hits=' . $leafHits);
                 break;
             }
             // Enough EMS live metrics — stop thrashing on PDU OIDs
-            if ($emsTempHits >= 1 && $emsHumHits >= 1 && $leafHits >= 3
+            if (!$coolingFocus && $emsTempHits >= 1 && $emsHumHits >= 1 && $leafHits >= 3
                 && (microtime(true) - $leafStarted) > 2.0
             ) {
                 $logStep('leaf_early_stop ems_live hits=' . $leafHits);
+                break;
+            }
+            // A few Liebert hits is enough — move on to walks for the full table
+            if ($coolingFocus && $leafLiebertHits >= 3) {
+                $logStep('leaf_early_stop liebert hits=' . $leafLiebertHits);
                 break;
             }
             $v = self::snmpGet($hostPort, $version, $creds, $oid, self::LEAF_TIMEOUT_USEC);
@@ -301,6 +309,9 @@ class SnmpDiscover
                     'raw_key' => $oid,
                 ];
                 $leafHits++;
+                if (str_starts_with($oid, '1.3.6.1.4.1.476.')) {
+                    $leafLiebertHits++;
+                }
                 if (str_contains($oid, '10.3.13.1.1.3.') || str_contains($oid, '10.2.3.2.1.4.')
                     || str_contains($oid, '10.3.5.1.1.3.')
                 ) {
@@ -314,6 +325,7 @@ class SnmpDiscover
             }
         }
         $logStep('leaf_gets collected=' . count($collected) . ' hits=' . $leafHits
+            . ' liebertLeaf=' . $leafLiebertHits
             . ' emsT=' . $emsTempHits . ' emsH=' . $emsHumHits);
 
         // Narrow walks only if still needed and under wall-clock deadline
@@ -325,22 +337,45 @@ class SnmpDiscover
                 $liebertHits++;
             }
         }
-        if ($haveEmsLive && !$looksLiebert) {
+        $walkDeadline = $coolingFocus ? 18.0 : self::WALK_DEADLINE_SEC;
+        $walkRootStats = [];
+        if ($haveEmsLive && !$coolingFocus) {
             $logStep('walks_skipped have_ems_live elapsed=' . round($elapsed, 2));
-        } elseif ($looksLiebert && $liebertHits >= 4) {
+        } elseif ($liebertHits >= 6 && !$coolingFocus) {
             $logStep('walks_skipped have_liebert_live hits=' . $liebertHits);
-        } elseif ($elapsed < self::WALK_DEADLINE_SEC && count($collected) < self::MAX_OIDS) {
+        } elseif ($elapsed < $walkDeadline && count($collected) < self::MAX_OIDS) {
             self::setOidOutputFormat('numeric');
-            $roots = $looksLiebert ? self::WALK_ROOTS_LIEBERT : self::WALK_ROOTS;
-            // Cooling family with no Liebert hits yet: try Liebert roots even if sysDescr was generic
+            // Cooling: enterprise 476 first (before MIB-2 fill), then system for identity
+            $roots = $coolingFocus
+                ? array_values(array_unique(array_merge(
+                    [
+                        '1.3.6.1.4.1.476',
+                        '1.3.6.1.4.1.476.1.42',
+                    ],
+                    self::WALK_ROOTS_LIEBERT
+                )))
+                : self::WALK_ROOTS;
             if ($familyHint === 'cooling' && !$looksLiebert) {
-                $roots = array_values(array_unique(array_merge(self::WALK_ROOTS_LIEBERT, self::WALK_ROOTS)));
+                $roots = array_values(array_unique(array_merge($roots, self::WALK_ROOTS)));
             }
-            self::collectWalks($hostPort, $version, $creds, $collected, $errors, $roots);
+            $walkRootStats = self::collectWalks($hostPort, $version, $creds, $collected, $errors, $roots);
             $logStep('walks collected=' . count($collected) . ' errors=' . count($errors)
-                . ' roots=' . ($looksLiebert || $familyHint === 'cooling' ? 'liebert+' : 'default'));
+                . ' roots=' . ($coolingFocus ? 'liebert+' : 'default'));
         } else {
             $logStep('walks_skipped elapsed=' . round($elapsed, 2));
+        }
+
+        // Recount enterprise after walks
+        $liebertHits = 0;
+        $enterpriseHits = 0;
+        foreach ($collected as $oidKey => $_) {
+            $ok = (string)$oidKey;
+            if (str_starts_with($ok, '1.3.6.1.4.1.476')) {
+                $liebertHits++;
+            }
+            if (str_starts_with($ok, '1.3.6.1.4.1.') && !str_starts_with($ok, '1.3.6.1.4.1.99999')) {
+                $enterpriseHits++;
+            }
         }
 
         // Always keep sysDescr in collection for scoring
@@ -537,9 +572,18 @@ class SnmpDiscover
             }
         }
 
-        if ($mibsLoaded > 0 && $namedCount === 0 && $indexSize === 0) {
+        $msg .= ' Enterprise objects: ' . (int)$enterpriseHits
+            . ' (Liebert/Emerson 476: ' . (int)$liebertHits . ').';
+        if ($coolingFocus && $liebertHits === 0) {
+            $msg .= ' Auth works (sysDescr) but enterprise 1.3.6.1.4.1.476 returned nothing — '
+                . 'usually the SNMPv3 user MIB view on the Liebert/iCOM card only allows MIB-2. '
+                . 'On the unit web UI: allow Emerson enterprise (or “all”), and set SNMP Context on the unit in ColdAisle if the card uses one.';
+            if ($errors) {
+                $msg .= ' Walk errors: ' . implode('; ', array_slice($errors, 0, 3)) . '.';
+            }
+        } elseif ($mibsLoaded > 0 && $namedCount === 0 && $indexSize === 0) {
             $msg .= ' Could not parse OBJECT-TYPE assignments from uploaded MIBs.';
-        } elseif ($indexSize > 0 && $namedCount === 0) {
+        } elseif ($indexSize > 0 && $namedCount === 0 && $enterpriseHits === 0) {
             $msg .= ' Offline MIB index built but no walk OIDs matched (different enterprise tree or incomplete IMPORT chain in the MIB file).';
         }
 
@@ -555,6 +599,14 @@ class SnmpDiscover
             'sysDescr' => is_string($sysDescr) ? self::utf8Safe($sysDescr) : null,
             'candidates' => $candidates,
             'proposed_map' => $safeProposed,
+            'diagnostics' => [
+                'family' => $familyHint,
+                'cooling_focus' => $coolingFocus,
+                'liebert_objects' => $liebertHits,
+                'enterprise_objects' => $enterpriseHits,
+                'walk_roots' => $walkRootStats,
+                'walk_errors' => array_slice($errors, 0, 8),
+            ],
             'serial_no' => isset($serialHit['value']) ? self::utf8Safe((string)$serialHit['value']) : null,
             'serial_oid' => $serialHit['oid'] ?? null,
             'walk_count' => count($collected),
@@ -739,6 +791,7 @@ class SnmpDiscover
      * @param array<string,array{raw:mixed,name:?string,module:?string,raw_key:string}> $collected
      * @param list<string> $errors
      * @param list<string>|null $roots walk roots (default WALK_ROOTS)
+     * @return list<array{root:string,ok:bool,added:int,error:?string}>
      */
     private static function collectWalks(
         string $hostPort,
@@ -747,9 +800,10 @@ class SnmpDiscover
         array &$collected,
         array &$errors,
         ?array $roots = null
-    ): void {
+    ): array {
         $consecutiveFails = 0;
         $rootList = $roots ?? self::WALK_ROOTS;
+        $stats = [];
         foreach ($rootList as $root) {
             if (count($collected) >= self::MAX_OIDS) {
                 break;
@@ -757,7 +811,7 @@ class SnmpDiscover
             // After several empty trees, stop — agent already answered probe; further
             // enterprise branches often just burn IIS request time.
             // Liebert trees: allow more misses (many sub-branches empty on some cards).
-            $failLimit = ($roots !== null && $roots !== self::WALK_ROOTS) ? 8 : 4;
+            $failLimit = ($roots !== null && $roots !== self::WALK_ROOTS) ? 10 : 4;
             if ($consecutiveFails >= $failLimit && count($collected) > 5) {
                 break;
             }
@@ -783,19 +837,30 @@ class SnmpDiscover
                         $collected[$oid]['raw_key'] = $parsed['raw_key'];
                     }
                     if (count($collected) >= self::MAX_OIDS) {
-                        return;
+                        $stats[] = [
+                            'root' => $root,
+                            'ok' => true,
+                            'added' => count($collected) - $before,
+                            'error' => null,
+                        ];
+                        return $stats;
                     }
                 }
-                if (count($collected) === $before) {
+                $added = count($collected) - $before;
+                $stats[] = ['root' => $root, 'ok' => true, 'added' => $added, 'error' => null];
+                if ($added === 0) {
                     $consecutiveFails++;
                 } else {
                     $consecutiveFails = 0;
                 }
             } catch (Throwable $e) {
-                $errors[] = $root . ': ' . $e->getMessage();
+                $err = $e->getMessage();
+                $errors[] = $root . ': ' . $err;
+                $stats[] = ['root' => $root, 'ok' => false, 'added' => 0, 'error' => $err];
                 $consecutiveFails++;
             }
         }
+        return $stats;
     }
 
     /**
@@ -921,7 +986,54 @@ class SnmpDiscover
     private static function snmpWalk(string $hostPort, string $version, array $creds, string $root): array
     {
         $result = false;
+        $root = ltrim($root, '.');
+        $timeout = self::WALK_TIMEOUT_USEC;
+        if (preg_match('/^1\.3\.6\.1\.4\.1\.476(\.|$)/', $root)) {
+            $timeout = 1_500_000;
+        }
         try {
+            // Prefer SNMP class: supports SNMPv3 context + bounded timeouts
+            if (class_exists('SNMP')) {
+                $ver = match (strtolower($version)) {
+                    '1' => constant('SNMP::VERSION_1'),
+                    '3' => constant('SNMP::VERSION_3'),
+                    default => constant('SNMP::VERSION_2c'),
+                };
+                $communityOrUser = ($version === '3')
+                    ? (string)($creds['security_name'] ?? '')
+                    : (string)($creds['community'] ?? 'public');
+                /** @var \SNMP $sess */
+                $sess = new \SNMP($ver, $hostPort, $communityOrUser ?: 'public', $timeout, self::WALK_RETRIES);
+                if (defined('SNMP_VALUE_PLAIN')) {
+                    $sess->valueretrieval = constant('SNMP_VALUE_PLAIN');
+                }
+                $sess->exceptions_enabled = 0;
+                if (defined('SNMP_OID_OUTPUT_NUMERIC')) {
+                    $sess->oid_output_format = constant('SNMP_OID_OUTPUT_NUMERIC');
+                }
+                if ($version === '3') {
+                    $sec = self::secLevel($creds);
+                    $authProto = self::normalizeSnmpProtocol((string)($creds['auth_protocol'] ?? 'SHA'), 'auth');
+                    $privProto = self::normalizeSnmpProtocol((string)($creds['priv_protocol'] ?? 'AES'), 'priv');
+                    $sess->setSecurity(
+                        $sec,
+                        $authProto,
+                        (string)($creds['auth_passphrase'] ?? ''),
+                        $privProto,
+                        (string)($creds['priv_passphrase'] ?? ''),
+                        (string)($creds['context'] ?? '')
+                    );
+                }
+                $walked = @$sess->walk($root, true);
+                if (is_object($sess)) {
+                    @$sess->close();
+                }
+                if (is_array($walked) && $walked !== []) {
+                    return $walked;
+                }
+                throw new RuntimeException('empty walk (no objects — ACL, wrong tree, or end of MIB)');
+            }
+
             if ($version === '3' && function_exists('snmp3_real_walk')) {
                 $sec = self::secLevel($creds);
                 $authProto = self::normalizeSnmpProtocol((string)($creds['auth_protocol'] ?? 'SHA'), 'auth');
@@ -931,24 +1043,23 @@ class SnmpDiscover
                 $privPass = (string)($creds['priv_passphrase'] ?? '');
                 $result = @snmp3_real_walk(
                     $hostPort, $user, $sec, $authProto, $authPass, $privProto, $privPass, $root,
-                    self::WALK_TIMEOUT_USEC, self::WALK_RETRIES
+                    $timeout, self::WALK_RETRIES
                 );
             } else {
                 $community = (string)($creds['community'] ?? 'public');
                 if ($version === '1' && function_exists('snmprealwalk')) {
-                    // snmprealwalk is typically used for v1/v2c
-                    $result = @snmprealwalk($hostPort, $community, $root, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
+                    $result = @snmprealwalk($hostPort, $community, $root, $timeout, self::WALK_RETRIES);
                 } elseif (function_exists('snmp2_real_walk')) {
-                    $result = @snmp2_real_walk($hostPort, $community, $root, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
+                    $result = @snmp2_real_walk($hostPort, $community, $root, $timeout, self::WALK_RETRIES);
                 } elseif (function_exists('snmprealwalk')) {
-                    $result = @snmprealwalk($hostPort, $community, $root, self::WALK_TIMEOUT_USEC, self::WALK_RETRIES);
+                    $result = @snmprealwalk($hostPort, $community, $root, $timeout, self::WALK_RETRIES);
                 }
             }
         } catch (Throwable $e) {
             throw new RuntimeException('Walk failed for ' . $root . ': ' . $e->getMessage());
         }
-        if ($result === false || !is_array($result)) {
-            throw new RuntimeException('Walk failed for ' . $root);
+        if ($result === false || !is_array($result) || $result === []) {
+            throw new RuntimeException('Walk failed for ' . $root . ' (empty or no response)');
         }
         return $result;
     }
