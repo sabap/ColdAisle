@@ -86,18 +86,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             $sid = (int)($_POST['sensor_id'] ?? 0);
             $val = $_POST['value'] ?? '';
             if ($sid <= 0 || $val === '' || !is_numeric($val)) {
-                throw new RuntimeException('Sensor and numeric value required.');
+                throw new RuntimeException('Sensor and numeric temperature/primary value required.');
             }
             $value = (float)$val;
-            Database::insert('env_readings', [
-                'sensor_id' => $sid,
-                'value' => $value,
-            ]);
-            Database::update('env_sensors', [
+            $humIn = $_POST['humidity'] ?? '';
+            $humVal = ($humIn !== '' && is_numeric($humIn)) ? (float)$humIn : null;
+            $now = date('Y-m-d H:i:s');
+            $sensorRow = Database::fetchOne('SELECT * FROM env_sensors WHERE sensor_id = ?', [$sid]);
+            $kind = (string)($sensorRow['sensor_kind'] ?? 'temperature');
+
+            try {
+                Database::insert('env_readings', [
+                    'sensor_id' => $sid,
+                    'value' => $value,
+                    'recorded_at' => $now,
+                    'metric' => $kind === 'humidity' ? 'humidity' : 'temperature',
+                ]);
+            } catch (Throwable $e) {
+                Database::insert('env_readings', [
+                    'sensor_id' => $sid,
+                    'value' => $value,
+                    'recorded_at' => $now,
+                ]);
+            }
+            $fields = [
                 'last_value' => $value,
-                'last_seen_at' => date('Y-m-d H:i:s'),
-                'updated_at' => date('Y-m-d H:i:s'),
-            ], 'sensor_id = :id', [':id' => $sid]);
+                'last_seen_at' => $now,
+                'updated_at' => $now,
+            ];
+            if ($humVal !== null && ($kind === 'temp_humidity' || $kind === 'humidity')) {
+                $fields['last_humidity'] = $humVal;
+                try {
+                    Database::insert('env_readings', [
+                        'sensor_id' => $sid,
+                        'value' => $humVal,
+                        'recorded_at' => $now,
+                        'metric' => 'humidity',
+                    ]);
+                } catch (Throwable $e) {
+                    // ignore
+                }
+            }
+            Database::update('env_sensors', $fields, 'sensor_id = :id', [':id' => $sid]);
+
+            // Threshold alerts after manual entry
+            if (class_exists('EnvSensorAlertService')) {
+                try {
+                    $fresh = Database::fetchOne('SELECT * FROM env_sensors WHERE sensor_id = ?', [$sid]);
+                    if ($fresh) {
+                        EnvSensorAlertService::evaluateSensor($fresh);
+                    }
+                } catch (Throwable $e) {
+                    // ignore
+                }
+            }
+
             App::flash('success', 'Reading recorded.');
             App::redirect('pages/env_sensors.php?id=' . $sid);
         }
@@ -127,12 +170,14 @@ if ($sensorId > 0) {
                 rm.name AS room_name,
                 cu.name AS cooling_unit_name,
                 p.name AS pdu_name,
-                c.name AS cabinet_name
+                c.name AS cabinet_name,
+                d.label AS device_label
          FROM env_sensors s
          LEFT JOIN rooms rm ON rm.room_id = s.room_id
          LEFT JOIN cooling_units cu ON cu.cooling_unit_id = s.cooling_unit_id
          LEFT JOIN pdus p ON p.pdu_id = s.pdu_id
          LEFT JOIN cabinets c ON c.cabinet_id = s.cabinet_id
+         LEFT JOIN devices d ON d.device_id = s.device_id
          WHERE s.sensor_id = ?',
         [$sensorId]
     );
@@ -143,16 +188,39 @@ if ($sensorId > 0) {
     $readings = [];
     try {
         $readings = Database::fetchAll(
-            'SELECT TOP 50 reading_id, value, recorded_at
+            'SELECT TOP 80 reading_id, value, recorded_at, metric
              FROM env_readings WHERE sensor_id = ?
              ORDER BY recorded_at DESC',
             [$sensorId]
         );
     } catch (Throwable $e) {
-        $readings = [];
+        try {
+            $readings = Database::fetchAll(
+                'SELECT TOP 80 reading_id, value, recorded_at
+                 FROM env_readings WHERE sensor_id = ?
+                 ORDER BY recorded_at DESC',
+                [$sensorId]
+            );
+        } catch (Throwable $e2) {
+            $readings = [];
+        }
     }
     $val = $s['last_value'] !== null && $s['last_value'] !== '' ? (float)$s['last_value'] : null;
+    $hum = isset($s['last_humidity']) && $s['last_humidity'] !== null && $s['last_humidity'] !== ''
+        ? (float)$s['last_humidity'] : null;
+    $kindKey = (string)($s['sensor_kind'] ?? 'temperature');
+    $isCombo = $kindKey === 'temp_humidity';
     $st = env_sensor_threshold_status($val, $s);
+    $stHum = ($hum !== null && ($isCombo || $kindKey === 'humidity'))
+        ? env_sensor_threshold_status($hum, [
+            'warn_high' => class_exists('EnvSensorAlertService')
+                ? EnvSensorAlertService::settings()['rh_warn'] : 70,
+            'crit_high' => class_exists('EnvSensorAlertService')
+                ? EnvSensorAlertService::settings()['rh_crit'] : 90,
+            'warn_low' => 20,
+            'crit_low' => null,
+        ])
+        : 'unknown';
 
     layout_header('Sensor: ' . $s['name'], $user, 'env_sensors');
     ?>
@@ -161,9 +229,11 @@ if ($sensorId > 0) {
             <a class="text-muted" href="<?= App::e(App::url('pages/env_sensors.php')) ?>">← All sensors</a>
             <h2 class="mt-1 mb-0"><?= App::e($s['name']) ?></h2>
             <p class="text-muted mb-0" style="font-size:.9rem">
-                <?= App::e($kinds[$s['sensor_kind'] ?? ''] ?? '') ?>
-                · <?= App::e($hosts[$s['host_type'] ?? ''] ?? '') ?>
+                <?= App::e($kinds[$kindKey] ?? $kindKey) ?>
                 · <?= App::e($placements[$s['placement'] ?? ''] ?? '') ?>
+                <?php if (!empty($s['cabinet_name'])): ?>
+                    · <?= App::e((string)$s['cabinet_name']) ?>
+                <?php endif; ?>
             </p>
         </div>
         <a class="btn btn-secondary" href="<?= App::e(App::url('pages/cooling.php')) ?>">Dashboard</a>
@@ -171,45 +241,40 @@ if ($sensorId > 0) {
 
     <div class="metrics power-metrics mb-2">
         <div class="metric-card <?= $st === 'crit' ? 'danger' : ($st === 'warn' ? 'warning' : 'success') ?>">
-            <div class="label">Last value</div>
+            <div class="label"><?= $kindKey === 'humidity' ? 'Humidity' : 'Temperature' ?></div>
             <div class="value">
                 <?php if ($val !== null): ?>
-                    <?= App::e(rtrim(rtrim(number_format($val, 2, '.', ''), '0'), '.')) ?>
-                    <?php
-                    $hum = $s['last_humidity'] ?? null;
-                    if (($s['sensor_kind'] ?? '') === 'temp_humidity' && $hum !== null && $hum !== ''):
-                        $hv = (float)$hum;
-                        ?>
-                        <span class="metric-unit">°C</span>
-                        <span class="text-muted" style="font-size:.85rem;font-weight:500">
-                            / <?= App::e(rtrim(rtrim(number_format($hv, 1, '.', ''), '0'), '.')) ?>%RH
-                        </span>
-                    <?php else: ?>
-                        <span class="metric-unit"><?= App::e((string)($s['unit'] ?? '')) ?></span>
-                    <?php endif; ?>
+                    <?= App::e(rtrim(rtrim(number_format($val, 1, '.', ''), '0'), '.') ?: '0') ?>
+                    <span class="metric-unit"><?= $kindKey === 'humidity' ? '%RH' : '°C' ?></span>
                 <?php else: ?>
                     —
                 <?php endif; ?>
             </div>
-            <div class="sub">status: <?= App::e($st) ?><?= !empty($s['snmp_index']) ? ' · key ' . App::e((string)$s['snmp_index']) : '' ?></div>
+            <div class="sub">status: <?= App::e($st) ?><?= !empty($s['snmp_index']) ? ' · ' . App::e((string)$s['snmp_index']) : '' ?></div>
         </div>
+        <?php if ($isCombo): ?>
+        <div class="metric-card <?= $stHum === 'crit' ? 'danger' : ($stHum === 'warn' ? 'warning' : 'success') ?>">
+            <div class="label">Relative humidity</div>
+            <div class="value">
+                <?php if ($hum !== null): ?>
+                    <?= App::e(rtrim(rtrim(number_format($hum, 0, '.', ''), '0'), '.') ?: '0') ?>
+                    <span class="metric-unit">%RH</span>
+                <?php else: ?>
+                    —
+                <?php endif; ?>
+            </div>
+            <div class="sub">status: <?= App::e($stHum) ?></div>
+        </div>
+        <?php endif; ?>
         <div class="metric-card">
             <div class="label">Host</div>
             <div class="value" style="font-size:1rem">
-                <?php
-                echo App::e(match ($s['host_type'] ?? '') {
-                    'cooling_unit' => (string)($s['cooling_unit_name'] ?? 'Cooling unit'),
-                    'pdu' => (string)($s['pdu_name'] ?? 'PDU'),
-                    'cabinet' => (string)($s['cabinet_name'] ?? 'Cabinet'),
-                    'room' => (string)($s['room_name'] ?? 'Room'),
-                    default => (string)($hosts[$s['host_type'] ?? ''] ?? 'Standalone'),
-                });
-                ?>
+                <?= App::e(env_sensor_host_display($s, $hosts)) ?>
             </div>
             <div class="sub"><?= App::e((string)($s['location_label'] ?? $s['room_name'] ?? '')) ?></div>
         </div>
         <div class="metric-card">
-            <div class="label">Thresholds</div>
+            <div class="label">Thresholds (primary)</div>
             <div class="value" style="font-size:.95rem">
                 W <?= App::e(($s['warn_low'] ?? '—') . ' / ' . ($s['warn_high'] ?? '—')) ?>
             </div>
@@ -220,7 +285,13 @@ if ($sensorId > 0) {
         <div class="metric-card">
             <div class="label">Last seen</div>
             <div class="value" style="font-size:.95rem"><?= App::e((string)($s['last_seen_at'] ?? '—')) ?></div>
-            <div class="sub"><?= !empty($s['snmp_oid']) ? 'OID set' : 'manual / host poll later' ?></div>
+            <div class="sub">
+                <?php if (!empty($s['device_id'])): ?>
+                    via host poll / manual
+                <?php else: ?>
+                    manual
+                <?php endif; ?>
+            </div>
         </div>
     </div>
 
@@ -230,25 +301,56 @@ if ($sensorId > 0) {
            href="<?= App::e(App::url('pages/devices.php?id=' . (int)$s['device_id'])) ?>">
             Open host device
         </a>
+        <span class="text-muted" style="font-size:.85rem;margin-left:.5rem">
+            Enable <strong>Scheduled poll</strong> on the host so this sensor refreshes automatically.
+        </span>
     </p>
     <?php endif; ?>
+
+    <div class="card power-history-wide mb-2" data-env-history data-id="<?= (int)$sensorId ?>" data-hours="24">
+        <div class="card-header flex-between">
+            <h3 class="mt-0 mb-0" style="font-size:1rem">History (24h)</h3>
+            <span class="text-muted" style="font-size:.8rem" data-env-chart-status>Loading…</span>
+        </div>
+        <div class="card-body">
+            <div class="mb-2">
+                <div class="text-muted" style="font-size:.8rem;margin-bottom:.35rem">Temperature / primary</div>
+                <div data-env-series="temp" class="env-chart-host" style="min-height:170px"></div>
+            </div>
+            <div data-env-hum-wrap <?= ($isCombo || $kindKey === 'humidity') ? '' : 'hidden' ?>>
+                <div class="text-muted" style="font-size:.8rem;margin-bottom:.35rem">Humidity</div>
+                <div data-env-series="humidity" class="env-chart-host" style="min-height:150px"></div>
+            </div>
+        </div>
+    </div>
 
     <?php if ($canEdit): ?>
     <div class="card mb-2">
         <div class="card-header"><h3 class="mt-0 mb-0" style="font-size:1rem">Manual reading</h3></div>
         <div class="card-body">
-            <form method="post" class="form-grid form-grid-3" style="max-width:28rem">
+            <form method="post" class="form-grid form-grid-3" style="max-width:36rem">
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                 <input type="hidden" name="action" value="record_reading">
                 <input type="hidden" name="sensor_id" value="<?= (int)$sensorId ?>">
-                <div class="form-row"><label>Value (<?= App::e((string)($s['unit'] ?? '')) ?>)</label>
-                    <input class="form-control" type="number" step="any" name="value" required></div>
+                <div class="form-row">
+                    <label><?= $kindKey === 'humidity' ? 'Humidity (%RH)' : 'Temperature (°C)' ?></label>
+                    <input class="form-control" type="number" step="any" name="value" required
+                           value="<?= $val !== null ? App::e((string)$val) : '' ?>">
+                </div>
+                <?php if ($isCombo): ?>
+                <div class="form-row">
+                    <label>Humidity (%RH)</label>
+                    <input class="form-control" type="number" step="any" name="humidity"
+                           value="<?= $hum !== null ? App::e((string)$hum) : '' ?>"
+                           placeholder="optional">
+                </div>
+                <?php endif; ?>
                 <div class="form-row" style="align-self:end">
                     <button type="submit" class="btn btn-primary">Record</button>
                 </div>
             </form>
             <p class="text-muted mb-0 mt-1" style="font-size:.8rem">
-                SNMP polling for probes will reuse site OID templates in a later slice; manual entry validates history now.
+                Prefer SNMP via host device Poll / scheduled poll. Manual entry still updates history and can fire threshold alerts.
             </p>
         </div>
     </div>
@@ -278,12 +380,17 @@ if ($sensorId > 0) {
                 <p class="text-muted p-2 mb-0">No readings yet.</p>
             <?php else: ?>
                 <table class="table table-sm">
-                    <thead><tr><th>When (UTC storage)</th><th>Value</th></tr></thead>
+                    <thead><tr><th>When (UTC)</th><th>Metric</th><th>Value</th></tr></thead>
                     <tbody>
-                    <?php foreach ($readings as $r): ?>
+                    <?php foreach ($readings as $r):
+                        $m = strtolower((string)($r['metric'] ?? ''));
+                        $mLab = $m === 'humidity' ? 'Humidity' : ($m === 'temperature' || $m === 'primary' || $m === '' ? 'Temp / primary' : $m);
+                        $unitR = ($m === 'humidity' || $kindKey === 'humidity') ? '%RH' : '°C';
+                        ?>
                         <tr>
                             <td><?= App::e((string)$r['recorded_at']) ?></td>
-                            <td><?= App::e((string)$r['value']) ?> <?= App::e((string)($s['unit'] ?? '')) ?></td>
+                            <td class="text-muted" style="font-size:.85rem"><?= App::e($mLab) ?></td>
+                            <td><?= App::e((string)$r['value']) ?> <?= App::e($unitR) ?></td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
@@ -291,6 +398,7 @@ if ($sensorId > 0) {
             <?php endif; ?>
         </div>
     </div>
+    <script src="<?= App::e(App::url('assets/js/env-charts.js')) ?>?v=1"></script>
     <?php
     layout_footer();
     return;

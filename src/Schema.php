@@ -524,6 +524,8 @@ class Schema
             self::ensureColumn('env_sensors', 'pos_z', 'DECIMAL(10,3) NULL');
             // Combo temp+humidity sensors: secondary last reading from SNMP poll
             self::ensureColumn('env_sensors', 'last_humidity', 'DECIMAL(14,4) NULL');
+            self::ensureColumn('env_sensors', 'last_alert_level', 'NVARCHAR(20) NULL');
+            self::ensureColumn('env_sensors', 'last_alert_at', 'DATETIME2 NULL');
             self::ensureTable(
                 'env_readings',
                 "CREATE TABLE env_readings (

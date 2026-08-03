@@ -358,6 +358,17 @@ class SnmpPoller
             App::log('EnvSensorPoll device_id=' . (int)$device['device_id'] . ': ' . $e->getMessage(), 'warning');
         }
 
+        // Threshold mail for env sensors on this device
+        $envAlerts = ['checked' => 0, 'alerted' => 0];
+        if (!empty($env['updated']) && class_exists('EnvSensorAlertService')) {
+            try {
+                $envAlerts = EnvSensorAlertService::evaluateAfterDevicePoll((int)$device['device_id']);
+            } catch (Throwable $e) {
+                App::log('EnvSensorAlert device_id=' . (int)$device['device_id'] . ': ' . $e->getMessage(), 'warning');
+            }
+        }
+        $env['alerts'] = $envAlerts;
+
         return [
             'watts' => $got['watts'],
             'amps' => $got['amps'],

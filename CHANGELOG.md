@@ -13,6 +13,12 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Env sensor refinements (4):**
+  - **Scheduled poll:** saving a site OID template on `env_monitor` / `env_module` turns on `snmp_auto_poll`; device UI reflects it and tips keep the Windows task path clear.
+  - **Threshold email alerts:** Settings → Environmental alerts (enable, recipients, cooldown, RH warn/crit); fires after SNMP poll and manual readings via `EnvSensorAlertService`.
+  - **Combo humidity:** list shows `°C / %RH`; sensor detail has a dedicated RH metric card and dual history series.
+  - **24h history chart:** SVG charts on sensor detail (`api/env_history.php` + `assets/js/env-charts.js`).
+
 ### Enhancements
 
 ### Bug fixes

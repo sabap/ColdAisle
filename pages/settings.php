@@ -222,6 +222,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             App::redirect('pages/settings.php#power-alerts');
         }
 
+        if ($section === 'env_alerts') {
+            if (!class_exists('EnvSensorAlertService')) {
+                throw new RuntimeException('EnvSensorAlertService is not installed. Deploy the latest release.');
+            }
+            $rawEmails = trim((string)($_POST['env_alerts_email'] ?? ''));
+            if ($rawEmails !== '') {
+                $parsed = EnvSensorAlertService::normalizeEmailList($rawEmails);
+                if (!$parsed) {
+                    throw new RuntimeException('Env alert email list has no valid addresses.');
+                }
+            }
+            EnvSensorAlertService::saveSettingsFromPost($_POST);
+            App::flash('success', 'Environmental alert settings saved.');
+            App::redirect('pages/settings.php#env-alerts');
+        }
+
         if ($section === 'snmp_schedule') {
             if (!class_exists('SnmpSchedulerService')) {
                 require_once dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php';
@@ -601,7 +617,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         // power_alerts / snmp_schedule use settings table only (redirect earlier or no config.php)
         if (!in_array($section, [
             'update_check', 'update_apply', 'update_backup_now', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
-            'power_alerts', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
+            'power_alerts', 'env_alerts', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
             'diagnostics', 'schema_ensure', 'smb_backup_save', 'smb_backup_test',
         ], true)) {
             $export = var_export($config, true);
@@ -634,6 +650,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#mail';
     } elseif ($secPost === 'power_alerts') {
         $redirHash = '#power-alerts';
+    } elseif ($secPost === 'env_alerts') {
+        $redirHash = '#env-alerts';
     }
     App::redirect('pages/settings.php' . $redirHash);
 }
@@ -659,6 +677,11 @@ $powerAlerts = class_exists('PowerAlertService')
     : [
         'enabled' => false, 'email' => '', 'warn_pct' => 75.0, 'crit_pct' => 90.0,
         'cooldown_min' => 60, 'hold_sec' => 120, 'util' => true, 'load_state' => true, 'ps' => true,
+    ];
+$envAlerts = class_exists('EnvSensorAlertService')
+    ? EnvSensorAlertService::settings()
+    : [
+        'enabled' => false, 'email' => '', 'cooldown_min' => 60, 'rh_warn' => 70.0, 'rh_crit' => 90.0,
     ];
 if (!class_exists('SnmpSchedulerService')
     && is_file(dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php')
@@ -1476,6 +1499,58 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
 
             <div class="form-row full">
                 <button class="btn btn-primary" type="submit">Save power alerts</button>
+            </div>
+        </form>
+        <?php endif; ?>
+    </div>
+</div>
+
+<div class="card" id="env-alerts">
+    <div class="card-header"><h2>Environmental alerts</h2></div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size:.9rem;margin-top:0">
+            After SNMP poll (or manual reading), compare each env sensor to its warn/crit thresholds
+            (temperature / primary) and optional RH limits for combo sensors. Emails require Settings → Email (SMTP).
+        </p>
+        <?php if (!class_exists('EnvSensorAlertService')): ?>
+            <p class="alert alert-error">EnvSensorAlertService is not deployed on this host.</p>
+        <?php else: ?>
+        <form method="post" class="form-grid">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="env_alerts">
+
+            <div class="form-row full"><label>
+                <input type="checkbox" name="env_alerts_enabled" value="1"
+                    <?= !empty($envAlerts['enabled']) ? 'checked' : '' ?>>
+                Enable environmental alerts
+            </label></div>
+
+            <div class="form-row full"><label>Alert email recipients</label>
+                <input class="form-control" name="env_alerts_email"
+                       value="<?= App::e($envAlerts['email'] ?? '') ?>"
+                       placeholder="ops@contoso.com (defaults to power alert list if empty)">
+                <span class="text-muted" style="font-size:.75rem">Comma-separated. Leave empty to reuse power alert recipients when set.</span>
+            </div>
+
+            <div class="form-row"><label>Re-alert cooldown (minutes)</label>
+                <input class="form-control" type="number" min="5" max="10080" step="1"
+                       name="env_alerts_cooldown_min"
+                       value="<?= App::e((string)(int)($envAlerts['cooldown_min'] ?? 60)) ?>">
+                <span class="text-muted" style="font-size:.75rem">Same sensor/level will not re-mail until this elapses (warn→crit still mails).</span>
+            </div>
+            <div class="form-row"><label>RH warning %</label>
+                <input class="form-control" type="number" min="1" max="100" step="1"
+                       name="env_alerts_rh_warn"
+                       value="<?= App::e((string)(int)($envAlerts['rh_warn'] ?? 70)) ?>">
+            </div>
+            <div class="form-row"><label>RH critical %</label>
+                <input class="form-control" type="number" min="1" max="100" step="1"
+                       name="env_alerts_rh_crit"
+                       value="<?= App::e((string)(int)($envAlerts['rh_crit'] ?? 90)) ?>">
+            </div>
+
+            <div class="form-row full">
+                <button class="btn btn-primary" type="submit">Save env alerts</button>
             </div>
         </form>
         <?php endif; ?>
