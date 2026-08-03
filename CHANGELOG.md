@@ -15,6 +15,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+### Bug fixes
+
+---
+
+## [0.3.39] - 2026-08-03
+
+### Enhancements
+
 - **Cooling Discover (IS-UNITY):** probe/walk LGP identity `476.1.42.2` (Vertiv / model / firmware) first; clearer message when identity works but condition tables (`.3`) are empty.
 
 ### Bug fixes
@@ -22,7 +30,6 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **Discover candidate OIDs:** prefer longest numeric OID and fix relative walk keys so candidates are not truncated to `3.0` / `9.1.4.x`.
 
 ---
-
 ## [0.3.38] - 2026-08-03
 
 ### Enhancements
