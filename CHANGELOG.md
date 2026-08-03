@@ -19,6 +19,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.3.44] - 2026-08-03
+
+### Enhancements
+
+- **3D cooling units:** placed CRAC/CRAH/pumps render in 3D (dashboard, floor plan, NOC) as translucent wireframe solids with the ColdAisle snowflake logo on top; standby units draw lighter.
+- **NOC auto-reload on version change:** wall display polls `App::VERSION` with metrics; on a new build it reloads so CSS/JS/HTML update without a manual refresh.
+
+---
 ## [0.3.43] - 2026-08-03
 
 ### Enhancements
