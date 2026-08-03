@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Cooling Discover (Liebert):** air-unit Discover walks Emerson/Liebert enterprise **1.3.6.1.4.1.476** (LGP condition tables), probes known supply/return OIDs, and proposes `supply_temp` / `return_temp` map keys (not APC-only roots).
+
 ### Bug fixes
 
 ---
