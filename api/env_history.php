@@ -100,15 +100,20 @@ foreach ($rows as $row) {
     }
 }
 
-// Sort keys chronologically
+// Sort keys chronologically; convert temp series to site display unit
 $keys = array_keys($t);
 sort($keys);
 $tOut = [];
 $tempOut = [];
 $humOut = [];
+$convertTemp = class_exists('TempUnitService') && TempUnitService::isTempKind($kind) && $kind !== 'humidity';
 foreach ($keys as $k) {
     $tOut[] = $t[$k];
-    $tempOut[] = $temp[$k];
+    $tv = $temp[$k];
+    if ($convertTemp && $tv !== null && is_numeric($tv)) {
+        $tv = TempUnitService::fromC((float)$tv);
+    }
+    $tempOut[] = $tv;
     $humOut[] = $humidity[$k];
 }
 
@@ -119,10 +124,21 @@ if ($tOut === [] && $sensor['last_value'] !== null && $sensor['last_value'] !== 
         $humOut[] = (float)$sensor['last_value'];
         $tempOut[] = null;
     } else {
-        $tempOut[] = (float)$sensor['last_value'];
+        $lv = (float)$sensor['last_value'];
+        if ($convertTemp) {
+            $lv = TempUnitService::fromC($lv) ?? $lv;
+        }
+        $tempOut[] = $lv;
         $hum = $sensor['last_humidity'] ?? null;
         $humOut[] = ($hum !== null && $hum !== '') ? (float)$hum : null;
     }
+}
+
+$dispUnit = (string)($sensor['unit'] ?? '°C');
+if (class_exists('TempUnitService') && TempUnitService::isTempKind($kind) && $kind !== 'humidity') {
+    $dispUnit = TempUnitService::symbol();
+} elseif ($kind === 'humidity') {
+    $dispUnit = '%RH';
 }
 
 App::json([
@@ -130,7 +146,8 @@ App::json([
     'sensor_id' => $sensorId,
     'name' => (string)$sensor['name'],
     'sensor_kind' => $kind,
-    'unit' => (string)($sensor['unit'] ?? '°C'),
+    'unit' => $dispUnit,
+    'temp_unit' => class_exists('TempUnitService') ? TempUnitService::siteUnit() : 'C',
     'hours' => $hours,
     't' => $tOut,
     'temp' => $tempOut,

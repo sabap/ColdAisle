@@ -14,6 +14,25 @@ $devices = $devices ?? [];
 $formId = $envFormId ?? ($formId ?? 'envSensorForm');
 // When embedded off env_sensors.php, POST must still hit that page
 $formActionUrl = $envFormPostUrl ?? null;
+// Thresholds stored in °C — show in site display unit for temperature kinds
+$editKind = (string)($edit['sensor_kind'] ?? 'temperature');
+$thrDisp = static function ($v) use ($editKind) {
+    if ($v === null || $v === '') {
+        return '';
+    }
+    if (!is_numeric($v)) {
+        return (string)$v;
+    }
+    if (class_exists('TempUnitService') && TempUnitService::isTempKind($editKind)) {
+        $d = TempUnitService::fromC((float)$v);
+        return $d === null ? '' : (string)round($d, 2);
+    }
+    return (string)$v;
+};
+$tempSym = class_exists('TempUnitService') ? TempUnitService::symbol() : '°C';
+$unitDefault = class_exists('TempUnitService')
+    ? TempUnitService::defaultUnitForKind($editKind)
+    : '°C';
 ?>
 <form method="post" class="form-grid form-grid-3" id="<?= App::e($formId) ?>"
     <?php if ($formActionUrl): ?>action="<?= App::e($formActionUrl) ?>"<?php endif; ?>>
@@ -40,8 +59,8 @@ $formActionUrl = $envFormPostUrl ?? null;
     </div>
     <div class="form-row"><label>Unit</label>
         <input class="form-control" name="unit"
-               value="<?= App::e($edit['unit'] ?? '°C') ?>"
-               placeholder="°C, %RH, °C / %RH, Pa…"></div>
+               value="<?= App::e($edit['unit'] ?? $unitDefault) ?>"
+               placeholder="<?= App::e($tempSym . ', %RH, ' . $tempSym . ' / %RH, Pa…') ?>"></div>
     <div class="form-row"><label>Host type</label>
         <select class="form-control" name="host_type">
             <?php foreach ($hosts as $val => $lab): ?>
@@ -139,19 +158,24 @@ $formActionUrl = $envFormPostUrl ?? null;
         <input class="form-control" name="location_label" value="<?= App::e($edit['location_label'] ?? '') ?>"
                placeholder="Optional free text"></div>
 
-    <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Thresholds</h4></div>
+    <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">
+        Thresholds
+        <?php if (class_exists('TempUnitService') && TempUnitService::isTempKind($editKind)): ?>
+            <span class="text-muted" style="font-weight:400;font-size:.8rem">(<?= App::e($tempSym) ?>)</span>
+        <?php endif; ?>
+    </h4></div>
     <div class="form-row"><label>Warn low</label>
         <input class="form-control" type="number" step="any" name="warn_low"
-               value="<?= App::e((string)($edit['warn_low'] ?? '')) ?>"></div>
+               value="<?= App::e($thrDisp($edit['warn_low'] ?? '')) ?>"></div>
     <div class="form-row"><label>Warn high</label>
         <input class="form-control" type="number" step="any" name="warn_high"
-               value="<?= App::e((string)($edit['warn_high'] ?? '')) ?>"></div>
+               value="<?= App::e($thrDisp($edit['warn_high'] ?? '')) ?>"></div>
     <div class="form-row"><label>Crit low</label>
         <input class="form-control" type="number" step="any" name="crit_low"
-               value="<?= App::e((string)($edit['crit_low'] ?? '')) ?>"></div>
+               value="<?= App::e($thrDisp($edit['crit_low'] ?? '')) ?>"></div>
     <div class="form-row"><label>Crit high</label>
         <input class="form-control" type="number" step="any" name="crit_high"
-               value="<?= App::e((string)($edit['crit_high'] ?? '')) ?>"></div>
+               value="<?= App::e($thrDisp($edit['crit_high'] ?? '')) ?>"></div>
 
     <div class="form-row full">
         <h4 class="mt-0" style="margin-bottom:.35rem;font-size:.95rem;color:var(--muted)">SNMP (optional — safe to leave blank)</h4>
@@ -196,11 +220,12 @@ $formActionUrl = $envFormPostUrl ?? null;
   var cab = form.querySelector('[name="cabinet_id"]');
   var kind = form.querySelector('[name="sensor_kind"]');
   var unit = form.querySelector('[name="unit"]');
+  var tempSym = <?= json_encode($tempSym, JSON_UNESCAPED_UNICODE) ?>;
   var unitDefaults = {
-    temperature: '°C',
+    temperature: tempSym,
     humidity: '%RH',
-    temp_humidity: '°C / %RH',
-    dew_point: '°C',
+    temp_humidity: tempSym + ' / %RH',
+    dew_point: tempSym,
     differential_pressure: 'Pa',
     airflow: 'CFM',
     leak: 'state',

@@ -144,7 +144,7 @@
               t: j.t,
               values: j.temp,
               color: '#38bdf8',
-              unit: '°C',
+              unit: j.unit || '°C',
               label: 'Temperature',
               height: 170,
             });

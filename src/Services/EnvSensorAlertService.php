@@ -146,14 +146,23 @@ class EnvSensorAlertService
         $worst = 'ok';
 
         if ($temp !== null && function_exists('env_sensor_threshold_status')) {
+            // Thresholds and last_value are stored in °C for temperature kinds
             $st = env_sensor_threshold_status($temp, $sensor);
             if ($st === 'warn' || $st === 'crit') {
                 $metric = $kind === 'humidity' ? 'humidity' : 'temperature';
+                $dispVal = $temp;
+                $dispUnit = (string)($sensor['unit'] ?? ($metric === 'humidity' ? '%RH' : '°C'));
+                if ($metric !== 'humidity' && class_exists('TempUnitService')
+                    && TempUnitService::isTempKind($kind)
+                ) {
+                    $dispVal = TempUnitService::fromC($temp) ?? $temp;
+                    $dispUnit = TempUnitService::symbol();
+                }
                 $issues[] = [
                     'level' => $st,
                     'metric' => $metric,
-                    'value' => $temp,
-                    'unit' => (string)($sensor['unit'] ?? ($metric === 'humidity' ? '%RH' : '°C')),
+                    'value' => $dispVal,
+                    'unit' => $dispUnit,
                 ];
                 $worst = $st === 'crit' ? 'crit' : ($worst === 'crit' ? 'crit' : 'warn');
             }
@@ -230,9 +239,24 @@ class EnvSensorAlertService
             );
         }
         $lines[] = '';
-        $lines[] = 'Thresholds (primary): warn '
-            . ($sensor['warn_low'] ?? '—') . ' / ' . ($sensor['warn_high'] ?? '—')
-            . ' · crit ' . ($sensor['crit_low'] ?? '—') . ' / ' . ($sensor['crit_high'] ?? '—');
+        $fmtT = static function ($v) use ($kind): string {
+            if ($v === null || $v === '') {
+                return '—';
+            }
+            if (!is_numeric($v)) {
+                return (string)$v;
+            }
+            if (class_exists('TempUnitService') && TempUnitService::isTempKind($kind) && $kind !== 'humidity') {
+                return TempUnitService::format((float)$v, 1);
+            }
+            return (string)$v;
+        };
+        $lines[] = 'Thresholds (primary'
+            . (class_exists('TempUnitService') && TempUnitService::isTempKind($kind) && $kind !== 'humidity'
+                ? ' ' . TempUnitService::symbol() : '')
+            . '): warn '
+            . $fmtT($sensor['warn_low'] ?? null) . ' / ' . $fmtT($sensor['warn_high'] ?? null)
+            . ' · crit ' . $fmtT($sensor['crit_low'] ?? null) . ' / ' . $fmtT($sensor['crit_high'] ?? null);
         if ($kind === 'temp_humidity' || $kind === 'humidity') {
             $lines[] = 'RH settings: warn ≥ ' . $cfg['rh_warn'] . '% · crit ≥ ' . $cfg['rh_crit'] . '%';
         }

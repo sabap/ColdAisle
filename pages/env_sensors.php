@@ -94,6 +94,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             $now = date('Y-m-d H:i:s');
             $sensorRow = Database::fetchOne('SELECT * FROM env_sensors WHERE sensor_id = ?', [$sid]);
             $kind = (string)($sensorRow['sensor_kind'] ?? 'temperature');
+            // Manual entry is in site display unit; store °C for temperature kinds
+            if (class_exists('TempUnitService') && TempUnitService::isTempKind($kind) && $kind !== 'humidity') {
+                $conv = TempUnitService::toC($value);
+                if ($conv !== null) {
+                    $value = $conv;
+                }
+            }
 
             try {
                 Database::insert('env_readings', [
@@ -244,8 +251,16 @@ if ($sensorId > 0) {
             <div class="label"><?= $kindKey === 'humidity' ? 'Humidity' : 'Temperature' ?></div>
             <div class="value">
                 <?php if ($val !== null): ?>
-                    <?= App::e(rtrim(rtrim(number_format($val, 1, '.', ''), '0'), '.') ?: '0') ?>
-                    <span class="metric-unit"><?= $kindKey === 'humidity' ? '%RH' : '°C' ?></span>
+                    <?php
+                    $dispVal = $val;
+                    $dispUnit = $kindKey === 'humidity' ? '%RH' : (class_exists('TempUnitService') ? TempUnitService::symbol() : '°C');
+                    if ($kindKey !== 'humidity' && class_exists('TempUnitService') && TempUnitService::isTempKind($kindKey)) {
+                        $conv = TempUnitService::fromC($val);
+                        $dispVal = $conv ?? $val;
+                    }
+                    ?>
+                    <?= App::e(rtrim(rtrim(number_format($dispVal, 1, '.', ''), '0'), '.') ?: '0') ?>
+                    <span class="metric-unit"><?= App::e($dispUnit) ?></span>
                 <?php else: ?>
                     —
                 <?php endif; ?>
@@ -274,12 +289,26 @@ if ($sensorId > 0) {
             <div class="sub"><?= App::e((string)($s['location_label'] ?? $s['room_name'] ?? '')) ?></div>
         </div>
         <div class="metric-card">
-            <div class="label">Thresholds (primary)</div>
+            <div class="label">Thresholds (primary<?= class_exists('TempUnitService') && TempUnitService::isTempKind($kindKey) ? ' ' . TempUnitService::symbol() : '' ?>)</div>
             <div class="value" style="font-size:.95rem">
-                W <?= App::e(($s['warn_low'] ?? '—') . ' / ' . ($s['warn_high'] ?? '—')) ?>
+                <?php
+                $fmtThr = static function ($v) use ($kindKey) {
+                    if ($v === null || $v === '') {
+                        return '—';
+                    }
+                    if (!is_numeric($v)) {
+                        return (string)$v;
+                    }
+                    if (class_exists('TempUnitService') && TempUnitService::isTempKind($kindKey)) {
+                        return TempUnitService::format((float)$v, 1);
+                    }
+                    return rtrim(rtrim(number_format((float)$v, 1, '.', ''), '0'), '.') ?: '0';
+                };
+                ?>
+                W <?= App::e($fmtThr($s['warn_low'] ?? null) . ' / ' . $fmtThr($s['warn_high'] ?? null)) ?>
             </div>
             <div class="sub">
-                C <?= App::e(($s['crit_low'] ?? '—') . ' / ' . ($s['crit_high'] ?? '—')) ?>
+                C <?= App::e($fmtThr($s['crit_low'] ?? null) . ' / ' . $fmtThr($s['crit_high'] ?? null)) ?>
             </div>
         </div>
         <div class="metric-card">
@@ -333,9 +362,17 @@ if ($sensorId > 0) {
                 <input type="hidden" name="action" value="record_reading">
                 <input type="hidden" name="sensor_id" value="<?= (int)$sensorId ?>">
                 <div class="form-row">
-                    <label><?= $kindKey === 'humidity' ? 'Humidity (%RH)' : 'Temperature (°C)' ?></label>
+                    <label><?= $kindKey === 'humidity'
+                        ? 'Humidity (%RH)'
+                        : ('Temperature (' . (class_exists('TempUnitService') ? TempUnitService::symbol() : '°C') . ')') ?></label>
                     <input class="form-control" type="number" step="any" name="value" required
-                           value="<?= $val !== null ? App::e((string)$val) : '' ?>">
+                           value="<?= $val !== null
+                               ? App::e(
+                                   (class_exists('TempUnitService') && TempUnitService::isTempKind($kindKey) && $kindKey !== 'humidity')
+                                       ? (string)round((float)TempUnitService::fromC($val), 2)
+                                       : (string)$val
+                               )
+                               : '' ?>">
                 </div>
                 <?php if ($isCombo): ?>
                 <div class="form-row">
@@ -385,12 +422,20 @@ if ($sensorId > 0) {
                     <?php foreach ($readings as $r):
                         $m = strtolower((string)($r['metric'] ?? ''));
                         $mLab = $m === 'humidity' ? 'Humidity' : ($m === 'temperature' || $m === 'primary' || $m === '' ? 'Temp / primary' : $m);
-                        $unitR = ($m === 'humidity' || $kindKey === 'humidity') ? '%RH' : '°C';
+                        $unitR = ($m === 'humidity' || $kindKey === 'humidity')
+                            ? '%RH'
+                            : (class_exists('TempUnitService') ? TempUnitService::symbol() : '°C');
+                        $rv = $r['value'];
+                        if ($m !== 'humidity' && $kindKey !== 'humidity' && is_numeric($rv)
+                            && class_exists('TempUnitService') && TempUnitService::isTempKind($kindKey)
+                        ) {
+                            $rv = TempUnitService::format((float)$rv, 2);
+                        }
                         ?>
                         <tr>
                             <td><?= App::e((string)$r['recorded_at']) ?></td>
                             <td class="text-muted" style="font-size:.85rem"><?= App::e($mLab) ?></td>
-                            <td><?= App::e((string)$r['value']) ?> <?= App::e($unitR) ?></td>
+                            <td><?= App::e((string)$rv) ?> <?= App::e($unitR) ?></td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
@@ -542,15 +587,25 @@ layout_header('Environmental sensors', $user, 'env_sensors');
                             <td class="col-value">
                                 <?php if ($val !== null): ?>
                                     <span class="env-sensor-value">
-                                        <?= App::e(rtrim(rtrim(number_format($val, 1, '.', ''), '0'), '.') ?: '0') ?>
+                                        <?php
+                                        $listVal = $val;
+                                        $listUnit = (string)($s['unit'] ?? '');
+                                        if ($kindKey !== 'humidity' && class_exists('TempUnitService')
+                                            && TempUnitService::isTempKind($kindKey)
+                                        ) {
+                                            $listVal = TempUnitService::fromC($val) ?? $val;
+                                            $listUnit = TempUnitService::symbol();
+                                        }
+                                        ?>
+                                        <?= App::e(rtrim(rtrim(number_format((float)$listVal, 1, '.', ''), '0'), '.') ?: '0') ?>
                                         <?php
                                         $humL = $s['last_humidity'] ?? null;
                                         if ($kindKey === 'temp_humidity' && $humL !== null && $humL !== ''):
                                             ?>
-                                            <span class="text-muted">°C</span>
+                                            <span class="text-muted"><?= App::e(class_exists('TempUnitService') ? TempUnitService::symbol() : '°C') ?></span>
                                             <span class="env-sensor-rh">/ <?= App::e(rtrim(rtrim(number_format((float)$humL, 0, '.', ''), '0'), '.') ?: '0') ?>%RH</span>
                                         <?php else: ?>
-                                            <span class="text-muted"><?= App::e((string)($s['unit'] ?? '')) ?></span>
+                                            <span class="text-muted"><?= App::e($listUnit) ?></span>
                                         <?php endif; ?>
                                     </span>
                                     <?php if (!empty($s['last_seen_at'])): ?>
