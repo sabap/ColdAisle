@@ -133,10 +133,11 @@ Historical note commits:
 
 | Field | Value |
 |-------|--------|
-| **Status** | open |
-| **Requested** | 2026-07-29 (user) |
+| **Status** | **done** (pages/noc.php + api/noc.php; optional token; spinning 3D) |
+| **Requested** | 2026-07-29 (user); refined 2026-08-03 (public TV / no auth timeout) |
 | **Source** | `BACKLOG.md` (chat request after 3D/dashboard perf work) |
 | **Priority** | nice-to-have (ops / wall display) |
+| **Delivered** | Public NOC wall; JSON poll; auto-rotate 3D top-left; Settings → NOC |
 
 **Goal:** A **NOC-style dashboard** that shows key site metrics and keeps them **auto-updating without a full page refresh** (suitable for a wall monitor or always-on ops tab).
 
@@ -162,11 +163,13 @@ Historical note commits:
 
 **Acceptance (when built)**
 
-- [ ] NOC (or equivalent) page loads and shows core metrics  
-- [ ] Metrics refresh on an interval without full page navigation/reload  
-- [ ] Last-updated time visible; failed poll does not blank the whole UI  
-- [ ] Hidden tab does not hammer the server (pause or slow poll)  
-- [ ] Existing home dashboard still works for day-to-day use  
+- [x] NOC (or equivalent) page loads and shows core metrics  
+- [x] Metrics refresh on an interval without full page navigation/reload  
+- [x] Last-updated time visible; failed poll does not blank the whole UI  
+- [x] Hidden tab does not hammer the server (pause or slow poll)  
+- [x] Existing home dashboard still works for day-to-day use  
+- [x] No login / session timeout for TV wall (optional access token)  
+- [x] Spinning 3D floor overview (top-left)  
 
 ---
 
