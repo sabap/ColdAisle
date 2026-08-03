@@ -9,6 +9,9 @@
   var pollMs = Math.max(5000, Number(cfg.pollMs) || 20000);
   var panelRotateMs = Math.max(8000, Number(cfg.panelRotateMs) || 18000);
   var sceneReloadMs = Math.max(60000, Number(cfg.sceneReloadMs) || 300000);
+  /** Version of HTML/JS this tab loaded; API version change triggers full reload */
+  var bootVersion = cfg.appVersion ? String(cfg.appVersion) : null;
+  var reloadingForUpdate = false;
   var view3d = null;
   var sceneLoadedAt = 0;
   var hidden = false;
@@ -381,8 +384,10 @@
     if (!el || !scene) return;
     var cabinets = scene.cabinets || [];
     var pdus = scene.pdus || [];
+    var cooling = scene.cooling || scene.cooling_units || [];
     var rooms = scene.rooms || [];
     var envSensors = scene.env_sensors || scene.envSensors || [];
+    var logoUrl = scene.logo_url || cfg.logoUrl || '';
 
     function start() {
       if (!window.ColdAisle3D) {
@@ -396,8 +401,10 @@
       view3d = ColdAisle3D.mount(el, {
         cabinets: cabinets,
         pdus: pdus,
+        cooling: cooling,
         rooms: rooms,
         envSensors: envSensors,
+        logoUrl: logoUrl,
         heatOverlay: envSensors.length > 0,
         interactive: false,
         autoRotate: true,
@@ -428,13 +435,50 @@
     return u;
   }
 
+  /**
+   * Wall TVs stay open for days. When operators ship a new ColdAisle build,
+   * api/noc.php returns a new App::VERSION — full reload picks up CSS/JS/HTML.
+   */
+  function checkAppVersion(data) {
+    var remote = data && data.version != null ? String(data.version) : '';
+    if (!remote) return false;
+    if (!bootVersion) {
+      bootVersion = remote;
+      return false;
+    }
+    if (remote === bootVersion) return false;
+    if (reloadingForUpdate) return true;
+    reloadingForUpdate = true;
+    setStatus(null, 'App updated to v' + remote + ' — reloading…');
+    showError('');
+    var verEl = $('nocAppVer');
+    if (verEl) {
+      verEl.textContent = (data.app || 'ColdAisle') + ' v' + remote + ' (reloading…)';
+    }
+    // Bust HTML cache while keeping token query args
+    try {
+      var u = new URL(window.location.href);
+      u.searchParams.set('_nocv', remote);
+      u.searchParams.set('_t', String(Date.now()));
+      setTimeout(function () {
+        window.location.replace(u.toString());
+      }, 800);
+    } catch (e) {
+      setTimeout(function () {
+        window.location.reload();
+      }, 800);
+    }
+    return true;
+  }
+
   function poll(forceScene) {
-    if (hidden) return;
+    if (hidden || reloadingForUpdate) return;
     var needScene = forceScene || !view3d || (Date.now() - sceneLoadedAt > sceneReloadMs);
     setStatus(null, 'Refreshing…');
     fetch(apiUrl(needScene), {
       credentials: 'same-origin',
       headers: { Accept: 'application/json' },
+      cache: 'no-store',
     })
       .then(function (r) {
         return r.json().then(function (j) {
@@ -442,12 +486,14 @@
         });
       })
       .then(function (res) {
+        if (reloadingForUpdate) return;
         if (!res.ok || !res.j || !res.j.ok) {
           var err = (res.j && res.j.error) || ('HTTP ' + res.status);
           showError(err);
           setStatus(false, 'Update failed');
           return;
         }
+        if (checkAppVersion(res.j)) return;
         showError('');
         renderAll(res.j);
         if (needScene && res.j.scene) {
@@ -456,6 +502,7 @@
         setStatus(true, 'Live · every ' + Math.round(pollMs / 1000) + 's');
       })
       .catch(function () {
+        if (reloadingForUpdate) return;
         showError('Network error loading NOC data');
         setStatus(false, 'Offline');
       });

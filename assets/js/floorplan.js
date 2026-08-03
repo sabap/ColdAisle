@@ -3209,6 +3209,8 @@
     function refresh3d() {
       if (!show3d || !view3d || !window.ColdAisle3D) return;
       if (view3dInstance && view3dInstance.dispose) view3dInstance.dispose();
+      var base = (window.ColdAisle && window.ColdAisle.baseUrl
+        ? String(window.ColdAisle.baseUrl).replace(/\/$/, '') : '');
       view3dInstance = ColdAisle3D.mount(view3d, {
         cabinets: cabinets,
         pdus: floorPdus,
@@ -3218,6 +3220,7 @@
         rooms: room ? [room] : [],
         interactive: true,
         textureFaces: 'both',
+        logoUrl: base ? base + '/assets/img/logo.svg' : 'assets/img/logo.svg',
       });
     }
 
