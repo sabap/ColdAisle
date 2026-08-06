@@ -408,26 +408,44 @@ class LabelLayoutService
         $hIn = (float)$layout['height_in'];
         $W = (int)round($wIn * 1000);
         $H = (int)round($hIn * 1000);
-        // Outer safe zone (printer hard stop / die-cut)
-        $outerL = max(40, (int)round($W * 0.045));
-        $outerR = max(72, (int)round($W * 0.08));
-        $outerT = max(36, (int)round($H * 0.04));
-        $outerB = max(36, (int)round($H * 0.04));
-        // Rounded frame inside the safe zone
-        $stroke = max(10, min(22, (int)round(min($W, $H) * 0.009))); // thin ~0.01–0.02″
+
+        // --- BMP51 / thermal hard stops (measured ~3/8″ right dead zone) ---
+        // Units = thousandths of an inch. Border stroke is centered on the path, so
+        // the outer edge of ink is path ± stroke/2; keep that inside the printable area.
+        $hardRight = 375; // 3/8″ unprintable / cut zone on the right
+        $hardLeft = 70;   // modest left (sprocket side still needs a little air)
+        $hardTB = 50;     // top/bottom
+
+        $stroke = max(10, min(18, (int)round(min($W, $H) * 0.008))); // thin frame
+        // Inset so entire stroke (outer half) clears the hard stops
+        $outerL = $hardLeft + (int)ceil($stroke / 2);
+        $outerR = $hardRight + (int)ceil($stroke / 2);
+        $outerT = $hardTB + (int)ceil($stroke / 2);
+        $outerB = $hardTB + (int)ceil($stroke / 2);
+
+        // On very small media, hard-right 3/8″ would leave almost no room — scale proportionally
+        $minContentW = 400; // ≥0.40″ for text+QR
+        if ($W - $outerL - $outerR < $minContentW) {
+            $budget = max($minContentW, (int)round($W * 0.55));
+            $side = max(40, (int)floor(($W - $budget) / 2));
+            $outerL = max($outerL, $side);
+            $outerR = max((int)ceil($stroke / 2) + 40, $W - $outerL - $budget);
+        }
+
         $bx = $outerL;
         $by = $outerT;
-        $bw = $W - $outerL - $outerR;
-        $bh = $H - $outerT - $outerB;
-        $rx = max(36, min(90, (int)round(min($bw, $bh) * 0.07))); // rounded corners
-        // Content pad: keep text/QR clear of the stroke (half-stroke + gap)
-        $pad = max(28, (int)round($stroke / 2) + 22);
+        $bw = max(200, $W - $outerL - $outerR);
+        $bh = max(200, $H - $outerT - $outerB);
+        $rx = max(28, min(70, (int)round(min($bw, $bh) * 0.06)));
+
+        // Cell padding inside the border (~1–2 print px at 300 dpi ≈ 3–7 units; use ~12–16
+        // so registration error does not kiss the stroke)
+        $pad = max(12, (int)ceil($stroke / 2) + 10);
         $marginL = $bx + $pad;
-        $marginR = $W - ($bx + $bw - $pad); // distance from page right to content right
         $marginY = $by + $pad;
-        $contentW = $bw - 2 * $pad;
-        $contentH = $bh - 2 * $pad;
-        $gap = max(22, (int)round(min($W, $H) * 0.03));
+        $contentW = max(100, $bw - 2 * $pad);
+        $contentH = max(80, $bh - 2 * $pad);
+        $gap = max(18, (int)round(min($W, $H) * 0.028));
         $mode = (string)($layout['layout_mode'] ?? 'stack');
         $showQr = !empty($layout['show_qr']) && $qrSvgInner !== '';
         $lines = is_array($layout['lines'] ?? null) ? $layout['lines'] : [];
@@ -441,9 +459,9 @@ class LabelLayoutService
             $H
         );
         $parts[] = sprintf('<rect x="0" y="0" width="%d" height="%d" fill="#ffffff"/>', $W, $H);
-        // Professional thin rounded border (content stays inside)
+        // Rounded border — fully inside the 3/8″ right hard-stop
         $parts[] = sprintf(
-            '<rect x="%d" y="%d" width="%d" height="%d" rx="%d" ry="%d" fill="none" stroke="#000000" stroke-width="%d"/>',
+            '<rect x="%d" y="%d" width="%d" height="%d" rx="%d" ry="%d" fill="none" stroke="#000000" stroke-width="%d" stroke-linejoin="round"/>',
             $bx,
             $by,
             $bw,
@@ -457,33 +475,33 @@ class LabelLayoutService
         $qrX = $marginL;
         $qrY = $marginY;
         $textX = $marginL;
-        $textBoxW = max(120, $contentW);
-        $textBoxH = max(80, $contentH);
+        $textBoxW = max(100, $contentW);
+        $textBoxH = max(70, $contentH);
 
         if ($showQr) {
             if ($mode === 'side') {
                 $qrSize = (int)min($contentH, (int)round($contentW * 0.36));
-                $qrSize = max(220, min($qrSize, $contentH));
+                $qrSize = max(200, min($qrSize, $contentH));
                 $qrX = $bx + $bw - $pad - $qrSize;
                 $qrY = $marginY;
-                $textBoxW = max(120, $qrX - $marginL - $gap);
+                $textBoxW = max(100, $qrX - $marginL - $gap);
                 $textBoxH = $contentH;
             } elseif ($mode === 'stack_qr') {
                 $nameBudget = (int)round($contentH * 0.20);
                 $qrSize = (int)min($contentW, $contentH - $nameBudget - $gap);
-                $qrSize = max(180, $qrSize);
+                $qrSize = max(160, $qrSize);
                 $qrX = $marginL + (int)max(0, ($contentW - $qrSize) / 2);
                 $qrY = $by + $bh - $pad - $qrSize;
                 $textBoxW = $contentW;
-                $textBoxH = max(60, $qrY - $marginY - $gap);
+                $textBoxH = max(50, $qrY - $marginY - $gap);
             } else {
                 // stack: text top, QR below — both inside frame padding
-                $qrSize = (int)min($contentW * 0.92, $contentH * 0.46);
-                $qrSize = max(300, min($qrSize, $contentW));
+                $qrSize = (int)min($contentW * 0.90, $contentH * 0.44);
+                $qrSize = max(280, min($qrSize, $contentW));
                 $qrX = $marginL;
                 $qrY = $by + $bh - $pad - $qrSize;
                 $textBoxW = $contentW;
-                $textBoxH = max(120, $qrY - $marginY - $gap);
+                $textBoxH = max(100, $qrY - $marginY - $gap);
             }
         }
 
