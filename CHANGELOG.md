@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **PDU label frame:** thin black rounded-corner border; text and QR stay inside frame padding so they never touch the edge.
-
 ### Bug fixes
 
 ---
 
+## [0.3.50] - 2026-08-06
+
+### Enhancements
+
+- **PDU label frame:** thin black rounded-corner border; text and QR stay inside frame padding so they never touch the edge.
+
+---
 ## [0.3.49] - 2026-08-06
 
 ### Bug fixes
