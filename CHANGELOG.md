@@ -15,14 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **PDU label fonts:** larger adaptive type fitted to the text area (name + detail lines); slightly more room for text vs QR on horizontal labels.
-
 ### Bug fixes
-
-
 
 ---
 
+## [0.3.46] - 2026-08-06
+
+### Enhancements
+
+- **PDU label fonts:** larger adaptive type fitted to the text area (name + detail lines); slightly more room for text vs QR on horizontal labels.
+
+---
 ## [0.3.45] - 2026-08-06
 
 ### New features
