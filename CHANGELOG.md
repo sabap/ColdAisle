@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **PDU labels on 1.50″ continuous tape:** for BMP51, all ink (including rounded border) stays in the left **1.50″** of the page even when the Windows dialog is 2×2; larger text in that frame.
+
 ---
 
 ## [0.3.51] - 2026-08-06
