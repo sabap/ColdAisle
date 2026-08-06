@@ -408,13 +408,26 @@ class LabelLayoutService
         $hIn = (float)$layout['height_in'];
         $W = (int)round($wIn * 1000);
         $H = (int)round($hIn * 1000);
-        // Left margin + larger RIGHT gutter (printer hard stop / die-cut unprintable zone)
-        $marginL = max(48, (int)round($W * 0.055));
-        $marginR = max(90, (int)round($W * 0.10)); // ~0.09–0.10″ hard stop on BMP51 vinyl
-        $marginY = max(40, (int)round($H * 0.05));
-        $gap = max(24, (int)round(min($W, $H) * 0.035));
-        $innerW = $W - $marginL - $marginR;
-        $innerH = $H - 2 * $marginY;
+        // Outer safe zone (printer hard stop / die-cut)
+        $outerL = max(40, (int)round($W * 0.045));
+        $outerR = max(72, (int)round($W * 0.08));
+        $outerT = max(36, (int)round($H * 0.04));
+        $outerB = max(36, (int)round($H * 0.04));
+        // Rounded frame inside the safe zone
+        $stroke = max(10, min(22, (int)round(min($W, $H) * 0.009))); // thin ~0.01–0.02″
+        $bx = $outerL;
+        $by = $outerT;
+        $bw = $W - $outerL - $outerR;
+        $bh = $H - $outerT - $outerB;
+        $rx = max(36, min(90, (int)round(min($bw, $bh) * 0.07))); // rounded corners
+        // Content pad: keep text/QR clear of the stroke (half-stroke + gap)
+        $pad = max(28, (int)round($stroke / 2) + 22);
+        $marginL = $bx + $pad;
+        $marginR = $W - ($bx + $bw - $pad); // distance from page right to content right
+        $marginY = $by + $pad;
+        $contentW = $bw - 2 * $pad;
+        $contentH = $bh - 2 * $pad;
+        $gap = max(22, (int)round(min($W, $H) * 0.03));
         $mode = (string)($layout['layout_mode'] ?? 'stack');
         $showQr = !empty($layout['show_qr']) && $qrSvgInner !== '';
         $lines = is_array($layout['lines'] ?? null) ? $layout['lines'] : [];
@@ -428,38 +441,49 @@ class LabelLayoutService
             $H
         );
         $parts[] = sprintf('<rect x="0" y="0" width="%d" height="%d" fill="#ffffff"/>', $W, $H);
+        // Professional thin rounded border (content stays inside)
+        $parts[] = sprintf(
+            '<rect x="%d" y="%d" width="%d" height="%d" rx="%d" ry="%d" fill="none" stroke="#000000" stroke-width="%d"/>',
+            $bx,
+            $by,
+            $bw,
+            $bh,
+            $rx,
+            $rx,
+            $stroke
+        );
 
         $qrSize = 0;
         $qrX = $marginL;
         $qrY = $marginY;
         $textX = $marginL;
-        $textBoxW = $innerW;
-        $textBoxH = $innerH;
+        $textBoxW = max(120, $contentW);
+        $textBoxH = max(80, $contentH);
 
         if ($showQr) {
             if ($mode === 'side') {
-                $qrSize = (int)min($innerH, (int)round($innerW * 0.36));
-                $qrSize = max(240, min($qrSize, $innerH));
-                $qrX = $W - $marginR - $qrSize;
+                $qrSize = (int)min($contentH, (int)round($contentW * 0.36));
+                $qrSize = max(220, min($qrSize, $contentH));
+                $qrX = $bx + $bw - $pad - $qrSize;
                 $qrY = $marginY;
-                $textBoxW = max(140, $qrX - $marginL - $gap);
-                $textBoxH = $innerH;
+                $textBoxW = max(120, $qrX - $marginL - $gap);
+                $textBoxH = $contentH;
             } elseif ($mode === 'stack_qr') {
-                $nameBudget = (int)round($innerH * 0.20);
-                $qrSize = (int)min($innerW, $innerH - $nameBudget - $gap);
-                $qrSize = max(200, $qrSize);
-                $qrX = $marginL + (int)max(0, ($innerW - $qrSize) / 2);
-                $qrY = $H - $marginY - $qrSize;
-                $textBoxW = $innerW;
-                $textBoxH = max(70, $qrY - $marginY - $gap);
+                $nameBudget = (int)round($contentH * 0.20);
+                $qrSize = (int)min($contentW, $contentH - $nameBudget - $gap);
+                $qrSize = max(180, $qrSize);
+                $qrX = $marginL + (int)max(0, ($contentW - $qrSize) / 2);
+                $qrY = $by + $bh - $pad - $qrSize;
+                $textBoxW = $contentW;
+                $textBoxH = max(60, $qrY - $marginY - $gap);
             } else {
-                // stack: text top, QR below — QR stays within left/right safe margins
-                $qrSize = (int)min($innerW * 0.92, $innerH * 0.46);
-                $qrSize = max(320, min($qrSize, $innerW));
+                // stack: text top, QR below — both inside frame padding
+                $qrSize = (int)min($contentW * 0.92, $contentH * 0.46);
+                $qrSize = max(300, min($qrSize, $contentW));
                 $qrX = $marginL;
-                $qrY = $H - $marginY - $qrSize;
-                $textBoxW = $innerW;
-                $textBoxH = max(140, $qrY - $marginY - $gap);
+                $qrY = $by + $bh - $pad - $qrSize;
+                $textBoxW = $contentW;
+                $textBoxH = max(120, $qrY - $marginY - $gap);
             }
         }
 
