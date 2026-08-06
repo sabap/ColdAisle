@@ -234,15 +234,24 @@ class SnmpPoller
                 : null,
         ], 'target_id = :id', [':id' => (int)$t['target_id']]);
 
-        if (!empty($t['pdu_id']) && ($got['watts'] !== null || $got['amps'] !== null || $got['phases'] !== null || !empty($got['serial_no']) || !empty($got['outlets']))) {
-            self::writePduPoll(
-                (int)$t['pdu_id'],
-                $got['watts'],
-                $got['amps'],
-                $got['phases'],
-                $got['serial_no'] ?? null,
-                $got['outlets'] ?? null
-            );
+        if (!empty($t['pdu_id'])) {
+            $mac = $got['mac_address'] ?? null;
+            if ($mac === null || $mac === '') {
+                $mac = self::probeManagementMac($session);
+            }
+            if ($got['watts'] !== null || $got['amps'] !== null || $got['phases'] !== null
+                || !empty($got['serial_no']) || !empty($got['outlets']) || ($mac !== null && $mac !== '')
+            ) {
+                self::writePduPoll(
+                    (int)$t['pdu_id'],
+                    $got['watts'],
+                    $got['amps'],
+                    $got['phases'],
+                    $got['serial_no'] ?? null,
+                    $got['outlets'] ?? null,
+                    $mac
+                );
+            }
         }
 
         self::closeSession($session);
@@ -732,6 +741,14 @@ class SnmpPoller
         $got = self::collectOidMap($session, $oidMap);
         // Device inventory size (APC rPDU2 NumOutlets) even when no metered outlet table
         $invCount = self::probeDeviceNumOutlets($session, $oidMap, $got);
+        // IF-MIB MAC even when not in the site template map
+        $mac = $got['mac_address'] ?? null;
+        if ($mac === null || $mac === '') {
+            $mac = self::probeManagementMac($session);
+            if ($mac !== null) {
+                $got['mac_address'] = $mac;
+            }
+        }
         self::closeSession($session);
 
         if ($got['ok'] === 0) {
@@ -744,7 +761,8 @@ class SnmpPoller
             $got['amps'],
             $got['phases'],
             $got['serial_no'] ?? null,
-            $got['outlets'] ?? null
+            $got['outlets'] ?? null,
+            $got['mac_address'] ?? null
         );
 
         $outletSync = null;
@@ -773,9 +791,59 @@ class SnmpPoller
             'device_num_outlets' => $invCount,
             'outlet_sync' => $outletSync,
             'serial_no' => $got['serial_no'] ?? null,
+            'mac_address' => $got['mac_address'] ?? null,
             'ok' => $got['ok'],
             'failed' => $got['failed'],
         ];
+    }
+
+    /**
+     * Read IF-MIB ifPhysAddress (+ ifDescr) and pick a management Ethernet MAC.
+     *
+     * @param array<string,mixed> $session
+     */
+    public static function probeManagementMac(array $session): ?string
+    {
+        require_once __DIR__ . '/SnmpDiscover.php';
+        try {
+            $phys = self::sessionWalk($session, '1.3.6.1.2.1.2.2.1.6');
+            if (!$phys) {
+                return null;
+            }
+            $descr = self::sessionWalk($session, '1.3.6.1.2.1.2.2.1.2');
+            $collected = [];
+            foreach ($phys as $suffix => $val) {
+                $idx = ltrim((string)$suffix, '.');
+                // Walk may return full OID or just ifIndex
+                if (preg_match('/(\d+)$/', $idx, $m)) {
+                    $ifIndex = $m[1];
+                } else {
+                    $ifIndex = $idx;
+                }
+                $collected['1.3.6.1.2.1.2.2.1.6.' . $ifIndex] = [
+                    'value' => $val,
+                    'name' => 'ifPhysAddress',
+                    'module' => 'IF-MIB',
+                ];
+            }
+            foreach ($descr as $suffix => $val) {
+                $idx = ltrim((string)$suffix, '.');
+                if (preg_match('/(\d+)$/', $idx, $m)) {
+                    $ifIndex = $m[1];
+                } else {
+                    $ifIndex = $idx;
+                }
+                $collected['1.3.6.1.2.1.2.2.1.2.' . $ifIndex] = [
+                    'value' => $val,
+                    'name' => 'ifDescr',
+                    'module' => 'IF-MIB',
+                ];
+            }
+            $hit = SnmpDiscover::extractMacFromCollected($collected);
+            return $hit['value'] ?? null;
+        } catch (Throwable $e) {
+            return null;
+        }
     }
 
     /**
@@ -908,7 +976,8 @@ class SnmpPoller
         ?float $amps,
         ?array $phases,
         ?string $serialNo = null,
-        ?array $outlets = null
+        ?array $outlets = null,
+        ?string $macAddress = null
     ): void {
         // UI last_poll can still show raw; history uses sanitized totals
         $histWatts = $watts;
@@ -942,10 +1011,15 @@ class SnmpPoller
             }
         }
 
-        // Fill empty serial from SNMP (never overwrite a value already set)
-        if ($serialNo !== null && $serialNo !== '') {
+        // Fill empty serial / MAC from SNMP (never overwrite a value already set)
+        if (($serialNo !== null && $serialNo !== '') || ($macAddress !== null && $macAddress !== '')) {
             require_once __DIR__ . '/SnmpDiscover.php';
-            SnmpDiscover::applySerialToPduIfEmpty($pduId, $serialNo);
+            if ($serialNo !== null && $serialNo !== '') {
+                SnmpDiscover::applySerialToPduIfEmpty($pduId, $serialNo);
+            }
+            if ($macAddress !== null && $macAddress !== '') {
+                SnmpDiscover::applyMacToPduIfEmpty($pduId, $macAddress);
+            }
         }
 
         // History sample (watts/amps/volts/phases) for 24h charts & reports
@@ -1033,6 +1107,7 @@ class SnmpPoller
         $devicePf = null;
         $ratedAmps = null;
         $serialNo = null;
+        $macAddress = null;
         $ps1 = null;
         $ps2 = null;
         $psAlarm = null;
@@ -1078,10 +1153,16 @@ class SnmpPoller
                     $onMetric((string)$metric, $raw, $num);
                 }
 
-                // String identity metrics (serial)
+                // String identity metrics (serial / MAC)
                 if (preg_match('/^(serial_no|serial|serialnumber)\b/', $metricKey)) {
                     require_once __DIR__ . '/SnmpDiscover.php';
                     $serialNo = SnmpDiscover::cleanSerialValue($raw) ?? $serialNo;
+                    $ok++;
+                    continue;
+                }
+                if (preg_match('/^(mac_address|mac|ifphysaddress)\b/', $metricKey)) {
+                    require_once __DIR__ . '/SnmpDiscover.php';
+                    $macAddress = SnmpDiscover::cleanMacValue($raw) ?? $macAddress;
                     $ok++;
                     continue;
                 }
@@ -1227,6 +1308,7 @@ class SnmpPoller
             'outlets' => $outletsOut,
             'outlet_diag' => $outletDiag,
             'serial_no' => $serialNo,
+            'mac_address' => $macAddress,
             'metrics' => $metrics,
             'ok' => $ok,
             'failed' => $failed,

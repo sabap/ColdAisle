@@ -13,7 +13,11 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **PDU ID labels (Brady BMP51):** Power → PDU detail → **ID label** prints or downloads SVG tags with name, IP, serial, MAC, and a QR deep link to the PDU page. Horizontal/vertical orientation and length presets sized for continuous **1.50″** vinyl.
+
 ### Enhancements
+
+- **PDU MAC address** field for asset tags and labels; **SNMP Discover / Poll** fills empty MAC from IF-MIB `ifPhysAddress` (management Ethernet preferred).
 
 ### Bug fixes
 

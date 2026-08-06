@@ -103,6 +103,8 @@ Historical note commits:
 4. History charts (reuse power-history patterns)  
 5. **3D / floor plan sensor markers** using `env_sensors.pos_*` (height/Z later)  
 6. Optional heat/humidity floor overlay  
+7. **Vertiv / Liebert DS LGP condition SNMP** — formal item **#8** (blocked on Unity VACM / Monitoring Support; templates in `AC_Vertiv_Thermal/`)  
+8. **3D airflow particles** (ceiling vents → cold aisle → hot aisle → returns) — formal item **#9**
 
 **Recommended order (AP9340 site)**
 
@@ -177,10 +179,11 @@ Historical note commits:
 
 | Field | Value |
 |-------|--------|
-| **Status** | open |
+| **Status** | open (shared `QrCodeService` landed with PDU labels; cabinets not yet wired) |
 | **Requested** | 2026-07-29 (user) |
 | **Source** | `BACKLOG.md` (chat request) |
 | **Priority** | nice-to-have (field ops / audits) |
+| **Related** | PDU ID labels (print/SVG + QR) reuse `QrCodeService` / `LabelLayoutService` |
 
 **Goal:** Generate **QR codes per cabinet** for printing labels or laser-engraving plaques. Scanning a code should open that cabinet’s page in ColdAisle for audits or quick device reference.
 
@@ -259,6 +262,190 @@ Historical note commits:
 - [x] Thresholds and alert emails use the same unit consistently  
 - [x] SNMP-ingested temps stored as °C (assumed poll scale °C); display converts only — no double-convert on write path  
 - [x] Existing sites default to °C with no behavior change until changed  
+
+---
+
+### 8. Vertiv / Liebert DS cooling SNMP (LGP condition maps + expanded telemetry)
+
+| Field | Value |
+|-------|--------|
+| **Status** | **blocked / parked** — revisit after Vertiv Monitoring Support reply |
+| **Requested** | 2026-08-05…08-06 (user + Vertiv field / monitoring engagement) |
+| **Source** | chat (Liebert DS only showing uptime; Vertiv rep + `AC_Vertiv_Thermal/` templates; ticket to Monitoring.Support) |
+| **Priority** | high for site cooling ops once agent access is fixed |
+| **Do not implement until** | (1) user confirms Monitoring Support unblocked `.3` GETs **or** explicitly asks to import templates for dry-run/probe-only, and (2) scope confirmed |
+
+**Goal:** Poll live Liebert **DS** thermal metrics into ColdAisle (supply/return temp, humidity, system state, capacity, alarms—not only sysUpTime / product identity), using **official Vertiv NMS OID maps**, then expand to related product templates in the pack.
+
+**Diagnosis already established (do not re-litigate without new evidence)**
+
+| Observation | Detail |
+|-------------|--------|
+| Agent reachable | SNMPv3/v2c path works for MIB-2 + identity |
+| Identity works | `1.3.6.1.4.1.476.1.42.2` → Vertiv, **IS-UNITY-ICOM2**, fw ≈ **v8.0.0.1-4.4.7** |
+| sysObjectID | `1.3.6.1.4.1.476.1.42` |
+| Condition tree empty | Walks/GETs under **`1.3.6.1.4.1.476.1.42.3`** return empty / timeout (likely **VACM / view ACL**, context, or feature enablement on Unity—not missing OIDs in the app) |
+| Discover limitation | ColdAisle cooling Discover preferred other LGP leaf shapes (e.g. community IDs 5002/4291); Vertiv DS templates use **`…3.4.1.2.3.1.3.n`** present-value style |
+
+**External dependency (ticket)**
+
+- **Vertiv Software & Management Card Technical Support**  
+  - Phone: `800.222.5877` option **2 + 2**  
+  - Email: `Monitoring.Support@Vertiv.com`  
+- Ask: enable **read** access to LGP condition OIDs; confirm views, context, firmware, and validation snmpgets.  
+- **Acceptance for unblocking:** positive GET of at least  
+  - Return Temp `1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.3`  
+  - System State `1.3.6.1.4.1.476.1.42.3.4.3.1.0`
+
+**Vendor assets on disk (do not delete)**
+
+Folder: **`AC_Vertiv_Thermal/`** (Vertiv technician contribution — NMS device templates, `templateVersion` 6, SNMP).
+
+| File | Model | Approx points | Use |
+|------|--------|---------------|-----|
+| `AC_Vertiv_DS_json.txt` | **DS** | ~106 | **Primary** for site Liebert DS units |
+| `AC_Vertiv_DS_wControl.json` | DS | ~91 | Same core + **writable Unit Control** OID (defer writes) |
+| `AC_Vertiv_CRAC_Intellislot.json` | Generic CRAC | ~231 | Broader IntelliSlot library |
+| `AC_Vertiv_CRV.json` / `CRV4` / `Unity_CRV_300_InRowCooler` | CRV family | ~91–133 | In-row |
+| `AC_Vertiv_CRD010.json` | CRD | ~104 | |
+| `AC_Vertiv_DataMate.json` | DataMate | ~41 | |
+| `AC_Vertiv_Chiller_XDC_Intellislot.json` / `AC_Emerson_Liebert_Chiller_EFC300.json` | Chillers | ~83–88 | Plant |
+
+**Key DS OIDs (from Vertiv template — map into site cooling OID template)**
+
+| Metric | OID |
+|--------|-----|
+| Alarms Present | `1.3.6.1.4.1.476.1.42.3.2.2.0` |
+| Control Temp | `…3.4.1.2.3.1.3.1` |
+| Supply Temp | `…3.4.1.2.3.1.3.2` |
+| Return Temp | `…3.4.1.2.3.1.3.3` |
+| Supply / Return temp setpoints | `…3.4.1.2.3.1.6.2` / `.6.3` |
+| Control / Return humidity | `…3.4.2.2.3.1.3.1` / `.3.2` |
+| System State (On/Off/Standby) | `…3.4.3.1.0` |
+| Cooling / Fan / Humidify / Dehumidify | `…3.4.3.2` … `.7` |
+| Cooling / fan capacity % | `…3.4.3.9` / `.16` |
+| Run hours (comp, fan, reheat, free cool…) | `…3.4.6.*` |
+| Remote sensors 1–10 (×0.1 °F style) | `…3.9.20.1.20.1.2.1.5059.n` |
+| Unit Control (writable, **opt-in later**) | `…3.7.4.2.0` (`DS_wControl` only) |
+
+Notes from templates: many temps labeled **FAHRENHEIT**; some setpoints/remotes use `LINEAR` scale (e.g. 0.1); alarms often `SNMP_GET_TABLE` under `…3.2…` (not simple leaf GET).
+
+**Implementation slices (when unblocked)**
+
+1. **Probe-first validation** — hard-coded GET of Return Temp + System State (and a few more) on unit 1; fail clearly if still noSuchObject.  
+2. **Built-in / site OID template “Vertiv Liebert DS”** — core map: `return_temp`, `supply_temp`, humidity, system_state, setpoints, capacity, alarms_present; honor scale + store °C via existing `TempUnitService` rules.  
+3. **Cooling Discover** — prefer DS present-value OIDs / import path from Vertiv JSON instead of only 5002/4291 heuristics.  
+4. **Poll snapshot UI** — unit detail + NOC cooling panel: state, supply/return, RH, capacity %, alarms present.  
+5. **Expand (later)** — discrete alarm booleans (table semantics), remote sensors → optional env points, run hours.  
+6. **Template importer** — convert other `AC_Vertiv_Thermal` JSON (CRV, CRAC, chillers) into site templates when those assets exist.  
+7. **Do not enable Unit Control SET** unless explicitly requested (safety).
+
+**Out of scope unless asked**
+
+- Automatic setpoint / On-Off control from ColdAisle  
+- Replacing Vertiv’s own NMS  
+- Full LGP MIB dump packaging (use templates + targeted GETs)
+
+**Acceptance (when built)**
+
+- [ ] With a correctly configured Unity view, **Poll now** on a DS unit returns supply/return temp (and humidity or system state) into `last_poll_json` / cooling UI  
+- [ ] Site can attach a **Vertiv DS** OID template without hand-typing OIDs  
+- [ ] Values respect site °C/°F display; no double conversion  
+- [ ] NOC / cooling views show more than uptime once data is present  
+- [ ] Writable control OIDs remain unused by default  
+
+**Revisit trigger:** reply from `Monitoring.Support@Vertiv.com` (or successful GET of Return Temp / System State on site credentials).
+
+---
+
+### 9. 3D airflow particles (vents → cold aisle → hot aisle → AC return)
+
+| Field | Value |
+|-------|--------|
+| **Status** | **open** (design noted; not started) |
+| **Requested** | 2026-08-06 (user) |
+| **Source** | chat (NOC/3D cooling visualization idea) |
+| **Priority** | visual / ops storytelling (depends on placement + temp data) |
+| **Do not implement until** | explicitly requested; confirm v1 scope (anchors + particles only vs full CFD-like paths) |
+
+**Goal:** In the 3D room view, show **air particles** that originate at **ceiling supply vents**, travel through the **cold aisle**, across/through cabinets (front → rear), and return via the **hot aisle** to **AC return** anchors. Particle **color** reflects live/last temperatures from the sensors along that path. Effect is **toggleable** (dashboard / floor-plan 3D / NOC).
+
+**Why this is compelling**
+
+- Makes cold/hot aisle strategy visible on the wall display without CFD.  
+- Reuses existing heat-sphere temp pipeline + cooling supply/return when SNMP (#8) lands.  
+- Complements solid AC units and heat spheres rather than replacing them.
+
+**Prerequisites / building blocks we already have**
+
+- Floor plan + 3D: cabinets, floor PDUs, cooling units, env heat spheres (`EnvSensor3dData`, `heatOverlay` toggle).  
+- Cabinets have `front_facing` / rotation; sensors can host on cabinet front/rear-ish placement.  
+- Site temp unit (°C/°F) for legend labels.  
+- Cooling units placed with footprint (supply/return *equipment* anchors can link to a unit).
+
+**Missing pieces to design in**
+
+1. **Airflow anchors** (new placeable objects on floor plan / ceiling plane)  
+   - Types: `supply_vent` (ceiling), `return` (ceiling or upper wall / unit face), maybe later `raised_floor_tile`.  
+   - Fields: `room_id`, `pos_x`, `pos_y`, `pos_z` (ceiling height default from room), size/orientation optional, optional `cooling_unit_id` link, label, color.  
+   - Palette + place/nudge/lock like cooling units; show on 2D plan as vent symbols.  
+2. **Flow topology (v1 — simple, not CFD)**  
+   - Explicit **flow paths** or auto-heuristic: each supply → nearest cold-aisle midline → cabinet fronts → cabinet rears → hot-aisle midline → linked/nearest return.  
+   - Prefer **user-authored paths** (ordered list of anchors + optional waypoints) for predictability; auto-suggest as assist.  
+   - Row / aisle side: use cabinet `front_facing` + row geometry so cold = intake side, hot = exhaust side.  
+3. **Particle system (Three.js)**  
+   - Lightweight `THREE.Points` or small sprites; pool size cap (e.g. 200–800 total) for TV/NOC perf.  
+   - Spawn at supply vents; lerp along path segments; recycle at return.  
+   - Speed modest; optional slight turbulence.  
+   - Toggle: `airflowOverlay` next to heat spheres (dashboard, floor plan 3D, NOC). Default **off** (perf + clutter).  
+4. **Temperature → color**  
+   - Sample temps along path:  
+     - supply / output air (cooling unit poll or vent-linked sensor)  
+     - cabinet **front** thermal sensors  
+     - cabinet **rear** thermal sensors  
+     - return air (cooling unit / return-linked sensor)  
+   - Color map aligned with existing heat-sphere scale (cool blue → green → yellow → red); store °C, display legend in site unit.  
+   - Missing temps: neutral gray / dim particles for that segment.  
+5. **NOC**  
+   - Same toggle (or inherit “show airflow”); keep auto-rotate usable with particles.
+
+**Suggested delivery slices**
+
+| Slice | Deliverable |
+|-------|-------------|
+| **A — Anchors** | Schema + floor plan palette for supply vents & returns; place/move/unplace; optional link to cooling unit |
+| **B — 3D markers** | Render vents/returns in 3D (ceiling discs / return grilles) without particles |
+| **C — Paths** | Define simple path (ordered anchors or auto path from vent→return via aisle midlines); visualize path as thin ribbon optional |
+| **D — Particles + toggle** | Particle animation along paths; color from nearest temp samples; on/off control |
+| **E — Polish** | Density/speed settings, NOC default, legend, performance caps |
+
+**Dependencies**
+
+- **Useful without #8:** cabinet front/rear env sensors alone still color mid-path particles.  
+- **Richer with #8:** supply/return air temps from Liebert DS poll color vent→aisle and hot→return segments.  
+- Heat spheres stay; particles are additive storytelling, not a thermal model of record.
+
+**Out of scope (unless asked later)**
+
+- Real CFD / Fluent / pressure fields  
+- Smoke tests / containment curtain physics  
+- Particle occlusion / GPU compute fluid  
+- Controlling CRACs from particle UI  
+
+**Acceptance (when built)**
+
+- [ ] Can place ceiling **supply vents** and **returns** on the floor plan and see them in 3D  
+- [ ] Can turn **airflow particles** on/off in 3D without breaking heat spheres or faceplates  
+- [ ] Particles move supply → cold aisle → hot aisle → return along a defined or auto path  
+- [ ] Particle color changes with available front/rear cabinet temps and supply/return temps when present  
+- [ ] Performance acceptable on dashboard and NOC (capped particle count; default off)  
+
+**Open design questions (resolve at implement time)**
+
+- Auto path vs only user-drawn paths for v1?  
+- One global “aisle direction” per room vs per row?  
+- Ceiling height: room setting vs fixed default (e.g. 3.0 m)?  
+- Should returns default to top of linked CRAC footprint when unit is placed?
 
 ---
 

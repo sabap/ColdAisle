@@ -20,6 +20,8 @@ class SnmpDiscover
      */
     private const WALK_ROOTS = [
         '1.3.6.1.2.1.1',                  // MIB-II system
+        '1.3.6.1.2.1.2.2.1.2',            // IF-MIB ifDescr (MAC selection)
+        '1.3.6.1.2.1.2.2.1.6',            // IF-MIB ifPhysAddress (MAC)
         '1.3.6.1.4.1.318.1.1.10.3.13',    // emsProbeStatus* live temp/humidity
         '1.3.6.1.4.1.318.1.1.10.3.5',     // alternate EMS probe status
         '1.3.6.1.4.1.318.1.1.10.2.3',     // IEM status probes
@@ -561,6 +563,21 @@ class SnmpDiscover
             ]);
         }
 
+        // Management NIC MAC from IF-MIB ifPhysAddress (when walk included interface table)
+        $macHit = self::extractMacFromCollected($collected);
+        if ($macHit) {
+            $proposed['mac_address'] = $macHit['oid'];
+            array_unshift($scored, [
+                'oid' => $macHit['oid'],
+                'name' => $macHit['name'] ?? 'ifPhysAddress',
+                'module' => $macHit['module'] ?? 'IF-MIB',
+                'value' => $macHit['value'],
+                'numeric' => null,
+                'score' => 98,
+                'hint' => 'Management MAC → mac_address field',
+            ]);
+        }
+
         // UI table: high-signal only
         $candidates = [];
         foreach ($scored as $c) {
@@ -602,6 +619,9 @@ class SnmpDiscover
             }
             if ($serialHit) {
                 $msg .= '; serial ' . $serialHit['value'];
+            }
+            if ($macHit) {
+                $msg .= '; MAC ' . $macHit['value'];
             }
             if ($outletKeyCount > 0) {
                 $msg .= '; ' . $outletKeyCount . ' outlet table column(s) in proposed map';
@@ -677,6 +697,8 @@ class SnmpDiscover
             ],
             'serial_no' => isset($serialHit['value']) ? self::utf8Safe((string)$serialHit['value']) : null,
             'serial_oid' => $serialHit['oid'] ?? null,
+            'mac_address' => isset($macHit['value']) ? self::utf8Safe((string)$macHit['value']) : null,
+            'mac_oid' => $macHit['oid'] ?? null,
             'walk_count' => count($collected),
             'named_count' => $namedCount,
             'mibs_loaded' => $mibsLoaded,
@@ -830,6 +852,152 @@ class SnmpDiscover
                 return false;
             }
             Database::update('pdus', ['serial_no' => $serial], 'pdu_id = :id', [':id' => $pduId]);
+            return true;
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Normalize SNMP ifPhysAddress (Hex-STRING, binary, or text) to AA:BB:CC:DD:EE:FF.
+     * @param mixed $raw
+     */
+    public static function cleanMacValue($raw): ?string
+    {
+        if ($raw === null || $raw === false) {
+            return null;
+        }
+        if (is_int($raw) || is_float($raw)) {
+            return null;
+        }
+        $s = is_string($raw) ? $raw : (string)$raw;
+        // Binary 6-octet MAC
+        if (strlen($s) === 6 && !preg_match('/^[\x20-\x7E]+$/', $s)) {
+            $parts = [];
+            for ($i = 0; $i < 6; $i++) {
+                $parts[] = sprintf('%02X', ord($s[$i]));
+            }
+            $mac = implode(':', $parts);
+            return self::isUsableMac($mac) ? $mac : null;
+        }
+        // Hex-STRING: AA BB CC DD EE FF  or  AA:BB:…  or  AABBCCDDEEFF
+        if (preg_match_all('/[0-9A-Fa-f]{2}/', $s, $m) && count($m[0]) >= 6) {
+            $bytes = array_slice($m[0], 0, 6);
+            $mac = strtoupper(implode(':', $bytes));
+            return self::isUsableMac($mac) ? $mac : null;
+        }
+        return null;
+    }
+
+    public static function isUsableMac(string $mac): bool
+    {
+        $mac = strtoupper(trim($mac));
+        if (!preg_match('/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/', $mac)) {
+            return false;
+        }
+        if ($mac === '00:00:00:00:00:00' || $mac === 'FF:FF:FF:FF:FF:FF') {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Pick management-ish ifPhysAddress from a discover walk collection.
+     *
+     * @param array<string,array{value?:mixed,name?:?string,module?:?string}> $collected
+     * @return array{oid:string,value:string,name?:string,module?:string}|null
+     */
+    public static function extractMacFromCollected(array $collected): ?array
+    {
+        /** @var list<array{oid:string,value:string,name:string,module:string,score:int,ifIndex:string}> $hits */
+        $hits = [];
+        $descrByIndex = [];
+        foreach ($collected as $oid => $row) {
+            $oid = ltrim((string)$oid, '.');
+            if (preg_match('/(?:^|\.)1\.3\.6\.1\.2\.1\.2\.2\.1\.2\.(\d+)$/', $oid, $m)
+                || preg_match('/ifDescr\.(\d+)$/i', $oid, $m)
+            ) {
+                $descrByIndex[$m[1]] = strtolower(trim((string)($row['value'] ?? '')));
+            }
+        }
+        foreach ($collected as $oid => $row) {
+            $oid = ltrim((string)$oid, '.');
+            $ifIndex = null;
+            if (preg_match('/(?:^|\.)1\.3\.6\.1\.2\.1\.2\.2\.1\.6\.(\d+)$/', $oid, $m)) {
+                $ifIndex = $m[1];
+            } elseif (preg_match('/ifPhysAddress\.(\d+)$/i', $oid, $m)) {
+                $ifIndex = $m[1];
+            } else {
+                $nm = strtolower((string)($row['name'] ?? ''));
+                if ($nm !== '' && (str_contains($nm, 'ifphysaddress') || $nm === 'ifphysaddress')) {
+                    if (preg_match('/\.(\d+)$/', $oid, $m2)) {
+                        $ifIndex = $m2[1];
+                    }
+                }
+            }
+            if ($ifIndex === null) {
+                continue;
+            }
+            $mac = self::cleanMacValue($row['value'] ?? null);
+            if ($mac === null) {
+                continue;
+            }
+            $descr = $descrByIndex[$ifIndex] ?? '';
+            $score = 10;
+            if ($descr !== '' && preg_match('/\b(eth|enet|lan|mgmt|management|network|gig|ge|xe|fm)\b/i', $descr)) {
+                $score += 40;
+            }
+            if ($descr !== '' && preg_match('/\b(lo|loopback|sit|tun|null|internal)\b/i', $descr)) {
+                $score -= 50;
+            }
+            // Prefer lower ifIndex as weak tie-break (often eth0 = 1 or 2)
+            $score += max(0, 5 - (int)$ifIndex);
+            $hits[] = [
+                'oid' => $oid,
+                'value' => $mac,
+                'name' => (string)($row['name'] ?? 'ifPhysAddress'),
+                'module' => (string)($row['module'] ?? 'IF-MIB'),
+                'score' => $score,
+                'ifIndex' => $ifIndex,
+            ];
+        }
+        if (!$hits) {
+            return null;
+        }
+        usort($hits, static fn($a, $b) => ($b['score'] <=> $a['score']) ?: ((int)$a['ifIndex'] <=> (int)$b['ifIndex']));
+        $best = $hits[0];
+        if ($best['score'] < 0) {
+            return null;
+        }
+        return [
+            'oid' => $best['oid'],
+            'value' => $best['value'],
+            'name' => $best['name'],
+            'module' => $best['module'],
+        ];
+    }
+
+    /**
+     * Write MAC onto PDU when empty (does not overwrite a user-entered MAC).
+     * @return bool true if the row was updated
+     */
+    public static function applyMacToPduIfEmpty(int $pduId, ?string $mac): bool
+    {
+        $mac = self::cleanMacValue($mac);
+        if ($mac === null || $mac === '' || $pduId < 1) {
+            return false;
+        }
+        try {
+            $row = Database::fetchOne('SELECT mac_address FROM pdus WHERE pdu_id = ?', [$pduId]);
+            if (!$row) {
+                // Column may not exist yet
+                return false;
+            }
+            $cur = trim((string)($row['mac_address'] ?? ''));
+            if ($cur !== '') {
+                return false;
+            }
+            Database::update('pdus', ['mac_address' => $mac], 'pdu_id = :id', [':id' => $pduId]);
             return true;
         } catch (Throwable $e) {
             return false;
