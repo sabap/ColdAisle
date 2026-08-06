@@ -1,126 +1,313 @@
 <?php
 /**
- * Physical label layout for Brady BMP51 (Windows dialog sizes + continuous vinyl).
+ * Physical label layouts for popular label printers (Brady BMP51, Zebra, Avery, generic).
  *
- * Primary presets match sizes that typically work in the BMP51 Windows print dialog:
- *   2″×2″, 1.5″×1″, 1″×1″.
- * Continuous 1.50″-wide layouts remain available for SVG / Brady Workstation.
+ * Each printer defines media presets (width × height inches). Layout packs content
+ * top-left and fits text to the printable width so thermal transfer does not clip.
  */
 declare(strict_types=1);
 
 class LabelLayoutService
 {
-    /** Continuous cartridge width (inches) — BMP51 max / 1.50″ vinyl. */
-    public const TAPE_WIDTH_IN = 1.50;
-
     /**
-     * Media presets (width × height in inches as printed on the page).
-     * Keys are stable for URLs.
+     * Printer families → presets.
      *
-     * @var array<string,array{w:float,h:float,label:string,group:string}>
+     * @var array<string,array{
+     *   label:string,
+     *   notes:string,
+     *   presets:array<string,array{w:float,h:float,label:string,layout?:string}>
+     * }>
      */
-    public const MEDIA_PRESETS = [
-        // --- Sizes that match common BMP51 Windows dialog options ---
-        'brady_2x2' => [
-            'w' => 2.0,
-            'h' => 2.0,
-            'label' => '2″ × 2″ — Brady dialog (recommended)',
-            'group' => 'brady',
+    public const PRINTERS = [
+        'brady_bmp51' => [
+            'label' => 'Brady BMP51',
+            'notes' => 'Windows dialog usually offers 1×1, 1.5×1, and 2×2. Prefer those for Print…; use SVG for continuous 1.50″ vinyl lengths.',
+            'presets' => [
+                'bmp51_2x2' => [
+                    'w' => 2.0,
+                    'h' => 2.0,
+                    'label' => '2″ × 2″ (dialog — recommended)',
+                    'layout' => 'stack',
+                ],
+                'bmp51_1_5x1' => [
+                    'w' => 1.5,
+                    'h' => 1.0,
+                    'label' => '1.5″ × 1″ (dialog)',
+                    'layout' => 'side',
+                ],
+                'bmp51_1x1' => [
+                    'w' => 1.0,
+                    'h' => 1.0,
+                    'label' => '1″ × 1″ (dialog — QR + name)',
+                    'layout' => 'stack_qr',
+                ],
+                'bmp51_cont_h2' => [
+                    'w' => 2.0,
+                    'h' => 1.5,
+                    'label' => 'Continuous 2″ × 1.50″ (horizontal)',
+                    'layout' => 'side',
+                ],
+                'bmp51_cont_h3' => [
+                    'w' => 3.0,
+                    'h' => 1.5,
+                    'label' => 'Continuous 3″ × 1.50″ (horizontal)',
+                    'layout' => 'side',
+                ],
+                'bmp51_cont_v2' => [
+                    'w' => 1.5,
+                    'h' => 2.0,
+                    'label' => 'Continuous 1.50″ × 2″ (vertical)',
+                    'layout' => 'stack',
+                ],
+                'bmp51_cont_v3' => [
+                    'w' => 1.5,
+                    'h' => 3.0,
+                    'label' => 'Continuous 1.50″ × 3″ (vertical)',
+                    'layout' => 'stack',
+                ],
+            ],
         ],
-        'brady_1_5x1' => [
-            'w' => 1.5,
-            'h' => 1.0,
-            'label' => '1.5″ × 1″ — Brady dialog',
-            'group' => 'brady',
+        'zebra' => [
+            'label' => 'Zebra desktop (GK/ZD class)',
+            'notes' => 'Common thermal sizes. Select matching stock in the Zebra driver or use SVG → ZebraDesigner.',
+            'presets' => [
+                'zebra_2x1' => [
+                    'w' => 2.0,
+                    'h' => 1.0,
+                    'label' => '2″ × 1″',
+                    'layout' => 'side',
+                ],
+                'zebra_2x2' => [
+                    'w' => 2.0,
+                    'h' => 2.0,
+                    'label' => '2″ × 2″',
+                    'layout' => 'stack',
+                ],
+                'zebra_3x2' => [
+                    'w' => 3.0,
+                    'h' => 2.0,
+                    'label' => '3″ × 2″',
+                    'layout' => 'side',
+                ],
+                'zebra_4x1' => [
+                    'w' => 4.0,
+                    'h' => 1.0,
+                    'label' => '4″ × 1″',
+                    'layout' => 'side',
+                ],
+                'zebra_4x2' => [
+                    'w' => 4.0,
+                    'h' => 2.0,
+                    'label' => '4″ × 2″',
+                    'layout' => 'side',
+                ],
+            ],
         ],
-        'brady_1x1' => [
-            'w' => 1.0,
-            'h' => 1.0,
-            'label' => '1″ × 1″ — Brady dialog (QR + name)',
-            'group' => 'brady',
+        'avery' => [
+            'label' => 'Avery (single-label sheet sizes)',
+            'notes' => 'Prints one label at the Avery face size. For multi-up sheets, download SVG and place in Avery Design & Print.',
+            'presets' => [
+                'avery_5160' => [
+                    'w' => 2.625,
+                    'h' => 1.0,
+                    'label' => '5160 — 1″ × 2-5/8″',
+                    'layout' => 'side',
+                ],
+                'avery_5163' => [
+                    'w' => 4.0,
+                    'h' => 2.0,
+                    'label' => '5163 — 2″ × 4″',
+                    'layout' => 'side',
+                ],
+                'avery_94207' => [
+                    'w' => 2.0,
+                    'h' => 2.0,
+                    'label' => '94207 — 2″ × 2″ square',
+                    'layout' => 'stack',
+                ],
+                'avery_5293' => [
+                    'w' => 1.5,
+                    'h' => 1.5,
+                    'label' => '5293 — 1.5″ × 1.5″',
+                    'layout' => 'stack',
+                ],
+            ],
         ],
-        // --- Continuous 1.50″ tape (use SVG if Windows only offers die-cut sizes) ---
-        'cont_h2' => [
-            'w' => 2.0,
-            'h' => 1.5,
-            'label' => 'Continuous 2″ long × 1.50″ (horizontal)',
-            'group' => 'continuous',
-        ],
-        'cont_h3' => [
-            'w' => 3.0,
-            'h' => 1.5,
-            'label' => 'Continuous 3″ long × 1.50″ (horizontal)',
-            'group' => 'continuous',
-        ],
-        'cont_v2' => [
-            'w' => 1.5,
-            'h' => 2.0,
-            'label' => 'Continuous 1.50″ × 2″ long (vertical)',
-            'group' => 'continuous',
-        ],
-        'cont_v3' => [
-            'w' => 1.5,
-            'h' => 3.0,
-            'label' => 'Continuous 1.50″ × 3″ long (vertical)',
-            'group' => 'continuous',
+        'generic' => [
+            'label' => 'Generic / other',
+            'notes' => 'Common sizes for laser/inkjet or unknown thermal printers.',
+            'presets' => [
+                'gen_2x1' => [
+                    'w' => 2.0,
+                    'h' => 1.0,
+                    'label' => '2″ × 1″',
+                    'layout' => 'side',
+                ],
+                'gen_2x2' => [
+                    'w' => 2.0,
+                    'h' => 2.0,
+                    'label' => '2″ × 2″',
+                    'layout' => 'stack',
+                ],
+                'gen_3x2' => [
+                    'w' => 3.0,
+                    'h' => 2.0,
+                    'label' => '3″ × 2″',
+                    'layout' => 'side',
+                ],
+                'gen_4x2' => [
+                    'w' => 4.0,
+                    'h' => 2.0,
+                    'label' => '4″ × 2″',
+                    'layout' => 'side',
+                ],
+            ],
         ],
     ];
 
-    /** Default for new label UI */
-    public const DEFAULT_MEDIA = 'brady_2x2';
+    public const DEFAULT_PRINTER = 'brady_bmp51';
+    public const DEFAULT_MEDIA = 'bmp51_2x2';
 
-    /** @deprecated use MEDIA_PRESETS — kept for old ?length_in= links */
+    /** Legacy media key aliases → current keys */
+    private const MEDIA_ALIASES = [
+        'brady_2x2' => 'bmp51_2x2',
+        'brady_1_5x1' => 'bmp51_1_5x1',
+        'brady_1x1' => 'bmp51_1x1',
+        'cont_h2' => 'bmp51_cont_h2',
+        'cont_h3' => 'bmp51_cont_h3',
+        'cont_v2' => 'bmp51_cont_v2',
+        'cont_v3' => 'bmp51_cont_v3',
+    ];
+
+    /**
+     * @return array{printer:string,media:string,w:float,h:float,label:string,layout:string,notes:string}|null
+     */
+    public static function resolvePreset(?string $printer, ?string $media): ?array
+    {
+        $media = trim((string)$media);
+        if (isset(self::MEDIA_ALIASES[$media])) {
+            $media = self::MEDIA_ALIASES[$media];
+        }
+        $printer = trim((string)$printer);
+
+        // Find media in any printer if printer omitted / wrong
+        foreach (self::PRINTERS as $pKey => $pDef) {
+            if ($media !== '' && isset($pDef['presets'][$media])) {
+                if ($printer === '' || $printer === $pKey) {
+                    $pr = $pDef['presets'][$media];
+                    return [
+                        'printer' => $pKey,
+                        'media' => $media,
+                        'w' => (float)$pr['w'],
+                        'h' => (float)$pr['h'],
+                        'label' => (string)$pr['label'],
+                        'layout' => (string)($pr['layout'] ?? 'stack'),
+                        'notes' => (string)($pDef['notes'] ?? ''),
+                    ];
+                }
+            }
+        }
+
+        if ($printer === '' || !isset(self::PRINTERS[$printer])) {
+            $printer = self::DEFAULT_PRINTER;
+        }
+        $pDef = self::PRINTERS[$printer];
+        $media = self::DEFAULT_MEDIA;
+        if ($printer !== self::DEFAULT_PRINTER) {
+            $media = array_key_first($pDef['presets']) ?: self::DEFAULT_MEDIA;
+        }
+        if (!isset($pDef['presets'][$media])) {
+            $media = (string)array_key_first($pDef['presets']);
+        }
+        $pr = $pDef['presets'][$media];
+        return [
+            'printer' => $printer,
+            'media' => $media,
+            'w' => (float)$pr['w'],
+            'h' => (float)$pr['h'],
+            'label' => (string)$pr['label'],
+            'layout' => (string)($pr['layout'] ?? 'stack'),
+            'notes' => (string)($pDef['notes'] ?? ''),
+        ];
+    }
+
+    /**
+     * Flat list of all media keys (compat).
+     * @return array<string,array{w:float,h:float,label:string,group:string}>
+     */
+    public static function allMediaPresets(): array
+    {
+        $out = [];
+        foreach (self::PRINTERS as $pKey => $pDef) {
+            foreach ($pDef['presets'] as $mKey => $pr) {
+                $out[$mKey] = [
+                    'w' => (float)$pr['w'],
+                    'h' => (float)$pr['h'],
+                    'label' => (string)$pr['label'],
+                    'group' => $pKey,
+                ];
+            }
+        }
+        return $out;
+    }
+
+    /** @deprecated */
+    public const MEDIA_PRESETS = []; // populated at runtime via allMediaPresets if needed
+
+    /** @deprecated */
     public const LENGTH_PRESETS_IN = [2.0, 2.5, 3.0, 4.0];
 
     /**
      * @param array{
      *   name?:string,ip?:?string,serial?:?string,mac?:?string,
      *   url?:string,show_ip?:bool,show_serial?:bool,show_mac?:bool,show_qr?:bool,
-     *   media?:string,orient?:string,length_in?:float
+     *   printer?:string,media?:string,orient?:string,length_in?:float
      * } $opts
-     * @return array{
-     *   width_in:float,height_in:float,media:string,orient:string,length_in:float,
-     *   lines:list<array{label:string,value:string,primary?:bool}>,
-     *   qr_url:string,show_qr:bool,title:string,tape_width_in:float,layout_mode:string
-     * }
+     * @return array<string,mixed>
      */
     public static function pduLabel(array $opts): array
     {
-        $media = trim((string)($opts['media'] ?? ''));
-        if ($media === '' || !isset(self::MEDIA_PRESETS[$media])) {
-            // Legacy orient + length_in
+        $resolved = self::resolvePreset(
+            isset($opts['printer']) ? (string)$opts['printer'] : null,
+            isset($opts['media']) ? (string)$opts['media'] : null
+        );
+
+        // Legacy orient + length only if no media
+        if (
+            $resolved
+            && empty($opts['media'])
+            && empty($opts['printer'])
+            && (isset($opts['orient']) || isset($opts['length_in']))
+        ) {
             $orient = strtolower(trim((string)($opts['orient'] ?? 'landscape')));
-            if ($orient !== 'portrait' && $orient !== 'landscape') {
-                $orient = 'landscape';
-            }
             $length = (float)($opts['length_in'] ?? 2.0);
             if ($length < 1.0) {
                 $length = 1.0;
             }
-            if ($length > 12.0) {
-                $length = 12.0;
-            }
             if ($orient === 'portrait') {
-                $widthIn = self::TAPE_WIDTH_IN;
+                $widthIn = 1.5;
                 $heightIn = $length;
-                $media = 'cont_v' . (abs($length - 3.0) < 0.01 ? '3' : '2');
-                if (!isset(self::MEDIA_PRESETS[$media])) {
-                    $media = 'custom';
-                }
+                $layoutMode = 'stack';
             } else {
                 $widthIn = $length;
-                $heightIn = self::TAPE_WIDTH_IN;
-                $media = 'cont_h' . (abs($length - 3.0) < 0.01 ? '3' : '2');
-                if (!isset(self::MEDIA_PRESETS[$media])) {
-                    $media = 'custom';
-                }
+                $heightIn = 1.5;
+                $layoutMode = 'side';
             }
+            $printer = 'brady_bmp51';
+            $media = 'custom';
+            $notes = '';
         } else {
-            $preset = self::MEDIA_PRESETS[$media];
-            $widthIn = (float)$preset['w'];
-            $heightIn = (float)$preset['h'];
-            $orient = $widthIn >= $heightIn ? 'landscape' : 'portrait';
+            if (!$resolved) {
+                $resolved = self::resolvePreset(self::DEFAULT_PRINTER, self::DEFAULT_MEDIA);
+            }
+            $widthIn = $resolved['w'];
+            $heightIn = $resolved['h'];
+            $layoutMode = $resolved['layout'];
+            $printer = $resolved['printer'];
+            $media = $resolved['media'];
+            $notes = $resolved['notes'];
             $length = max($widthIn, $heightIn);
+            $orient = $widthIn >= $heightIn ? 'landscape' : 'portrait';
         }
 
         $name = trim((string)($opts['name'] ?? 'PDU'));
@@ -132,8 +319,7 @@ class LabelLayoutService
         $showMac = ($opts['show_mac'] ?? true) !== false;
         $showQr = ($opts['show_qr'] ?? true) !== false;
 
-        // Tiny 1×1: name + QR only (detail lines unreadable)
-        $tiny = ($widthIn <= 1.05 && $heightIn <= 1.05);
+        $tiny = ($widthIn <= 1.05 && $heightIn <= 1.05) || $layoutMode === 'stack_qr';
 
         $lines = [];
         $lines[] = ['label' => '', 'value' => $name, 'primary' => true];
@@ -154,30 +340,21 @@ class LabelLayoutService
 
         $url = trim((string)($opts['url'] ?? ''));
 
-        // Layout mode for SVG packing
-        $layoutMode = 'side'; // text | QR side-by-side
-        if ($tiny) {
-            $layoutMode = 'stack_qr'; // name then QR
-        } elseif ($heightIn >= $widthIn * 0.95 && $heightIn >= 1.75) {
-            $layoutMode = 'stack'; // text top, QR bottom (square / tall)
-        } elseif ($heightIn <= 1.15) {
-            $layoutMode = 'side'; // short strip: text left, QR right
-        } else {
-            $layoutMode = $widthIn > $heightIn ? 'side' : 'stack';
-        }
-
         return [
             'width_in' => round($widthIn, 3),
             'height_in' => round($heightIn, 3),
+            'printer' => $printer,
             'media' => $media,
-            'orient' => $orient,
-            'length_in' => round($length, 3),
-            'tape_width_in' => self::TAPE_WIDTH_IN,
+            'orient' => $orient ?? 'landscape',
+            'length_in' => round($length ?? max($widthIn, $heightIn), 3),
+            'tape_width_in' => 1.50,
             'lines' => $lines,
             'qr_url' => $url,
             'show_qr' => $showQr && $url !== '',
             'title' => $name,
             'layout_mode' => $layoutMode,
+            'notes' => $notes ?? '',
+            'preset_label' => $resolved['label'] ?? '',
         ];
     }
 
@@ -191,9 +368,49 @@ class LabelLayoutService
     }
 
     /**
-     * Full SVG document — content packed to top-left (leading edge / left of feed).
-     *
-     * @param array<string,mixed> $layout from pduLabel()
+     * Estimate rendered text width (thousandths of inch) for Arial bold-ish.
+     * Thermal + white-on-dark vinyl tends to look wider than screen metrics.
+     */
+    private static function estimateTextWidth(string $text, int $fontSize, bool $primary): float
+    {
+        // Conservative factors so we never clip (was ~0.58–0.62 → overflow on print)
+        $factor = $primary ? 0.72 : 0.68;
+        $len = function_exists('mb_strlen') ? mb_strlen($text) : strlen($text);
+        // Slightly wider for digits/colons in MAC/IP
+        if (preg_match('/[0-9:]/', $text)) {
+            $factor += 0.03;
+        }
+        return $len * $fontSize * $factor;
+    }
+
+    /**
+     * Fit one line into max width: shrink font first, then truncate.
+     * @return array{0:string,1:int} text, fontSize
+     */
+    private static function fitLine(string $text, int $fontSize, int $minFs, int $maxW, bool $primary): array
+    {
+        $fs = $fontSize;
+        while ($fs > $minFs && self::estimateTextWidth($text, $fs, $primary) > $maxW) {
+            $fs--;
+        }
+        if (self::estimateTextWidth($text, $fs, $primary) <= $maxW) {
+            return [$text, $fs];
+        }
+        // Truncate until it fits
+        $len = function_exists('mb_strlen') ? mb_strlen($text) : strlen($text);
+        while ($len > 4) {
+            $len--;
+            $cut = function_exists('mb_substr') ? mb_substr($text, 0, $len) : substr($text, 0, $len);
+            $try = $cut . '..';
+            if (self::estimateTextWidth($try, $fs, $primary) <= $maxW) {
+                return [$try, $fs];
+            }
+        }
+        return [function_exists('mb_substr') ? mb_substr($text, 0, 3) . '..' : substr($text, 0, 3) . '..', $fs];
+    }
+
+    /**
+     * @param array<string,mixed> $layout
      */
     public static function toSvg(array $layout, string $qrSvgInner = ''): string
     {
@@ -201,12 +418,13 @@ class LabelLayoutService
         $hIn = (float)$layout['height_in'];
         $W = (int)round($wIn * 1000);
         $H = (int)round($hIn * 1000);
-        // Tighter margins on small media
-        $margin = max(28, (int)round(min($W, $H) * 0.045));
-        $gap = max(20, (int)round(min($W, $H) * 0.035));
-        $innerW = $W - 2 * $margin;
-        $innerH = $H - 2 * $margin;
-        $mode = (string)($layout['layout_mode'] ?? 'side');
+        // Extra side margin — physical printable area is often inside die-cut edge
+        $marginX = max(50, (int)round($W * 0.06)); // ≥0.05″, ~6%
+        $marginY = max(40, (int)round($H * 0.05));
+        $gap = max(24, (int)round(min($W, $H) * 0.035));
+        $innerW = $W - 2 * $marginX;
+        $innerH = $H - 2 * $marginY;
+        $mode = (string)($layout['layout_mode'] ?? 'stack');
         $showQr = !empty($layout['show_qr']) && $qrSvgInner !== '';
         $lines = is_array($layout['lines'] ?? null) ? $layout['lines'] : [];
 
@@ -221,67 +439,64 @@ class LabelLayoutService
         $parts[] = sprintf('<rect x="0" y="0" width="%d" height="%d" fill="#ffffff"/>', $W, $H);
 
         $qrSize = 0;
-        $qrX = $margin;
-        $qrY = $margin;
-        $textX = $margin;
+        $qrX = $marginX;
+        $qrY = $marginY;
+        $textX = $marginX;
         $textBoxW = $innerW;
         $textBoxH = $innerH;
 
         if ($showQr) {
             if ($mode === 'side') {
-                // Short horizontal strip (e.g. 1.5×1): QR on right, text left — top aligned
-                $qrSize = (int)min($innerH, (int)round($innerW * 0.40));
-                $qrSize = max(280, min($qrSize, $innerH));
-                $qrX = $W - $margin - $qrSize;
-                $qrY = $margin; // top, not vertically centered
-                $textBoxW = max(180, $qrX - $margin - $gap);
+                $qrSize = (int)min($innerH, (int)round($innerW * 0.38));
+                $qrSize = max(260, min($qrSize, $innerH));
+                $qrX = $W - $marginX - $qrSize;
+                $qrY = $marginY;
+                $textBoxW = max(160, $qrX - $marginX - $gap);
                 $textBoxH = $innerH;
             } elseif ($mode === 'stack_qr') {
-                // 1×1: small name on top, QR fills rest
-                $nameBudget = (int)round($innerH * 0.22);
+                $nameBudget = (int)round($innerH * 0.20);
                 $qrSize = (int)min($innerW, $innerH - $nameBudget - $gap);
                 $qrSize = max(200, $qrSize);
-                $qrX = $margin + (int)max(0, ($innerW - $qrSize) / 2);
-                $qrY = $H - $margin - $qrSize;
+                $qrX = $marginX + (int)max(0, ($innerW - $qrSize) / 2);
+                $qrY = $H - $marginY - $qrSize;
                 $textBoxW = $innerW;
-                $textBoxH = max(80, $qrY - $margin - $gap);
+                $textBoxH = max(70, $qrY - $marginY - $gap);
             } else {
-                // stack (2×2 and tall vertical): text top-left, QR bottom-left (leading/top when fed)
-                $qrSize = (int)min($innerW * 0.92, $innerH * 0.48);
-                $qrSize = max(360, min($qrSize, $innerW));
-                $qrX = $margin; // left, not centered — matches feed edge
-                $qrY = $H - $margin - $qrSize;
+                // stack: text top-left, QR bottom-left (leave side gutter so QR doesn't force text overflow)
+                $qrSize = (int)min($innerW * 0.88, $innerH * 0.46);
+                $qrSize = max(340, min($qrSize, $innerW));
+                $qrX = $marginX;
+                $qrY = $H - $marginY - $qrSize;
                 $textBoxW = $innerW;
-                $textBoxH = max(160, $qrY - $margin - $gap);
+                $textBoxH = max(140, $qrY - $marginY - $gap);
             }
         }
 
-        // Fonts: fit into text box; pack from TOP (no vertical centering)
-        $lineGapFactor = 1.12;
+        $lineGapFactor = 1.14;
         $weightUnits = 0.0;
         foreach ($lines as $line) {
-            $weightUnits += !empty($line['primary']) ? 1.30 : 1.0;
+            $weightUnits += !empty($line['primary']) ? 1.28 : 1.0;
         }
         if ($weightUnits < 1) {
             $weightUnits = 1.0;
         }
 
         $bodyFs = (int)floor($textBoxH / max(1.0, $weightUnits * $lineGapFactor));
-        // Arial Black is wide — cap by width so lines don't clip
-        $maxBody = (int)round(min($textBoxH * 0.28, $textBoxW * 0.095, 145));
-        $minBody = 70;
-        $maxName = (int)round(min($textBoxH * 0.38, $textBoxW * 0.14, 200));
-        $minName = 90;
+        // Slightly smaller caps so full MAC/name fit on ~1.4″ usable width
+        $maxBody = (int)round(min($textBoxH * 0.26, $textBoxW * 0.085, 128));
+        $minBody = 64;
+        $maxName = (int)round(min($textBoxH * 0.34, $textBoxW * 0.12, 168));
+        $minName = 80;
 
         if ($mode === 'stack_qr') {
-            $maxName = (int)round(min($textBoxH * 0.85, $textBoxW * 0.12, 120));
-            $minName = 70;
+            $maxName = (int)round(min($textBoxH * 0.85, $textBoxW * 0.11, 110));
+            $minName = 64;
             $maxBody = $maxName;
             $minBody = $minName;
         }
 
         $bodyFs = max($minBody, min($maxBody, $bodyFs));
-        $nameFs = (int)round($bodyFs * 1.28);
+        $nameFs = (int)round($bodyFs * 1.22);
         $nameFs = max($minName, min($maxName, $nameFs));
 
         $stackH = 0;
@@ -291,35 +506,28 @@ class LabelLayoutService
         }
         if ($stackH > $textBoxH && $stackH > 0) {
             $scale = $textBoxH / $stackH;
-            $nameFs = max((int)($minName * 0.85), (int)floor($nameFs * $scale));
-            $bodyFs = max((int)($minBody * 0.85), (int)floor($bodyFs * $scale));
+            $nameFs = max((int)($minName * 0.9), (int)floor($nameFs * $scale));
+            $bodyFs = max((int)($minBody * 0.9), (int)floor($bodyFs * $scale));
         }
 
-        // TOP-LEFT pack (not centered) — first baseline just below top margin
-        $y = $margin + $nameFs;
-        $fontFamily = 'Arial, Helvetica, sans-serif'; // regular Arial is narrower / more reliable on thermal
+        // Top-left pack
+        $y = $marginY + $nameFs;
+        $fontFamily = 'Arial, Helvetica, sans-serif';
 
         foreach ($lines as $line) {
             $isPrimary = !empty($line['primary']);
             $label = (string)($line['label'] ?? '');
             $value = (string)($line['value'] ?? '');
             $fontSize = $isPrimary ? $nameFs : $bodyFs;
+            $minFs = $isPrimary ? max(60, (int)($minName * 0.85)) : max(56, (int)($minBody * 0.85));
             if ($label !== '') {
                 $text = $label . ' ' . $value;
             } else {
                 $text = $value;
             }
-            // Bold condensed estimate: ~0.60 of font size per char (was 0.52 → overflow)
-            $charW = $isPrimary ? 0.62 : 0.58;
-            $maxChars = max(6, (int)floor($textBoxW / max(1.0, $fontSize * $charW)));
-            $rawLen = function_exists('mb_strlen') ? mb_strlen($text) : strlen($text);
-            if ($rawLen > $maxChars) {
-                $cutN = max(1, $maxChars - 2);
-                $cut = function_exists('mb_substr') ? mb_substr($text, 0, $cutN) : substr($text, 0, $cutN);
-                $text = $cut . '..';
-            }
+            [$text, $fontSize] = self::fitLine($text, $fontSize, $minFs, $textBoxW, $isPrimary);
             $weight = $isPrimary ? '700' : '600';
-            // text-anchor start = left; explicit x at left margin
+            // Optional SVG textLength as safety net (never exceed box)
             $parts[] = sprintf(
                 '<text x="%d" y="%d" text-anchor="start" font-family="%s" font-size="%d" font-weight="%s" fill="#000000">%s</text>',
                 $textX,

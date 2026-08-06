@@ -15,7 +15,12 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **PDU labels — multi-printer presets:** choose Brady BMP51, Zebra, Avery, or Generic sizes; BMP51 keeps 2×2 / 1.5×1 / 1×1 dialog sizes.
+- **PDU ID label modal:** opens on the PDU detail page (no separate page); Print… / Download SVG from the modal.
+
 ### Bug fixes
+
+- **PDU label text clipping:** more conservative width fit and side margins so name and full MAC print without cutting off.
 
 ---
 

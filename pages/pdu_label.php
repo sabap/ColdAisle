@@ -1,10 +1,11 @@
 <?php
 /**
- * Printable PDU ID label — Brady BMP51.
- * Prefer media presets that match the Windows print dialog (2×2, 1.5×1, 1×1).
+ * Printable PDU ID label.
  *
- * Query: id, media=brady_2x2|…, show fields, format=html|svg
- * Legacy: orient=landscape|portrait&length_in= still accepted.
+ * Query:
+ *   id, printer=brady_bmp51|zebra|avery|generic, media=bmp51_2x2|…,
+ *   f_ip, f_serial, f_mac, f_qr, cfg=1,
+ *   format=html|svg, embed=1 (minimal chrome for iframe/modal preview)
  */
 declare(strict_types=1);
 
@@ -45,17 +46,13 @@ if (!$pdu || empty($pdu['is_active'])) {
     exit;
 }
 
+$printer = trim((string)($_GET['printer'] ?? LabelLayoutService::DEFAULT_PRINTER));
 $media = trim((string)($_GET['media'] ?? LabelLayoutService::DEFAULT_MEDIA));
-if ($media === '' || (!isset(LabelLayoutService::MEDIA_PRESETS[$media]) && $media !== 'custom')) {
-    // Legacy
-    $media = '';
-}
 
 $showIp = !isset($_GET['show_ip']) || $_GET['show_ip'] === '1' || $_GET['show_ip'] === 'true';
 $showSerial = !isset($_GET['show_serial']) || $_GET['show_serial'] === '1' || $_GET['show_serial'] === 'true';
 $showMac = !isset($_GET['show_mac']) || $_GET['show_mac'] === '1' || $_GET['show_mac'] === 'true';
 $showQr = !isset($_GET['show_qr']) || $_GET['show_qr'] === '1' || $_GET['show_qr'] === 'true';
-
 if (isset($_GET['cfg'])) {
     $showIp = !empty($_GET['f_ip']);
     $showSerial = !empty($_GET['f_serial']);
@@ -64,7 +61,7 @@ if (isset($_GET['cfg'])) {
 }
 
 $qrUrl = App::url('pages/power_pdus.php?id=' . $pduId);
-$labelOpts = [
+$layout = LabelLayoutService::pduLabel([
     'name' => (string)($pdu['name'] ?? 'PDU'),
     'ip' => $pdu['ip_address'] ?? null,
     'serial' => $pdu['serial_no'] ?? null,
@@ -74,15 +71,12 @@ $labelOpts = [
     'show_serial' => $showSerial,
     'show_mac' => $showMac,
     'show_qr' => $showQr,
-];
-if ($media !== '' && isset(LabelLayoutService::MEDIA_PRESETS[$media])) {
-    $labelOpts['media'] = $media;
-} else {
-    $labelOpts['orient'] = strtolower(trim((string)($_GET['orient'] ?? 'landscape')));
-    $labelOpts['length_in'] = (float)($_GET['length_in'] ?? 2.0);
-}
-
-$layout = LabelLayoutService::pduLabel($labelOpts);
+    'printer' => $printer,
+    'media' => $media,
+    'orient' => $_GET['orient'] ?? null,
+    'length_in' => isset($_GET['length_in']) ? (float)$_GET['length_in'] : null,
+]);
+$printer = (string)($layout['printer'] ?? $printer);
 $media = (string)($layout['media'] ?? $media);
 
 $qrSvg = '';
@@ -110,7 +104,23 @@ if ($format === 'svg') {
 $w = (float)$layout['width_in'];
 $h = (float)$layout['height_in'];
 $svgPreview = LabelLayoutService::toSvg($layout, $qrSvg);
-$backUrl = App::url('pages/power_pdus.php?id=' . $pduId);
+$embed = !empty($_GET['embed']);
+$printOnly = !empty($_GET['print']);
+
+// JSON meta for modal (optional)
+if ($format === 'json') {
+    App::json([
+        'ok' => true,
+        'width_in' => $w,
+        'height_in' => $h,
+        'printer' => $printer,
+        'media' => $media,
+        'preset_label' => $layout['preset_label'] ?? '',
+        'notes' => $layout['notes'] ?? '',
+        'svg' => $svgPreview,
+        'qr_url' => $qrUrl,
+    ]);
+}
 
 function pdu_label_q(array $base, array $over = []): string
 {
@@ -120,6 +130,7 @@ function pdu_label_q(array $base, array $over = []): string
 
 $baseQuery = [
     'id' => $pduId,
+    'printer' => $printer,
     'media' => $media,
     'cfg' => 1,
 ];
@@ -136,9 +147,44 @@ if ($showQr) {
     $baseQuery['f_qr'] = 1;
 }
 
-$presetMeta = LabelLayoutService::MEDIA_PRESETS[$media] ?? null;
-$isBradyDialog = $presetMeta && ($presetMeta['group'] ?? '') === 'brady';
+$notes = (string)($layout['notes'] ?? '');
+$presetLabel = (string)($layout['preset_label'] ?? '');
 
+// --- Embed / print-only: minimal HTML (iframe or popup print) ---
+if ($embed || $printOnly):
+    ?><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PDU label — <?= App::e((string)$pdu['name']) ?></title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #fff; }
+    .preview-stage { padding: <?= $embed ? '12px' : '0' ?>; background: <?= $embed ? '#e2e8f0' : '#fff' ?>; }
+    .label-svg { display: block; background: #fff; max-width: 100%; height: auto; }
+    @media print {
+      html, body, .preview-stage { margin: 0; padding: 0; background: #fff; }
+      .label-svg {
+        max-width: none !important;
+        width: <?= App::e((string)$w) ?>in !important;
+        height: <?= App::e((string)$h) ?>in !important;
+      }
+      @page { size: <?= App::e((string)$w) ?>in <?= App::e((string)$h) ?>in; margin: 0; }
+    }
+  </style>
+  <?php if ($printOnly): ?>
+  <script>window.addEventListener('load', function () { setTimeout(function () { window.print(); }, 200); });</script>
+  <?php endif; ?>
+</head>
+<body>
+  <div class="preview-stage"><?= $svgPreview ?></div>
+</body>
+</html>
+    <?php
+    exit;
+endif;
+
+// --- Full page (fallback / direct link) ---
+$backUrl = App::url('pages/power_pdus.php?id=' . $pduId);
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -146,181 +192,24 @@ $isBradyDialog = $presetMeta && ($presetMeta['group'] ?? '') === 'brady';
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PDU label — <?= App::e((string)$pdu['name']) ?></title>
   <style>
-    :root {
-      --bg: #0f172a;
-      --card: #1e293b;
-      --text: #e2e8f0;
-      --muted: #94a3b8;
-      --accent: #38bdf8;
-      --border: rgba(148,163,184,.25);
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: "Segoe UI", system-ui, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-    }
-    .wrap { max-width: 960px; margin: 0 auto; padding: 1.25rem; }
-    h1 { font-size: 1.25rem; margin: 0 0 .35rem; }
-    .sub { color: var(--muted); font-size: .9rem; margin-bottom: 1rem; }
-    .toolbar {
-      display: flex; flex-wrap: wrap; gap: .65rem; align-items: flex-end;
-      background: var(--card); border: 1px solid var(--border);
-      border-radius: 10px; padding: .85rem 1rem; margin-bottom: 1rem;
-    }
-    .toolbar label { display: flex; flex-direction: column; gap: .25rem; font-size: .78rem; color: var(--muted); }
-    .toolbar label.row { flex-direction: row; align-items: center; gap: .4rem; font-size: .85rem; color: var(--text); }
-    select {
-      background: #0f172a; color: var(--text); border: 1px solid var(--border);
-      border-radius: 6px; padding: .4rem .55rem; font: inherit; min-width: 16rem;
-    }
-    .fields { display: flex; flex-wrap: wrap; gap: .65rem 1rem; align-items: center; }
-    .actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-left: auto; }
-    .btn {
-      appearance: none; border: 0; border-radius: 8px; padding: .45rem .9rem;
-      font: inherit; font-weight: 600; cursor: pointer; text-decoration: none;
-      display: inline-flex; align-items: center; gap: .35rem;
-    }
-    .btn-primary { background: linear-gradient(135deg, #38bdf8, #22d3ee); color: #0f172a; }
-    .btn-secondary { background: #334155; color: var(--text); }
-    .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
-    .preview-stage {
-      background: #334155; border-radius: 12px; padding: 1.5rem;
-      display: flex; justify-content: flex-start; align-items: flex-start;
-      min-height: 180px; margin-bottom: 1rem; overflow: auto;
-    }
-    .preview-stage .label-svg {
-      background: #fff; box-shadow: 0 8px 28px rgba(0,0,0,.35);
-      /* Screen: scale up for visibility but keep aspect; print uses true inches */
-      max-width: min(100%, 420px);
-      height: auto;
-      display: block;
-    }
-    .size-chip {
-      display: inline-block; background: rgba(56,189,248,.15); color: #7dd3fc;
-      border-radius: 6px; padding: .15rem .5rem; font-weight: 650; font-size: .85rem;
-    }
-    .meta {
-      font-size: .85rem; color: var(--muted); line-height: 1.45;
-      background: var(--card); border: 1px solid var(--border);
-      border-radius: 10px; padding: .85rem 1rem;
-    }
-    .meta code { color: #7dd3fc; word-break: break-all; }
-    .meta strong { color: var(--text); }
-    .warn { color: #fbbf24; }
-
+    body { font-family: "Segoe UI", system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 1.25rem; }
+    a { color: #38bdf8; }
+    .label-svg { background: #fff; max-width: min(100%, 420px); height: auto; }
     @media print {
-      body { background: #fff !important; color: #000; margin: 0; }
+      body { background: #fff; padding: 0; }
       .no-print { display: none !important; }
-      .wrap { max-width: none; margin: 0; padding: 0; }
-      .preview-stage {
-        background: none !important; padding: 0; min-height: 0; margin: 0;
-        box-shadow: none; justify-content: flex-start; align-items: flex-start;
-        overflow: visible;
-      }
-      .preview-stage .label-svg {
-        box-shadow: none !important;
-        max-width: none !important;
-        width: <?= App::e((string)$w) ?>in !important;
-        height: <?= App::e((string)$h) ?>in !important;
-        margin: 0 !important;
-      }
-      @page {
-        size: <?= App::e((string)$w) ?>in <?= App::e((string)$h) ?>in;
-        margin: 0;
-      }
+      .label-svg { max-width: none; width: <?= App::e((string)$w) ?>in; height: <?= App::e((string)$h) ?>in; }
+      @page { size: <?= App::e((string)$w) ?>in <?= App::e((string)$h) ?>in; margin: 0; }
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="no-print">
-      <h1>PDU identification label</h1>
-      <p class="sub">
-        <?= App::e((string)$pdu['name']) ?> ·
-        <span class="size-chip"><?= App::e((string)$w) ?>″ × <?= App::e((string)$h) ?>″</span>
-        <?php if ($presetMeta): ?>
-          · <?= App::e($presetMeta['label']) ?>
-        <?php endif; ?>
-      </p>
-
-      <form class="toolbar" method="get" action="">
-        <input type="hidden" name="id" value="<?= (int)$pduId ?>">
-        <input type="hidden" name="cfg" value="1">
-        <label>Label size (match Brady print dialog)
-          <select name="media" onchange="this.form.submit()">
-            <optgroup label="Brady Windows dialog (use these)">
-              <?php foreach (LabelLayoutService::MEDIA_PRESETS as $key => $p):
-                  if (($p['group'] ?? '') !== 'brady') {
-                      continue;
-                  }
-                  ?>
-                <option value="<?= App::e($key) ?>" <?= $media === $key ? 'selected' : '' ?>>
-                  <?= App::e($p['label']) ?>
-                </option>
-              <?php endforeach; ?>
-            </optgroup>
-            <optgroup label="Continuous 1.50″ vinyl (SVG / Workstation if dialog lacks size)">
-              <?php foreach (LabelLayoutService::MEDIA_PRESETS as $key => $p):
-                  if (($p['group'] ?? '') !== 'continuous') {
-                      continue;
-                  }
-                  ?>
-                <option value="<?= App::e($key) ?>" <?= $media === $key ? 'selected' : '' ?>>
-                  <?= App::e($p['label']) ?>
-                </option>
-              <?php endforeach; ?>
-            </optgroup>
-          </select>
-        </label>
-        <div class="fields">
-          <label class="row"><input type="checkbox" name="f_ip" value="1" <?= $showIp ? 'checked' : '' ?> onchange="this.form.submit()"> IP</label>
-          <label class="row"><input type="checkbox" name="f_serial" value="1" <?= $showSerial ? 'checked' : '' ?> onchange="this.form.submit()"> Serial</label>
-          <label class="row"><input type="checkbox" name="f_mac" value="1" <?= $showMac ? 'checked' : '' ?> onchange="this.form.submit()"> MAC</label>
-          <label class="row"><input type="checkbox" name="f_qr" value="1" <?= $showQr ? 'checked' : '' ?> onchange="this.form.submit()"> QR code</label>
-        </div>
-        <div class="actions">
-          <button type="button" class="btn btn-primary" onclick="window.print()">Print…</button>
-          <a class="btn btn-secondary" href="<?= App::e(pdu_label_q($baseQuery, ['format' => 'svg'])) ?>">Download SVG</a>
-          <a class="btn btn-ghost" href="<?= App::e($backUrl) ?>">Back to PDU</a>
-        </div>
-      </form>
-    </div>
-
-    <div class="preview-stage">
-      <?= $svgPreview ?>
-    </div>
-
-    <div class="meta no-print">
-      <p style="margin-top:0">
-        <strong>Match the print dialog size exactly.</strong>
-        Your BMP51 driver only prints cleanly on <strong>1″×1″</strong>, <strong>1.5″×1″</strong>, and <strong>2″×2″</strong>.
-        Other sizes often become a huge continuous page with artwork floating in the middle.
-      </p>
-      <?php if ($isBradyDialog): ?>
-        <p>
-          Selected design is <strong><?= App::e((string)$w) ?>″ × <?= App::e((string)$h) ?>″</strong> —
-          choose that same size in the Windows print dialog (e.g. <strong>2″ × 2″</strong>).
-        </p>
-      <?php else: ?>
-        <p class="warn">
-          Continuous sizes are best via <strong>Download SVG</strong> → Brady Workstation if the Windows dialog
-          has no matching size (avoids the 25′ page issue).
-        </p>
-      <?php endif; ?>
-      <p>
-        Content is packed to the <strong>top-left</strong> of the label (leading edge / left of feed), not centered.
-        Recommended for full name + IP + serial + MAC + QR: <strong>2″ × 2″</strong>.
-      </p>
-      <p>
-        <strong>QR target:</strong> <code><?= App::e($qrUrl) ?></code>
-      </p>
-      <?php if (empty($pdu['mac_address'])): ?>
-        <p>MAC is blank — SNMP Discover/Poll or Edit properties fills it for the label.</p>
-      <?php endif; ?>
-    </div>
-  </div>
+  <p class="no-print"><a href="<?= App::e($backUrl) ?>">← Back to PDU</a>
+    · <?= App::e((string)$w) ?>″ × <?= App::e((string)$h) ?>″
+    · <a href="<?= App::e(pdu_label_q($baseQuery, ['format' => 'svg'])) ?>">Download SVG</a>
+    · <button type="button" onclick="window.print()">Print</button>
+  </p>
+  <?= $svgPreview ?>
+  <?php if ($notes !== ''): ?><p class="no-print" style="color:#94a3b8;font-size:.85rem"><?= App::e($notes) ?></p><?php endif; ?>
 </body>
 </html>

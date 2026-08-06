@@ -1656,9 +1656,8 @@ if ($pduId) {
         <div class="card-header flex-between">
             <h2>Overview</h2>
             <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-                <a class="btn btn-sm btn-secondary"
-                   href="<?= App::e(App::url('pages/pdu_label.php?id=' . (int)$p['pdu_id'] . '&media=brady_2x2')) ?>"
-                   title="Print or download Brady BMP51 ID label (2×2 recommended)">ID label</a>
+                <button type="button" class="btn btn-sm btn-secondary" data-open-modal="modal-pdu-label"
+                        title="Print or download identification label">ID label</button>
                 <?php if (AuthManager::canEditPower($user)): ?>
                     <button type="button" class="btn btn-sm btn-secondary" data-open-modal="modal-edit-pdu">Edit properties</button>
                 <?php endif; ?>
@@ -1762,6 +1761,163 @@ if ($pduId) {
         </div>
     </div>
     <?php endif; ?>
+
+    <?php
+    require_once dirname(__DIR__) . '/src/Services/LabelLayoutService.php';
+    $labelPrinters = LabelLayoutService::PRINTERS;
+    $labelDefaultPrinter = LabelLayoutService::DEFAULT_PRINTER;
+    $labelDefaultMedia = LabelLayoutService::DEFAULT_MEDIA;
+    $labelPduId = (int)$p['pdu_id'];
+    $labelBase = App::url('pages/pdu_label.php');
+    ?>
+    <div class="app-modal" id="modal-pdu-label" hidden aria-hidden="true">
+        <div class="app-modal-backdrop" data-modal-close></div>
+        <div class="app-modal-panel app-modal-panel-xl" role="dialog" aria-modal="true" aria-labelledby="modal-pdu-label-title">
+            <div class="app-modal-head">
+                <h3 id="modal-pdu-label-title">ID label — <?= App::e($p['name']) ?></h3>
+                <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
+            </div>
+            <div class="app-modal-body">
+                <div class="form-row" style="display:flex;flex-wrap:wrap;gap:.75rem 1rem;align-items:flex-end;margin-bottom:.75rem">
+                    <div>
+                        <label class="text-muted" style="font-size:.78rem;display:block;margin-bottom:.25rem">Printer</label>
+                        <select class="form-control" id="pduLabelPrinter" style="min-width:12rem">
+                            <?php foreach ($labelPrinters as $pk => $pd): ?>
+                                <option value="<?= App::e($pk) ?>" <?= $pk === $labelDefaultPrinter ? 'selected' : '' ?>>
+                                    <?= App::e($pd['label']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-muted" style="font-size:.78rem;display:block;margin-bottom:.25rem">Label size</label>
+                        <select class="form-control" id="pduLabelMedia" style="min-width:16rem"></select>
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:.65rem;align-items:center;padding-bottom:.2rem">
+                        <label style="margin:0;font-size:.85rem"><input type="checkbox" id="pduLabelFIp" checked> IP</label>
+                        <label style="margin:0;font-size:.85rem"><input type="checkbox" id="pduLabelFSerial" checked> Serial</label>
+                        <label style="margin:0;font-size:.85rem"><input type="checkbox" id="pduLabelFMac" checked> MAC</label>
+                        <label style="margin:0;font-size:.85rem"><input type="checkbox" id="pduLabelFQr" checked> QR</label>
+                    </div>
+                </div>
+                <p class="text-muted" id="pduLabelNotes" style="font-size:.82rem;margin:.25rem 0 .75rem"></p>
+                <p class="text-muted" style="font-size:.82rem;margin:0 0 .5rem">
+                    Size: <strong id="pduLabelSizeChip">—</strong>
+                    · Match this size in the printer dialog when using <strong>Print…</strong>
+                </p>
+                <div style="background:#334155;border-radius:10px;padding:1rem;min-height:200px">
+                    <iframe id="pduLabelFrame" title="Label preview"
+                            style="width:100%;min-height:280px;border:0;border-radius:8px;background:#e2e8f0"></iframe>
+                </div>
+            </div>
+            <div class="app-modal-foot" style="display:flex;flex-wrap:wrap;gap:.5rem;justify-content:flex-end;padding:.75rem 1rem;border-top:1px solid var(--border)">
+                <button type="button" class="btn btn-ghost" data-modal-close>Close</button>
+                <a class="btn btn-secondary" id="pduLabelSvg" href="#" target="_blank" rel="noopener">Download SVG</a>
+                <button type="button" class="btn btn-primary" id="pduLabelPrint">Print…</button>
+            </div>
+        </div>
+    </div>
+    <script>
+    window.ColdAislePduLabel = {
+        pduId: <?= (int)$labelPduId ?>,
+        baseUrl: <?= json_encode($labelBase, JSON_UNESCAPED_SLASHES) ?>,
+        printers: <?= json_encode($labelPrinters, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>,
+        defaultPrinter: <?= json_encode($labelDefaultPrinter) ?>,
+        defaultMedia: <?= json_encode($labelDefaultMedia) ?>
+    };
+    (function () {
+        var cfg = window.ColdAislePduLabel;
+        if (!cfg) return;
+        var printerEl = document.getElementById('pduLabelPrinter');
+        var mediaEl = document.getElementById('pduLabelMedia');
+        var frame = document.getElementById('pduLabelFrame');
+        var notesEl = document.getElementById('pduLabelNotes');
+        var sizeChip = document.getElementById('pduLabelSizeChip');
+        var svgLink = document.getElementById('pduLabelSvg');
+        var printBtn = document.getElementById('pduLabelPrint');
+        if (!printerEl || !mediaEl || !frame) return;
+
+        function fillMedia(printerKey, keepMedia) {
+            var p = cfg.printers[printerKey];
+            mediaEl.innerHTML = '';
+            if (!p || !p.presets) return;
+            var keys = Object.keys(p.presets);
+            var selected = keepMedia && p.presets[keepMedia] ? keepMedia : keys[0];
+            keys.forEach(function (k) {
+                var opt = document.createElement('option');
+                opt.value = k;
+                opt.textContent = p.presets[k].label || k;
+                if (k === selected) opt.selected = true;
+                mediaEl.appendChild(opt);
+            });
+            notesEl.textContent = p.notes || '';
+        }
+
+        function buildQuery() {
+            var q = {
+                id: cfg.pduId,
+                printer: printerEl.value,
+                media: mediaEl.value,
+                embed: 1,
+                cfg: 1
+            };
+            if (document.getElementById('pduLabelFIp').checked) q.f_ip = 1;
+            if (document.getElementById('pduLabelFSerial').checked) q.f_serial = 1;
+            if (document.getElementById('pduLabelFMac').checked) q.f_mac = 1;
+            if (document.getElementById('pduLabelFQr').checked) q.f_qr = 1;
+            return q;
+        }
+
+        function qs(obj) {
+            return Object.keys(obj).map(function (k) {
+                return encodeURIComponent(k) + '=' + encodeURIComponent(obj[k]);
+            }).join('&');
+        }
+
+        function refresh() {
+            var q = buildQuery();
+            var url = cfg.baseUrl + (cfg.baseUrl.indexOf('?') >= 0 ? '&' : '?') + qs(q);
+            frame.src = url;
+            var svgQ = Object.assign({}, q);
+            delete svgQ.embed;
+            svgQ.format = 'svg';
+            svgLink.href = cfg.baseUrl + (cfg.baseUrl.indexOf('?') >= 0 ? '&' : '?') + qs(svgQ);
+            var p = cfg.printers[printerEl.value];
+            var pr = p && p.presets ? p.presets[mediaEl.value] : null;
+            if (pr) {
+                sizeChip.textContent = pr.w + '″ × ' + pr.h + '″';
+            } else {
+                sizeChip.textContent = '—';
+            }
+        }
+
+        printerEl.addEventListener('change', function () {
+            fillMedia(printerEl.value, null);
+            refresh();
+        });
+        mediaEl.addEventListener('change', refresh);
+        ['pduLabelFIp', 'pduLabelFSerial', 'pduLabelFMac', 'pduLabelFQr'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) el.addEventListener('change', refresh);
+        });
+        printBtn.addEventListener('click', function () {
+            var q = buildQuery();
+            delete q.embed;
+            q.print = 1;
+            var url = cfg.baseUrl + (cfg.baseUrl.indexOf('?') >= 0 ? '&' : '?') + qs(q);
+            window.open(url, 'pduLabelPrint', 'width=640,height=720');
+        });
+
+        // When modal opens, ensure options + preview
+        document.querySelectorAll('[data-open-modal="modal-pdu-label"]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                fillMedia(printerEl.value || cfg.defaultPrinter, mediaEl.value || cfg.defaultMedia);
+                setTimeout(refresh, 50);
+            });
+        });
+        fillMedia(cfg.defaultPrinter, cfg.defaultMedia);
+    })();
+    </script>
 
     <div class="card">
             <?php if ($outputMode === 'breakers'):
