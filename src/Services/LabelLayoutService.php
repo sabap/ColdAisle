@@ -408,7 +408,30 @@ class LabelLayoutService
         while ($fs > $minFs && self::estimateTextWidth($text, $fs, $primary) > $maxW) {
             $fs--;
         }
-        // If still too wide at minFs, keep minFs — SVG textLength will compress slightly
+        return $fs;
+    }
+
+    /**
+     * Grow font until the string nearly fills targetW (then back off one step if over).
+     * Used for the PDU name so it spans the frame with only a tiny side gap.
+     */
+    private static function fontSizeToFillWidth(string $text, int $targetW, int $maxFs, int $minFs, bool $primary): int
+    {
+        if ($text === '' || $targetW < 1) {
+            return $minFs;
+        }
+        // Seed from inverse of width estimate, then climb while still under target
+        $len = function_exists('mb_strlen') ? mb_strlen($text) : strlen($text);
+        $len = max(1, $len);
+        $seedFactor = $primary ? 0.56 : 0.54;
+        $fs = (int)floor($targetW / ($len * $seedFactor));
+        $fs = max($minFs, min($maxFs, $fs));
+        while ($fs > $minFs && self::estimateTextWidth($text, $fs, $primary) > $targetW) {
+            $fs--;
+        }
+        while ($fs < $maxFs && self::estimateTextWidth($text, $fs + 1, $primary) <= $targetW) {
+            $fs++;
+        }
         return $fs;
     }
 
@@ -538,21 +561,23 @@ class LabelLayoutService
             }
         }
 
-        // --- Name: as large as possible within text box (padding already applied) ---
+        // --- Name: fill nearly full content width (1–2 print px pad each side) ---
+        // At 300 dpi, 2 px ≈ 0.0067″ ≈ 7 units in our 1000/in space.
+        $nameSidePad = 8; // ~2 print pixels each side
+        $nameTargetW = max(60, $textBoxW - 2 * $nameSidePad);
         $minName = 56;
-        $maxName = (int)round(min($textBoxH * 0.42, 220)); // allow big name
+        $maxName = (int)round(min($textBoxH * 0.55, 280)); // height allows large name
         if ($mode === 'stack_qr') {
-            $maxName = (int)round(min($textBoxH * 0.90, $textBoxW * 0.14, 130));
+            $maxName = (int)round(min($textBoxH * 0.92, 140));
             $minName = 48;
         }
-        // Start high; width-fit brings it down to fill the box width
-        $nameFs = $maxName;
+        $nameFs = $minName;
         if ($nameText !== '') {
-            $nameFs = self::fontSizeToFit($nameText, $textBoxW, $maxName, $minName, true);
+            $nameFs = self::fontSizeToFillWidth($nameText, $nameTargetW, $maxName, $minName, true);
         }
         $nameWidth = $nameText !== ''
             ? self::estimateTextWidth($nameText, $nameFs, true)
-            : (float)$textBoxW;
+            : (float)$nameTargetW;
 
         // --- Detail: longest line fits in ≤ 90% of the name's rendered width ---
         // (name stays the largest visual object)
@@ -601,16 +626,30 @@ class LabelLayoutService
             }
         }
         if ($stackH > $textBoxH && $stackH > 0) {
-            $scale = $textBoxH / $stackH;
-            $nameFs = max($minName, (int)floor($nameFs * $scale));
-            $bodyFs = max($minBody, (int)floor($bodyFs * $scale));
-            if ($nameText !== '') {
-                $nameFs = self::fontSizeToFit($nameText, $textBoxW, $nameFs, $minName, true);
-                $nameWidth = self::estimateTextWidth($nameText, $nameFs, true);
-                $detailMaxW = (int)max(80, min($textBoxW, (int)floor($nameWidth * 0.90)));
+            // Prefer shrinking detail; only shrink name if still over
+            $detailOnly = $stackH - (int)round($nameFs * $lineGapFactor);
+            $room = $textBoxH - (int)round($nameFs * $lineGapFactor);
+            if ($nDetail > 0 && $detailOnly > $room && $room > 0) {
+                $bodyFs = max($minBody, (int)floor($bodyFs * ($room / $detailOnly)));
             }
-            if ($longestDetail !== '') {
-                $bodyFs = self::fontSizeToFit($longestDetail, $detailMaxW, $bodyFs, $minBody, false);
+            $stackH = (int)round($nameFs * $lineGapFactor);
+            foreach ($prepared as $p) {
+                if (!$p['primary']) {
+                    $stackH += (int)round($bodyFs * $lineGapFactor);
+                }
+            }
+            if ($stackH > $textBoxH && $stackH > 0) {
+                $scale = $textBoxH / $stackH;
+                $nameFs = max($minName, (int)floor($nameFs * $scale));
+                $bodyFs = max($minBody, (int)floor($bodyFs * $scale));
+                if ($nameText !== '') {
+                    $nameFs = self::fontSizeToFillWidth($nameText, $nameTargetW, $nameFs, $minName, true);
+                    $nameWidth = self::estimateTextWidth($nameText, $nameFs, true);
+                    $detailMaxW = (int)max(80, min($textBoxW, (int)floor($nameWidth * 0.90)));
+                }
+                if ($longestDetail !== '') {
+                    $bodyFs = self::fontSizeToFit($longestDetail, $detailMaxW, $bodyFs, $minBody, false);
+                }
             }
             if ($bodyFs >= $nameFs) {
                 $bodyFs = max($minBody, (int)floor($nameFs * 0.88));
@@ -626,10 +665,8 @@ class LabelLayoutService
             $text = $p['text'];
             $fontSize = $isPrimary ? $nameFs : $bodyFs;
             $weight = $isPrimary ? '700' : '600';
-            $maxW = $isPrimary ? $textBoxW : $detailMaxW;
-            $est = self::estimateTextWidth($text, $fontSize, $isPrimary);
-            $useLen = $est > $maxW;
-            if ($useLen) {
+            // Name: lock width to target so it spans the frame (with 1–2px pad)
+            if ($isPrimary) {
                 $parts[] = sprintf(
                     '<text x="%d" y="%d" text-anchor="start" font-family="%s" font-size="%d" font-weight="%s" fill="#000000" textLength="%d" lengthAdjust="spacingAndGlyphs">%s</text>',
                     $textX,
@@ -637,19 +674,34 @@ class LabelLayoutService
                     $fontFamily,
                     $fontSize,
                     $weight,
-                    $maxW,
+                    $nameTargetW,
                     self::xmlEsc($text)
                 );
             } else {
-                $parts[] = sprintf(
-                    '<text x="%d" y="%d" text-anchor="start" font-family="%s" font-size="%d" font-weight="%s" fill="#000000">%s</text>',
-                    $textX,
-                    $y,
-                    $fontFamily,
-                    $fontSize,
-                    $weight,
-                    self::xmlEsc($text)
-                );
+                $maxW = $detailMaxW;
+                $est = self::estimateTextWidth($text, $fontSize, false);
+                if ($est > $maxW) {
+                    $parts[] = sprintf(
+                        '<text x="%d" y="%d" text-anchor="start" font-family="%s" font-size="%d" font-weight="%s" fill="#000000" textLength="%d" lengthAdjust="spacingAndGlyphs">%s</text>',
+                        $textX,
+                        $y,
+                        $fontFamily,
+                        $fontSize,
+                        $weight,
+                        $maxW,
+                        self::xmlEsc($text)
+                    );
+                } else {
+                    $parts[] = sprintf(
+                        '<text x="%d" y="%d" text-anchor="start" font-family="%s" font-size="%d" font-weight="%s" fill="#000000">%s</text>',
+                        $textX,
+                        $y,
+                        $fontFamily,
+                        $fontSize,
+                        $weight,
+                        self::xmlEsc($text)
+                    );
+                }
             }
             $y += (int)round($fontSize * $lineGapFactor);
         }

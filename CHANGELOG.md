@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **PDU label name width:** name grows to fill the frame width (about 1–2 print px padding each side) via width-fit + SVG textLength; detail lines stay ≤90% of the name width.
+
 ---
 
 ## [0.3.53] - 2026-08-06
