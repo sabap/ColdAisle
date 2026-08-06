@@ -281,16 +281,23 @@ if ($showQr) {
 
     <div class="meta no-print">
       <p style="margin-top:0">
-        <strong>Print tips:</strong> Choose the BMP51 (or continuous 1.50″ cartridge) in the Windows print dialog.
-        Set page size to <strong><?= App::e((string)$w) ?>″ × <?= App::e((string)$h) ?>″</strong> if the driver asks.
-        If the driver ignores custom size, use <strong>Download SVG</strong> and import into Brady Workstation / LabelMark.
+        <strong>Print size:</strong> this design is exactly
+        <strong><?= App::e((string)$w) ?>″ wide × <?= App::e((string)$h) ?>″ tall</strong>
+        (<?= $orient === 'landscape' ? 'length along tape × 1.50″ tape width' : '1.50″ tape width × length along tape' ?>).
+        In the Windows / Brady dialog, pick a media size that <em>matches</em> those numbers
+        (e.g. Continuous 1.50″ × <?= App::e((string)$lengthIn) ?>″ for horizontal).
+        Choosing a smaller preset (like 1.5″×1″) scales the whole artwork down and can make text unreadable
+        or print blank if the driver rejects the page size.
+      </p>
+      <p>
+        Prefer <strong>Download SVG</strong> → Brady Workstation / LabelMark if the Windows dialog will not honor custom size.
       </p>
       <p>
         <strong>QR target:</strong> <code><?= App::e($qrUrl) ?></code><br>
         Scanning opens this PDU in ColdAisle (login required if not already signed in). Phones need network/VPN reachability to the server.
       </p>
       <?php if (empty($pdu['mac_address'])): ?>
-        <p>MAC is blank — add it under <strong>Edit properties</strong> to print it on the label.</p>
+        <p>MAC is blank — run SNMP Discover/Poll or edit properties to fill it for the label.</p>
       <?php endif; ?>
     </div>
   </div>
