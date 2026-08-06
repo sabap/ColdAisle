@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **PDU label right-edge clip:** larger right safe margin; detail lines (IP/SN/MAC) scale down to fit the longest field fully; SVG textLength hard-cap so the last glyph is not cut by the printer stop.
+
 ---
 
 ## [0.3.48] - 2026-08-06
