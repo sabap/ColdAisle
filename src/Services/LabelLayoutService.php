@@ -435,18 +435,20 @@ class LabelLayoutService
         $artY = 0;
 
         $stroke = max(10, min(16, (int)round(min($artW, $artH) * 0.008)));
-        // Small edge inset from tape edge (not 3/8″ — that was eating half the 1.5″ tape)
-        $edge = max(28, (int)round(min($artW, $artH) * 0.035)); // ~0.03–0.04″
-        $edge = $edge + (int)ceil($stroke / 2);
+        // Asymmetric edge: a few extra units on the RIGHT so the frame clears the tape edge
+        $edgeL = max(26, (int)round(min($artW, $artH) * 0.032)) + (int)ceil($stroke / 2);
+        $edgeR = $edgeL + 28; // ~0.028″ shorter frame on the right (right border fully on tape)
+        $edgeT = max(26, (int)round(min($artW, $artH) * 0.032)) + (int)ceil($stroke / 2);
+        $edgeB = $edgeT;
 
-        $bx = $artX + $edge;
-        $by = $artY + $edge;
-        $bw = max(200, $artW - 2 * $edge);
-        $bh = max(200, $artH - 2 * $edge);
+        $bx = $artX + $edgeL;
+        $by = $artY + $edgeT;
+        $bw = max(200, $artW - $edgeL - $edgeR);
+        $bh = max(200, $artH - $edgeT - $edgeB);
         $rx = max(24, min(60, (int)round(min($bw, $bh) * 0.055)));
 
-        // Tight cell padding inside border (~1–2 print px past half-stroke)
-        $pad = max(10, (int)ceil($stroke / 2) + 8);
+        // Cell padding inside border (a few print px past the stroke)
+        $pad = max(12, (int)ceil($stroke / 2) + 10);
         $marginL = $bx + $pad;
         $marginY = $by + $pad;
         $contentW = max(100, $bw - 2 * $pad);
@@ -493,7 +495,7 @@ class LabelLayoutService
                 $textBoxW = max(100, $qrX - $marginL - $gap);
                 $textBoxH = $contentH;
             } elseif ($mode === 'stack_qr') {
-                $nameBudget = (int)round($contentH * 0.20);
+                $nameBudget = (int)round($contentH * 0.22);
                 $qrSize = (int)min($contentW, $contentH - $nameBudget - $gap);
                 $qrSize = max(160, $qrSize);
                 $qrX = $marginL + (int)max(0, ($contentW - $qrSize) / 2);
@@ -501,7 +503,7 @@ class LabelLayoutService
                 $textBoxW = $contentW;
                 $textBoxH = max(50, $qrY - $marginY - $gap);
             } else {
-                // stack: text top, QR below — use as much of the frame as possible
+                // stack: text top, QR below
                 $qrSize = (int)min($contentW * 0.92, $contentH * 0.48);
                 $qrSize = max(300, min($qrSize, $contentW));
                 $qrX = $marginL;
@@ -513,15 +515,19 @@ class LabelLayoutService
 
         // Build full line strings first (never split mid-value)
         $prepared = [];
+        $nameText = '';
         foreach ($lines as $line) {
             $isPrimary = !empty($line['primary']);
             $label = (string)($line['label'] ?? '');
             $value = (string)($line['value'] ?? '');
             $text = $label !== '' ? ($label . ' ' . $value) : $value;
             $prepared[] = ['text' => $text, 'primary' => $isPrimary];
+            if ($isPrimary && $nameText === '') {
+                $nameText = $text;
+            }
         }
 
-        $lineGapFactor = 1.14;
+        $lineGapFactor = 1.12;
         $nPrimary = 0;
         $nDetail = 0;
         foreach ($prepared as $p) {
@@ -532,71 +538,82 @@ class LabelLayoutService
             }
         }
 
-        // Height-based starting sizes — prefer larger type; width-fit will pull down if needed
-        $weightUnits = $nPrimary * 1.28 + max(0, $nDetail) * 1.0;
-        if ($weightUnits < 1) {
-            $weightUnits = 1.0;
-        }
-        $bodyFs = (int)floor($textBoxH / max(1.0, $weightUnits * $lineGapFactor));
-        $maxBody = (int)round(min($textBoxH * 0.30, 145));
-        $minBody = 52;
-        $maxName = (int)round(min($textBoxH * 0.38, 175));
-        $minName = 64;
-
+        // --- Name: as large as possible within text box (padding already applied) ---
+        $minName = 56;
+        $maxName = (int)round(min($textBoxH * 0.42, 220)); // allow big name
         if ($mode === 'stack_qr') {
-            $maxName = (int)round(min($textBoxH * 0.85, $textBoxW * 0.12, 110));
-            $minName = 52;
-            $maxBody = $maxName;
-            $minBody = $minName;
+            $maxName = (int)round(min($textBoxH * 0.90, $textBoxW * 0.14, 130));
+            $minName = 48;
         }
-
-        $bodyFs = max($minBody, min($maxBody, $bodyFs));
-        $nameFs = (int)round($bodyFs * 1.22);
-        $nameFs = max($minName, min($maxName, $nameFs));
-
-        // WIDTH: scale name and ALL detail lines to fit the longest field fully
-        foreach ($prepared as $p) {
-            if ($p['primary']) {
-                $nameFs = self::fontSizeToFit($p['text'], $textBoxW, $nameFs, $minName, true);
-            }
+        // Start high; width-fit brings it down to fill the box width
+        $nameFs = $maxName;
+        if ($nameText !== '') {
+            $nameFs = self::fontSizeToFit($nameText, $textBoxW, $maxName, $minName, true);
         }
+        $nameWidth = $nameText !== ''
+            ? self::estimateTextWidth($nameText, $nameFs, true)
+            : (float)$textBoxW;
+
+        // --- Detail: longest line fits in ≤ 90% of the name's rendered width ---
+        // (name stays the largest visual object)
+        $detailMaxW = (int)max(80, min($textBoxW, (int)floor($nameWidth * 0.90)));
+        $minBody = 48;
+        $maxBody = (int)round(min($nameFs * 0.92, $textBoxH * 0.28, 160));
+
         $longestDetail = '';
         foreach ($prepared as $p) {
-            if (!$p['primary']) {
-                $len = function_exists('mb_strlen') ? mb_strlen($p['text']) : strlen($p['text']);
-                $best = function_exists('mb_strlen') ? mb_strlen($longestDetail) : strlen($longestDetail);
-                if ($len > $best) {
-                    $longestDetail = $p['text'];
-                }
+            if ($p['primary']) {
+                continue;
             }
-        }
-        if ($longestDetail !== '') {
-            $bodyFs = self::fontSizeToFit($longestDetail, $textBoxW, $bodyFs, $minBody, false);
-            // Also ensure every detail line fits at that size (paranoia)
-            foreach ($prepared as $p) {
-                if (!$p['primary']) {
-                    $bodyFs = self::fontSizeToFit($p['text'], $textBoxW, $bodyFs, $minBody, false);
-                }
+            $len = function_exists('mb_strlen') ? mb_strlen($p['text']) : strlen($p['text']);
+            $best = function_exists('mb_strlen') ? mb_strlen($longestDetail) : strlen($longestDetail);
+            if ($len > $best) {
+                $longestDetail = $p['text'];
             }
         }
 
-        // Vertical: if stack overflows, scale both down together (keep ratio)
-        $stackH = 0;
+        // Height budget for detail lines under the name
+        $nameLineH = (int)round($nameFs * $lineGapFactor);
+        $detailBudgetH = max(40, $textBoxH - $nameLineH);
+        $bodyFsFromHeight = $nDetail > 0
+            ? (int)floor($detailBudgetH / max(1.0, $nDetail * $lineGapFactor))
+            : $maxBody;
+        $bodyFs = max($minBody, min($maxBody, $bodyFsFromHeight));
+
+        if ($longestDetail !== '') {
+            $bodyFs = self::fontSizeToFit($longestDetail, $detailMaxW, $bodyFs, $minBody, false);
+            foreach ($prepared as $p) {
+                if (!$p['primary']) {
+                    $bodyFs = self::fontSizeToFit($p['text'], $detailMaxW, $bodyFs, $minBody, false);
+                }
+            }
+        }
+        // Enforce name > detail size (font px)
+        if ($bodyFs >= $nameFs) {
+            $bodyFs = max($minBody, (int)floor($nameFs * 0.88));
+        }
+
+        // Vertical: if total stack overflows, shrink detail first, then name
+        $stackH = $nameLineH;
         foreach ($prepared as $p) {
-            $fs = $p['primary'] ? $nameFs : $bodyFs;
-            $stackH += (int)round($fs * $lineGapFactor);
+            if (!$p['primary']) {
+                $stackH += (int)round($bodyFs * $lineGapFactor);
+            }
         }
         if ($stackH > $textBoxH && $stackH > 0) {
             $scale = $textBoxH / $stackH;
             $nameFs = max($minName, (int)floor($nameFs * $scale));
             $bodyFs = max($minBody, (int)floor($bodyFs * $scale));
-            // Re-check width after vertical shrink (usually ok); re-fit if needed
-            foreach ($prepared as $p) {
-                if ($p['primary']) {
-                    $nameFs = self::fontSizeToFit($p['text'], $textBoxW, $nameFs, $minName, true);
-                } else {
-                    $bodyFs = self::fontSizeToFit($p['text'], $textBoxW, $bodyFs, $minBody, false);
-                }
+            if ($nameText !== '') {
+                $nameFs = self::fontSizeToFit($nameText, $textBoxW, $nameFs, $minName, true);
+                $nameWidth = self::estimateTextWidth($nameText, $nameFs, true);
+                $detailMaxW = (int)max(80, min($textBoxW, (int)floor($nameWidth * 0.90)));
+            }
+            if ($longestDetail !== '') {
+                $bodyFs = self::fontSizeToFit($longestDetail, $detailMaxW, $bodyFs, $minBody, false);
+            }
+            if ($bodyFs >= $nameFs) {
+                $bodyFs = max($minBody, (int)floor($nameFs * 0.88));
             }
         }
 
@@ -609,9 +626,9 @@ class LabelLayoutService
             $text = $p['text'];
             $fontSize = $isPrimary ? $nameFs : $bodyFs;
             $weight = $isPrimary ? '700' : '600';
+            $maxW = $isPrimary ? $textBoxW : $detailMaxW;
             $est = self::estimateTextWidth($text, $fontSize, $isPrimary);
-            // Hard SVG cap only when still over after scaling (min font + long string)
-            $useLen = $est > $textBoxW;
+            $useLen = $est > $maxW;
             if ($useLen) {
                 $parts[] = sprintf(
                     '<text x="%d" y="%d" text-anchor="start" font-family="%s" font-size="%d" font-weight="%s" fill="#000000" textLength="%d" lengthAdjust="spacingAndGlyphs">%s</text>',
@@ -620,7 +637,7 @@ class LabelLayoutService
                     $fontFamily,
                     $fontSize,
                     $weight,
-                    $textBoxW,
+                    $maxW,
                     self::xmlEsc($text)
                 );
             } else {

@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **PDU label type hierarchy:** name scales to fill the frame (with padding); IP/SN/MAC scale from the longest line and stay ≤90% of the name width; right border inset a few more units so the frame fully prints on 1.50″ tape.
+
 ---
 
 ## [0.3.52] - 2026-08-06
