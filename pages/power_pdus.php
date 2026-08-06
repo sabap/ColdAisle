@@ -1657,8 +1657,8 @@ if ($pduId) {
             <h2>Overview</h2>
             <div style="display:flex;gap:.5rem;flex-wrap:wrap">
                 <a class="btn btn-sm btn-secondary"
-                   href="<?= App::e(App::url('pages/pdu_label.php?id=' . (int)$p['pdu_id'] . '&orient=landscape&length_in=3')) ?>"
-                   title="Print or download Brady BMP51 ID label">ID label</a>
+                   href="<?= App::e(App::url('pages/pdu_label.php?id=' . (int)$p['pdu_id'] . '&media=brady_2x2')) ?>"
+                   title="Print or download Brady BMP51 ID label (2×2 recommended)">ID label</a>
                 <?php if (AuthManager::canEditPower($user)): ?>
                     <button type="button" class="btn btn-sm btn-secondary" data-open-modal="modal-edit-pdu">Edit properties</button>
                 <?php endif; ?>

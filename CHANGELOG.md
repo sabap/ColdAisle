@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **PDU labels vs Brady dialog:** presets for **2″×2″**, **1.5″×1″**, **1″×1″** (sizes that print from Windows); content packed top-left (not centered); continuous sizes for SVG/Workstation; less text clipping.
+
 ### Bug fixes
 
 ---
