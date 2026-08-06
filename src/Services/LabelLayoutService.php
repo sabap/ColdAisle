@@ -368,45 +368,35 @@ class LabelLayoutService
     }
 
     /**
-     * Estimate rendered text width (thousandths of inch) for Arial bold-ish.
-     * Thermal + white-on-dark vinyl tends to look wider than screen metrics.
+     * Estimate rendered text width (thousandths of inch).
+     * Thermal transfer + bold white-on-blue prints wider than screen Arial metrics.
+     * Bias high so we scale down early rather than clip the last glyph.
      */
     private static function estimateTextWidth(string $text, int $fontSize, bool $primary): float
     {
-        // Conservative factors so we never clip (was ~0.58–0.62 → overflow on print)
-        $factor = $primary ? 0.72 : 0.68;
+        // ~0.78–0.85 em per char — deliberately high for printer hard-stop margin
+        $factor = $primary ? 0.82 : 0.78;
         $len = function_exists('mb_strlen') ? mb_strlen($text) : strlen($text);
-        // Slightly wider for digits/colons in MAC/IP
-        if (preg_match('/[0-9:]/', $text)) {
-            $factor += 0.03;
+        if (preg_match('/[0-9:.\-]/', $text)) {
+            $factor += 0.04; // digits/colons run wide on thermal
         }
         return $len * $fontSize * $factor;
     }
 
     /**
-     * Fit one line into max width: shrink font first, then truncate.
-     * @return array{0:string,1:int} text, fontSize
+     * Largest font size that fits the full string (no truncation).
      */
-    private static function fitLine(string $text, int $fontSize, int $minFs, int $maxW, bool $primary): array
+    private static function fontSizeToFit(string $text, int $maxW, int $maxFs, int $minFs, bool $primary): int
     {
-        $fs = $fontSize;
+        if ($text === '' || $maxW < 1) {
+            return $minFs;
+        }
+        $fs = max($minFs, min($maxFs, $maxFs));
         while ($fs > $minFs && self::estimateTextWidth($text, $fs, $primary) > $maxW) {
             $fs--;
         }
-        if (self::estimateTextWidth($text, $fs, $primary) <= $maxW) {
-            return [$text, $fs];
-        }
-        // Truncate until it fits
-        $len = function_exists('mb_strlen') ? mb_strlen($text) : strlen($text);
-        while ($len > 4) {
-            $len--;
-            $cut = function_exists('mb_substr') ? mb_substr($text, 0, $len) : substr($text, 0, $len);
-            $try = $cut . '..';
-            if (self::estimateTextWidth($try, $fs, $primary) <= $maxW) {
-                return [$try, $fs];
-            }
-        }
-        return [function_exists('mb_substr') ? mb_substr($text, 0, 3) . '..' : substr($text, 0, 3) . '..', $fs];
+        // If still too wide at minFs, keep minFs — SVG textLength will compress slightly
+        return $fs;
     }
 
     /**
@@ -418,11 +408,12 @@ class LabelLayoutService
         $hIn = (float)$layout['height_in'];
         $W = (int)round($wIn * 1000);
         $H = (int)round($hIn * 1000);
-        // Extra side margin — physical printable area is often inside die-cut edge
-        $marginX = max(50, (int)round($W * 0.06)); // ≥0.05″, ~6%
+        // Left margin + larger RIGHT gutter (printer hard stop / die-cut unprintable zone)
+        $marginL = max(48, (int)round($W * 0.055));
+        $marginR = max(90, (int)round($W * 0.10)); // ~0.09–0.10″ hard stop on BMP51 vinyl
         $marginY = max(40, (int)round($H * 0.05));
         $gap = max(24, (int)round(min($W, $H) * 0.035));
-        $innerW = $W - 2 * $marginX;
+        $innerW = $W - $marginL - $marginR;
         $innerH = $H - 2 * $marginY;
         $mode = (string)($layout['layout_mode'] ?? 'stack');
         $showQr = !empty($layout['show_qr']) && $qrSvgInner !== '';
@@ -439,104 +430,162 @@ class LabelLayoutService
         $parts[] = sprintf('<rect x="0" y="0" width="%d" height="%d" fill="#ffffff"/>', $W, $H);
 
         $qrSize = 0;
-        $qrX = $marginX;
+        $qrX = $marginL;
         $qrY = $marginY;
-        $textX = $marginX;
+        $textX = $marginL;
         $textBoxW = $innerW;
         $textBoxH = $innerH;
 
         if ($showQr) {
             if ($mode === 'side') {
-                $qrSize = (int)min($innerH, (int)round($innerW * 0.38));
-                $qrSize = max(260, min($qrSize, $innerH));
-                $qrX = $W - $marginX - $qrSize;
+                $qrSize = (int)min($innerH, (int)round($innerW * 0.36));
+                $qrSize = max(240, min($qrSize, $innerH));
+                $qrX = $W - $marginR - $qrSize;
                 $qrY = $marginY;
-                $textBoxW = max(160, $qrX - $marginX - $gap);
+                $textBoxW = max(140, $qrX - $marginL - $gap);
                 $textBoxH = $innerH;
             } elseif ($mode === 'stack_qr') {
                 $nameBudget = (int)round($innerH * 0.20);
                 $qrSize = (int)min($innerW, $innerH - $nameBudget - $gap);
                 $qrSize = max(200, $qrSize);
-                $qrX = $marginX + (int)max(0, ($innerW - $qrSize) / 2);
+                $qrX = $marginL + (int)max(0, ($innerW - $qrSize) / 2);
                 $qrY = $H - $marginY - $qrSize;
                 $textBoxW = $innerW;
                 $textBoxH = max(70, $qrY - $marginY - $gap);
             } else {
-                // stack: text top-left, QR bottom-left (leave side gutter so QR doesn't force text overflow)
-                $qrSize = (int)min($innerW * 0.88, $innerH * 0.46);
-                $qrSize = max(340, min($qrSize, $innerW));
-                $qrX = $marginX;
+                // stack: text top, QR below — QR stays within left/right safe margins
+                $qrSize = (int)min($innerW * 0.92, $innerH * 0.46);
+                $qrSize = max(320, min($qrSize, $innerW));
+                $qrX = $marginL;
                 $qrY = $H - $marginY - $qrSize;
                 $textBoxW = $innerW;
                 $textBoxH = max(140, $qrY - $marginY - $gap);
             }
         }
 
-        $lineGapFactor = 1.14;
-        $weightUnits = 0.0;
+        // Build full line strings first (never split mid-value)
+        $prepared = [];
         foreach ($lines as $line) {
-            $weightUnits += !empty($line['primary']) ? 1.28 : 1.0;
+            $isPrimary = !empty($line['primary']);
+            $label = (string)($line['label'] ?? '');
+            $value = (string)($line['value'] ?? '');
+            $text = $label !== '' ? ($label . ' ' . $value) : $value;
+            $prepared[] = ['text' => $text, 'primary' => $isPrimary];
         }
+
+        $lineGapFactor = 1.14;
+        $nPrimary = 0;
+        $nDetail = 0;
+        foreach ($prepared as $p) {
+            if ($p['primary']) {
+                $nPrimary++;
+            } else {
+                $nDetail++;
+            }
+        }
+
+        // Height-based starting sizes
+        $weightUnits = $nPrimary * 1.28 + max(0, $nDetail) * 1.0;
         if ($weightUnits < 1) {
             $weightUnits = 1.0;
         }
-
         $bodyFs = (int)floor($textBoxH / max(1.0, $weightUnits * $lineGapFactor));
-        // Slightly smaller caps so full MAC/name fit on ~1.4″ usable width
-        $maxBody = (int)round(min($textBoxH * 0.26, $textBoxW * 0.085, 128));
-        $minBody = 64;
-        $maxName = (int)round(min($textBoxH * 0.34, $textBoxW * 0.12, 168));
-        $minName = 80;
+        $maxBody = (int)round(min($textBoxH * 0.26, 120));
+        $minBody = 48; // allow small type so long serial/MAC still fully prints
+        $maxName = (int)round(min($textBoxH * 0.34, 150));
+        $minName = 56;
 
         if ($mode === 'stack_qr') {
-            $maxName = (int)round(min($textBoxH * 0.85, $textBoxW * 0.11, 110));
-            $minName = 64;
+            $maxName = (int)round(min($textBoxH * 0.85, $textBoxW * 0.10, 100));
+            $minName = 48;
             $maxBody = $maxName;
             $minBody = $minName;
         }
 
         $bodyFs = max($minBody, min($maxBody, $bodyFs));
-        $nameFs = (int)round($bodyFs * 1.22);
+        $nameFs = (int)round($bodyFs * 1.18);
         $nameFs = max($minName, min($maxName, $nameFs));
 
+        // WIDTH: scale name and ALL detail lines to fit the longest field fully
+        foreach ($prepared as $p) {
+            if ($p['primary']) {
+                $nameFs = self::fontSizeToFit($p['text'], $textBoxW, $nameFs, $minName, true);
+            }
+        }
+        $longestDetail = '';
+        foreach ($prepared as $p) {
+            if (!$p['primary']) {
+                $len = function_exists('mb_strlen') ? mb_strlen($p['text']) : strlen($p['text']);
+                $best = function_exists('mb_strlen') ? mb_strlen($longestDetail) : strlen($longestDetail);
+                if ($len > $best) {
+                    $longestDetail = $p['text'];
+                }
+            }
+        }
+        if ($longestDetail !== '') {
+            $bodyFs = self::fontSizeToFit($longestDetail, $textBoxW, $bodyFs, $minBody, false);
+            // Also ensure every detail line fits at that size (paranoia)
+            foreach ($prepared as $p) {
+                if (!$p['primary']) {
+                    $bodyFs = self::fontSizeToFit($p['text'], $textBoxW, $bodyFs, $minBody, false);
+                }
+            }
+        }
+
+        // Vertical: if stack overflows, scale both down together (keep ratio)
         $stackH = 0;
-        foreach ($lines as $line) {
-            $fs = !empty($line['primary']) ? $nameFs : $bodyFs;
+        foreach ($prepared as $p) {
+            $fs = $p['primary'] ? $nameFs : $bodyFs;
             $stackH += (int)round($fs * $lineGapFactor);
         }
         if ($stackH > $textBoxH && $stackH > 0) {
             $scale = $textBoxH / $stackH;
-            $nameFs = max((int)($minName * 0.9), (int)floor($nameFs * $scale));
-            $bodyFs = max((int)($minBody * 0.9), (int)floor($bodyFs * $scale));
+            $nameFs = max($minName, (int)floor($nameFs * $scale));
+            $bodyFs = max($minBody, (int)floor($bodyFs * $scale));
+            // Re-check width after vertical shrink (usually ok); re-fit if needed
+            foreach ($prepared as $p) {
+                if ($p['primary']) {
+                    $nameFs = self::fontSizeToFit($p['text'], $textBoxW, $nameFs, $minName, true);
+                } else {
+                    $bodyFs = self::fontSizeToFit($p['text'], $textBoxW, $bodyFs, $minBody, false);
+                }
+            }
         }
 
         // Top-left pack
         $y = $marginY + $nameFs;
         $fontFamily = 'Arial, Helvetica, sans-serif';
 
-        foreach ($lines as $line) {
-            $isPrimary = !empty($line['primary']);
-            $label = (string)($line['label'] ?? '');
-            $value = (string)($line['value'] ?? '');
+        foreach ($prepared as $p) {
+            $isPrimary = $p['primary'];
+            $text = $p['text'];
             $fontSize = $isPrimary ? $nameFs : $bodyFs;
-            $minFs = $isPrimary ? max(60, (int)($minName * 0.85)) : max(56, (int)($minBody * 0.85));
-            if ($label !== '') {
-                $text = $label . ' ' . $value;
-            } else {
-                $text = $value;
-            }
-            [$text, $fontSize] = self::fitLine($text, $fontSize, $minFs, $textBoxW, $isPrimary);
             $weight = $isPrimary ? '700' : '600';
-            // Optional SVG textLength as safety net (never exceed box)
-            $parts[] = sprintf(
-                '<text x="%d" y="%d" text-anchor="start" font-family="%s" font-size="%d" font-weight="%s" fill="#000000">%s</text>',
-                $textX,
-                $y,
-                $fontFamily,
-                $fontSize,
-                $weight,
-                self::xmlEsc($text)
-            );
+            $est = self::estimateTextWidth($text, $fontSize, $isPrimary);
+            // Hard SVG cap only when still over after scaling (min font + long string)
+            $useLen = $est > $textBoxW;
+            if ($useLen) {
+                $parts[] = sprintf(
+                    '<text x="%d" y="%d" text-anchor="start" font-family="%s" font-size="%d" font-weight="%s" fill="#000000" textLength="%d" lengthAdjust="spacingAndGlyphs">%s</text>',
+                    $textX,
+                    $y,
+                    $fontFamily,
+                    $fontSize,
+                    $weight,
+                    $textBoxW,
+                    self::xmlEsc($text)
+                );
+            } else {
+                $parts[] = sprintf(
+                    '<text x="%d" y="%d" text-anchor="start" font-family="%s" font-size="%d" font-weight="%s" fill="#000000">%s</text>',
+                    $textX,
+                    $y,
+                    $fontFamily,
+                    $fontSize,
+                    $weight,
+                    self::xmlEsc($text)
+                );
+            }
             $y += (int)round($fontSize * $lineGapFactor);
         }
 
