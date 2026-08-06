@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.51] - 2026-08-06
+
+### Bug fixes
+
 - **PDU label right border cut off:** reserve a **3/8″** right hard-stop so the full rounded frame prints; content scales inside the frame with tight padding (~1–2 print px past the stroke).
 
 ---
-
 ## [0.3.50] - 2026-08-06
 
 ### Enhancements
