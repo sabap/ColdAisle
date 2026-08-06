@@ -266,6 +266,7 @@ try {
             'manufacturer' => pdu_null($d['manufacturer'] ?? null),
             'model' => pdu_null($d['model'] ?? null),
             'serial_no' => pdu_null(isset($d['serial_no']) ? trim((string)$d['serial_no']) : null),
+            'mac_address' => pdu_null(isset($d['mac_address']) ? trim((string)$d['mac_address']) : null),
             'ip_address' => pdu_null($d['ip_address'] ?? null),
             'output_mode' => in_array(strtolower((string)($d['output_mode'] ?? 'outlets')), ['outlets', 'breakers'], true)
                 ? strtolower((string)($d['output_mode'] ?? 'outlets')) : 'outlets',
@@ -393,7 +394,7 @@ try {
         $fields = [];
         $map = [
             'name', 'cabinet_id', 'row_id', 'zone_id', 'pdu_scope', 'mount_style', 'position_u', 'u_height',
-            'manufacturer', 'model', 'serial_no', 'ip_address', 'output_mode', 'num_outlets', 'num_breaker_slots', 'rated_amps',
+            'manufacturer', 'model', 'serial_no', 'mac_address', 'ip_address', 'output_mode', 'num_outlets', 'num_breaker_slots', 'rated_amps',
             'input_type', 'snmp_enabled', 'snmp_version', 'snmp_port', 'snmp_community',
             'snmp_security_name', 'snmp_auth_protocol', 'snmp_auth_passphrase',
             'snmp_priv_protocol', 'snmp_priv_passphrase', 'snmp_context', 'snmp_v3_sec_level', 'notes',

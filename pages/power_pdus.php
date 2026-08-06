@@ -301,6 +301,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'model' => $_POST['model'] !== '' ? $_POST['model'] : null,
                 'serial_no' => trim((string)($_POST['serial_no'] ?? '')) !== ''
                     ? trim((string)$_POST['serial_no']) : null,
+                'mac_address' => trim((string)($_POST['mac_address'] ?? '')) !== ''
+                    ? trim((string)$_POST['mac_address']) : null,
                 'ip_address' => $_POST['ip_address'] !== '' ? $_POST['ip_address'] : null,
                 'output_mode' => $outputMode,
                 'num_outlets' => $outputMode === 'outlets' ? $numOutlets : 0,
@@ -1397,6 +1399,11 @@ if ($pduId) {
             } else if (data.serial_no) {
                 toast('Device serial: ' + data.serial_no, 'info');
             }
+            if (data.mac_applied && data.mac_address) {
+                toast('MAC address saved on PDU: ' + data.mac_address, 'success');
+            } else if (data.mac_address) {
+                toast('Device MAC: ' + data.mac_address, 'info');
+            }
 
             var mapUl = document.getElementById('pduSnmpProposedMap');
             mapUl.innerHTML = '';
@@ -1648,9 +1655,14 @@ if ($pduId) {
     <div class="card mb-2">
         <div class="card-header flex-between">
             <h2>Overview</h2>
-            <?php if (AuthManager::canEditPower($user)): ?>
-                <button type="button" class="btn btn-sm btn-secondary" data-open-modal="modal-edit-pdu">Edit properties</button>
-            <?php endif; ?>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+                <a class="btn btn-sm btn-secondary"
+                   href="<?= App::e(App::url('pages/pdu_label.php?id=' . (int)$p['pdu_id'] . '&orient=landscape&length_in=3')) ?>"
+                   title="Print or download Brady BMP51 ID label">ID label</a>
+                <?php if (AuthManager::canEditPower($user)): ?>
+                    <button type="button" class="btn btn-sm btn-secondary" data-open-modal="modal-edit-pdu">Edit properties</button>
+                <?php endif; ?>
+            </div>
         </div>
         <div class="card-body">
             <dl class="pdu-summary-grid">
@@ -1665,6 +1677,12 @@ if ($pduId) {
                     <dt>Serial number</dt>
                     <dd><?= !empty($p['serial_no'])
                         ? App::e((string)$p['serial_no'])
+                        : '<span class="text-muted">—</span>' ?></dd>
+                </div>
+                <div>
+                    <dt>MAC address</dt>
+                    <dd><?= !empty($p['mac_address'])
+                        ? App::e((string)$p['mac_address'])
                         : '<span class="text-muted">—</span>' ?></dd>
                 </div>
                 <div>

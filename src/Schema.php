@@ -224,6 +224,8 @@ class Schema
                 'depth_mm' => 'INT NULL',
                 'height_mm' => 'INT NULL',
                 'color_hex' => 'NVARCHAR(7) NULL',
+                // NIC MAC for ID labels / asset tags (manual; SNMP fill later)
+                'mac_address' => 'NVARCHAR(64) NULL',
             ];
             foreach ($pduCols as $col => $def) {
                 self::ensureColumn('pdus', $col, $def);

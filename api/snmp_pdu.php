@@ -119,11 +119,21 @@ try {
             if (is_string($serial) && $serial !== '') {
                 $serialApplied = SnmpDiscover::applySerialToPduIfEmpty($id, $serial);
             }
+            $macApplied = false;
+            $mac = $result['mac_address'] ?? null;
+            if (is_string($mac) && $mac !== '') {
+                $macApplied = SnmpDiscover::applyMacToPduIfEmpty($id, $mac);
+            }
             $msg = (string)($result['message'] ?? '');
             if ($serialApplied) {
                 $msg .= ' Serial number saved on PDU: ' . $serial . '.';
             } elseif (is_string($serial) && $serial !== '' && !empty($pdu['serial_no'])) {
                 $msg .= ' Serial from device: ' . $serial . ' (PDU field already set).';
+            }
+            if ($macApplied) {
+                $msg .= ' MAC address saved on PDU: ' . $mac . '.';
+            } elseif (is_string($mac) && $mac !== '' && !empty($pdu['mac_address'])) {
+                $msg .= ' MAC from device: ' . $mac . ' (PDU field already set).';
             }
 
             App::json([
@@ -138,6 +148,9 @@ try {
                 'serial_no' => $serial,
                 'serial_oid' => $result['serial_oid'] ?? null,
                 'serial_applied' => $serialApplied,
+                'mac_address' => $mac,
+                'mac_oid' => $result['mac_oid'] ?? null,
+                'mac_applied' => $macApplied,
                 'template_name' => $templateName,
                 'vendor' => $prereqs['vendor'],
                 'model' => $prereqs['model'],
