@@ -21,49 +21,58 @@ class LabelLayoutService
     public const PRINTERS = [
         'brady_bmp51' => [
             'label' => 'Brady BMP51',
-            'notes' => 'Windows dialog usually offers 1×1, 1.5×1, and 2×2. Prefer those for Print…; use SVG for continuous 1.50″ vinyl lengths.',
+            // Continuous indoor vinyl is 1.50″ wide — page may be 2×2 for the Windows dialog,
+            // but ink must stay within the left 1.50″ or the right border is cut off the tape.
+            'notes' => '1.50″ continuous vinyl: artwork is capped at 1.50″ wide (even for 2×2 dialog). Match dialog size when printing; blank area on a 2″ page is intentional.',
             'presets' => [
                 'bmp51_2x2' => [
                     'w' => 2.0,
                     'h' => 2.0,
-                    'label' => '2″ × 2″ (dialog — recommended)',
+                    'label' => '2″ × 2″ dialog (1.50″ tape-safe)',
                     'layout' => 'stack',
+                    'tape_w' => 1.5, // physical continuous width
                 ],
                 'bmp51_1_5x1' => [
                     'w' => 1.5,
                     'h' => 1.0,
-                    'label' => '1.5″ × 1″ (dialog)',
+                    'label' => '1.5″ × 1″ (dialog / tape width)',
                     'layout' => 'side',
+                    'tape_w' => 1.5,
                 ],
                 'bmp51_1x1' => [
                     'w' => 1.0,
                     'h' => 1.0,
                     'label' => '1″ × 1″ (dialog — QR + name)',
                     'layout' => 'stack_qr',
+                    'tape_w' => 1.0,
                 ],
                 'bmp51_cont_h2' => [
                     'w' => 2.0,
                     'h' => 1.5,
-                    'label' => 'Continuous 2″ × 1.50″ (horizontal)',
+                    'label' => 'Continuous 2″ long × 1.50″ (horizontal)',
                     'layout' => 'side',
+                    'tape_w' => 1.5,
                 ],
                 'bmp51_cont_h3' => [
                     'w' => 3.0,
                     'h' => 1.5,
-                    'label' => 'Continuous 3″ × 1.50″ (horizontal)',
+                    'label' => 'Continuous 3″ long × 1.50″ (horizontal)',
                     'layout' => 'side',
+                    'tape_w' => 1.5,
                 ],
                 'bmp51_cont_v2' => [
                     'w' => 1.5,
                     'h' => 2.0,
                     'label' => 'Continuous 1.50″ × 2″ (vertical)',
                     'layout' => 'stack',
+                    'tape_w' => 1.5,
                 ],
                 'bmp51_cont_v3' => [
                     'w' => 1.5,
                     'h' => 3.0,
                     'label' => 'Continuous 1.50″ × 3″ (vertical)',
                     'layout' => 'stack',
+                    'tape_w' => 1.5,
                 ],
             ],
         ],
@@ -203,6 +212,7 @@ class LabelLayoutService
                         'label' => (string)$pr['label'],
                         'layout' => (string)($pr['layout'] ?? 'stack'),
                         'notes' => (string)($pDef['notes'] ?? ''),
+                        'tape_w' => isset($pr['tape_w']) ? (float)$pr['tape_w'] : (float)$pr['w'],
                     ];
                 }
             }
@@ -228,6 +238,7 @@ class LabelLayoutService
             'label' => (string)$pr['label'],
             'layout' => (string)($pr['layout'] ?? 'stack'),
             'notes' => (string)($pDef['notes'] ?? ''),
+            'tape_w' => isset($pr['tape_w']) ? (float)$pr['tape_w'] : (float)$pr['w'],
         ];
     }
 
@@ -296,6 +307,7 @@ class LabelLayoutService
             $printer = 'brady_bmp51';
             $media = 'custom';
             $notes = '';
+            $tapeW = min(1.5, $widthIn); // continuous cartridge width
         } else {
             if (!$resolved) {
                 $resolved = self::resolvePreset(self::DEFAULT_PRINTER, self::DEFAULT_MEDIA);
@@ -308,6 +320,7 @@ class LabelLayoutService
             $notes = $resolved['notes'];
             $length = max($widthIn, $heightIn);
             $orient = $widthIn >= $heightIn ? 'landscape' : 'portrait';
+            $tapeW = (float)($resolved['tape_w'] ?? $widthIn);
         }
 
         $name = trim((string)($opts['name'] ?? 'PDU'));
@@ -355,6 +368,8 @@ class LabelLayoutService
             'layout_mode' => $layoutMode,
             'notes' => $notes ?? '',
             'preset_label' => $resolved['label'] ?? '',
+            // Physical cartridge / printable width (may be < page width, e.g. 1.50″ tape on 2×2 dialog)
+            'tape_w' => round($tapeW ?? $widthIn, 3),
         ];
     }
 
@@ -369,16 +384,14 @@ class LabelLayoutService
 
     /**
      * Estimate rendered text width (thousandths of inch).
-     * Thermal transfer + bold white-on-blue prints wider than screen Arial metrics.
-     * Bias high so we scale down early rather than clip the last glyph.
+     * Slightly conservative for thermal bold; not so high that type stays tiny.
      */
     private static function estimateTextWidth(string $text, int $fontSize, bool $primary): float
     {
-        // ~0.78–0.85 em per char — deliberately high for printer hard-stop margin
-        $factor = $primary ? 0.82 : 0.78;
+        $factor = $primary ? 0.70 : 0.66;
         $len = function_exists('mb_strlen') ? mb_strlen($text) : strlen($text);
         if (preg_match('/[0-9:.\-]/', $text)) {
-            $factor += 0.04; // digits/colons run wide on thermal
+            $factor += 0.03;
         }
         return $len * $fontSize * $factor;
     }
@@ -409,43 +422,36 @@ class LabelLayoutService
         $W = (int)round($wIn * 1000);
         $H = (int)round($hIn * 1000);
 
-        // --- BMP51 / thermal hard stops (measured ~3/8″ right dead zone) ---
-        // Units = thousandths of an inch. Border stroke is centered on the path, so
-        // the outer edge of ink is path ± stroke/2; keep that inside the printable area.
-        $hardRight = 375; // 3/8″ unprintable / cut zone on the right
-        $hardLeft = 70;   // modest left (sprocket side still needs a little air)
-        $hardTB = 50;     // top/bottom
-
-        $stroke = max(10, min(18, (int)round(min($W, $H) * 0.008))); // thin frame
-        // Inset so entire stroke (outer half) clears the hard stops
-        $outerL = $hardLeft + (int)ceil($stroke / 2);
-        $outerR = $hardRight + (int)ceil($stroke / 2);
-        $outerT = $hardTB + (int)ceil($stroke / 2);
-        $outerB = $hardTB + (int)ceil($stroke / 2);
-
-        // On very small media, hard-right 3/8″ would leave almost no room — scale proportionally
-        $minContentW = 400; // ≥0.40″ for text+QR
-        if ($W - $outerL - $outerR < $minContentW) {
-            $budget = max($minContentW, (int)round($W * 0.55));
-            $side = max(40, (int)floor(($W - $budget) / 2));
-            $outerL = max($outerL, $side);
-            $outerR = max((int)ceil($stroke / 2) + 40, $W - $outerL - $budget);
+        // Physical ink width (e.g. BMP51 continuous vinyl = 1.50″). Page may be wider
+        // for the Windows 2×2 dialog — keep ALL ink in the left tape_w inches so the
+        // right side of the border is never cut off the tape.
+        $tapeW = (float)($layout['tape_w'] ?? $wIn);
+        if ($tapeW < 0.5) {
+            $tapeW = $wIn;
         }
+        $artW = (int)round(min($W, $tapeW * 1000));
+        $artX = 0; // left-align on page (continuous feed / sprocket side)
+        $artH = $H;
+        $artY = 0;
 
-        $bx = $outerL;
-        $by = $outerT;
-        $bw = max(200, $W - $outerL - $outerR);
-        $bh = max(200, $H - $outerT - $outerB);
-        $rx = max(28, min(70, (int)round(min($bw, $bh) * 0.06)));
+        $stroke = max(10, min(16, (int)round(min($artW, $artH) * 0.008)));
+        // Small edge inset from tape edge (not 3/8″ — that was eating half the 1.5″ tape)
+        $edge = max(28, (int)round(min($artW, $artH) * 0.035)); // ~0.03–0.04″
+        $edge = $edge + (int)ceil($stroke / 2);
 
-        // Cell padding inside the border (~1–2 print px at 300 dpi ≈ 3–7 units; use ~12–16
-        // so registration error does not kiss the stroke)
-        $pad = max(12, (int)ceil($stroke / 2) + 10);
+        $bx = $artX + $edge;
+        $by = $artY + $edge;
+        $bw = max(200, $artW - 2 * $edge);
+        $bh = max(200, $artH - 2 * $edge);
+        $rx = max(24, min(60, (int)round(min($bw, $bh) * 0.055)));
+
+        // Tight cell padding inside border (~1–2 print px past half-stroke)
+        $pad = max(10, (int)ceil($stroke / 2) + 8);
         $marginL = $bx + $pad;
         $marginY = $by + $pad;
         $contentW = max(100, $bw - 2 * $pad);
         $contentH = max(80, $bh - 2 * $pad);
-        $gap = max(18, (int)round(min($W, $H) * 0.028));
+        $gap = max(16, (int)round(min($artW, $artH) * 0.025));
         $mode = (string)($layout['layout_mode'] ?? 'stack');
         $showQr = !empty($layout['show_qr']) && $qrSvgInner !== '';
         $lines = is_array($layout['lines'] ?? null) ? $layout['lines'] : [];
@@ -459,7 +465,7 @@ class LabelLayoutService
             $H
         );
         $parts[] = sprintf('<rect x="0" y="0" width="%d" height="%d" fill="#ffffff"/>', $W, $H);
-        // Rounded border — fully inside the 3/8″ right hard-stop
+        // Rounded border fully within tape width (left artW of page)
         $parts[] = sprintf(
             '<rect x="%d" y="%d" width="%d" height="%d" rx="%d" ry="%d" fill="none" stroke="#000000" stroke-width="%d" stroke-linejoin="round"/>',
             $bx,
@@ -495,13 +501,13 @@ class LabelLayoutService
                 $textBoxW = $contentW;
                 $textBoxH = max(50, $qrY - $marginY - $gap);
             } else {
-                // stack: text top, QR below — both inside frame padding
-                $qrSize = (int)min($contentW * 0.90, $contentH * 0.44);
-                $qrSize = max(280, min($qrSize, $contentW));
+                // stack: text top, QR below — use as much of the frame as possible
+                $qrSize = (int)min($contentW * 0.92, $contentH * 0.48);
+                $qrSize = max(300, min($qrSize, $contentW));
                 $qrX = $marginL;
                 $qrY = $by + $bh - $pad - $qrSize;
                 $textBoxW = $contentW;
-                $textBoxH = max(100, $qrY - $marginY - $gap);
+                $textBoxH = max(120, $qrY - $marginY - $gap);
             }
         }
 
@@ -526,26 +532,26 @@ class LabelLayoutService
             }
         }
 
-        // Height-based starting sizes
+        // Height-based starting sizes — prefer larger type; width-fit will pull down if needed
         $weightUnits = $nPrimary * 1.28 + max(0, $nDetail) * 1.0;
         if ($weightUnits < 1) {
             $weightUnits = 1.0;
         }
         $bodyFs = (int)floor($textBoxH / max(1.0, $weightUnits * $lineGapFactor));
-        $maxBody = (int)round(min($textBoxH * 0.26, 120));
-        $minBody = 48; // allow small type so long serial/MAC still fully prints
-        $maxName = (int)round(min($textBoxH * 0.34, 150));
-        $minName = 56;
+        $maxBody = (int)round(min($textBoxH * 0.30, 145));
+        $minBody = 52;
+        $maxName = (int)round(min($textBoxH * 0.38, 175));
+        $minName = 64;
 
         if ($mode === 'stack_qr') {
-            $maxName = (int)round(min($textBoxH * 0.85, $textBoxW * 0.10, 100));
-            $minName = 48;
+            $maxName = (int)round(min($textBoxH * 0.85, $textBoxW * 0.12, 110));
+            $minName = 52;
             $maxBody = $maxName;
             $minBody = $minName;
         }
 
         $bodyFs = max($minBody, min($maxBody, $bodyFs));
-        $nameFs = (int)round($bodyFs * 1.18);
+        $nameFs = (int)round($bodyFs * 1.22);
         $nameFs = max($minName, min($maxName, $nameFs));
 
         // WIDTH: scale name and ALL detail lines to fit the longest field fully
