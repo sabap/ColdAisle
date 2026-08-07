@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **iDRAC Discover scoring:** Dell identity OIDs (service tag / express service code) are no longer labeled “possible watts”; extra power/thermal/status leaf probes for common iDRAC OMSA objects.
+
 ### Bug fixes
 
 ---
