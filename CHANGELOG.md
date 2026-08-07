@@ -17,11 +17,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.59] - 2026-08-07
+
+### Bug fixes
+
 - **Device edit SNMP shows Disabled:** rehydrate SNMP version/profile/user from saved device data on Edit (plus server data attributes) so SNMPv3 settings match the properties page.
 - **Device Discover “set model”:** Discover uses manufacturer/model from the linked device template when the device row fields are blank (same fallback as the properties view). Saving a device with a template also copies model/vendor onto the device if empty.
 
 ---
-
 ## [0.3.58] - 2026-08-07
 
 ### Bug fixes
