@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.66] - 2026-08-07
+
+### Bug fixes
+
 - **Device ICMP host:** ping **mgmt/primary IP only** (OS path). iDRAC is not used — BMC stays reachable when the OS is down.
 
 ---
-
 ## [0.3.65] - 2026-08-07
 
 ### New features
