@@ -940,6 +940,17 @@ if ($action === 'new' || $id) {
                 </span>
                 <button type="button" class="btn btn-secondary btn-sm" id="btnDevIcmpPing"
                     <?= $icmpHostDev !== '' ? '' : 'disabled' ?>>Ping now</button>
+                <?php
+                $testingModeDev = class_exists('IcmpMonitorService') && IcmpMonitorService::testingModeEnabled();
+                if ($testingModeDev):
+                    ?>
+                <button type="button" class="btn btn-warning btn-sm" id="btnDevIcmpSimDown"
+                    title="Testing mode: force ICMP DOWN and fire [TEST] alert"
+                    <?= $icmpHostDev !== '' ? '' : 'disabled' ?>>Simulate outage</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnDevIcmpSimUp"
+                    title="Testing mode: clear simulated DOWN and fire recovery alert"
+                    <?= $icmpHostDev !== '' ? '' : 'disabled' ?>>Simulate recovery</button>
+                <?php endif; ?>
                 <?php endif; ?>
                 <a class="btn btn-secondary" href="<?= App::e(App::url('pages/devices.php')) ?>">← Devices</a>
                 <?php if (!empty($device['cabinet_id'])): ?>
@@ -2096,6 +2107,33 @@ if ($action === 'new' || $id) {
                         .finally(function () { btn.disabled = !hostOk; });
                 });
             }
+            function wireSim(id, action) {
+                var el = document.getElementById(id);
+                if (!el) return;
+                el.addEventListener('click', function () {
+                    if (!confirm(action === 'simulate_outage'
+                        ? 'Simulate ICMP outage and fire a [TEST] alert for this device?'
+                        : 'Simulate recovery and fire a [TEST] recovery alert?')) {
+                        return;
+                    }
+                    el.disabled = true;
+                    icmpApi({ action: action, kind: 'device', id: deviceId })
+                        .then(function (data) {
+                            toast(data.message || 'Done', action === 'simulate_outage' ? 'warning' : 'success');
+                            if (data.status) renderIcmpStatus(data.status);
+                            if (tog && data.icmp_monitor) {
+                                tog.checked = true;
+                                if (lab) lab.textContent = 'Monitor via ICMP on';
+                            }
+                        })
+                        .catch(function (err) {
+                            toast((err && err.message) || 'Failed', 'error');
+                        })
+                        .finally(function () { el.disabled = !hostOk; });
+                });
+            }
+            wireSim('btnDevIcmpSimDown', 'simulate_outage');
+            wireSim('btnDevIcmpSimUp', 'simulate_recovery');
         })();
         </script>
         <?php endif; ?>
@@ -3374,6 +3412,11 @@ if ($q !== '') {
 $sql .= ' ORDER BY d.label';
 $devices = Database::fetchAll($sql, $params);
 $canCreate = AuthManager::canEditDevice($user, null);
+$canBatchIcmp = AuthManager::canManageDevices($user) || AuthManager::canEditSnmp($user);
+if (is_file(dirname(__DIR__) . '/src/Services/IcmpMonitorService.php')) {
+    require_once dirname(__DIR__) . '/src/Services/IcmpMonitorService.php';
+}
+$testingModeList = class_exists('IcmpMonitorService') && IcmpMonitorService::testingModeEnabled();
 
 layout_header('Devices', $user, 'devices');
 ?>
@@ -3393,11 +3436,42 @@ layout_header('Devices', $user, 'devices');
     </div>
 </div>
 <div class="card">
+    <div class="card-header flex-between">
+        <h2 style="margin:0;font-size:1rem">Devices</h2>
+        <?php if ($canBatchIcmp): ?>
+        <div class="batch-icmp-bar" style="display:flex;flex-wrap:wrap;gap:.4rem;align-items:center">
+            <span class="text-muted" style="font-size:.8rem" id="devSelCount">0 selected</span>
+            <button type="button" class="btn btn-sm btn-secondary" id="devIcmpOnBtn" disabled
+                    title="Enable ICMP monitor on selected devices (needs mgmt/primary IP)">
+                Monitor ICMP
+            </button>
+            <button type="button" class="btn btn-sm btn-ghost" id="devIcmpOffBtn" disabled
+                    title="Disable ICMP monitor on selected devices">
+                Stop ICMP
+            </button>
+            <?php if ($testingModeList): ?>
+                <button type="button" class="btn btn-sm btn-warning" id="devSimDownBtn" disabled
+                        title="Testing mode: simulate outage + [TEST] alert">
+                    Simulate outage
+                </button>
+                <button type="button" class="btn btn-sm btn-secondary" id="devSimUpBtn" disabled
+                        title="Testing mode: simulate recovery">
+                    Simulate recovery
+                </button>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
+    </div>
     <div class="card-body flush">
         <div class="table-wrap">
-            <table class="data">
+            <table class="data" id="deviceListTable">
                 <thead>
                 <tr>
+                    <?php if ($canBatchIcmp): ?>
+                    <th class="col-check" style="width:2.2rem">
+                        <input type="checkbox" id="devSelectAll" title="Select all on this list" aria-label="Select all devices">
+                    </th>
+                    <?php endif; ?>
                     <th>Device Name</th>
                     <th>Type</th>
                     <th>Department</th>
@@ -3431,8 +3505,21 @@ layout_header('Devices', $user, 'devices');
                     if ($hp === 'degraded') {
                         $hp = 'warn';
                     }
+                    $hostDev = class_exists('IcmpMonitorService')
+                        ? IcmpMonitorService::hostFromDevice($d)
+                        : (trim((string)($d['mgmt_ip'] ?? '')) !== ''
+                            ? trim((string)$d['mgmt_ip'])
+                            : trim((string)($d['primary_ip'] ?? '')));
                     ?>
-                    <tr class="<?= $rowHealth !== '' ? 'health-row-' . App::e($rowHealth) : '' ?>">
+                    <tr class="<?= $rowHealth !== '' ? 'health-row-' . App::e($rowHealth) : '' ?>"
+                        data-device-id="<?= (int)$d['device_id'] ?>">
+                        <?php if ($canBatchIcmp): ?>
+                        <td class="col-check">
+                            <input type="checkbox" class="dev-row-check" value="<?= (int)$d['device_id'] ?>"
+                                   data-has-host="<?= $hostDev !== '' ? '1' : '0' ?>"
+                                   aria-label="Select <?= App::e((string)$d['label']) ?>">
+                        </td>
+                        <?php endif; ?>
                         <td><a href="?id=<?= (int)$d['device_id'] ?>"><?= App::e($d['label']) ?></a></td>
                         <td><?= App::e($deviceTypes[$d['device_type']] ?? $d['device_type']) ?></td>
                         <td>
@@ -3479,11 +3566,90 @@ layout_header('Devices', $user, 'devices');
                     </tr>
                 <?php endforeach; ?>
                 <?php if (!$devices): ?>
-                    <tr><td colspan="9" class="text-muted">No devices found.</td></tr>
+                    <tr><td colspan="<?= $canBatchIcmp ? 10 : 9 ?>" class="text-muted">No devices found.</td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>
         </div>
     </div>
 </div>
+<?php if ($canBatchIcmp): ?>
+<script>
+(function () {
+    var selectAll = document.getElementById('devSelectAll');
+    var countEl = document.getElementById('devSelCount');
+    var btnOn = document.getElementById('devIcmpOnBtn');
+    var btnOff = document.getElementById('devIcmpOffBtn');
+    var btnDown = document.getElementById('devSimDownBtn');
+    var btnUp = document.getElementById('devSimUpBtn');
+
+    function checks() {
+        return Array.prototype.slice.call(document.querySelectorAll('.dev-row-check'));
+    }
+    function selectedIds() {
+        return checks().filter(function (c) { return c.checked; }).map(function (c) {
+            return parseInt(c.value, 10);
+        }).filter(function (n) { return n > 0; });
+    }
+    function toast(msg, type) {
+        if (window.ColdAisle && ColdAisle.toast) ColdAisle.toast(msg, type || 'info');
+        else alert(msg);
+    }
+    function sync() {
+        var ids = selectedIds();
+        var n = ids.length;
+        if (countEl) countEl.textContent = n + ' selected';
+        [btnOn, btnOff, btnDown, btnUp].forEach(function (b) {
+            if (b) b.disabled = n < 1;
+        });
+        if (selectAll) {
+            var all = checks();
+            selectAll.checked = all.length > 0 && all.every(function (c) { return c.checked; });
+            selectAll.indeterminate = n > 0 && n < all.length;
+        }
+    }
+    if (selectAll) {
+        selectAll.addEventListener('change', function () {
+            checks().forEach(function (c) { c.checked = selectAll.checked; });
+            sync();
+        });
+    }
+    checks().forEach(function (c) { c.addEventListener('change', sync); });
+    sync();
+
+    function runBatch(action, enabled, confirmMsg) {
+        var ids = selectedIds();
+        if (!ids.length) return;
+        if (confirmMsg && !confirm(confirmMsg.replace('{n}', String(ids.length)))) return;
+        var body = { action: action, kind: 'device', ids: ids };
+        if (action === 'set_monitor_batch') body.enabled = !!enabled;
+        var buttons = [btnOn, btnOff, btnDown, btnUp];
+        buttons.forEach(function (b) { if (b) b.disabled = true; });
+        ColdAisle.api('api/icmp.php', { method: 'POST', body: body })
+            .then(function (data) {
+                toast(data.message || 'Done', data.fail_count ? 'warning' : 'success');
+                if (!data.fail_count || data.ok_count > 0) {
+                    setTimeout(function () { location.reload(); }, 600);
+                }
+            })
+            .catch(function (err) {
+                toast((err && err.message) || 'Batch failed', 'error');
+            })
+            .finally(sync);
+    }
+    if (btnOn) btnOn.addEventListener('click', function () {
+        runBatch('set_monitor_batch', true, 'Enable ICMP monitoring on {n} device(s)? Devices without mgmt/primary IP will be skipped.');
+    });
+    if (btnOff) btnOff.addEventListener('click', function () {
+        runBatch('set_monitor_batch', false, 'Disable ICMP monitoring on {n} device(s)?');
+    });
+    if (btnDown) btnDown.addEventListener('click', function () {
+        runBatch('simulate_outage_batch', null, 'Simulate outage + [TEST] alerts on {n} device(s)?');
+    });
+    if (btnUp) btnUp.addEventListener('click', function () {
+        runBatch('simulate_recovery_batch', null, 'Simulate recovery on {n} device(s)?');
+    });
+})();
+</script>
+<?php endif; ?>
 <?php layout_footer(); ?>
