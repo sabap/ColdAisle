@@ -19,7 +19,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
-## [0.3.67] - 2026-08-07
+## [0.3.68] - 2026-08-07
 
 ### New features
 
@@ -31,6 +31,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 - **Env alerts** route through `AlertService` (in-app + subscription email), not email-only.
 - Notifications page copy points at Settings → Alerts; `alert_subscriptions` documented in schema.
+
+---
+
+## [0.3.67] - 2026-08-07
+
+### Enhancements
+
+- Changelog / version bump only (implementation shipped in **0.3.68**).
 
 ---
 ## [0.3.66] - 2026-08-07
