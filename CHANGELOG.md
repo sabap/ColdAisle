@@ -15,6 +15,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+### Bug fixes
+
+---
+
+## [0.3.62] - 2026-08-07
+
+### Enhancements
+
 - **Device SNMP poll errors:** total GET failure message includes the target host (and notes iDRAC host when used) plus a reminder that agent IP allow-lists live on the iDRAC, not in ColdAisle.
 
 ### Bug fixes
@@ -22,7 +30,6 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **Device SNMPv3 poll:** honor stored security level (authPriv / authNoPriv) instead of only inferring from whether passphrases are present.
 
 ---
-
 ## [0.3.61] - 2026-08-07
 
 ### Enhancements
