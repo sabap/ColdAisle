@@ -3349,6 +3349,9 @@ if ($action === 'new' || $id) {
 }
 
 // ---- List ----
+if (is_file(dirname(__DIR__) . '/src/Services/IcmpMonitorService.php')) {
+    require_once dirname(__DIR__) . '/src/Services/IcmpMonitorService.php';
+}
 $q = trim($_GET['q'] ?? '');
 $sql = 'SELECT d.*, c.name AS cabinet_name, dc.name AS dc_name, cr.name AS row_name, z.name AS zone_name,
                dep.name AS department_name, dep.color_hex AS department_color,
@@ -3402,6 +3405,7 @@ layout_header('Devices', $user, 'devices');
                     <th>Cabinet</th>
                     <th>U</th>
                     <th>IP</th>
+                    <th>Health</th>
                     <th>Status</th>
                 </tr>
                 </thead>
@@ -3414,8 +3418,21 @@ layout_header('Devices', $user, 'devices');
                     if ($dc !== '' && !preg_match('/^#[0-9A-Fa-f]{6}$/', $dc)) {
                         $dc = '';
                     }
+                    $icmpList = class_exists('IcmpMonitorService')
+                        ? IcmpMonitorService::statusFromRow('device', $d)
+                        : ['status' => 'off', 'label' => '—'];
+                    $hp = (string)($icmpList['status'] ?? 'off');
+                    if ($hp === 'up') {
+                        $hp = 'ok';
+                    }
+                    $rowHealth = in_array($hp, ['down', 'crit', 'warn', 'degraded'], true)
+                        ? ($hp === 'degraded' ? 'warn' : $hp)
+                        : '';
+                    if ($hp === 'degraded') {
+                        $hp = 'warn';
+                    }
                     ?>
-                    <tr>
+                    <tr class="<?= $rowHealth !== '' ? 'health-row-' . App::e($rowHealth) : '' ?>">
                         <td><a href="?id=<?= (int)$d['device_id'] ?>"><?= App::e($d['label']) ?></a></td>
                         <td><?= App::e($deviceTypes[$d['device_type']] ?? $d['device_type']) ?></td>
                         <td>
@@ -3451,11 +3468,18 @@ layout_header('Devices', $user, 'devices');
                             }
                         ?></td>
                         <td><?= App::e($d['primary_ip'] ?? '—') ?></td>
+                        <td>
+                            <span class="health-chip health-chip-<?= App::e($hp) ?>"
+                                  title="<?= App::e((string)($icmpList['label'] ?? '')) ?>">
+                                <span class="health-pulse health-pulse-<?= App::e($hp) ?>" aria-hidden="true"></span>
+                                <span class="health-chip-label"><?= App::e((string)($icmpList['label'] ?? '—')) ?></span>
+                            </span>
+                        </td>
                         <td><span class="badge badge-info"><?= App::e($deviceStatuses[$d['status']] ?? $d['status']) ?></span></td>
                     </tr>
                 <?php endforeach; ?>
                 <?php if (!$devices): ?>
-                    <tr><td colspan="8" class="text-muted">No devices found.</td></tr>
+                    <tr><td colspan="9" class="text-muted">No devices found.</td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>

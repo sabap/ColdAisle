@@ -1691,12 +1691,14 @@ if ($pduId) {
         var c2 = document.getElementById('pduSnmpDiscoverCancel');
         if (c1) c1.addEventListener('click', closeDiscover);
         if (c2) c2.addEventListener('click', closeDiscover);
-        modal.addEventListener('click', function (e) {
-            if (e.target === modal) closeDiscover();
-        });
-        document.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape' && !modal.hidden) closeDiscover();
-        });
+        if (modal) {
+            modal.addEventListener('click', function (e) {
+                if (e.target === modal) closeDiscover();
+            });
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape' && !modal.hidden) closeDiscover();
+            });
+        }
     })();
     </script>
     <?php endif; ?>
@@ -2603,6 +2605,9 @@ if ($pduId) {
 }
 
 // List
+if (is_file(dirname(__DIR__) . '/src/Services/IcmpMonitorService.php')) {
+    require_once dirname(__DIR__) . '/src/Services/IcmpMonitorService.php';
+}
 $sql = 'SELECT p.*, c.name AS cabinet_name, z.name AS zone_name, z.voltage AS zone_voltage,
                r.name AS row_name
         FROM pdus p
@@ -2735,6 +2740,7 @@ $labelBase = App::url('pages/pdu_label.php');
                 <th>Zone</th>
                 <th>Amps</th>
                 <th>Load</th>
+                <th>Health</th>
                 <th>SNMP</th>
                 <th class="col-actions"></th>
             </tr>
@@ -2764,8 +2770,20 @@ $labelBase = App::url('pages/pdu_label.php');
                 $outShort = $om === 'breakers'
                     ? ((int)($p['num_breaker_slots'] ?? 0) . ' brk')
                     : ((int)($p['num_outlets'] ?? 0) . ' out');
+                $icmpListPdu = class_exists('IcmpMonitorService')
+                    ? IcmpMonitorService::statusFromRow('pdu', $p)
+                    : ['status' => 'off', 'label' => '—'];
+                $hpPdu = (string)($icmpListPdu['status'] ?? 'off');
+                if ($hpPdu === 'up') {
+                    $hpPdu = 'ok';
+                }
+                if ($hpPdu === 'degraded') {
+                    $hpPdu = 'warn';
+                }
+                $rowHpPdu = in_array($hpPdu, ['down', 'crit', 'warn'], true) ? $hpPdu : '';
                 ?>
-                <tr data-pdu-id="<?= (int)$p['pdu_id'] ?>">
+                <tr data-pdu-id="<?= (int)$p['pdu_id'] ?>"
+                    class="<?= $rowHpPdu !== '' ? 'health-row-' . App::e($rowHpPdu) : '' ?>">
                     <td class="col-check">
                         <input type="checkbox" class="pdu-row-check" value="<?= (int)$p['pdu_id'] ?>"
                                data-pdu-name="<?= App::e((string)$p['name']) ?>"
@@ -2801,6 +2819,13 @@ $labelBase = App::url('pages/pdu_label.php');
                     </td>
                     <td><?= $p['rated_amps'] !== null ? App::e((string)$p['rated_amps']) : '—' ?></td>
                     <td><?= $p['last_poll_watts'] !== null ? number_format((float)$p['last_poll_watts'] / 1000, 2) . ' kW' : '—' ?></td>
+                    <td>
+                        <span class="health-chip health-chip-<?= App::e($hpPdu) ?>"
+                              title="<?= App::e((string)($icmpListPdu['label'] ?? '')) ?>">
+                            <span class="health-pulse health-pulse-<?= App::e($hpPdu) ?>" aria-hidden="true"></span>
+                            <span class="health-chip-label"><?= App::e((string)($icmpListPdu['label'] ?? '—')) ?></span>
+                        </span>
+                    </td>
                     <td><?= !empty($p['snmp_enabled']) ? '<span class="badge badge-success">v' . App::e((string)$p['snmp_version']) . '</span>' : '—' ?></td>
                     <td class="actions col-actions">
                         <a class="btn btn-sm btn-secondary" href="?id=<?= (int)$p['pdu_id'] ?>">Open</a>
@@ -2809,7 +2834,7 @@ $labelBase = App::url('pages/pdu_label.php');
             <?php endforeach; ?>
             <?php if (!$pdus): ?>
                 <tr>
-                    <td colspan="13" class="text-muted">
+                    <td colspan="14" class="text-muted">
                         No PDUs yet.
                         <?php if ($canEditPdu): ?>
                             Use <strong>Add PDU</strong> to create one.

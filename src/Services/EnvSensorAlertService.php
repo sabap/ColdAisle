@@ -121,13 +121,6 @@ class EnvSensorAlertService
         if (!$cfg['enabled']) {
             return false;
         }
-        $emails = self::normalizeEmailList($cfg['email']);
-        if ($emails === []) {
-            return false;
-        }
-        if (!class_exists('MailService') || !MailService::isEnabled()) {
-            return false;
-        }
 
         $sid = (int)($sensor['sensor_id'] ?? 0);
         if ($sid < 1) {
@@ -263,18 +256,54 @@ class EnvSensorAlertService
         $lines[] = '';
         $lines[] = 'Time (UTC): ' . gmdate('Y-m-d H:i:s');
 
-        $subject = sprintf(
-            '[ColdAisle] %s env %s — %s',
+        $title = sprintf(
+            'Env %s: %s',
             strtoupper($worst),
-            $issues[0]['metric'] ?? 'sensor',
             $name
         );
-        $result = MailService::send($emails, $subject, [
-            'text' => implode("\n", $lines),
-        ]);
+        $body = implode("\n", $lines);
+        $delivered = false;
 
-        if (empty($result['ok'])) {
-            App::log('Env alert mail failed sensor_id=' . $sid . ': ' . ($result['message'] ?? ''), 'warning');
+        // Unified hub (in-app + subscription / default email routing)
+        if (class_exists('AlertService')) {
+            try {
+                $stats = AlertService::emit([
+                    'category' => AlertService::CAT_ENV,
+                    'severity' => $worst === 'crit' ? AlertService::SEV_CRITICAL : AlertService::SEV_WARNING,
+                    'title' => $title,
+                    'message' => $body,
+                    'entity_type' => 'env_sensor',
+                    'entity_id' => $sid,
+                ]);
+                $delivered = ($stats['in_app'] ?? 0) > 0 || ($stats['emails'] ?? 0) > 0;
+            } catch (Throwable $e) {
+                App::log('Env AlertService emit: ' . $e->getMessage(), 'error');
+            }
+        }
+
+        // Fallback direct email when hub unavailable or produced no mail
+        if (!$delivered) {
+            $emails = self::normalizeEmailList($cfg['email']);
+            if ($emails && class_exists('MailService') && MailService::isEnabled()) {
+                $subject = sprintf(
+                    '[ColdAisle] %s env %s — %s',
+                    strtoupper($worst),
+                    $issues[0]['metric'] ?? 'sensor',
+                    $name
+                );
+                try {
+                    $result = MailService::send($emails, $subject, ['text' => $body]);
+                    $delivered = !empty($result['ok']);
+                    if (!$delivered) {
+                        App::log('Env alert mail failed sensor_id=' . $sid . ': ' . ($result['message'] ?? ''), 'warning');
+                    }
+                } catch (Throwable $e) {
+                    App::log('Env alert mail: ' . $e->getMessage(), 'error');
+                }
+            }
+        }
+
+        if (!$delivered) {
             return false;
         }
 

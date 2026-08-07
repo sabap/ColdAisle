@@ -812,11 +812,31 @@ CREATE TABLE notifications (
     user_id INT NULL REFERENCES users(user_id),
     title NVARCHAR(200) NOT NULL,
     message NVARCHAR(MAX) NOT NULL,
-    category NVARCHAR(50) NOT NULL DEFAULT 'info', -- info, warning, disposal, audit, system, power
+    category NVARCHAR(50) NOT NULL DEFAULT 'info', -- info, warning, disposal, audit, system, power, icmp, env
     entity_type NVARCHAR(50) NULL,
     entity_id INT NULL,
     is_read BIT NOT NULL DEFAULT 0,
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
+GO
+
+-- Unified alert routing (global / department / device / PDU)
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'alert_subscriptions')
+CREATE TABLE alert_subscriptions (
+    subscription_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL,
+    scope NVARCHAR(20) NOT NULL CONSTRAINT DF_alert_sub_scope DEFAULT 'global',
+    department_id INT NULL,
+    device_id INT NULL,
+    pdu_id INT NULL,
+    categories NVARCHAR(200) NOT NULL CONSTRAINT DF_alert_sub_cats DEFAULT 'icmp,power,env,snmp,system',
+    min_severity NVARCHAR(20) NOT NULL CONSTRAINT DF_alert_sub_sev DEFAULT 'warning',
+    email_to NVARCHAR(500) NULL,
+    notify_in_app BIT NOT NULL CONSTRAINT DF_alert_sub_app DEFAULT 1,
+    notify_email BIT NOT NULL CONSTRAINT DF_alert_sub_mail DEFAULT 1,
+    is_active BIT NOT NULL CONSTRAINT DF_alert_sub_active DEFAULT 1,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_alert_sub_created DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_alert_sub_updated DEFAULT SYSUTCDATETIME()
 );
 GO
 
