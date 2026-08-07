@@ -81,6 +81,16 @@ class Cabinet3dData
         }
         unset($c);
 
+        // Aggregate ICMP / power / env health for 3D + floorplan coloring
+        if (class_exists('CabinetHealthService') || is_file(__DIR__ . '/CabinetHealthService.php')) {
+            require_once __DIR__ . '/CabinetHealthService.php';
+            try {
+                $cabinets = CabinetHealthService::attach($cabinets);
+            } catch (Throwable $e) {
+                // non-fatal — views still render without health
+            }
+        }
+
         return $cabinets;
     }
 

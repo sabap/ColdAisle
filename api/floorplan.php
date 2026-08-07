@@ -496,6 +496,8 @@ try {
                     p.pos_x, p.pos_y, p.pos_z, p.rotation_deg, p.front_facing,
                     p.width_mm, p.depth_mm, p.height_mm, p.color_hex, p.output_mode, p.num_breaker_slots,
                     p.rated_amps, p.phases, p.phase_wiring, p.ip_address,
+                    p.icmp_monitor, p.icmp_fail_count, p.icmp_last_at, p.icmp_last_ok,
+                    p.icmp_last_rtt_ms, p.icmp_last_error,
                     r.name AS row_name, z.name AS zone_name, z.color_hex AS zone_color
              FROM pdus p
              LEFT JOIN cabinet_rows r ON r.row_id = p.row_id
@@ -507,6 +509,9 @@ try {
              ORDER BY p.name',
             [$roomId]
         );
+        if (class_exists('CabinetHealthService')) {
+            $placedPdus = CabinetHealthService::attachPdus($placedPdus);
+        }
         // Unplaced: row/room PDUs with no floor coords; prefer same DC via zone or row room
         $unplacedPdus = Database::fetchAll(
             'SELECT p.pdu_id, p.name, p.pdu_scope, p.row_id, p.zone_id,

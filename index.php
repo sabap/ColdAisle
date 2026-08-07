@@ -69,7 +69,9 @@ $pdus3d = [];
 try {
     $pdus3d = Database::fetchAll(
         'SELECT p.pdu_id, p.name, p.pos_x, p.pos_y, p.pos_z, p.rotation_deg, p.front_facing,
-                p.width_mm, p.depth_mm, p.height_mm, p.color_hex, p.pdu_scope,
+                p.width_mm, p.depth_mm, p.height_mm, p.color_hex, p.pdu_scope, p.ip_address,
+                p.icmp_monitor, p.icmp_fail_count, p.icmp_last_at, p.icmp_last_ok,
+                p.icmp_last_rtt_ms, p.icmp_last_error,
                 z.name AS zone_name, z.color_hex AS zone_color,
                 r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth
          FROM pdus p
@@ -80,6 +82,9 @@ try {
            AND p.pos_x IS NOT NULL AND p.pos_y IS NOT NULL
          ORDER BY p.name'
     );
+    if (class_exists('CabinetHealthService')) {
+        $pdus3d = CabinetHealthService::attachPdus($pdus3d);
+    }
 } catch (Throwable $e) {
     $pdus3d = [];
 }
@@ -327,7 +332,7 @@ layout_header('Dashboard', $user, 'dashboard');
     if (!el) return;
     el.classList.add('dash-3d-loading');
     var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=10') ?>;
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=11') ?>;
     loadScript(threeUrl)
       .then(function () { return loadScript(app3d); })
       .then(function () {

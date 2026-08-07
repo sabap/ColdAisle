@@ -443,6 +443,30 @@
 
     var faceJobs = []; // { cab, face, mat }
 
+    var healthPulseMats = []; // body mats that breathe on warn/crit
+
+    function cabinetHealthStatus(cab) {
+      var h = cab && (cab.health || cab.health_status);
+      if (!h) return 'unknown';
+      if (typeof h === 'string') return h;
+      return String(h.status || cab.health_status || 'unknown');
+    }
+
+    function healthTintHex(cab) {
+      // Prefer server-blended display hex; fall back to status color lerp client-side
+      if (cab.health_display_hex) return cab.health_display_hex;
+      var st = cabinetHealthStatus(cab);
+      var base = new THREE.Color(cab.color_hex || '#2d3748');
+      if (st === 'crit' || st === 'down') {
+        base.lerp(new THREE.Color(0xef4444), 0.55);
+      } else if (st === 'warn' || st === 'degraded') {
+        base.lerp(new THREE.Color(0xeab308), 0.45);
+      } else if (st === 'ok' || st === 'up') {
+        base.lerp(new THREE.Color(0x22c55e), 0.12);
+      }
+      return '#' + base.getHexString();
+    }
+
     cabinets.forEach(function (cab) {
       var w = mmToM(cab.width_mm) || 0.6;
       var d = mmToM(cab.depth_mm) || 1.2;
@@ -450,7 +474,8 @@
       var x = Number(cab.pos_x) || 0;
       var z = Number(cab.pos_y) || 0;
       var rot = (Number(cab.rotation_deg) || 0) * Math.PI / 180;
-      var color = new THREE.Color(cab.color_hex || '#2d3748');
+      var healthSt = cabinetHealthStatus(cab);
+      var color = new THREE.Color(healthTintHex(cab));
 
       var geo = new THREE.BoxGeometry(w, h, d);
       var mat = new THREE.MeshStandardMaterial({
@@ -458,10 +483,20 @@
         roughness: 0.55,
         metalness: 0.35,
       });
+      // Soft emissive glow for problems (not a chunky outline box)
+      if (healthSt === 'crit' || healthSt === 'down') {
+        mat.emissive = new THREE.Color(0xef4444);
+        mat.emissiveIntensity = 0.28;
+        healthPulseMats.push({ mat: mat, base: 0.22, amp: 0.22, speed: 2.4 });
+      } else if (healthSt === 'warn' || healthSt === 'degraded') {
+        mat.emissive = new THREE.Color(0xeab308);
+        mat.emissiveIntensity = 0.16;
+        healthPulseMats.push({ mat: mat, base: 0.12, amp: 0.12, speed: 1.6 });
+      }
       var mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(x + w / 2, h / 2, z + d / 2);
       mesh.rotation.y = rot;
-      mesh.userData = { cabinet: cab };
+      mesh.userData = { cabinet: cab, health: healthSt };
 
       // Front / rear face planes — solid first (instant), images upgrade async
       var faceW = w * 0.98;
@@ -522,6 +557,51 @@
       label.rotation.x = -Math.PI / 2;
       mesh.add(label);
 
+      // Compact health beacon (sphere) — modern pulse, not a box/circle badge
+      if (healthSt === 'ok' || healthSt === 'warn' || healthSt === 'crit'
+          || healthSt === 'up' || healthSt === 'degraded' || healthSt === 'down') {
+        var beaconHex = 0x22c55e;
+        if (healthSt === 'crit' || healthSt === 'down') beaconHex = 0xef4444;
+        else if (healthSt === 'warn' || healthSt === 'degraded') beaconHex = 0xeab308;
+        var beaconR = Math.max(0.035, Math.min(w, d) * 0.08);
+        var beaconMat = new THREE.MeshStandardMaterial({
+          color: beaconHex,
+          emissive: new THREE.Color(beaconHex),
+          emissiveIntensity: healthSt === 'ok' || healthSt === 'up' ? 0.35 : 0.55,
+          roughness: 0.25,
+          metalness: 0.2,
+        });
+        if (healthSt !== 'ok' && healthSt !== 'up') {
+          healthPulseMats.push({
+            mat: beaconMat,
+            base: 0.35,
+            amp: 0.45,
+            speed: healthSt === 'crit' || healthSt === 'down' ? 2.8 : 1.8,
+          });
+        }
+        var beacon = new THREE.Mesh(
+          new THREE.SphereGeometry(beaconR, 16, 12),
+          beaconMat
+        );
+        beacon.position.set(w * 0.32, h / 2 + 0.04, 0);
+        beacon.userData = { kind: 'healthBeacon', health: healthSt };
+        mesh.add(beacon);
+        // Soft halo disc under beacon
+        var haloMat = new THREE.MeshBasicMaterial({
+          color: beaconHex,
+          transparent: true,
+          opacity: 0.28,
+          depthWrite: false,
+        });
+        var halo = new THREE.Mesh(
+          new THREE.CircleGeometry(beaconR * 2.4, 24),
+          haloMat
+        );
+        halo.rotation.x = -Math.PI / 2;
+        halo.position.set(w * 0.32, h / 2 + 0.012, 0);
+        mesh.add(halo);
+      }
+
       rackGroup.add(mesh);
     });
 
@@ -559,6 +639,7 @@
     }
 
     // Row / room floor PDUs — translucent zone-colored body + wireframe edges
+    // (health border: warn/crit tint via zone/body color blend when provided)
     floorPdus.forEach(function (pdu) {
       var w = mmToM(pdu.width_mm) || 0.6;
       var d = mmToM(pdu.depth_mm) || 0.3;
@@ -570,6 +651,12 @@
       var hex = pdu.zone_color || pdu.color_hex || '#f59e0b';
       if (!/^#[0-9A-Fa-f]{6}$/.test(String(hex))) hex = '#f59e0b';
       var color = new THREE.Color(hex);
+      var pduH = (pdu.health && pdu.health.status) || pdu.health_status || '';
+      if (pduH === 'crit' || pduH === 'down') {
+        color.lerp(new THREE.Color(0xef4444), 0.5);
+      } else if (pduH === 'warn' || pduH === 'degraded') {
+        color.lerp(new THREE.Color(0xeab308), 0.4);
+      }
 
       var geo = new THREE.BoxGeometry(w, h, d);
       var mat = new THREE.MeshStandardMaterial({
@@ -580,12 +667,22 @@
         metalness: 0.25,
         depthWrite: false,
       });
+      if (pduH === 'crit' || pduH === 'warn' || pduH === 'down' || pduH === 'degraded') {
+        mat.emissive = new THREE.Color(pduH === 'crit' || pduH === 'down' ? 0xef4444 : 0xeab308);
+        mat.emissiveIntensity = 0.2;
+        healthPulseMats.push({
+          mat: mat,
+          base: 0.12,
+          amp: 0.18,
+          speed: pduH === 'crit' || pduH === 'down' ? 2.5 : 1.6,
+        });
+      }
       var mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(x + w / 2, h / 2, z + d / 2);
       mesh.rotation.y = rot;
-      mesh.userData = { pdu: pdu };
+      mesh.userData = { pdu: pdu, health: pduH };
 
-      // Solid wireframe outline in zone color
+      // Solid wireframe outline in zone/health color
       var edges = new THREE.LineSegments(
         new THREE.EdgesGeometry(geo),
         new THREE.LineBasicMaterial({ color: color, linewidth: 1 })
@@ -1028,11 +1125,21 @@
     }
 
     var animId;
+    var healthT0 = performance.now();
     function animate() {
       animId = requestAnimationFrame(animate);
       if (autoRotate && !isDown) {
         theta += autoRotateSpeed;
         updateCamera();
+      }
+      // Breathe emissive on warn/crit racks (subtle, not strobe)
+      if (healthPulseMats.length) {
+        var t = (performance.now() - healthT0) / 1000;
+        for (var hi = 0; hi < healthPulseMats.length; hi++) {
+          var hp = healthPulseMats[hi];
+          if (!hp.mat) continue;
+          hp.mat.emissiveIntensity = hp.base + hp.amp * (0.5 + 0.5 * Math.sin(t * hp.speed));
+        }
       }
       renderer.render(scene, camera);
     }

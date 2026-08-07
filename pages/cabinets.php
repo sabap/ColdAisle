@@ -231,11 +231,21 @@ if ($id) {
                             ? '; --dept-color: ' . $deptColor . ';'
                             : '';
                         $deptTitle = !empty($d['department_name']) ? ' · ' . $d['department_name'] : '';
+                        $devHp = '';
+                        if (!empty($d['icmp_monitor']) && class_exists('IcmpMonitorService')) {
+                            $icmpDev = IcmpMonitorService::statusFromRow('device', $d);
+                            $devHp = CabinetHealthService::mapIcmp((string)($icmpDev['status'] ?? 'unknown'));
+                            if ($devHp === 'unknown') {
+                                $devHp = '';
+                            }
+                        }
+                        $devHpClass = $devHp !== '' ? ' rack-device-health-' . $devHp : '';
+                        $devHpTitle = $devHp !== '' ? ' · health ' . $devHp : '';
                         ?>
-                        <a class="rack-device type-<?= App::e($typeClass) ?><?= $deptColor !== '' ? ' has-dept-color' : '' ?>"
+                        <a class="rack-device type-<?= App::e($typeClass) ?><?= $deptColor !== '' ? ' has-dept-color' : '' ?><?= App::e($devHpClass) ?>"
                            href="<?= App::e($href) ?>"
                            style="bottom: <?= rtrim(rtrim(sprintf('%.4F', $bottomPct), '0'), '.') ?>%; height: <?= rtrim(rtrim(sprintf('%.4F', $hPct), '0'), '.') ?>%;<?= App::e($deptStyle) ?>"
-                           title="<?= App::e($label . ' · U' . $pos . '–' . $topU . ' · ' . $uh . 'U' . $deptTitle) ?>">
+                           title="<?= App::e($label . ' · U' . $pos . '–' . $topU . ' · ' . $uh . 'U' . $deptTitle . $devHpTitle) ?>">
                             <?php if ($img !== ''): ?>
                                 <img class="rack-device-img"
                                      src="<?= App::e($img) ?>"
@@ -319,11 +329,31 @@ if ($id) {
         $cabAuditInterval
     );
 
+    $cabHealth = [
+        'status' => 'unknown',
+        'label' => 'No monitors',
+        'reasons' => [],
+        'color' => '#64748b',
+    ];
+    if (class_exists('CabinetHealthService')) {
+        $hm = CabinetHealthService::forCabinetIds([(int)$id]);
+        if (!empty($hm[(int)$id])) {
+            $cabHealth = $hm[(int)$id];
+        }
+    }
+
     layout_header('Cabinet: ' . $cab['name'], $user, 'cabinets');
     ?>
     <div class="flex-between mb-2">
         <div>
             <span class="text-muted"><?= App::e($cab['dc_name'] . ' / ' . $cab['room_name']) ?></span>
+            <p class="mb-0" style="margin-top:.35rem">
+                <span class="health-chip health-chip-<?= App::e((string)$cabHealth['status']) ?>"
+                      title="<?= App::e(implode("\n", $cabHealth['reasons'] ?? []) ?: (string)$cabHealth['label']) ?>">
+                    <span class="health-pulse health-pulse-<?= App::e((string)$cabHealth['status']) ?>" aria-hidden="true"></span>
+                    <span class="health-chip-label"><?= App::e((string)$cabHealth['label']) ?></span>
+                </span>
+            </p>
             <p class="text-muted mb-0">
                 Floor: <?= (int)$cab['width_mm'] ?>×<?= (int)$cab['depth_mm'] ?> mm ·
                 Rails: 19″ · <?= $height ?>U (<?= App::e(rtrim(rtrim(sprintf('%.2F', $aspectH), '0'), '.')) ?>″ tall)
@@ -385,6 +415,20 @@ if ($id) {
                 </div>
                 <dl class="rack-prop-list">
                     <div><dt>Name</dt><dd><?= App::e($cab['name']) ?></dd></div>
+                    <div><dt>Health</dt><dd>
+                        <span class="health-chip health-chip-<?= App::e((string)$cabHealth['status']) ?>"
+                              title="<?= App::e(implode("\n", $cabHealth['reasons'] ?? []) ?: (string)$cabHealth['label']) ?>">
+                            <span class="health-pulse health-pulse-<?= App::e((string)$cabHealth['status']) ?>" aria-hidden="true"></span>
+                            <span class="health-chip-label"><?= App::e((string)$cabHealth['label']) ?></span>
+                        </span>
+                        <?php if (!empty($cabHealth['reasons'])): ?>
+                            <ul class="text-muted" style="margin:.35rem 0 0;padding-left:1.1rem;font-size:.78rem">
+                                <?php foreach (array_slice($cabHealth['reasons'], 0, 6) as $reason): ?>
+                                    <li><?= App::e($reason) ?></li>
+                                <?php endforeach; ?>
+                            </ul>
+                        <?php endif; ?>
+                    </dd></div>
                     <div><dt>Data center</dt><dd><?= App::e($cab['dc_name']) ?></dd></div>
                     <div><dt>Room</dt><dd><?= App::e($cab['room_name']) ?></dd></div>
                     <div><dt>U height</dt><dd><?= $height ?>U</dd></div>
@@ -1208,6 +1252,14 @@ if ($rowId) {
     }
     unset($rc);
 
+    if (class_exists('CabinetHealthService')) {
+        try {
+            $rowCabs = CabinetHealthService::attach($rowCabs);
+        } catch (Throwable $e) {
+            // ignore
+        }
+    }
+
     $totalU = array_sum(array_map(static fn($c) => (int)$c['u_height'], $rowCabs));
     $usedU = array_sum(array_map(static fn($c) => (int)$c['u_used'], $rowCabs));
     $pollKw = array_sum(array_map(static fn($c) => (float)$c['pdu_watts'], $rowCabs)) / 1000.0;
@@ -1300,9 +1352,19 @@ if ($rowId) {
                 }
                 $pct = $units ? round(100 * (int)$rc['u_used'] / $units, 1) : 0;
                 ?>
-                <div class="row-view-cab">
+                <?php
+                $rvHealth = $rc['health'] ?? ['status' => 'unknown', 'label' => '—', 'reasons' => []];
+                $rvSt = (string)($rvHealth['status'] ?? 'unknown');
+                ?>
+                <div class="row-view-cab<?= in_array($rvSt, ['warn', 'crit'], true) ? ' row-view-cab-health-' . App::e($rvSt) : '' ?>">
                     <div class="row-view-cab-head">
                         <a href="?id=<?= (int)$rc['cabinet_id'] ?>"><strong><?= App::e($rc['name']) ?></strong></a>
+                        <span class="health-chip health-chip-<?= App::e($rvSt) ?>"
+                              title="<?= App::e(implode("\n", $rvHealth['reasons'] ?? []) ?: (string)($rvHealth['label'] ?? '')) ?>"
+                              style="font-size:.68rem;padding:.1rem .4rem">
+                            <span class="health-pulse health-pulse-<?= App::e($rvSt) ?>" aria-hidden="true"></span>
+                            <span class="health-chip-label"><?= App::e((string)($rvHealth['label'] ?? '—')) ?></span>
+                        </span>
                         <span class="text-muted" style="font-size:.75rem">
                             <?= (int)$rc['u_used'] ?>/<?= $units ?>U · <?= $pct ?>%
                         </span>
@@ -1469,6 +1531,13 @@ $cabinets = Database::fetchAll(
      WHERE c.is_active = 1
      ORDER BY dc.name, r.name, cr.name, c.name'
 );
+if (class_exists('CabinetHealthService')) {
+    try {
+        $cabinets = CabinetHealthService::attach($cabinets);
+    } catch (Throwable $e) {
+        // ignore
+    }
+}
 
 // Also load empty rows (no cabinets yet)
 $allRows = Database::fetchAll(
@@ -1679,6 +1748,7 @@ layout_header('Cabinets', $user, 'cabinets');
                                         <th>Devices</th>
                                         <th>Utilization</th>
                                         <th>Power</th>
+                                        <th>Health</th>
                                         <th></th>
                                     </tr>
                                     </thead>
@@ -1689,8 +1759,11 @@ layout_header('Cabinets', $user, 'cabinets');
                                         $seq++;
                                         $pct = $c['u_height'] ? round(100 * (int)$c['u_used'] / (int)$c['u_height'], 1) : 0;
                                         $kw = ((float)$c['pdu_watts']) / 1000.0;
+                                        $lh = $c['health'] ?? ['status' => 'unknown', 'label' => '—', 'reasons' => []];
+                                        $lst = (string)($lh['status'] ?? 'unknown');
+                                        $rowCls = in_array($lst, ['warn', 'crit'], true) ? 'health-row-' . $lst : '';
                                         ?>
-                                        <tr>
+                                        <tr class="<?= App::e($rowCls) ?>">
                                             <td class="text-muted"><?= $seq ?></td>
                                             <td>
                                                 <a href="?id=<?= (int)$c['cabinet_id'] ?>"><strong><?= App::e($c['name']) ?></strong></a>
@@ -1704,6 +1777,13 @@ layout_header('Cabinets', $user, 'cabinets');
                                                 </span>
                                             </td>
                                             <td><?= $kw > 0 ? number_format($kw, 2) . ' kW' : '—' ?></td>
+                                            <td>
+                                                <span class="health-chip health-chip-<?= App::e($lst) ?>"
+                                                      title="<?= App::e(implode("\n", $lh['reasons'] ?? []) ?: (string)($lh['label'] ?? '')) ?>">
+                                                    <span class="health-pulse health-pulse-<?= App::e($lst) ?>" aria-hidden="true"></span>
+                                                    <span class="health-chip-label"><?= App::e((string)($lh['label'] ?? '—')) ?></span>
+                                                </span>
+                                            </td>
                                             <td class="actions">
                                                 <a class="btn btn-sm btn-secondary" href="?id=<?= (int)$c['cabinet_id'] ?>">Rack View</a>
                                             </td>

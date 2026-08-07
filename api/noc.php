@@ -321,7 +321,9 @@ if ($includeScene) {
     try {
         $pdus3d = Database::fetchAll(
             'SELECT p.pdu_id, p.name, p.pos_x, p.pos_y, p.pos_z, p.rotation_deg, p.front_facing,
-                    p.width_mm, p.depth_mm, p.height_mm, p.color_hex, p.pdu_scope,
+                    p.width_mm, p.depth_mm, p.height_mm, p.color_hex, p.pdu_scope, p.ip_address,
+                    p.icmp_monitor, p.icmp_fail_count, p.icmp_last_at, p.icmp_last_ok,
+                    p.icmp_last_rtt_ms, p.icmp_last_error,
                     r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth
              FROM pdus p
              LEFT JOIN rooms r ON r.room_id = p.room_id
@@ -330,6 +332,9 @@ if ($includeScene) {
                AND p.pos_x IS NOT NULL AND p.pos_y IS NOT NULL
              ORDER BY p.name'
         );
+        if (class_exists('CabinetHealthService')) {
+            $pdus3d = CabinetHealthService::attachPdus($pdus3d);
+        }
     } catch (Throwable $e) {
         $pdus3d = [];
     }

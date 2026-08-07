@@ -612,15 +612,32 @@
         const selected = isSelected(c);
         const rot = cabRotation(c);
         const facing = (c.front_facing || rotationToFacing(rot)).toUpperCase();
+        const hSt = (c.health && c.health.status) || c.health_status || 'unknown';
+        const hColor = (c.health && c.health.color) || c.health_color
+          || (hSt === 'crit' ? '#ef4444' : hSt === 'warn' ? '#eab308' : hSt === 'ok' ? '#22c55e' : null);
+        const bodyFill = c.health_display_hex || c.color_hex || '#2d3748';
 
         ctx.save();
         ctx.translate(r.x + r.w / 2, r.y + r.d / 2);
         ctx.rotate((rot * Math.PI) / 180);
 
+        // Soft outer glow for warn/crit (modern aura — not a thick box outline)
+        if ((hSt === 'crit' || hSt === 'warn') && hColor) {
+          const glow = Math.max(6, 10 * zoom);
+          ctx.shadowColor = hColor;
+          ctx.shadowBlur = glow;
+          ctx.fillStyle = bodyFill;
+          ctx.fillRect(-r.w / 2, -r.d / 2, r.w, r.d);
+          ctx.shadowBlur = 0;
+          ctx.shadowColor = 'transparent';
+        }
+
         // body
-        ctx.fillStyle = c.color_hex || '#2d3748';
-        ctx.strokeStyle = selected ? '#3b82f6' : '#64748b';
-        ctx.lineWidth = selected ? 3 : 1;
+        ctx.fillStyle = bodyFill;
+        ctx.strokeStyle = selected
+          ? '#3b82f6'
+          : (hSt === 'crit' ? '#ef4444' : hSt === 'warn' ? '#ca8a04' : '#64748b');
+        ctx.lineWidth = selected ? 3 : ((hSt === 'crit' || hSt === 'warn') ? 2 : 1);
         ctx.fillRect(-r.w / 2, -r.d / 2, r.w, r.d);
         ctx.strokeRect(-r.w / 2, -r.d / 2, r.w, r.d);
 
@@ -649,6 +666,25 @@
         ctx.fillStyle = '#94a3b8';
         const rowTag = c.row_name ? (' · ' + String(c.row_name).slice(0, 8)) : '';
         ctx.fillText((c.u_height || 42) + 'U · ' + facing + rowTag, 0, 12);
+
+        // Health beacon (soft disc) — top-right of rack footprint
+        if (hColor && (hSt === 'ok' || hSt === 'warn' || hSt === 'crit')) {
+          const br = Math.max(3.5, 5 * Math.min(zoom, 1.8));
+          const bx = r.w / 2 - br - 3;
+          const by = -r.d / 2 + br + 3;
+          const g = ctx.createRadialGradient(bx, by, 0, bx, by, br * 2.2);
+          g.addColorStop(0, hColor);
+          g.addColorStop(0.45, hColor);
+          g.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(bx, by, br * 2.2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = hColor;
+          ctx.beginPath();
+          ctx.arc(bx, by, br * 0.55, 0, Math.PI * 2);
+          ctx.fill();
+        }
 
         // Anchor marker
         if (Number(anchorId) === Number(c.cabinet_id)) {
@@ -685,8 +721,11 @@
       const r = pduRect(p);
       const selected = Number(selectedPduId) === Number(p.pdu_id);
       const rot = pduRotation(p);
+      const hSt = (p.health && p.health.status) || p.health_status || '';
       const body = p.color_hex || p.zone_color || '#b45309';
-      const border = selected ? '#fbbf24' : (p.zone_color || '#f59e0b');
+      const border = selected
+        ? '#fbbf24'
+        : (hSt === 'crit' ? '#ef4444' : hSt === 'warn' ? '#eab308' : (p.zone_color || '#f59e0b'));
 
       ctx.save();
       ctx.translate(r.x + r.w / 2, r.y + r.d / 2);

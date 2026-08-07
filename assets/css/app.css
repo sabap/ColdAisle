@@ -1277,6 +1277,16 @@ table.table-env-sensors .col-name a:hover {
   opacity: .9;
   font-family: var(--mono);
 }
+/* Soft health edge on elevation devices (not a chunky outline box) */
+.rack-device.rack-device-health-ok {
+  box-shadow: inset 3px 0 0 0 rgba(34, 197, 94, 0.9);
+}
+.rack-device.rack-device-health-warn {
+  box-shadow: inset 3px 0 0 0 rgba(234, 179, 8, 0.95), 0 0 12px rgba(234, 179, 8, 0.25);
+}
+.rack-device.rack-device-health-crit {
+  box-shadow: inset 3px 0 0 0 rgba(239, 68, 68, 0.95), 0 0 14px rgba(239, 68, 68, 0.3);
+}
 .rack-device.type-server { background: linear-gradient(90deg, #1e3a8a, #1d4ed8); }
 .rack-device.type-network_switch,
 .rack-device.type-switch { background: linear-gradient(90deg, #064e3b, #059669); }
@@ -2445,6 +2455,22 @@ tr.row-empty td { color: var(--muted); font-style: italic; }
   border-color: rgba(56, 189, 248, 0.55);
   background: rgba(14, 165, 233, 0.12);
   color: #7dd3fc;
+}
+
+/* Row view health frame */
+.row-view-cab-health-warn .row-view-elevation,
+.row-view-cab-health-crit .row-view-elevation {
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(234, 179, 8, 0.45), 0 0 18px rgba(234, 179, 8, 0.18);
+}
+.row-view-cab-health-crit .row-view-elevation {
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.55), 0 0 22px rgba(239, 68, 68, 0.22);
+}
+.row-view-cab-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem .5rem;
 }
 
 /* ── Health pulse (modern status — lists, cabinets, 3D prep) ── */

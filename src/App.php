@@ -14,6 +14,7 @@ require_once __DIR__ . '/Auth/EntraAuth.php';
 require_once __DIR__ . '/Services/AuditService.php';
 require_once __DIR__ . '/Services/SettingsService.php';
 require_once __DIR__ . '/Services/Cabinet3dData.php';
+require_once __DIR__ . '/Services/CabinetHealthService.php';
 require_once __DIR__ . '/Services/EnvSensor3dData.php';
 require_once __DIR__ . '/Services/EnvSensorAlertService.php';
 require_once __DIR__ . '/Services/TempUnitService.php';
