@@ -313,7 +313,8 @@ class SnmpPoller
             $creds['auth_passphrase'] ?? '',
             $creds['priv_protocol'] ?? '',
             $creds['priv_passphrase'] ?? '',
-            (string)($device['snmp_v3_context'] ?? $creds['context'] ?? '')
+            (string)($device['snmp_v3_context'] ?? $creds['context'] ?? ''),
+            (string)($device['snmp_v3_sec_level'] ?? $creds['security_level'] ?? '')
         );
 
         $got = self::collectOidMap($session, $oidMap);
@@ -370,12 +371,22 @@ class SnmpPoller
 
         if ($got['ok'] === 0) {
             $detail = $got['last_error'] ?: 'no response';
-            throw new RuntimeException(
-                'All SNMP GETs failed for this device (template has OIDs but none answered). '
-                . 'Last error: ' . $detail
-                . '. Check SNMP version, community (v1/v2c) or v3 user, and that UDP/161 is open from IIS. '
-                . 'Missing probes (e.g. humidity.4 when only 3 probes exist) are soft-failed only when other OIDs succeed — this is a total auth/reachability failure, not “sensors not created”.'
-            );
+            $hostHint = (string)($creds['host'] ?? '');
+            $usesIdrac = SnmpDiscover::isDellManufacturer($device['manufacturer'] ?? null)
+                && trim((string)($device['idrac_host'] ?? '')) !== '';
+            $msg = 'All SNMP GETs failed for this device (template has OIDs but none answered). '
+                . 'Last error: ' . $detail . '. '
+                . 'SNMP target host: ' . ($hostHint !== '' ? $hostHint : '(empty)')
+                . ($usesIdrac ? ' (iDRAC field)' : '') . '. '
+                . 'Check version/community/v3 user, UDP/161 from the IIS server to that host. ';
+            if ($usesIdrac || SnmpDiscover::isDellManufacturer($device['manufacturer'] ?? null)) {
+                $msg .= 'On iDRAC: Settings → Services → SNMP — agent Enabled, protocol matches ColdAisle, '
+                    . 'and if the iDRAC firewall / “accept SNMP from these hosts” list is set, add the IIS server IP '
+                    . '(ColdAisle does not push agent ACLs to the device). ';
+            }
+            $msg .= 'Missing probes (e.g. humidity.4 when only 3 probes exist) soft-fail only when other OIDs succeed — '
+                . 'this is a total auth/reachability failure.';
+            throw new RuntimeException($msg);
         }
 
         Database::update('devices', [
@@ -1560,6 +1571,32 @@ class SnmpPoller
         self::closeSession($session);
     }
 
+    /**
+     * Resolve SNMPv3 security level: prefer explicit setting, else derive from passphrases.
+     */
+    private static function snmpV3SecurityLevel(string $explicit, string $authPass, string $privPass): string
+    {
+        $e = strtolower(trim($explicit));
+        // Normalize common aliases
+        $e = str_replace(['_', ' '], '', $e);
+        if (in_array($e, ['authpriv', 'authnopriv', 'noauthnopriv'], true)) {
+            if ($e === 'authpriv') {
+                return 'authPriv';
+            }
+            if ($e === 'authnopriv') {
+                return 'authNoPriv';
+            }
+            return 'noAuthNoPriv';
+        }
+        if ($authPass !== '' && $privPass !== '') {
+            return 'authPriv';
+        }
+        if ($authPass !== '') {
+            return 'authNoPriv';
+        }
+        return 'noAuthNoPriv';
+    }
+
     private static function openSession(
         string $host,
         int $port,
@@ -1569,7 +1606,8 @@ class SnmpPoller
         string $authPass,
         string $privProto,
         string $privPass,
-        string $context
+        string $context,
+        string $secLevel = ''
     ) {
         if (!function_exists('snmp3_get') && !function_exists('snmp2_get') && !class_exists('SNMP')) {
             throw new RuntimeException('PHP SNMP extension not available');
@@ -1580,6 +1618,7 @@ class SnmpPoller
         $timeoutUsec = 2_000_000; // 2 seconds
         $retries = 1;
         $snmpObj = null;
+        $resolvedLevel = self::snmpV3SecurityLevel($secLevel, (string)$authPass, (string)$privPass);
         if (class_exists('SNMP')) {
             try {
                 $ver = strtolower($version) === '3' ? constant('SNMP::VERSION_3') : constant('SNMP::VERSION_2c');
@@ -1593,14 +1632,8 @@ class SnmpPoller
                 }
                 $snmpObj->exceptions_enabled = 0;
                 if (strtolower($version) === '3') {
-                    $secLevel = 'noAuthNoPriv';
-                    if ($authPass && $privPass) {
-                        $secLevel = 'authPriv';
-                    } elseif ($authPass) {
-                        $secLevel = 'authNoPriv';
-                    }
                     $snmpObj->setSecurity(
-                        $secLevel,
+                        $resolvedLevel,
                         $authProto ?: 'SHA',
                         $authPass ?: '',
                         $privProto ?: 'AES',
@@ -1622,6 +1655,7 @@ class SnmpPoller
             'privProto' => $privProto,
             'privPass' => $privPass,
             'context' => $context,
+            'secLevel' => $resolvedLevel,
             'snmp' => $snmpObj,
         ];
     }
@@ -1643,11 +1677,13 @@ class SnmpPoller
 
         $host = $session['host'];
         if (($session['version'] ?? '3') === '3' && function_exists('snmp3_get')) {
-            $secLevel = 'noAuthNoPriv';
-            if ($session['authPass'] && $session['privPass']) {
-                $secLevel = 'authPriv';
-            } elseif ($session['authPass']) {
-                $secLevel = 'authNoPriv';
+            $secLevel = (string)($session['secLevel'] ?? '');
+            if ($secLevel === '') {
+                $secLevel = self::snmpV3SecurityLevel(
+                    '',
+                    (string)($session['authPass'] ?? ''),
+                    (string)($session['privPass'] ?? '')
+                );
             }
             $result = @snmp3_get(
                 $host,
