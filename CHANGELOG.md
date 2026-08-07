@@ -19,6 +19,20 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.3.67] - 2026-08-07
+
+### New features
+
+- **Alerts & notifications hub (Settings):** one panel for global delivery, ICMP / power / env thresholds, and routing subscriptions (global, department, device, PDU). Platform foundation for future SNMP thresholds.
+- **Live toast feed:** unread notifications surface as modern toasts without leaving the page (`api/notifications.php` poll).
+- **Health indicators:** soft pulse chips on device and PDU lists (ICMP UP / degraded / DOWN) with row accent; CSS ready for cabinet / 3D views later.
+
+### Enhancements
+
+- **Env alerts** route through `AlertService` (in-app + subscription email), not email-only.
+- Notifications page copy points at Settings → Alerts; `alert_subscriptions` documented in schema.
+
+---
 ## [0.3.66] - 2026-08-07
 
 ### Bug fixes
