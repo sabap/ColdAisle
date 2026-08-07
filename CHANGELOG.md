@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **ICMP monitoring (devices + PDUs):** toggle **Monitor via ICMP** (same checkmark style as scheduled SNMP poll), **Ping now**, and status badge (UP / Degraded / DOWN). Uses industry-style debounce: 3 packets, 1s timeout, **3 consecutive fails → DOWN**, fast recovery on success. Runs in the existing Windows poll task; optional email on down/recovered.
+
 ### Enhancements
 
 ### Bug fixes

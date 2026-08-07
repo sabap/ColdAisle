@@ -964,7 +964,19 @@ if ($pduId) {
                     </button>
                 </form>
             <?php endif; ?>
-            <?php if ($canConfigSnmp):
+            <?php
+            $canIcmp = AuthManager::canEditPower($user) || AuthManager::canEditSnmp($user);
+            $icmpHostPdu = trim((string)($p['ip_address'] ?? ''));
+            $icmpMonPdu = !empty($p['icmp_monitor']);
+            if ($canIcmp || $canConfigSnmp):
+                if (is_file(dirname(__DIR__) . '/src/Services/IcmpMonitorService.php')) {
+                    require_once dirname(__DIR__) . '/src/Services/IcmpMonitorService.php';
+                }
+                $icmpStPdu = class_exists('IcmpMonitorService')
+                    ? IcmpMonitorService::statusFromRow('pdu', $p)
+                    : ['enabled' => $icmpMonPdu, 'status' => 'unknown', 'label' => '—', 'rtt' => null, 'at' => null, 'host' => $icmpHostPdu, 'error' => null];
+            endif;
+            if ($canConfigSnmp):
                 $pduAutoPoll = !empty($p['snmp_auto_poll']);
                 ?>
             <label class="snmp-toggle" title="<?= $pduSiteTplId > 0
@@ -978,6 +990,32 @@ if ($pduId) {
                     Scheduled poll <?= $pduAutoPoll ? 'on' : 'off' ?>
                 </span>
             </label>
+            <?php endif; ?>
+            <?php if ($canIcmp): ?>
+            <label class="snmp-toggle" title="<?= $icmpHostPdu !== ''
+                ? 'Ping ' . App::e($icmpHostPdu) . ' via ICMP (3 packets, 1s timeout; DOWN after 3 failed checks)'
+                : 'Set an IP address first' ?>">
+                <input type="checkbox" id="pduIcmpMonitorToggle"
+                    <?= $icmpMonPdu ? 'checked' : '' ?>
+                    <?= $icmpHostPdu !== '' ? '' : 'disabled' ?>>
+                <span class="snmp-switch" aria-hidden="true"></span>
+                <span class="snmp-toggle-label" id="pduIcmpMonitorLabel">
+                    Monitor via ICMP <?= $icmpMonPdu ? 'on' : 'off' ?>
+                </span>
+            </label>
+            <span class="icmp-status icmp-status-<?= App::e((string)($icmpStPdu['status'] ?? 'off')) ?>" id="pduIcmpStatus"
+                  title="<?= App::e(trim(($icmpStPdu['host'] ?? '') . ' · ' . ($icmpStPdu['at'] ?? '') . ' · ' . ($icmpStPdu['error'] ?? ''), ' ·')) ?>">
+                <?= App::e((string)($icmpStPdu['label'] ?? '—')) ?>
+                <?php if (!empty($icmpStPdu['rtt'])): ?>
+                    · <?= App::e((string)$icmpStPdu['rtt']) ?>
+                <?php endif; ?>
+            </span>
+            <button type="button" class="btn btn-secondary btn-sm" id="btnPduIcmpPing"
+                <?= $icmpHostPdu !== '' ? '' : 'disabled title="Need IP address"' ?>>
+                Ping now
+            </button>
+            <?php endif; ?>
+            <?php if ($canConfigSnmp): ?>
             <button type="button" class="btn btn-secondary" id="btnPduSnmpDiscover"
                 <?= $pduDiscoverReady ? '' : 'disabled title="Need manufacturer, model, and IP on this PDU"' ?>>
                 Discover OIDs
@@ -1347,7 +1385,7 @@ if ($pduId) {
     (function () {
         var pduId = <?= (int)$pduId ?>;
         var modal = document.getElementById('pduSnmpDiscoverModal');
-        if (!modal) return;
+        // ICMP handlers register even if SNMP discover modal is absent
         var loadingEl = document.getElementById('pduSnmpDiscoverLoading');
         var errEl = document.getElementById('pduSnmpDiscoverError');
         var resEl = document.getElementById('pduSnmpDiscoverResults');
@@ -1525,6 +1563,10 @@ if ($pduId) {
             });
         }
         function startDiscover() {
+            if (!modal) {
+                toast('Discover UI not available', 'error');
+                return;
+            }
             openModal();
             setLoading(true);
             showErr('');
@@ -1564,6 +1606,60 @@ if ($pduId) {
                     })
                     .finally(function () {
                         autoToggle.disabled = !hasTemplate;
+                    });
+            });
+        }
+        // ICMP monitor toggle (same checkmark style as scheduled poll)
+        function renderIcmpStatus(st) {
+            var el = document.getElementById('pduIcmpStatus');
+            if (!el || !st) return;
+            el.className = 'icmp-status icmp-status-' + (st.status || 'off');
+            var t = st.label || '—';
+            if (st.rtt) t += ' · ' + st.rtt;
+            el.textContent = t;
+            el.title = [st.host, st.at, st.error].filter(Boolean).join(' · ');
+        }
+        function icmpApi(body) {
+            return ColdAisle.api('api/icmp.php', { method: 'POST', body: body });
+        }
+        var icmpToggle = document.getElementById('pduIcmpMonitorToggle');
+        var icmpLabel = document.getElementById('pduIcmpMonitorLabel');
+        var icmpHostOk = <?= $icmpHostPdu !== '' ? 'true' : 'false' ?>;
+        if (icmpToggle) {
+            icmpToggle.addEventListener('change', function () {
+                var enabled = !!icmpToggle.checked;
+                icmpToggle.disabled = true;
+                icmpApi({ action: 'set_monitor', kind: 'pdu', id: pduId, enabled: enabled })
+                    .then(function (data) {
+                        toast(data.message || 'Updated', 'success');
+                        if (icmpLabel) {
+                            icmpLabel.textContent = 'Monitor via ICMP ' + (data.icmp_monitor ? 'on' : 'off');
+                        }
+                        if (data.status) renderIcmpStatus(data.status);
+                    })
+                    .catch(function (err) {
+                        icmpToggle.checked = !enabled;
+                        toast((err && err.message) || 'Failed to update ICMP monitor', 'error');
+                    })
+                    .finally(function () {
+                        icmpToggle.disabled = !icmpHostOk;
+                    });
+            });
+        }
+        var btnIcmp = document.getElementById('btnPduIcmpPing');
+        if (btnIcmp) {
+            btnIcmp.addEventListener('click', function () {
+                btnIcmp.disabled = true;
+                icmpApi({ action: 'ping_now', kind: 'pdu', id: pduId })
+                    .then(function (data) {
+                        toast(data.message || 'Ping complete', data.result && data.result.ok ? 'success' : 'error');
+                        if (data.status) renderIcmpStatus(data.status);
+                    })
+                    .catch(function (err) {
+                        toast((err && err.message) || 'Ping failed', 'error');
+                    })
+                    .finally(function () {
+                        btnIcmp.disabled = !icmpHostOk;
                     });
             });
         }

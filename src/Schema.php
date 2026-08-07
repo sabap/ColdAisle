@@ -106,6 +106,13 @@ class Schema
                 'snmp_last_poll_amps' => 'DECIMAL(18,4) NULL',
                 // Dell iDRAC BMC address (IP or hostname) — preferred SNMP / web target when set
                 'idrac_host' => 'NVARCHAR(255) NULL',
+                // ICMP / ping monitoring (independent of SNMP)
+                'icmp_monitor' => 'BIT NOT NULL CONSTRAINT DF_devices_icmp_mon DEFAULT 0',
+                'icmp_fail_count' => 'INT NOT NULL CONSTRAINT DF_devices_icmp_fail DEFAULT 0',
+                'icmp_last_at' => 'DATETIME2 NULL',
+                'icmp_last_ok' => 'BIT NULL',
+                'icmp_last_rtt_ms' => 'DECIMAL(10,2) NULL',
+                'icmp_last_error' => 'NVARCHAR(255) NULL',
             ];
             foreach ($deviceCols as $col => $def) {
                 self::ensureColumn('devices', $col, $def);
@@ -228,6 +235,13 @@ class Schema
                 'color_hex' => 'NVARCHAR(7) NULL',
                 // NIC MAC for ID labels / asset tags (manual; SNMP fill later)
                 'mac_address' => 'NVARCHAR(64) NULL',
+                // ICMP / ping monitoring (independent of SNMP)
+                'icmp_monitor' => 'BIT NOT NULL CONSTRAINT DF_pdus_icmp_mon DEFAULT 0',
+                'icmp_fail_count' => 'INT NOT NULL CONSTRAINT DF_pdus_icmp_fail DEFAULT 0',
+                'icmp_last_at' => 'DATETIME2 NULL',
+                'icmp_last_ok' => 'BIT NULL',
+                'icmp_last_rtt_ms' => 'DECIMAL(10,2) NULL',
+                'icmp_last_error' => 'NVARCHAR(255) NULL',
             ];
             foreach ($pduCols as $col => $def) {
                 self::ensureColumn('pdus', $col, $def);
@@ -634,7 +648,7 @@ class Schema
                 'warranty_provider', 'tags', 'snmp_version', 'snmp_community', 'snmp_fail_count',
                 'snmp_v3_profile_id', 'snmp_site_template_id', 'snmp_auto_poll',
                 'snmp_last_poll_at', 'snmp_last_poll_watts', 'snmp_last_poll_amps',
-                'idrac_host',
+                'idrac_host', 'icmp_monitor', 'icmp_fail_count', 'icmp_last_at', 'icmp_last_ok',
             ],
             'snmp_site_oid_templates' => ['template_id', 'name', 'oid_map'],
             'pdu_templates' => ['template_id', 'name', 'fields_json'],
@@ -644,6 +658,7 @@ class Schema
                 'mount_style', 'position_u', 'u_height', 'snmp_community', 'phases',
                 'output_mode', 'snmp_site_template_id', 'snmp_auto_poll', 'pdu_template_id',
                 'last_poll_phases', 'room_id', 'pos_x', 'pos_y',
+                'icmp_monitor', 'icmp_fail_count', 'icmp_last_at', 'icmp_last_ok',
             ],
             'pdu_outlets' => ['rated_amps', 'device_power_supply_id'],
             'power_alert_state' => ['alert_key', 'pdu_id', 'severity'],

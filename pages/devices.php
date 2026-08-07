@@ -905,7 +905,40 @@ if ($action === 'new' || $id) {
                     </span>
                 <?php endif; ?>
             </div>
-            <div class="flex gap-1">
+            <div class="flex gap-1" style="flex-wrap:wrap;align-items:center">
+                <?php
+                $canIcmpDev = $canEditThis || AuthManager::canEditSnmp($user);
+                if (is_file(dirname(__DIR__) . '/src/Services/IcmpMonitorService.php')) {
+                    require_once dirname(__DIR__) . '/src/Services/IcmpMonitorService.php';
+                }
+                $icmpHostDev = class_exists('IcmpMonitorService')
+                    ? IcmpMonitorService::hostFromDevice($device)
+                    : trim((string)($device['mgmt_ip'] ?? $device['primary_ip'] ?? ''));
+                $icmpMonDev = !empty($device['icmp_monitor']);
+                $icmpStDev = class_exists('IcmpMonitorService')
+                    ? IcmpMonitorService::statusFromRow('device', $device)
+                    : ['status' => 'off', 'label' => '—', 'rtt' => null, 'at' => null, 'host' => $icmpHostDev, 'error' => null];
+                if ($canIcmpDev):
+                    ?>
+                <label class="snmp-toggle" title="<?= $icmpHostDev !== ''
+                    ? 'Ping ' . App::e($icmpHostDev) . ' (3 packets · 1s · DOWN after 3 fails)'
+                    : 'Set iDRAC / management / primary IP first' ?>">
+                    <input type="checkbox" id="devIcmpMonitorToggle"
+                        <?= $icmpMonDev ? 'checked' : '' ?>
+                        <?= $icmpHostDev !== '' ? '' : 'disabled' ?>>
+                    <span class="snmp-switch" aria-hidden="true"></span>
+                    <span class="snmp-toggle-label" id="devIcmpMonitorLabel">
+                        Monitor via ICMP <?= $icmpMonDev ? 'on' : 'off' ?>
+                    </span>
+                </label>
+                <span class="icmp-status icmp-status-<?= App::e((string)($icmpStDev['status'] ?? 'off')) ?>" id="devIcmpStatus"
+                      title="<?= App::e(trim(($icmpStDev['host'] ?? '') . ' · ' . ($icmpStDev['at'] ?? '') . ' · ' . ($icmpStDev['error'] ?? ''), ' ·')) ?>">
+                    <?= App::e((string)($icmpStDev['label'] ?? '—')) ?>
+                    <?php if (!empty($icmpStDev['rtt'])): ?> · <?= App::e((string)$icmpStDev['rtt']) ?><?php endif; ?>
+                </span>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnDevIcmpPing"
+                    <?= $icmpHostDev !== '' ? '' : 'disabled' ?>>Ping now</button>
+                <?php endif; ?>
                 <a class="btn btn-secondary" href="<?= App::e(App::url('pages/devices.php')) ?>">← Devices</a>
                 <?php if (!empty($device['cabinet_id'])): ?>
                     <a class="btn btn-secondary" href="<?= App::e(App::url('pages/cabinets.php?id=' . (int)$device['cabinet_id'])) ?>">Cabinet</a>
@@ -2006,6 +2039,64 @@ if ($action === 'new' || $id) {
                 <?php endif; ?>
             </div>
         </div>
+        <?php if (!empty($canIcmpDev)): ?>
+        <script>
+        (function () {
+            var deviceId = <?= (int)$device['device_id'] ?>;
+            var hostOk = <?= $icmpHostDev !== '' ? 'true' : 'false' ?>;
+            function toast(msg, type) {
+                if (window.ColdAisle && ColdAisle.toast) ColdAisle.toast(msg, type || 'info');
+                else alert(msg);
+            }
+            function icmpApi(body) {
+                return ColdAisle.api('api/icmp.php', { method: 'POST', body: body });
+            }
+            function renderIcmpStatus(st) {
+                var el = document.getElementById('devIcmpStatus');
+                if (!el || !st) return;
+                el.className = 'icmp-status icmp-status-' + (st.status || 'off');
+                var t = st.label || '—';
+                if (st.rtt) t += ' · ' + st.rtt;
+                el.textContent = t;
+                el.title = [st.host, st.at, st.error].filter(Boolean).join(' · ');
+            }
+            var tog = document.getElementById('devIcmpMonitorToggle');
+            var lab = document.getElementById('devIcmpMonitorLabel');
+            if (tog) {
+                tog.addEventListener('change', function () {
+                    var enabled = !!tog.checked;
+                    tog.disabled = true;
+                    icmpApi({ action: 'set_monitor', kind: 'device', id: deviceId, enabled: enabled })
+                        .then(function (data) {
+                            toast(data.message || 'Updated', 'success');
+                            if (lab) lab.textContent = 'Monitor via ICMP ' + (data.icmp_monitor ? 'on' : 'off');
+                            if (data.status) renderIcmpStatus(data.status);
+                        })
+                        .catch(function (err) {
+                            tog.checked = !enabled;
+                            toast((err && err.message) || 'Failed', 'error');
+                        })
+                        .finally(function () { tog.disabled = !hostOk; });
+                });
+            }
+            var btn = document.getElementById('btnDevIcmpPing');
+            if (btn) {
+                btn.addEventListener('click', function () {
+                    btn.disabled = true;
+                    icmpApi({ action: 'ping_now', kind: 'device', id: deviceId })
+                        .then(function (data) {
+                            toast(data.message || 'Ping complete', data.result && data.result.ok ? 'success' : 'error');
+                            if (data.status) renderIcmpStatus(data.status);
+                        })
+                        .catch(function (err) {
+                            toast((err && err.message) || 'Ping failed', 'error');
+                        })
+                        .finally(function () { btn.disabled = !hostOk; });
+                });
+            }
+        })();
+        </script>
+        <?php endif; ?>
         <?php
         layout_footer();
         exit;
