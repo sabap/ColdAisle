@@ -304,18 +304,31 @@ class SnmpPoller
             ? (string)($creds['security_name'] ?? '')
             : (string)($creds['community'] ?? $creds['security_name'] ?? 'public');
 
+        // Match Discover: normalize protos + resolve FQDN issues (Windows SNMP + DNS)
+        $authProto = SnmpDiscover::normalizeSnmpProtocol((string)($creds['auth_protocol'] ?? 'SHA'), 'auth');
+        $privProto = SnmpDiscover::normalizeSnmpProtocol((string)($creds['priv_protocol'] ?? 'AES'), 'priv');
+        $secLevel = SnmpDiscover::resolveSecLevel(array_merge($creds, [
+            'security_level' => (string)($device['snmp_v3_sec_level'] ?? $creds['security_level'] ?? ''),
+        ]));
+        $pollHost = self::resolveSnmpHost((string)$creds['host']);
+
         $session = self::openSession(
-            $creds['host'],
+            $pollHost,
             (int)$creds['port'],
             $ver,
             $communityOrUser,
-            $creds['auth_protocol'] ?? '',
+            $authProto,
             $creds['auth_passphrase'] ?? '',
-            $creds['priv_protocol'] ?? '',
+            $privProto,
             $creds['priv_passphrase'] ?? '',
             (string)($device['snmp_v3_context'] ?? $creds['context'] ?? ''),
-            (string)($device['snmp_v3_sec_level'] ?? $creds['security_level'] ?? '')
+            $secLevel
         );
+        // Prefer the same procedural snmp3_get path Discover uses (more reliable on some iDRACs)
+        $session['prefer_procedural'] = true;
+        $session['timeout_usec'] = 3_000_000;
+        $session['retries'] = 1;
+        $session['host_label'] = (string)$creds['host']; // original FQDN/IP for errors
 
         $got = self::collectOidMap($session, $oidMap);
 
@@ -372,20 +385,24 @@ class SnmpPoller
         if ($got['ok'] === 0) {
             $detail = $got['last_error'] ?: 'no response';
             $hostHint = (string)($creds['host'] ?? '');
+            $resolved = $pollHost !== $hostHint ? $pollHost : '';
             $usesIdrac = SnmpDiscover::isDellManufacturer($device['manufacturer'] ?? null)
                 && trim((string)($device['idrac_host'] ?? '')) !== '';
             $msg = 'All SNMP GETs failed for this device (template has OIDs but none answered). '
                 . 'Last error: ' . $detail . '. '
-                . 'SNMP target host: ' . ($hostHint !== '' ? $hostHint : '(empty)')
-                . ($usesIdrac ? ' (iDRAC field)' : '') . '. '
-                . 'Check version/community/v3 user, UDP/161 from the IIS server to that host. ';
+                . 'SNMP target: ' . ($hostHint !== '' ? $hostHint : '(empty)')
+                . ($resolved !== '' ? ' → ' . $resolved : '')
+                . ($usesIdrac ? ' (iDRAC field)' : '')
+                . '; v' . $ver
+                . ($ver === '3' ? ' user=' . $communityOrUser . ' level=' . $secLevel : '')
+                . '. '
+                . 'Check credentials and UDP/161 from IIS to that host. ';
             if ($usesIdrac || SnmpDiscover::isDellManufacturer($device['manufacturer'] ?? null)) {
-                $msg .= 'On iDRAC: Settings → Services → SNMP — agent Enabled, protocol matches ColdAisle, '
-                    . 'and if the iDRAC firewall / “accept SNMP from these hosts” list is set, add the IIS server IP '
-                    . '(ColdAisle does not push agent ACLs to the device). ';
+                $msg .= 'iDRAC usually has no separate “SNMP agent IP list”; allow the IIS server via '
+                    . 'iDRAC firewall / IP range filter (Connectivity → Network / firewall), and confirm '
+                    . 'Services → SNMP agent is Enabled. FQDN is fine if DNS resolves on IIS. ';
             }
-            $msg .= 'Missing probes (e.g. humidity.4 when only 3 probes exist) soft-fail only when other OIDs succeed — '
-                . 'this is a total auth/reachability failure.';
+            $msg .= 'If Discover works but Poll fails, re-save SNMPv3 credentials on the device and try again.';
             throw new RuntimeException($msg);
         }
 
@@ -1597,6 +1614,35 @@ class SnmpPoller
         return 'noAuthNoPriv';
     }
 
+    /**
+     * Prefer an IP for SNMP when the host is a DNS name (Windows Net-SNMP can be flaky with FQDNs).
+     * Falls back to the original name if resolution fails.
+     */
+    private static function resolveSnmpHost(string $host): string
+    {
+        $host = trim($host);
+        if ($host === '') {
+            return $host;
+        }
+        // Already IPv4 / bracketed IPv6
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            return $host;
+        }
+        if (preg_match('/^\[[0-9a-fA-F:]+\]$/', $host)) {
+            return $host;
+        }
+        // Strip accidental scheme
+        if (preg_match('#^https?://#i', $host)) {
+            $host = (string)preg_replace('#^https?://#i', '', $host);
+            $host = rtrim(explode('/', $host, 2)[0], '/');
+        }
+        $ip = @gethostbyname($host);
+        if (is_string($ip) && $ip !== '' && $ip !== $host && filter_var($ip, FILTER_VALIDATE_IP)) {
+            return $ip;
+        }
+        return $host;
+    }
+
     private static function openSession(
         string $host,
         int $port,
@@ -1612,6 +1658,10 @@ class SnmpPoller
         if (!function_exists('snmp3_get') && !function_exists('snmp2_get') && !class_exists('SNMP')) {
             throw new RuntimeException('PHP SNMP extension not available');
         }
+
+        require_once __DIR__ . '/SnmpDiscover.php';
+        $authProto = SnmpDiscover::normalizeSnmpProtocol((string)($authProto ?: 'SHA'), 'auth');
+        $privProto = SnmpDiscover::normalizeSnmpProtocol((string)($privProto ?: 'AES'), 'priv');
 
         $hostPort = $host . ($port !== 161 ? ':' . $port : '');
         // Prefer SNMP class so we can set short timeouts (procedural snmp3_get can hang for minutes)
@@ -1634,9 +1684,9 @@ class SnmpPoller
                 if (strtolower($version) === '3') {
                     $snmpObj->setSecurity(
                         $resolvedLevel,
-                        $authProto ?: 'SHA',
+                        $authProto,
                         $authPass ?: '',
-                        $privProto ?: 'AES',
+                        $privProto,
                         $privPass ?: '',
                         $context ?: ''
                     );
@@ -1656,6 +1706,8 @@ class SnmpPoller
             'privPass' => $privPass,
             'context' => $context,
             'secLevel' => $resolvedLevel,
+            'timeout_usec' => $timeoutUsec,
+            'retries' => $retries,
             'snmp' => $snmpObj,
         ];
     }
@@ -1663,19 +1715,24 @@ class SnmpPoller
     private static function get(array $session, string $oid)
     {
         $oid = ltrim($oid, '.');
-        if (!empty($session['snmp']) && $session['snmp'] instanceof \SNMP) {
+        $preferProc = !empty($session['prefer_procedural']);
+        $timeout = (int)($session['timeout_usec'] ?? 2_000_000);
+        $retries = (int)($session['retries'] ?? 1);
+        $host = $session['host'];
+
+        // Path A: PHP SNMP class (unless device poll prefers Discover-style procedural GETs)
+        if (!$preferProc && !empty($session['snmp']) && $session['snmp'] instanceof \SNMP) {
             try {
                 $result = @$session['snmp']->get($oid);
+                if ($result !== false) {
+                    return $result;
+                }
             } catch (Throwable $e) {
-                throw new RuntimeException('SNMP GET failed for OID ' . $oid . ': ' . $e->getMessage());
+                // fall through to procedural
             }
-            if ($result === false) {
-                throw new RuntimeException("SNMP GET failed for OID {$oid}");
-            }
-            return $result;
         }
 
-        $host = $session['host'];
+        // Path B: procedural APIs (same family as SnmpDiscover::snmpGet — works for many iDRACs)
         if (($session['version'] ?? '3') === '3' && function_exists('snmp3_get')) {
             $secLevel = (string)($session['secLevel'] ?? '');
             if ($secLevel === '') {
@@ -1693,27 +1750,43 @@ class SnmpPoller
                 $session['authPass'] ?: '',
                 $session['privProto'] ?: 'AES',
                 $session['privPass'] ?: '',
-                $oid
+                $oid,
+                $timeout,
+                $retries
             );
+            if ($result !== false) {
+                return $result;
+            }
         } else {
             // v1 / v2c — session user holds community string
             $community = (string)($session['user'] ?: 'public');
             $ver = strtolower((string)($session['version'] ?? '2c'));
+            $result = false;
             if (($ver === '1' || $ver === 'v1') && function_exists('snmpget')) {
-                $result = @snmpget($host, $community, $oid);
+                $result = @snmpget($host, $community, $oid, $timeout, $retries);
             } elseif (function_exists('snmp2_get')) {
-                $result = @snmp2_get($host, $community, $oid);
+                $result = @snmp2_get($host, $community, $oid, $timeout, $retries);
             } elseif (function_exists('snmpget')) {
-                $result = @snmpget($host, $community, $oid);
-            } else {
-                throw new RuntimeException('No SNMP get function available');
+                $result = @snmpget($host, $community, $oid, $timeout, $retries);
+            }
+            if ($result !== false) {
+                return $result;
             }
         }
 
-        if ($result === false) {
-            throw new RuntimeException("SNMP GET failed for OID {$oid}");
+        // Path C: if we preferred procedural, try SNMP class once as fallback
+        if ($preferProc && !empty($session['snmp']) && $session['snmp'] instanceof \SNMP) {
+            try {
+                $result = @$session['snmp']->get($oid);
+                if ($result !== false) {
+                    return $result;
+                }
+            } catch (Throwable $e) {
+                throw new RuntimeException('SNMP GET failed for OID ' . $oid . ': ' . $e->getMessage());
+            }
         }
-        return $result;
+
+        throw new RuntimeException("SNMP GET failed for OID {$oid}");
     }
 
     private static function closeSession($session): void

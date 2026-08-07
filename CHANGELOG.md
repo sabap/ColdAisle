@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Device Poll after Discover (iDRAC):** use the same procedural SNMPv3 GET path as Discover, normalize auth/priv protocols, resolve FQDN to IP when possible, and include host/user/level in poll failure messages.
+
 ---
 
 ## [0.3.62] - 2026-08-07
