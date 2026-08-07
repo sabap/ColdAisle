@@ -1461,7 +1461,11 @@ class SnmpDiscover
     }
 
     /** Normalize auth/priv protocol names for PHP snmp3_* (expects MD5/SHA/AES…). */
-    private static function normalizeSnmpProtocol(string $proto, string $kind): string
+    /**
+     * Normalize auth/priv protocol names for PHP snmp3_* / SNMP::setSecurity.
+     * Public so SnmpPoller uses the same mapping as Discover (SHA-256 → SHA256, etc.).
+     */
+    public static function normalizeSnmpProtocol(string $proto, string $kind): string
     {
         $p = strtoupper(trim($proto));
         $p = str_replace(['-', ' '], '', $p);
@@ -1485,6 +1489,14 @@ class SnmpDiscover
             'AES256' => 'AES256',
         ];
         return $map[$p] ?? ($p !== '' ? $p : 'AES');
+    }
+
+    /**
+     * Resolve SNMPv3 security level (shared by Discover + Poll).
+     */
+    public static function resolveSecLevel(array $creds): string
+    {
+        return self::secLevel($creds);
     }
 
     /**
