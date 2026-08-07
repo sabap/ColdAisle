@@ -226,36 +226,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             SettingsService::set('mail_enabled', !empty($mailCfg['enabled']) ? '1' : '0', 'mail');
         }
 
-        if ($section === 'power_alerts') {
-            if (!class_exists('PowerAlertService')) {
-                throw new RuntimeException('PowerAlertService is not installed. Deploy the latest release.');
+        if ($section === 'alerts_hub' || $section === 'power_alerts' || $section === 'env_alerts') {
+            if (is_file(dirname(__DIR__) . '/src/Services/AlertService.php')) {
+                require_once dirname(__DIR__) . '/src/Services/AlertService.php';
             }
-            $rawEmails = trim((string)($_POST['power_alerts_email'] ?? ''));
-            if ($rawEmails !== '') {
-                $parsed = PowerAlertService::normalizeEmailList($rawEmails);
-                if (!$parsed) {
-                    throw new RuntimeException('Alert email list has no valid addresses.');
-                }
+            if (!class_exists('AlertService')) {
+                throw new RuntimeException('AlertService is not installed. Deploy the latest release.');
             }
-            PowerAlertService::saveSettingsFromPost($_POST);
-            App::flash('success', 'Power alert settings saved.');
-            App::redirect('pages/settings.php#power-alerts');
+            $rawDef = trim((string)($_POST['alerts_default_email'] ?? ''));
+            if ($rawDef !== '' && !AlertService::normalizeEmailList($rawDef)) {
+                throw new RuntimeException('Default alert email list has no valid addresses.');
+            }
+            AlertService::saveHubFromPost($_POST);
+            App::flash('success', 'Alert & notification settings saved.');
+            App::redirect('pages/settings.php#alerts');
         }
 
-        if ($section === 'env_alerts') {
-            if (!class_exists('EnvSensorAlertService')) {
-                throw new RuntimeException('EnvSensorAlertService is not installed. Deploy the latest release.');
+        if ($section === 'alert_subscription_save') {
+            if (is_file(dirname(__DIR__) . '/src/Services/AlertService.php')) {
+                require_once dirname(__DIR__) . '/src/Services/AlertService.php';
             }
-            $rawEmails = trim((string)($_POST['env_alerts_email'] ?? ''));
-            if ($rawEmails !== '') {
-                $parsed = EnvSensorAlertService::normalizeEmailList($rawEmails);
-                if (!$parsed) {
-                    throw new RuntimeException('Env alert email list has no valid addresses.');
-                }
+            if (!class_exists('AlertService')) {
+                throw new RuntimeException('AlertService is not installed.');
             }
-            EnvSensorAlertService::saveSettingsFromPost($_POST);
-            App::flash('success', 'Environmental alert settings saved.');
-            App::redirect('pages/settings.php#env-alerts');
+            $sid = !empty($_POST['subscription_id']) ? (int)$_POST['subscription_id'] : null;
+            $cats = $_POST['categories'] ?? [];
+            if (!is_array($cats)) {
+                $cats = [];
+            }
+            AlertService::saveSubscription([
+                'name' => $_POST['name'] ?? 'Subscription',
+                'scope' => $_POST['scope'] ?? 'global',
+                'department_id' => $_POST['department_id'] ?? null,
+                'device_id' => $_POST['device_id'] ?? null,
+                'pdu_id' => $_POST['pdu_id'] ?? null,
+                'categories' => $cats,
+                'min_severity' => $_POST['min_severity'] ?? 'warning',
+                'email_to' => $_POST['email_to'] ?? '',
+                'notify_in_app' => !empty($_POST['notify_in_app']),
+                'notify_email' => !empty($_POST['notify_email']),
+                'is_active' => !empty($_POST['is_active']),
+            ], $sid);
+            App::flash('success', 'Alert subscription saved.');
+            App::redirect('pages/settings.php#alerts');
+        }
+
+        if ($section === 'alert_subscription_delete') {
+            if (is_file(dirname(__DIR__) . '/src/Services/AlertService.php')) {
+                require_once dirname(__DIR__) . '/src/Services/AlertService.php';
+            }
+            if (class_exists('AlertService')) {
+                AlertService::deleteSubscription((int)($_POST['subscription_id'] ?? 0));
+            }
+            App::flash('success', 'Alert subscription removed.');
+            App::redirect('pages/settings.php#alerts');
         }
 
         if ($section === 'snmp_schedule') {
@@ -637,7 +661,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         // power_alerts / snmp_schedule use settings table only (redirect earlier or no config.php)
         if (!in_array($section, [
             'update_check', 'update_apply', 'update_backup_now', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
-            'power_alerts', 'env_alerts', 'noc', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
+            'power_alerts', 'env_alerts', 'alerts_hub', 'alert_subscription_save', 'alert_subscription_delete',
+            'noc', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
             'diagnostics', 'schema_ensure', 'smb_backup_save', 'smb_backup_test',
         ], true)) {
             $export = var_export($config, true);
@@ -668,10 +693,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#ldaps';
     } elseif ($secPost === 'mail' || $secPost === 'test_mail') {
         $redirHash = '#mail';
-    } elseif ($secPost === 'power_alerts') {
-        $redirHash = '#power-alerts';
-    } elseif ($secPost === 'env_alerts') {
-        $redirHash = '#env-alerts';
+    } elseif (in_array($secPost, ['power_alerts', 'env_alerts', 'alerts_hub', 'alert_subscription_save', 'alert_subscription_delete'], true)) {
+        $redirHash = '#alerts';
     } elseif ($secPost === 'noc') {
         $redirHash = '#noc';
     }
@@ -705,6 +728,33 @@ $envAlerts = class_exists('EnvSensorAlertService')
     : [
         'enabled' => false, 'email' => '', 'cooldown_min' => 60, 'rh_warn' => 70.0, 'rh_crit' => 90.0,
     ];
+if (is_file(dirname(__DIR__) . '/src/Services/AlertService.php')) {
+    require_once dirname(__DIR__) . '/src/Services/AlertService.php';
+}
+if (is_file(dirname(__DIR__) . '/src/Services/IcmpMonitorService.php')) {
+    require_once dirname(__DIR__) . '/src/Services/IcmpMonitorService.php';
+}
+$alertHub = class_exists('AlertService')
+    ? AlertService::settingsBundle()
+    : [
+        'master' => true, 'in_app' => true, 'email' => true, 'default_email' => '',
+        'power' => $powerAlerts, 'env' => $envAlerts, 'icmp' => [],
+    ];
+$icmpAlerts = class_exists('IcmpMonitorService')
+    ? IcmpMonitorService::settings()
+    : [
+        'enabled' => true, 'alerts' => false, 'email' => '', 'consec_down' => 3,
+        'packets' => 3, 'timeout_ms' => 1000, 'cooldown_min' => 60,
+    ];
+$alertSubs = class_exists('AlertService') ? AlertService::listSubscriptions() : [];
+$alertDepartments = [];
+try {
+    $alertDepartments = Database::fetchAll(
+        'SELECT department_id, name FROM departments WHERE is_active = 1 ORDER BY name'
+    );
+} catch (Throwable $e) {
+    $alertDepartments = [];
+}
 if (!class_exists('SnmpSchedulerService')
     && is_file(dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php')
 ) {
@@ -1507,136 +1557,371 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
 })();
 </script>
 
-<div class="card" id="power-alerts">
+<?php
+$alertsMasterOn = !empty($alertHub['master']);
+$anyCategoryOn = !empty($powerAlerts['enabled']) || !empty($envAlerts['enabled'])
+    || (!empty($icmpAlerts['enabled']) && !empty($icmpAlerts['alerts']));
+$alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
+?>
+<div class="card settings-feature-card <?= $alertsMasterOn ? 'settings-feature-active' : 'settings-feature-inactive' ?>"
+     id="alerts">
     <div class="card-header flex-between">
-        <h2>Power alerts</h2>
-        <span class="badge <?= !empty($powerAlerts['enabled']) ? 'badge-success' : '' ?>">
-            <?= !empty($powerAlerts['enabled']) ? 'Enabled' : 'Off' ?>
+        <h2>Alerts &amp; notifications</h2>
+        <span class="badge <?= $alertsBadgeOn ? 'badge-success' : '' ?>">
+            <?= $alertsBadgeOn ? 'Active' : ($alertsMasterOn ? 'Configured' : 'Off') ?>
         </span>
     </div>
     <div class="card-body">
         <p class="text-muted" style="font-size:.9rem;margin-top:0">
-            After SNMP poll, evaluate phase util, APC load-state, and power-supply health.
-            Alerts are <strong>held and batched</strong> into one digest (not one email per PDU),
-            rolled up as PDU → Cabinet → Row → Zone → Datacenter — so a site-wide event
-            does not generate dozens of messages.
+            One place for global delivery, category thresholds, and routing.
+            Use <strong>global</strong> subscriptions for NOC / network-wide, and
+            <strong>department</strong> (or device/PDU) routes so teams only hear about their gear.
+            Future SNMP / temperature thresholds will land here too.
+            Live toasts appear in the UI when in-app delivery is on.
         </p>
-        <?php if (!class_exists('PowerAlertService')): ?>
-            <p class="alert alert-error">PowerAlertService is not deployed on this host. Update ColdAisle to enable this section.</p>
+        <?php if (!class_exists('AlertService')): ?>
+            <p class="alert alert-error">AlertService is not deployed on this host. Update ColdAisle to enable the alerts hub.</p>
         <?php else: ?>
-        <form method="post" class="form-grid">
+
+        <form method="post" class="form-grid" id="alertsHubForm">
             <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
-            <input type="hidden" name="section" value="power_alerts">
+            <input type="hidden" name="section" value="alerts_hub">
 
-            <div class="form-row full"><label>
-                <input type="checkbox" name="power_alerts_enabled" value="1"
-                    <?= !empty($powerAlerts['enabled']) ? 'checked' : '' ?>>
-                Enable power alerts
-            </label></div>
-
-            <div class="form-row full"><label>Alert email recipients</label>
-                <input class="form-control" name="power_alerts_email"
-                       value="<?= App::e($powerAlerts['email'] ?? '') ?>"
-                       placeholder="ops@contoso.com, oncall@contoso.com">
-                <span class="text-muted" style="font-size:.75rem">Comma-separated. Requires Settings → Email (SMTP) enabled.</span>
+            <div class="alerts-hub-section">
+                <h3 class="alerts-hub-title">Global delivery</h3>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="alerts_master_enabled" value="1"
+                        <?= $alertsMasterOn ? 'checked' : '' ?>>
+                    Master switch — allow alerts platform-wide
+                </label></div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="alerts_in_app_enabled" value="1"
+                        <?= !empty($alertHub['in_app']) ? 'checked' : '' ?>>
+                    In-app notifications + live toast feed
+                </label></div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="alerts_email_enabled" value="1"
+                        <?= !empty($alertHub['email']) ? 'checked' : '' ?>>
+                    Email delivery (requires Settings → Email SMTP)
+                </label></div>
+                <div class="form-row full"><label>Default email recipients</label>
+                    <input class="form-control" name="alerts_default_email"
+                           value="<?= App::e((string)($alertHub['default_email'] ?? '')) ?>"
+                           placeholder="ops@contoso.com, noc@contoso.com">
+                    <span class="text-muted" style="font-size:.75rem">
+                        Fallback when a category has no recipients and no matching subscription.
+                    </span>
+                </div>
             </div>
 
-            <div class="form-row"><label>Warning util %</label>
-                <input class="form-control" type="number" min="1" max="100" step="1"
-                       name="power_alerts_warn_pct" value="<?= App::e((string)(int)$powerAlerts['warn_pct']) ?>">
-            </div>
-            <div class="form-row"><label>Critical util %</label>
-                <input class="form-control" type="number" min="1" max="100" step="1"
-                       name="power_alerts_crit_pct" value="<?= App::e((string)(int)$powerAlerts['crit_pct']) ?>">
-            </div>
-            <div class="form-row"><label>Hold time (minutes)</label>
-                <input class="form-control" type="number" min="0.25" max="60" step="0.25"
-                       name="power_alerts_hold_min"
-                       value="<?= App::e((string)round(((int)($powerAlerts['hold_sec'] ?? 120)) / 60, 2)) ?>">
-                <span class="text-muted" style="font-size:.75rem">
-                    Wait after the first alert so other PDUs can join the same digest (default 2).
-                    One email lists all affected PDUs by location.
-                </span>
-            </div>
-            <div class="form-row"><label>Re-alert cooldown (minutes)</label>
-                <input class="form-control" type="number" min="5" max="10080" step="1"
-                       name="power_alerts_cooldown_min" value="<?= App::e((string)(int)$powerAlerts['cooldown_min']) ?>">
-                <span class="text-muted" style="font-size:.75rem">After a digest, the same condition will not re-queue until this elapses (severity escalations still queue).</span>
+            <div class="alerts-hub-section">
+                <h3 class="alerts-hub-title">
+                    <span class="health-pulse health-pulse-info" aria-hidden="true"></span>
+                    ICMP reachability
+                </h3>
+                <p class="text-muted" style="font-size:.8rem;margin:0 0 .5rem">
+                    Per-device / PDU toggles live on inventory. Defaults match common NMS practice
+                    (3 packets, 1s timeout, 3 consecutive fails → DOWN).
+                </p>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="icmp_monitor_enabled" value="1"
+                        <?= !empty($icmpAlerts['enabled']) ? 'checked' : '' ?>>
+                    Enable ICMP monitoring platform-wide
+                </label></div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="icmp_alerts_enabled" value="1"
+                        <?= !empty($icmpAlerts['alerts']) ? 'checked' : '' ?>>
+                    Emit alerts on DOWN / recovered
+                </label></div>
+                <div class="form-row full"><label>ICMP alert email (optional override)</label>
+                    <input class="form-control" name="icmp_alerts_email"
+                           value="<?= App::e((string)($icmpAlerts['email'] ?? '')) ?>"
+                           placeholder="Leave empty to use default / subscriptions">
+                </div>
+                <div class="form-row"><label>Consecutive fails → DOWN</label>
+                    <input class="form-control" type="number" min="1" max="20" step="1"
+                           name="icmp_consec_fail"
+                           value="<?= App::e((string)(int)($icmpAlerts['consec_down'] ?? 3)) ?>">
+                </div>
+                <div class="form-row"><label>Packets per check</label>
+                    <input class="form-control" type="number" min="1" max="10" step="1"
+                           name="icmp_packets"
+                           value="<?= App::e((string)(int)($icmpAlerts['packets'] ?? 3)) ?>">
+                </div>
+                <div class="form-row"><label>Timeout (ms)</label>
+                    <input class="form-control" type="number" min="200" max="10000" step="100"
+                           name="icmp_timeout_ms"
+                           value="<?= App::e((string)(int)($icmpAlerts['timeout_ms'] ?? 1000)) ?>">
+                </div>
+                <div class="form-row"><label>Re-alert cooldown (min)</label>
+                    <input class="form-control" type="number" min="5" max="10080" step="1"
+                           name="icmp_alert_cooldown_min"
+                           value="<?= App::e((string)(int)($icmpAlerts['cooldown_min'] ?? 60)) ?>">
+                </div>
             </div>
 
-            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Check types</h4></div>
-            <div class="form-row full"><label>
-                <input type="checkbox" name="power_alerts_util" value="1"
-                    <?= !empty($powerAlerts['util']) ? 'checked' : '' ?>>
-                Phase / device current vs rating (util %)
-            </label></div>
-            <div class="form-row full"><label>
-                <input type="checkbox" name="power_alerts_load_state" value="1"
-                    <?= !empty($powerAlerts['load_state']) ? 'checked' : '' ?>>
-                APC phase load-state (near overload / overload)
-            </label></div>
-            <div class="form-row full"><label>
-                <input type="checkbox" name="power_alerts_ps" value="1"
-                    <?= !empty($powerAlerts['ps']) ? 'checked' : '' ?>>
-                Power supply fault / alarm
-            </label></div>
+            <div class="alerts-hub-section">
+                <h3 class="alerts-hub-title">
+                    <span class="health-pulse health-pulse-warn" aria-hidden="true"></span>
+                    Power / PDU load
+                </h3>
+                <p class="text-muted" style="font-size:.8rem;margin:0 0 .5rem">
+                    After SNMP poll: phase util, APC load-state, power-supply health.
+                    Events are <strong>held and batched</strong> into one digest
+                    (PDU → Cabinet → Row → Zone → Datacenter).
+                </p>
+                <?php if (!class_exists('PowerAlertService')): ?>
+                    <p class="alert alert-error">PowerAlertService not deployed.</p>
+                <?php else: ?>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="power_alerts_enabled" value="1"
+                        <?= !empty($powerAlerts['enabled']) ? 'checked' : '' ?>>
+                    Enable power alerts
+                </label></div>
+                <div class="form-row full"><label>Power alert email (optional override)</label>
+                    <input class="form-control" name="power_alerts_email"
+                           value="<?= App::e($powerAlerts['email'] ?? '') ?>"
+                           placeholder="ops@contoso.com">
+                </div>
+                <div class="form-row"><label>Warning util %</label>
+                    <input class="form-control" type="number" min="1" max="100" step="1"
+                           name="power_alerts_warn_pct" value="<?= App::e((string)(int)$powerAlerts['warn_pct']) ?>">
+                </div>
+                <div class="form-row"><label>Critical util %</label>
+                    <input class="form-control" type="number" min="1" max="100" step="1"
+                           name="power_alerts_crit_pct" value="<?= App::e((string)(int)$powerAlerts['crit_pct']) ?>">
+                </div>
+                <div class="form-row"><label>Hold time (minutes)</label>
+                    <input class="form-control" type="number" min="0.25" max="60" step="0.25"
+                           name="power_alerts_hold_min"
+                           value="<?= App::e((string)round(((int)($powerAlerts['hold_sec'] ?? 120)) / 60, 2)) ?>">
+                </div>
+                <div class="form-row"><label>Re-alert cooldown (min)</label>
+                    <input class="form-control" type="number" min="5" max="10080" step="1"
+                           name="power_alerts_cooldown_min" value="<?= App::e((string)(int)$powerAlerts['cooldown_min']) ?>">
+                </div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="power_alerts_util" value="1"
+                        <?= !empty($powerAlerts['util']) ? 'checked' : '' ?>>
+                    Phase / device current vs rating (util %)
+                </label></div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="power_alerts_load_state" value="1"
+                        <?= !empty($powerAlerts['load_state']) ? 'checked' : '' ?>>
+                    APC phase load-state (near overload / overload)
+                </label></div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="power_alerts_ps" value="1"
+                        <?= !empty($powerAlerts['ps']) ? 'checked' : '' ?>>
+                    Power supply fault / alarm
+                </label></div>
+                <?php endif; ?>
+            </div>
 
-            <div class="form-row full">
-                <button class="btn btn-primary" type="submit">Save power alerts</button>
+            <div class="alerts-hub-section">
+                <h3 class="alerts-hub-title">
+                    <span class="health-pulse health-pulse-ok" aria-hidden="true"></span>
+                    Environmental (temp / RH)
+                </h3>
+                <p class="text-muted" style="font-size:.8rem;margin:0 0 .5rem">
+                    After SNMP poll or manual reading: sensor warn/crit thresholds and RH limits.
+                    Temperature thresholds are set per sensor; site RH defaults are below.
+                </p>
+                <?php if (!class_exists('EnvSensorAlertService')): ?>
+                    <p class="alert alert-error">EnvSensorAlertService not deployed.</p>
+                <?php else: ?>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="env_alerts_enabled" value="1"
+                        <?= !empty($envAlerts['enabled']) ? 'checked' : '' ?>>
+                    Enable environmental alerts
+                </label></div>
+                <div class="form-row full"><label>Env alert email (optional override)</label>
+                    <input class="form-control" name="env_alerts_email"
+                           value="<?= App::e($envAlerts['email'] ?? '') ?>"
+                           placeholder="Defaults to power list / global if empty">
+                </div>
+                <div class="form-row"><label>Re-alert cooldown (min)</label>
+                    <input class="form-control" type="number" min="5" max="10080" step="1"
+                           name="env_alerts_cooldown_min"
+                           value="<?= App::e((string)(int)($envAlerts['cooldown_min'] ?? 60)) ?>">
+                </div>
+                <div class="form-row"><label>RH warning %</label>
+                    <input class="form-control" type="number" min="1" max="100" step="1"
+                           name="env_alerts_rh_warn"
+                           value="<?= App::e((string)(int)($envAlerts['rh_warn'] ?? 70)) ?>">
+                </div>
+                <div class="form-row"><label>RH critical %</label>
+                    <input class="form-control" type="number" min="1" max="100" step="1"
+                           name="env_alerts_rh_crit"
+                           value="<?= App::e((string)(int)($envAlerts['rh_crit'] ?? 90)) ?>">
+                </div>
+                <?php endif; ?>
+            </div>
+
+            <div class="alerts-hub-section alerts-hub-future">
+                <h3 class="alerts-hub-title">
+                    <span class="health-pulse health-pulse-off" aria-hidden="true"></span>
+                    SNMP thresholds <span class="badge" style="font-weight:500">Coming soon</span>
+                </h3>
+                <p class="text-muted" style="font-size:.8rem;margin:0">
+                    Custom OID warn/crit thresholds (beyond power and env) will appear here —
+                    same routing and delivery as ICMP / power / env.
+                </p>
+            </div>
+
+            <div class="form-row full" style="margin-top:.25rem">
+                <button class="btn btn-primary" type="submit">Save alert settings</button>
             </div>
         </form>
-        <?php endif; ?>
-    </div>
-</div>
 
-<div class="card" id="env-alerts">
-    <div class="card-header"><h2>Environmental alerts</h2></div>
-    <div class="card-body">
-        <p class="text-muted" style="font-size:.9rem;margin-top:0">
-            After SNMP poll (or manual reading), compare each env sensor to its warn/crit thresholds
-            (temperature / primary) and optional RH limits for combo sensors. Emails require Settings → Email (SMTP).
-        </p>
-        <?php if (!class_exists('EnvSensorAlertService')): ?>
-            <p class="alert alert-error">EnvSensorAlertService is not deployed on this host.</p>
-        <?php else: ?>
-        <form method="post" class="form-grid">
-            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
-            <input type="hidden" name="section" value="env_alerts">
+        <div class="alerts-hub-section" style="margin-top:1.5rem">
+            <h3 class="alerts-hub-title">Routing subscriptions</h3>
+            <p class="text-muted" style="font-size:.8rem;margin:0 0 .75rem">
+                Direct alerts by scope. Example: Network team → global (all categories);
+                Sysadmin department → only their devices’ ICMP + env.
+            </p>
 
-            <div class="form-row full"><label>
-                <input type="checkbox" name="env_alerts_enabled" value="1"
-                    <?= !empty($envAlerts['enabled']) ? 'checked' : '' ?>>
-                Enable environmental alerts
-            </label></div>
+            <?php if ($alertSubs): ?>
+            <div class="table-wrap" style="margin-bottom:1rem">
+                <table class="data">
+                    <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Scope</th>
+                        <th>Categories</th>
+                        <th>Min sev.</th>
+                        <th>Email</th>
+                        <th>Channels</th>
+                        <th></th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($alertSubs as $sub):
+                        $scopeLabel = (string)($sub['scope'] ?? 'global');
+                        if ($scopeLabel === 'department' && !empty($sub['department_name'])) {
+                            $scopeLabel = 'dept: ' . $sub['department_name'];
+                        } elseif ($scopeLabel === 'device' && !empty($sub['device_id'])) {
+                            $scopeLabel = 'device #' . (int)$sub['device_id'];
+                        } elseif ($scopeLabel === 'pdu' && !empty($sub['pdu_id'])) {
+                            $scopeLabel = 'pdu #' . (int)$sub['pdu_id'];
+                        }
+                        $ch = [];
+                        if (!empty($sub['notify_in_app'])) {
+                            $ch[] = 'in-app';
+                        }
+                        if (!empty($sub['notify_email'])) {
+                            $ch[] = 'email';
+                        }
+                        ?>
+                        <tr class="<?= empty($sub['is_active']) ? 'text-muted' : '' ?>">
+                            <td><?= App::e((string)$sub['name']) ?></td>
+                            <td><span class="badge"><?= App::e($scopeLabel) ?></span></td>
+                            <td style="font-size:.8rem"><?= App::e((string)($sub['categories'] ?? '')) ?></td>
+                            <td><?= App::e((string)($sub['min_severity'] ?? 'warning')) ?></td>
+                            <td style="font-size:.8rem"><?= App::e((string)($sub['email_to'] ?? '—') ?: '—') ?></td>
+                            <td style="font-size:.8rem"><?= App::e($ch ? implode(', ', $ch) : '—') ?></td>
+                            <td>
+                                <form method="post" style="display:inline" onsubmit="return confirm('Remove this subscription?');">
+                                    <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                                    <input type="hidden" name="section" value="alert_subscription_delete">
+                                    <input type="hidden" name="subscription_id" value="<?= (int)$sub['subscription_id'] ?>">
+                                    <button class="btn btn-ghost btn-sm" type="submit">Remove</button>
+                                </form>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php else: ?>
+                <p class="text-muted" style="font-size:.85rem">
+                    No subscriptions yet — category defaults and the global email list apply.
+                </p>
+            <?php endif; ?>
 
-            <div class="form-row full"><label>Alert email recipients</label>
-                <input class="form-control" name="env_alerts_email"
-                       value="<?= App::e($envAlerts['email'] ?? '') ?>"
-                       placeholder="ops@contoso.com (defaults to power alert list if empty)">
-                <span class="text-muted" style="font-size:.75rem">Comma-separated. Leave empty to reuse power alert recipients when set.</span>
-            </div>
+            <form method="post" class="form-grid" id="alertSubForm">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="section" value="alert_subscription_save">
+                <input type="hidden" name="is_active" value="1">
 
-            <div class="form-row"><label>Re-alert cooldown (minutes)</label>
-                <input class="form-control" type="number" min="5" max="10080" step="1"
-                       name="env_alerts_cooldown_min"
-                       value="<?= App::e((string)(int)($envAlerts['cooldown_min'] ?? 60)) ?>">
-                <span class="text-muted" style="font-size:.75rem">Same sensor/level will not re-mail until this elapses (warn→crit still mails).</span>
-            </div>
-            <div class="form-row"><label>RH warning %</label>
-                <input class="form-control" type="number" min="1" max="100" step="1"
-                       name="env_alerts_rh_warn"
-                       value="<?= App::e((string)(int)($envAlerts['rh_warn'] ?? 70)) ?>">
-            </div>
-            <div class="form-row"><label>RH critical %</label>
-                <input class="form-control" type="number" min="1" max="100" step="1"
-                       name="env_alerts_rh_crit"
-                       value="<?= App::e((string)(int)($envAlerts['rh_crit'] ?? 90)) ?>">
-            </div>
-
-            <div class="form-row full">
-                <button class="btn btn-primary" type="submit">Save env alerts</button>
-            </div>
-        </form>
+                <div class="form-row"><label>Name</label>
+                    <input class="form-control" name="name" required placeholder="Network NOC" maxlength="150">
+                </div>
+                <div class="form-row"><label>Scope</label>
+                    <select class="form-control" name="scope" id="alertSubScope">
+                        <option value="global">Global (all sites)</option>
+                        <option value="department">Department</option>
+                        <option value="device">Single device</option>
+                        <option value="pdu">Single PDU</option>
+                    </select>
+                </div>
+                <div class="form-row" id="alertSubDeptRow" hidden>
+                    <label>Department</label>
+                    <select class="form-control" name="department_id">
+                        <option value="">— Select —</option>
+                        <?php foreach ($alertDepartments as $ad): ?>
+                            <option value="<?= (int)$ad['department_id'] ?>"><?= App::e((string)$ad['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row" id="alertSubDeviceRow" hidden>
+                    <label>Device ID</label>
+                    <input class="form-control" type="number" min="1" name="device_id" placeholder="devices.device_id">
+                </div>
+                <div class="form-row" id="alertSubPduRow" hidden>
+                    <label>PDU ID</label>
+                    <input class="form-control" type="number" min="1" name="pdu_id" placeholder="pdus.pdu_id">
+                </div>
+                <div class="form-row"><label>Min severity</label>
+                    <select class="form-control" name="min_severity">
+                        <option value="info">Info (all)</option>
+                        <option value="warning" selected>Warning+</option>
+                        <option value="critical">Critical only</option>
+                    </select>
+                </div>
+                <div class="form-row full"><label>Categories</label>
+                    <div class="alerts-cat-checks">
+                        <?php foreach (['icmp' => 'ICMP', 'power' => 'Power', 'env' => 'Env', 'snmp' => 'SNMP', 'system' => 'System'] as $ck => $cl): ?>
+                            <label class="alerts-cat-chip">
+                                <input type="checkbox" name="categories[]" value="<?= App::e($ck) ?>" checked>
+                                <?= App::e($cl) ?>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+                <div class="form-row full"><label>Email to</label>
+                    <input class="form-control" name="email_to" placeholder="team@contoso.com">
+                </div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="notify_in_app" value="1" checked>
+                    In-app (department scope targets users in that department)
+                </label></div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="notify_email" value="1" checked>
+                    Email this subscription
+                </label></div>
+                <div class="form-row full">
+                    <button class="btn btn-secondary" type="submit">Add subscription</button>
+                </div>
+            </form>
+            <script>
+            (function () {
+                var scope = document.getElementById('alertSubScope');
+                if (!scope) return;
+                function sync() {
+                    var v = scope.value;
+                    var dept = document.getElementById('alertSubDeptRow');
+                    var dev = document.getElementById('alertSubDeviceRow');
+                    var pdu = document.getElementById('alertSubPduRow');
+                    if (dept) dept.hidden = v !== 'department';
+                    if (dev) dev.hidden = v !== 'device';
+                    if (pdu) pdu.hidden = v !== 'pdu';
+                }
+                scope.addEventListener('change', sync);
+                sync();
+            })();
+            </script>
+        </div>
         <?php endif; ?>
     </div>
 </div>

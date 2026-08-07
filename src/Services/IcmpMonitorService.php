@@ -386,14 +386,6 @@ class IcmpMonitorService
         if (!$cfg['alerts']) {
             return;
         }
-        $emails = self::normalizeEmails($cfg['email']);
-        if (!$emails && class_exists('PowerAlertService')) {
-            // Fall back to power alerts mailbox if ICMP-specific empty
-            $emails = self::normalizeEmails((string)SettingsService::get('power_alerts_email', ''));
-        }
-        if (!$emails || !class_exists('MailService') || !MailService::isEnabled()) {
-            return;
-        }
         $ck = 'icmp_alert_' . $kind . '_' . $id . '_' . $event;
         $last = SettingsService::get($ck, '');
         if (is_string($last) && $last !== '') {
@@ -404,10 +396,10 @@ class IcmpMonitorService
         }
         SettingsService::set($ck, date('Y-m-d H:i:s'), 'icmp');
 
-        $subj = $event === 'down'
-            ? '[ColdAisle] ICMP DOWN: ' . $label
-            : '[ColdAisle] ICMP recovered: ' . $label;
-        $body = ($event === 'down' ? 'Host unreachable' : 'Host recovered') . "\n\n"
+        $title = $event === 'down'
+            ? ('ICMP DOWN: ' . $label)
+            : ('ICMP recovered: ' . $label);
+        $body = ($event === 'down' ? 'Host unreachable via ICMP.' : 'Host recovered (ICMP).') . "\n\n"
             . 'Entity: ' . $kind . ' #' . $id . ' — ' . $label . "\n"
             . 'Host: ' . $host . "\n"
             . 'Time: ' . date('c') . "\n";
@@ -417,10 +409,34 @@ class IcmpMonitorService
         } else {
             $body .= 'RTT: ' . ($probe['rtt_ms'] ?? '—') . " ms\n";
         }
-        try {
-            MailService::send($emails, $subj, ['text' => $body]);
-        } catch (Throwable $e) {
-            App::log('ICMP alert mail: ' . $e->getMessage(), 'error');
+
+        // Unified hub (in-app + email routing / department subscriptions)
+        if (class_exists('AlertService') || is_file(__DIR__ . '/AlertService.php')) {
+            require_once __DIR__ . '/AlertService.php';
+            try {
+                AlertService::emit([
+                    'category' => AlertService::CAT_ICMP,
+                    'severity' => $event === 'down' ? AlertService::SEV_CRITICAL : AlertService::SEV_INFO,
+                    'title' => $title,
+                    'message' => $body,
+                    'entity_type' => $kind,
+                    'entity_id' => $id,
+                    'event' => $event,
+                ]);
+                return;
+            } catch (Throwable $e) {
+                App::log('ICMP AlertService emit: ' . $e->getMessage(), 'error');
+            }
+        }
+
+        // Fallback: direct email if hub unavailable
+        $emails = self::normalizeEmails($cfg['email']);
+        if ($emails && class_exists('MailService') && MailService::isEnabled()) {
+            try {
+                MailService::send($emails, '[' . App::APP_NAME . '] ' . $title, ['text' => $body]);
+            } catch (Throwable $e) {
+                App::log('ICMP alert mail: ' . $e->getMessage(), 'error');
+            }
         }
     }
 

@@ -63,21 +63,153 @@
       return data;
     },
 
-    toast: function (message, type) {
+    toast: function (message, type, opts) {
       type = type || 'info';
+      opts = opts || {};
       let host = document.getElementById('toast-host');
       if (!host) {
         host = document.createElement('div');
         host.id = 'toast-host';
-        host.style.cssText = 'position:fixed;right:1rem;bottom:1rem;z-index:9999;display:flex;flex-direction:column;gap:.5rem;';
+        host.setAttribute('aria-live', 'polite');
         document.body.appendChild(host);
       }
       const el = document.createElement('div');
-      el.className = 'alert alert-' + type;
-      el.style.minWidth = '220px';
-      el.textContent = message;
+      el.className = 'ca-toast ca-toast-' + type;
+      el.setAttribute('role', 'status');
+
+      const pulse = document.createElement('span');
+      pulse.className = 'health-pulse health-pulse-' + (
+        type === 'success' ? 'ok' :
+        type === 'warning' ? 'warn' :
+        (type === 'error' || type === 'danger') ? 'crit' : 'info'
+      );
+      pulse.setAttribute('aria-hidden', 'true');
+
+      const body = document.createElement('div');
+      body.style.flex = '1';
+      body.style.minWidth = '0';
+      if (opts.title) {
+        const t = document.createElement('div');
+        t.className = 'ca-toast-title';
+        t.textContent = opts.title;
+        body.appendChild(t);
+      }
+      const m = document.createElement('p');
+      m.className = opts.title ? 'ca-toast-msg' : 'ca-toast-title';
+      m.style.margin = opts.title ? '' : '0';
+      m.textContent = message || '';
+      body.appendChild(m);
+
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'ca-toast-close';
+      close.setAttribute('aria-label', 'Dismiss');
+      close.innerHTML = '×';
+      const dismiss = function () {
+        el.classList.add('ca-toast-out');
+        setTimeout(function () { el.remove(); }, 240);
+      };
+      close.addEventListener('click', dismiss);
+
+      el.appendChild(pulse);
+      el.appendChild(body);
+      el.appendChild(close);
       host.appendChild(el);
-      setTimeout(() => el.remove(), 3500);
+
+      const ms = typeof opts.duration === 'number' ? opts.duration : 5200;
+      if (ms > 0) {
+        setTimeout(dismiss, ms);
+      }
+      return el;
+    },
+
+    /**
+     * Poll notifications API and surface new items as live toasts.
+     * Uses sessionStorage so a refresh does not re-toast the same IDs.
+     */
+    initLiveToasts: function () {
+      if (window.__caLiveToastsStarted) return;
+      window.__caLiveToastsStarted = true;
+      const storageKey = 'ca_notif_max_id';
+      let sinceId = 0;
+      try {
+        sinceId = parseInt(sessionStorage.getItem(storageKey) || '0', 10) || 0;
+      } catch (e) { sinceId = 0; }
+
+      const seen = Object.create(null);
+      let first = true;
+      const intervalMs = 25000;
+
+      const tick = async function () {
+        try {
+          const q = first && sinceId === 0
+            ? 'api/notifications.php?limit=8'
+            : ('api/notifications.php?since_id=' + encodeURIComponent(String(sinceId)) + '&limit=20');
+          const data = await api.api(q);
+          if (!data || !data.ok) return;
+
+          // Badge
+          const badge = document.querySelector('.notif-badge');
+          const unread = typeof data.unread === 'number' ? data.unread : 0;
+          if (badge) {
+            if (unread > 0) {
+              badge.textContent = String(unread);
+              badge.hidden = false;
+              badge.style.display = '';
+            } else {
+              badge.hidden = true;
+            }
+          } else if (unread > 0) {
+            const actions = document.querySelector('.topbar-actions');
+            if (actions) {
+              const a = document.createElement('a');
+              a.className = 'notif-badge';
+              a.href = (api.baseUrl || '').replace(/\/$/, '') + '/pages/notifications.php';
+              a.title = 'Notifications';
+              a.textContent = String(unread);
+              actions.appendChild(a);
+            }
+          }
+
+          const items = Array.isArray(data.items) ? data.items : [];
+          // First paint with no prior max: set watermark without toasting old backlog
+          if (first && sinceId === 0) {
+            let max = 0;
+            items.forEach(function (it) {
+              if (it.id > max) max = it.id;
+            });
+            // Also respect API max_id if higher
+            if ((data.max_id || 0) > max) max = data.max_id;
+            sinceId = max;
+            try { sessionStorage.setItem(storageKey, String(sinceId)); } catch (e2) {}
+            first = false;
+            return;
+          }
+          first = false;
+
+          items.forEach(function (it) {
+            if (!it || !it.id || seen[it.id]) return;
+            seen[it.id] = true;
+            if (it.id <= sinceId) return;
+            sinceId = Math.max(sinceId, it.id);
+            const msg = it.message || '';
+            api.toast(msg || it.title || 'Notification', it.toast_type || 'info', {
+              title: it.title || 'Alert',
+              duration: 7000,
+            });
+          });
+          if ((data.max_id || 0) > sinceId) {
+            sinceId = data.max_id;
+          }
+          try { sessionStorage.setItem(storageKey, String(sinceId)); } catch (e3) {}
+        } catch (err) {
+          // silent — user may lack permission or be offline
+        }
+      };
+
+      // Delay first poll so page interactive work wins
+      setTimeout(tick, 4000);
+      setInterval(tick, intervalMs);
     },
 
     /**

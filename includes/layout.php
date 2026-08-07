@@ -34,13 +34,14 @@ function layout_header(string $title, array $user, string $active = ''): void
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon.svg')) ?>" type="image/svg+xml">
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon-32.png')) ?>" type="image/png" sizes="32x32">
     <link rel="apple-touch-icon" href="<?= App::e(App::url('assets/img/favicon-180.png')) ?>" sizes="180x180">
-    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=<?= App::e(preg_replace('/\W+/', '', (string)App::VERSION) . '41') ?>">
+    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=<?= App::e(preg_replace('/\W+/', '', (string)App::VERSION) . '42') ?>">
     <script>
     window.ColdAisle = {
       baseUrl: <?= json_encode(App::baseUrl()) ?>,
       csrf: <?= json_encode($csrf) ?>,
       tempUnit: <?= json_encode(class_exists('TempUnitService') ? TempUnitService::siteUnit() : 'C') ?>,
-      tempSymbol: <?= json_encode(class_exists('TempUnitService') ? TempUnitService::symbol() : '°C') ?>
+      tempSymbol: <?= json_encode(class_exists('TempUnitService') ? TempUnitService::symbol() : '°C') ?>,
+      liveToasts: true
     };
     window.WINDCIM = window.ColdAisle; // legacy alias
     </script>
@@ -158,9 +159,9 @@ function layout_header(string $title, array $user, string $active = ''): void
             <button type="button" class="btn btn-ghost btn-icon" id="sidebarToggle" aria-label="Toggle menu">☰</button>
             <h1 class="page-title"><?= App::e($title) ?></h1>
             <div class="topbar-actions">
-                <?php if ($unread > 0): ?>
-                    <a class="notif-badge" href="<?= App::e(App::url('pages/notifications.php')) ?>" title="Notifications"><?= (int)$unread ?></a>
-                <?php endif; ?>
+                <a class="notif-badge" href="<?= App::e(App::url('pages/notifications.php')) ?>"
+                   title="Notifications"
+                   <?= $unread < 1 ? 'hidden' : '' ?>><?= (int)$unread ?></a>
             </div>
         </header>
         <main class="content">
@@ -213,7 +214,14 @@ function layout_footer(): void
         </footer>
     </div>
 </div>
-<script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=<?= App::e(preg_replace('/\W+/', '', (string)App::VERSION) . '7') ?>"></script>
+<script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=<?= App::e(preg_replace('/\W+/', '', (string)App::VERSION) . '8') ?>"></script>
+<script>
+(function () {
+  if (window.ColdAisle && ColdAisle.liveToasts && typeof ColdAisle.initLiveToasts === 'function') {
+    ColdAisle.initLiveToasts();
+  }
+})();
+</script>
 </body>
 </html>
     <?php

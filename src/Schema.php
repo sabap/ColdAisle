@@ -133,6 +133,27 @@ class Schema
                     updated_at DATETIME2 NOT NULL CONSTRAINT DF_snmp_site_updated DEFAULT SYSUTCDATETIME()
                 )"
             );
+
+            // Unified alert routing (global / department / device / PDU)
+            self::ensureTable(
+                'alert_subscriptions',
+                "CREATE TABLE alert_subscriptions (
+                    subscription_id INT IDENTITY(1,1) PRIMARY KEY,
+                    name NVARCHAR(150) NOT NULL,
+                    scope NVARCHAR(20) NOT NULL CONSTRAINT DF_alert_sub_scope DEFAULT 'global',
+                    department_id INT NULL,
+                    device_id INT NULL,
+                    pdu_id INT NULL,
+                    categories NVARCHAR(200) NOT NULL CONSTRAINT DF_alert_sub_cats DEFAULT 'icmp,power,env,snmp,system',
+                    min_severity NVARCHAR(20) NOT NULL CONSTRAINT DF_alert_sub_sev DEFAULT 'warning',
+                    email_to NVARCHAR(500) NULL,
+                    notify_in_app BIT NOT NULL CONSTRAINT DF_alert_sub_app DEFAULT 1,
+                    notify_email BIT NOT NULL CONSTRAINT DF_alert_sub_mail DEFAULT 1,
+                    is_active BIT NOT NULL CONSTRAINT DF_alert_sub_active DEFAULT 1,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_alert_sub_created DEFAULT SYSUTCDATETIME(),
+                    updated_at DATETIME2 NOT NULL CONSTRAINT DF_alert_sub_updated DEFAULT SYSUTCDATETIME()
+                )"
+            );
             // Inventory templates for rack/row PDUs (electrical + optional outlet layout)
             self::ensureTable(
                 'pdu_templates',
@@ -653,6 +674,7 @@ class Schema
             'snmp_site_oid_templates' => ['template_id', 'name', 'oid_map'],
             'pdu_templates' => ['template_id', 'name', 'fields_json'],
             'snmp_v3_profiles' => ['profile_id', 'name', 'security_name'],
+            'alert_subscriptions' => ['subscription_id', 'name', 'scope', 'categories'],
             'device_notes' => ['note_id', 'device_id', 'note_text'],
             'pdus' => [
                 'mount_style', 'position_u', 'u_height', 'snmp_community', 'phases',
