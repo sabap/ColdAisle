@@ -154,7 +154,11 @@ try {
 
             $creds = SnmpDiscover::credsFromCooling($unit);
             // Prefer Liebert/Vertiv LGP trees over APC power/EMS roots
-            $result = SnmpDiscover::discover($creds, ['family' => 'cooling']);
+            $result = SnmpDiscover::discover($creds, [
+                'family' => 'cooling',
+                'manufacturer' => $prereqs['vendor'] ?? '',
+                'model' => $prereqs['model'] ?? '',
+            ]);
             $templateName = SnmpDiscover::templateName($prereqs['vendor'], $prereqs['model']);
             $existing = SnmpDiscover::findSiteTemplateByName($templateName);
 
