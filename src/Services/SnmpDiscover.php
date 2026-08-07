@@ -300,22 +300,31 @@ class SnmpDiscover
             '1.3.6.1.4.1.3808.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.3808.1.1.1.4.2.5.0',
         ];
-        // Dell iDRAC / OMSA identity + power / thermal status leaves
+        // Dell iDRAC / OMSA — identity + status + common power/thermal leaves
+        // (exact leaves vary by iDRAC gen / firmware; empty GETs are cheap with LEAF_TIMEOUT)
         $leafIdrac = [
-            '1.3.6.1.4.1.674.10892.5.1.3.1.0',   // systemFormFactor?
-            '1.3.6.1.4.1.674.10892.5.1.3.2.0',   // systemExpressServiceCode / related
-            '1.3.6.1.4.1.674.10892.5.1.3.6.0',   // systemModelName
-            '1.3.6.1.4.1.674.10892.5.1.3.12.0',  // systemServiceTag (common)
-            '1.3.6.1.4.1.674.10892.5.1.3.13.0',
-            '1.3.6.1.4.1.674.10892.5.4.200.10.1.2.1',   // chassis status
-            '1.3.6.1.4.1.674.10892.5.4.200.10.1.21.1',  // power supply status combined
-            '1.3.6.1.4.1.674.10892.5.4.200.10.1.42.1',  // power consumption
-            '1.3.6.1.4.1.674.10892.5.4.600.12.1.5.1',   // amps? (varies by firmware)
-            '1.3.6.1.4.1.674.10892.5.4.700.20.1.6.1',   // temp reading probe 1
-            '1.3.6.1.4.1.674.10892.5.4.700.20.1.8.1',   // temp status probe 1
-            '1.3.6.1.4.1.674.10892.5.4.1100.50.1.5.1',  // power unit status
-            '1.3.6.1.4.1.674.10892.5.4.1100.50.1.7.1',  // power unit watts-ish
-            '1.3.6.1.4.1.674.10892.5.4.1200.10.1.5.1',  // power supply status
+            // Identity (usually works when SNMPv3 auth is OK)
+            '1.3.6.1.4.1.674.10892.5.1.3.6.0',    // systemModelName
+            '1.3.6.1.4.1.674.10892.5.1.3.12.0',   // systemServiceTag
+            '1.3.6.1.4.1.674.10892.5.1.3.13.0',   // systemExpressServiceCode (NOT watts)
+            '1.3.6.1.4.1.674.10892.5.1.3.2.0',
+            // Overall health rollup (often 1=other … 3=ok)
+            '1.3.6.1.4.1.674.10892.5.2.1.0',
+            '1.3.6.1.4.1.674.10892.5.4.200.10.1.4.1',  // systemStateChassisStatus
+            '1.3.6.1.4.1.674.10892.5.4.200.10.1.21.1', // power supply status combined
+            '1.3.6.1.4.1.674.10892.5.4.200.10.1.24.1', // cooling / fan rollup
+            // Instantaneous power (Watts) — common on iDRAC with power monitoring
+            '1.3.6.1.4.1.674.10892.5.4.600.30.1.6.1',  // amperageReading
+            '1.3.6.1.4.1.674.10892.5.4.600.20.1.6.1',  // powerReading (watts)
+            '1.3.6.1.4.1.674.10892.5.4.200.10.1.42.1', // systemStatePowerConsumption
+            // Temperature probes (probe index 1–4)
+            '1.3.6.1.4.1.674.10892.5.4.700.20.1.6.1',
+            '1.3.6.1.4.1.674.10892.5.4.700.20.1.6.2',
+            '1.3.6.1.4.1.674.10892.5.4.700.20.1.8.1',
+            // Power supplies
+            '1.3.6.1.4.1.674.10892.5.4.1200.10.1.5.1',
+            '1.3.6.1.4.1.674.10892.5.4.1200.10.1.5.2',
+            '1.3.6.1.4.1.674.10892.5.4.1100.50.1.5.1',
         ];
 
         // EMS vs rPDU leaf order inside APC ruleset (preserve prior tuning)
@@ -1638,6 +1647,29 @@ class SnmpDiscover
         if (preg_match('/1\.3\.6\.1\.4\.1\.476\.1\.42\.3\.9\.20\.1\.20\.1\.2\.1\.(5002|4291|5001|5003)$/', $oid)) {
             $score += 20;
         }
+        // Dell iDRAC / OMSA (enterprise 674.10892.5)
+        $isDellId = str_starts_with($oid, '1.3.6.1.4.1.674.10892.5.1.3.'); // service tag / model / asset
+        $isDellPower = (bool)preg_match('/^1\.3\.6\.1\.4\.1\.674\.10892\.5\.4\.(600|1100|1200)\./', $oid)
+            || str_contains($oid, '1.3.6.1.4.1.674.10892.5.4.200.10.1.42');
+        $isDellTemp = str_starts_with($oid, '1.3.6.1.4.1.674.10892.5.4.700.');
+        $isDellStatus = str_starts_with($oid, '1.3.6.1.4.1.674.10892.5.4.200.')
+            || str_starts_with($oid, '1.3.6.1.4.1.674.10892.5.2.');
+        if (str_starts_with($oid, '1.3.6.1.4.1.674.10892.5.')) {
+            $score += 4;
+        }
+        if ($isDellId) {
+            // Identity only — never treat Express Service Code / asset numbers as watts
+            $score -= 12;
+        }
+        if ($isDellPower) {
+            $score += 16;
+        }
+        if ($isDellTemp) {
+            $score += 14;
+        }
+        if ($isDellStatus && !$isDellId) {
+            $score += 8;
+        }
 
         // Model / serial / hostname strings must not rank as power metrics
         if ($nonMetric) {
@@ -1876,9 +1908,21 @@ class SnmpDiscover
 
         // Value fallbacks only for real numeric samples — never for "AP8861"
         // Skip on env/EMS trees so temperature readings never become "possible watts"
+        // Skip Dell identity branch (service tag / express service code are not power)
         $isEnvTree = (bool)preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.(10|25)\./', $oid)
             || (bool)preg_match('/\btemp|temperature|humid|humidity|probe|ems|iem|environmental\b/', $s);
-        if (!$hints && !$nonMetric && $num !== null && !$isEnvTree) {
+        $isDellIdentity = (bool)preg_match('/^1\.3\.6\.1\.4\.1\.674\.10892\.5\.1\.3\./', $oid);
+        if ($isDellIdentity) {
+            if (str_ends_with($oid, '.12.0') || str_contains($s, 'servicetag')) {
+                $hints[] = 'Dell service tag';
+            } elseif (str_ends_with($oid, '.6.0') || str_contains($s, 'model')) {
+                $hints[] = 'Dell system model';
+            } elseif (str_ends_with($oid, '.13.0') || str_contains($s, 'express')) {
+                $hints[] = 'Dell express service code (identity, not watts)';
+            } else {
+                $hints[] = 'Dell identity';
+            }
+        } elseif (!$hints && !$nonMetric && $num !== null && !$isEnvTree) {
             if (str_contains($oid, '.318.') && $num <= 100) {
                 $hints[] = 'possible load %';
             }
