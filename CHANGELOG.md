@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **PDU list batch labels:** multi-select checkboxes + **Print labels** on Power → PDUs; same printer/size modal; multi-page print (one label per selected PDU).
-
 ### Bug fixes
 
 ---
 
+## [0.3.55] - 2026-08-06
+
+### Enhancements
+
+- **PDU list batch labels:** multi-select checkboxes + **Print labels** on Power → PDUs; same printer/size modal; multi-page print (one label per selected PDU).
+
+---
 ## [0.3.54] - 2026-08-06
 
 ### Bug fixes
