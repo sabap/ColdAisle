@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **Cabinet / 3D health coloring:** aggregate ICMP, power alerts, and env thresholds per cabinet; tint dashboard/NOC/floorplan 3D racks, floorplan 2D glow + beacon, row/list health chips, and cabinet detail indicators. Soft emissive pulse on warn/crit (not chunky boxes).
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.69] - 2026-08-07
+
+### New features
+
+- **Cabinet / 3D health coloring:** aggregate ICMP, power alerts, and env thresholds per cabinet; tint dashboard/NOC/floorplan 3D racks, floorplan 2D glow + beacon, row/list health chips, and cabinet detail indicators. Soft emissive pulse on warn/crit (not chunky boxes).
+
+---
 ## [0.3.68] - 2026-08-07
 
 ### New features
