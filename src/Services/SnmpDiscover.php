@@ -2674,6 +2674,34 @@ class SnmpDiscover
     {
         $vendor = trim((string)($device['manufacturer'] ?? ''));
         $model = trim((string)($device['model'] ?? ''));
+        // Properties UI falls back to the device template — Discover must too
+        if ($model === '') {
+            $model = trim((string)($device['tpl_model'] ?? ''));
+        }
+        if ($vendor === '') {
+            $vendor = trim((string)($device['tpl_manufacturer'] ?? ''));
+        }
+        if (($vendor === '' || $model === '') && !empty($device['template_id'])) {
+            try {
+                $tpl = Database::fetchOne(
+                    'SELECT t.model, m.name AS manufacturer_name
+                     FROM device_templates t
+                     LEFT JOIN manufacturers m ON m.manufacturer_id = t.manufacturer_id
+                     WHERE t.template_id = ?',
+                    [(int)$device['template_id']]
+                );
+                if ($tpl) {
+                    if ($model === '') {
+                        $model = trim((string)($tpl['model'] ?? ''));
+                    }
+                    if ($vendor === '') {
+                        $vendor = trim((string)($tpl['manufacturer_name'] ?? ''));
+                    }
+                }
+            } catch (Throwable $e) {
+                // ignore — report missing fields below
+            }
+        }
         $host = self::snmpHostFromDevice($device);
         $usesIdrac = $host !== ''
             && trim((string)($device['idrac_host'] ?? '')) !== ''
