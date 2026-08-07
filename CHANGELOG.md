@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **Dell iDRAC SNMP target:** when manufacturer is Dell, set **iDRAC IP or Hostname** on the device. Discover, Poll, and the scheduler use that BMC address (instead of OS primary/mgmt IP). Device properties show an **Open iDRAC** HTTPS link in a new tab. SNMPv3 profiles/fields work the same as other devices; community can still be saved (iDRAC often requires one on the controller even for v3).
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.56] - 2026-08-07
+
+### New features
+
+- **Dell iDRAC SNMP target:** when manufacturer is Dell, set **iDRAC IP or Hostname** on the device. Discover, Poll, and the scheduler use that BMC address (instead of OS primary/mgmt IP). Device properties show an **Open iDRAC** HTTPS link in a new tab. SNMPv3 profiles/fields work the same as other devices; community can still be saved (iDRAC often requires one on the controller even for v3).
+
+---
 ## [0.3.55] - 2026-08-06
 
 ### Enhancements
