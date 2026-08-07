@@ -15,7 +15,11 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **NOC 3D health:** cabinet outage/warn state updates every metrics poll (not only 5‑minute scene reload); soft red/amber volume glow + floor bloom pulse instead of hard outline rails.
+
 ### Bug fixes
+
+- **NOC 3D:** simulated and real ICMP cabinet health was missing or stale because `cabinet_health` was not pushed on live polls.
 
 ---
 

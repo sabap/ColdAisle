@@ -37,9 +37,9 @@ if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
 $cssUrl = App::url('assets/css/noc.css') . '?v=3';
-$jsUrl = App::url('assets/js/noc.js') . '?v=5';
+$jsUrl = App::url('assets/js/noc.js') . '?v=6';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=11';
+$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=12';
 $org = '';
 try {
     $org = (string)SettingsService::get('org_name', '');

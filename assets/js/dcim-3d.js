@@ -443,7 +443,10 @@
 
     var faceJobs = []; // { cab, face, mat }
 
-    var healthPulseMats = []; // body mats that breathe on warn/crit
+    // Soft health pulse drivers: { mat, prop:'emissiveIntensity'|'opacity', base, amp, speed }
+    var healthPulseMats = [];
+    // Live health update targets keyed by cabinet_id
+    var cabinetHealthNodes = Object.create(null);
 
     function cabinetHealthStatus(cab) {
       var h = cab && (cab.health || cab.health_status);
@@ -452,19 +455,161 @@
       return String(h.status || cab.health_status || 'unknown');
     }
 
-    function healthTintHex(cab) {
-      // Prefer server-blended display hex; fall back to status color lerp client-side
-      if (cab.health_display_hex) return cab.health_display_hex;
-      var st = cabinetHealthStatus(cab);
-      var base = new THREE.Color(cab.color_hex || '#2d3748');
-      if (st === 'crit' || st === 'down') {
-        base.lerp(new THREE.Color(0xef4444), 0.55);
-      } else if (st === 'warn' || st === 'degraded') {
-        base.lerp(new THREE.Color(0xeab308), 0.45);
-      } else if (st === 'ok' || st === 'up') {
-        base.lerp(new THREE.Color(0x22c55e), 0.12);
-      }
+    function normalizeHealthStatus(st) {
+      st = String(st || 'unknown').toLowerCase();
+      if (st === 'down') return 'crit';
+      if (st === 'degraded') return 'warn';
+      if (st === 'up') return 'ok';
+      return st;
+    }
+
+    function healthTintFrom(baseHex, st, displayHex) {
+      if (displayHex) return displayHex;
+      st = normalizeHealthStatus(st);
+      var base = new THREE.Color(baseHex || '#2d3748');
+      if (st === 'crit') base.lerp(new THREE.Color(0xef4444), 0.62);
+      else if (st === 'warn') base.lerp(new THREE.Color(0xeab308), 0.5);
+      else if (st === 'ok') base.lerp(new THREE.Color(0x22c55e), 0.12);
       return '#' + base.getHexString();
+    }
+
+    function healthAlertHex(st) {
+      st = normalizeHealthStatus(st);
+      if (st === 'crit') return 0xef4444;
+      if (st === 'warn') return 0xeab308;
+      if (st === 'ok') return 0x22c55e;
+      return 0x64748b;
+    }
+
+    /** Soft radial texture for floor bloom / aura (no hard ring edge). */
+    function softRadialTexture(hexColor) {
+      var c = document.createElement('canvas');
+      c.width = 256;
+      c.height = 256;
+      var ctx = c.getContext('2d');
+      var col = new THREE.Color(hexColor);
+      var r0 = Math.round(col.r * 255);
+      var g0 = Math.round(col.g * 255);
+      var b0 = Math.round(col.b * 255);
+      var g = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+      g.addColorStop(0.0, 'rgba(' + r0 + ',' + g0 + ',' + b0 + ',0.85)');
+      g.addColorStop(0.25, 'rgba(' + r0 + ',' + g0 + ',' + b0 + ',0.4)');
+      g.addColorStop(0.55, 'rgba(' + r0 + ',' + g0 + ',' + b0 + ',0.12)');
+      g.addColorStop(1.0, 'rgba(' + r0 + ',' + g0 + ',' + b0 + ',0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 256, 256);
+      var tex = new THREE.CanvasTexture(c);
+      tex.needsUpdate = true;
+      return tex;
+    }
+
+    function clearHealthPulsesFor(node) {
+      if (!node || !node.pulseRefs) return;
+      healthPulseMats = healthPulseMats.filter(function (p) {
+        return node.pulseRefs.indexOf(p) < 0;
+      });
+      node.pulseRefs = [];
+    }
+
+    /**
+     * Apply / refresh soft glow for a rack node (no hard outline boxes).
+     * Warn/crit: additive volume shells + floor bloom + body emissive breathe.
+     */
+    function applyCabinetHealthVisual(node, st, displayHex) {
+      if (!node || !node.bodyMat) return;
+      st = normalizeHealthStatus(st);
+      var baseHex = node.baseColorHex || '#2d3748';
+      var tint = healthTintFrom(baseHex, st, displayHex || null);
+      node.bodyMat.color.set(tint);
+      node.bodyMat.needsUpdate = true;
+      node.health = st;
+      if (node.mesh && node.mesh.userData) node.mesh.userData.health = st;
+
+      clearHealthPulsesFor(node);
+
+      // Reset body emissive
+      node.bodyMat.emissive.setHex(0x000000);
+      node.bodyMat.emissiveIntensity = 0;
+
+      // Soft rails (not chrome hard lines when unhealthy)
+      if (node.railMats) {
+        node.railMats.forEach(function (rm) {
+          if (st === 'crit' || st === 'warn') {
+            rm.color.setHex(st === 'crit' ? 0x7f1d1d : 0x713f12);
+            rm.metalness = 0.25;
+            rm.roughness = 0.65;
+          } else {
+            rm.color.setHex(0x64748b);
+            rm.metalness = 0.45;
+            rm.roughness = 0.45;
+          }
+          rm.needsUpdate = true;
+        });
+      }
+
+      // Hide glow group for ok/unknown
+      if (node.glowGroup) {
+        var alert = st === 'crit' || st === 'warn';
+        node.glowGroup.visible = alert;
+        if (!alert) return;
+
+        var alertHex = healthAlertHex(st);
+        var isCrit = st === 'crit';
+        var speed = isCrit ? 2.2 : 1.5;
+
+        node.bodyMat.emissive.setHex(alertHex);
+        node.bodyMat.emissiveIntensity = isCrit ? 0.35 : 0.18;
+        var pe = { mat: node.bodyMat, prop: 'emissiveIntensity', base: isCrit ? 0.28 : 0.12, amp: isCrit ? 0.38 : 0.18, speed: speed };
+        node.pulseRefs.push(pe);
+        healthPulseMats.push(pe);
+
+        // Update shell colors / pulse opacity
+        (node.shellMats || []).forEach(function (sm, i) {
+          sm.color.setHex(alertHex);
+          var baseOp = isCrit ? (0.14 - i * 0.035) : (0.1 - i * 0.03);
+          var ampOp = isCrit ? 0.12 : 0.07;
+          sm.opacity = baseOp;
+          sm.needsUpdate = true;
+          var po = { mat: sm, prop: 'opacity', base: Math.max(0.03, baseOp), amp: ampOp, speed: speed };
+          node.pulseRefs.push(po);
+          healthPulseMats.push(po);
+        });
+
+        if (node.floorGlowMat) {
+          if (node.floorGlowMat.map) node.floorGlowMat.map.dispose();
+          node.floorGlowMat.map = softRadialTexture(alertHex);
+          node.floorGlowMat.color.setHex(0xffffff);
+          node.floorGlowMat.opacity = isCrit ? 0.55 : 0.38;
+          node.floorGlowMat.needsUpdate = true;
+          var pf = {
+            mat: node.floorGlowMat,
+            prop: 'opacity',
+            base: isCrit ? 0.4 : 0.28,
+            amp: isCrit ? 0.28 : 0.16,
+            speed: speed * 0.9,
+          };
+          node.pulseRefs.push(pf);
+          healthPulseMats.push(pf);
+        }
+
+        // Subtle crown glow (soft disc, not a hard sphere badge)
+        if (node.crownMat) {
+          if (node.crownMat.map) node.crownMat.map.dispose();
+          node.crownMat.map = softRadialTexture(alertHex);
+          node.crownMat.opacity = isCrit ? 0.5 : 0.35;
+          node.crownMat.needsUpdate = true;
+          if (node.crownMesh) node.crownMesh.visible = true;
+          var pc = {
+            mat: node.crownMat,
+            prop: 'opacity',
+            base: isCrit ? 0.35 : 0.22,
+            amp: isCrit ? 0.3 : 0.16,
+            speed: speed,
+          };
+          node.pulseRefs.push(pc);
+          healthPulseMats.push(pc);
+        }
+      }
     }
 
     cabinets.forEach(function (cab) {
@@ -474,8 +619,9 @@
       var x = Number(cab.pos_x) || 0;
       var z = Number(cab.pos_y) || 0;
       var rot = (Number(cab.rotation_deg) || 0) * Math.PI / 180;
-      var healthSt = cabinetHealthStatus(cab);
-      var color = new THREE.Color(healthTintHex(cab));
+      var healthSt = normalizeHealthStatus(cabinetHealthStatus(cab));
+      var baseColorHex = cab.color_hex || '#2d3748';
+      var color = new THREE.Color(healthTintFrom(baseColorHex, healthSt, cab.health_display_hex));
 
       var geo = new THREE.BoxGeometry(w, h, d);
       var mat = new THREE.MeshStandardMaterial({
@@ -483,16 +629,6 @@
         roughness: 0.55,
         metalness: 0.35,
       });
-      // Soft emissive glow for problems (not a chunky outline box)
-      if (healthSt === 'crit' || healthSt === 'down') {
-        mat.emissive = new THREE.Color(0xef4444);
-        mat.emissiveIntensity = 0.28;
-        healthPulseMats.push({ mat: mat, base: 0.22, amp: 0.22, speed: 2.4 });
-      } else if (healthSt === 'warn' || healthSt === 'degraded') {
-        mat.emissive = new THREE.Color(0xeab308);
-        mat.emissiveIntensity = 0.16;
-        healthPulseMats.push({ mat: mat, base: 0.12, amp: 0.12, speed: 1.6 });
-      }
       var mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(x + w / 2, h / 2, z + d / 2);
       mesh.rotation.y = rot;
@@ -529,11 +665,17 @@
         faceJobs.push({ cab: cab, face: 'rear', mat: rearMat });
       }
 
-      // Side rails accent
-      var railMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.7, roughness: 0.3 });
+      // Soft side accents (not hard chrome rails)
+      var railMats = [];
       [-w * 0.48, w * 0.48].forEach(function (rx) {
-        var rail = new THREE.Mesh(new THREE.BoxGeometry(0.012, h * 0.98, 0.012), railMat);
-        rail.position.set(rx, 0, d / 2 + 0.004);
+        var railMat = new THREE.MeshStandardMaterial({
+          color: 0x64748b,
+          metalness: 0.45,
+          roughness: 0.45,
+        });
+        railMats.push(railMat);
+        var rail = new THREE.Mesh(new THREE.BoxGeometry(0.01, h * 0.96, 0.01), railMat);
+        rail.position.set(rx, 0, d / 2 + 0.003);
         mesh.add(rail);
       });
 
@@ -557,50 +699,88 @@
       label.rotation.x = -Math.PI / 2;
       mesh.add(label);
 
-      // Compact health beacon (sphere) — modern pulse, not a box/circle badge
-      if (healthSt === 'ok' || healthSt === 'warn' || healthSt === 'crit'
-          || healthSt === 'up' || healthSt === 'degraded' || healthSt === 'down') {
-        var beaconHex = 0x22c55e;
-        if (healthSt === 'crit' || healthSt === 'down') beaconHex = 0xef4444;
-        else if (healthSt === 'warn' || healthSt === 'degraded') beaconHex = 0xeab308;
-        var beaconR = Math.max(0.035, Math.min(w, d) * 0.08);
-        var beaconMat = new THREE.MeshStandardMaterial({
-          color: beaconHex,
-          emissive: new THREE.Color(beaconHex),
-          emissiveIntensity: healthSt === 'ok' || healthSt === 'up' ? 0.35 : 0.55,
-          roughness: 0.25,
-          metalness: 0.2,
-        });
-        if (healthSt !== 'ok' && healthSt !== 'up') {
-          healthPulseMats.push({
-            mat: beaconMat,
-            base: 0.35,
-            amp: 0.45,
-            speed: healthSt === 'crit' || healthSt === 'down' ? 2.8 : 1.8,
-          });
-        }
-        var beacon = new THREE.Mesh(
-          new THREE.SphereGeometry(beaconR, 16, 12),
-          beaconMat
-        );
-        beacon.position.set(w * 0.32, h / 2 + 0.04, 0);
-        beacon.userData = { kind: 'healthBeacon', health: healthSt };
-        mesh.add(beacon);
-        // Soft halo disc under beacon
-        var haloMat = new THREE.MeshBasicMaterial({
-          color: beaconHex,
+      // Soft health glow group (shells + floor bloom + crown) — no hard outlines
+      var glowGroup = new THREE.Group();
+      glowGroup.name = 'healthGlow';
+      glowGroup.visible = false;
+      mesh.add(glowGroup);
+
+      var shellMats = [];
+      // Nested additive shells — soft volume, feathered by low opacity
+      [1.08, 1.18, 1.3].forEach(function (scale, si) {
+        var shellMat = new THREE.MeshBasicMaterial({
+          color: 0xef4444,
           transparent: true,
-          opacity: 0.28,
+          opacity: 0.08,
           depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
         });
-        var halo = new THREE.Mesh(
-          new THREE.CircleGeometry(beaconR * 2.4, 24),
-          haloMat
+        shellMats.push(shellMat);
+        var shell = new THREE.Mesh(
+          new THREE.BoxGeometry(w * scale, h * (1 + si * 0.02), d * scale),
+          shellMat
         );
-        halo.rotation.x = -Math.PI / 2;
-        halo.position.set(w * 0.32, h / 2 + 0.012, 0);
-        mesh.add(halo);
+        shell.renderOrder = 1 + si;
+        glowGroup.add(shell);
+      });
+
+      // Floor bloom under rack (world-Y: place as child at bottom of mesh)
+      var floorGlowMat = new THREE.MeshBasicMaterial({
+        map: softRadialTexture(0xef4444),
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.45,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      var floorGlow = new THREE.Mesh(
+        new THREE.PlaneGeometry(Math.max(w, d) * 2.4, Math.max(w, d) * 2.4),
+        floorGlowMat
+      );
+      floorGlow.rotation.x = -Math.PI / 2;
+      floorGlow.position.set(0, -h / 2 + 0.02, 0);
+      floorGlow.renderOrder = 0;
+      glowGroup.add(floorGlow);
+
+      // Soft crown aura above rack (radial, not a hard sphere)
+      var crownMat = new THREE.MeshBasicMaterial({
+        map: softRadialTexture(0xef4444),
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.4,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      });
+      var crownMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(Math.min(w, d) * 1.4, Math.min(w, d) * 1.4),
+        crownMat
+      );
+      crownMesh.rotation.x = -Math.PI / 2;
+      crownMesh.position.set(0, h / 2 + 0.06, 0);
+      crownMesh.visible = false;
+      glowGroup.add(crownMesh);
+
+      var cabId = Number(cab.cabinet_id) || 0;
+      var node = {
+        mesh: mesh,
+        bodyMat: mat,
+        baseColorHex: baseColorHex,
+        railMats: railMats,
+        glowGroup: glowGroup,
+        shellMats: shellMats,
+        floorGlowMat: floorGlowMat,
+        crownMat: crownMat,
+        crownMesh: crownMesh,
+        pulseRefs: [],
+        health: healthSt,
+      };
+      if (cabId > 0) {
+        cabinetHealthNodes[cabId] = node;
       }
+      applyCabinetHealthVisual(node, healthSt, cab.health_display_hex || null);
 
       rackGroup.add(mesh);
     });
@@ -1132,13 +1312,18 @@
         theta += autoRotateSpeed;
         updateCamera();
       }
-      // Breathe emissive on warn/crit racks (subtle, not strobe)
+      // Soft breathe: emissive on body + opacity on glow shells / floor bloom
       if (healthPulseMats.length) {
         var t = (performance.now() - healthT0) / 1000;
         for (var hi = 0; hi < healthPulseMats.length; hi++) {
           var hp = healthPulseMats[hi];
           if (!hp.mat) continue;
-          hp.mat.emissiveIntensity = hp.base + hp.amp * (0.5 + 0.5 * Math.sin(t * hp.speed));
+          var wave = hp.base + hp.amp * (0.5 + 0.5 * Math.sin(t * hp.speed));
+          if (hp.prop === 'opacity') {
+            hp.mat.opacity = wave;
+          } else {
+            hp.mat.emissiveIntensity = wave;
+          }
         }
       }
       renderer.render(scene, camera);
@@ -1154,6 +1339,44 @@
     }
     window.addEventListener('resize', onResize);
 
+    /**
+     * Live health update (NOC poll). Accepts array of
+     * { cabinet_id, status, health_display_hex } or map id→status.
+     */
+    function setCabinetHealth(listOrMap) {
+      if (!listOrMap) return;
+      var map = Object.create(null);
+      if (Array.isArray(listOrMap)) {
+        listOrMap.forEach(function (row) {
+          if (!row) return;
+          var id = Number(row.cabinet_id || row.id);
+          if (!id) return;
+          map[id] = row;
+        });
+      } else if (typeof listOrMap === 'object') {
+        Object.keys(listOrMap).forEach(function (k) {
+          var v = listOrMap[k];
+          var id = Number(k);
+          if (!id) return;
+          if (typeof v === 'string') {
+            map[id] = { cabinet_id: id, status: v };
+          } else if (v && typeof v === 'object') {
+            map[id] = v;
+          }
+        });
+      }
+      Object.keys(cabinetHealthNodes).forEach(function (idStr) {
+        var id = Number(idStr);
+        var node = cabinetHealthNodes[id];
+        if (!node) return;
+        var row = map[id];
+        if (!row) return; // leave unchanged if not in payload
+        var st = normalizeHealthStatus(row.status || row.health_status || 'unknown');
+        var disp = row.health_display_hex || null;
+        applyCabinetHealthVisual(node, st, disp);
+      });
+    }
+
     return {
       scene: scene,
       camera: camera,
@@ -1165,6 +1388,7 @@
       setAutoRotate: function (on) {
         autoRotate = !!on;
       },
+      setCabinetHealth: setCabinetHealth,
       dispose: function () {
         cancelled = true;
         cancelAnimationFrame(animId);

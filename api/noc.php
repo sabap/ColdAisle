@@ -266,6 +266,53 @@ try {
 } catch (Throwable $e) {
 }
 
+// Live cabinet health for NOC 3D (every poll — not only full scene reloads)
+$cabinetHealth = [];
+try {
+    if (!class_exists('CabinetHealthService')
+        && is_file(dirname(__DIR__) . '/src/Services/CabinetHealthService.php')
+    ) {
+        require_once dirname(__DIR__) . '/src/Services/CabinetHealthService.php';
+    }
+    if (class_exists('CabinetHealthService')) {
+        $placedIds = Database::fetchAll(
+            'SELECT cabinet_id, color_hex FROM cabinets
+             WHERE is_active = 1 AND pos_x IS NOT NULL AND pos_y IS NOT NULL'
+        );
+        $idList = [];
+        $colorById = [];
+        foreach ($placedIds as $pr) {
+            $cid = (int)$pr['cabinet_id'];
+            if ($cid > 0) {
+                $idList[] = $cid;
+                $colorById[$cid] = (string)($pr['color_hex'] ?? '#2d3748');
+            }
+        }
+        if ($idList) {
+            $map = CabinetHealthService::forCabinetIds($idList);
+            foreach ($map as $cid => $h) {
+                $st = (string)($h['status'] ?? 'unknown');
+                // Only ship non-idle rows when many cabinets — always include warn/crit;
+                // include ok/unknown so the 3D view can clear a recovered rack.
+                $cabinetHealth[] = [
+                    'cabinet_id' => (int)$cid,
+                    'status' => $st,
+                    'label' => (string)($h['label'] ?? ''),
+                    'color' => (string)($h['color'] ?? CabinetHealthService::statusColor($st)),
+                    'health_display_hex' => CabinetHealthService::blendHex(
+                        $colorById[(int)$cid] ?? '#2d3748',
+                        $st
+                    ),
+                    'reasons' => $h['reasons'] ?? [],
+                ];
+            }
+        }
+    }
+} catch (Throwable $e) {
+    App::log('NOC cabinet_health: ' . $e->getMessage(), 'warning');
+    $cabinetHealth = [];
+}
+
 $out = [
     'ok' => true,
     'updated_at' => gmdate('c'),
@@ -280,6 +327,7 @@ $out = [
     'zones' => $zones,
     'cooling' => $cooling,
     'hot_sensors' => $hotSensors,
+    'cabinet_health' => $cabinetHealth,
 ];
 
 if ($includeScene) {

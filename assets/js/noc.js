@@ -412,6 +412,7 @@
         textureFaces: 'none',
       });
       sceneLoadedAt = Date.now();
+      // Health may already be on cabinet rows; also accept top-level snapshot if provided later
     }
 
     if (window.THREE && window.ColdAisle3D) {
@@ -498,6 +499,12 @@
         renderAll(res.j);
         if (needScene && res.j.scene) {
           mountScene(res.j.scene);
+        }
+        // Apply live cabinet health every poll (scene geometry only reloads rarely)
+        if (view3d && typeof view3d.setCabinetHealth === 'function' && res.j.cabinet_health) {
+          try {
+            view3d.setCabinetHealth(res.j.cabinet_health);
+          } catch (eH) { /* ignore */ }
         }
         setStatus(true, 'Live · every ' + Math.round(pollMs / 1000) + 's');
       })
