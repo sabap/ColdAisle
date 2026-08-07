@@ -2864,17 +2864,9 @@ class SnmpDiscover
     public static function credsFromPdu(array $pdu): array
     {
         $host = trim((string)($pdu['ip_address'] ?? ''));
-        $version = strtolower(trim((string)($pdu['snmp_version'] ?? '3')));
-        if ($version === 'v3' || $version === '3.0') {
+        $version = strtolower((string)($pdu['snmp_version'] ?? '3'));
+        if ($version === '') {
             $version = '3';
-        } elseif ($version === 'v2c' || $version === '2' || $version === 'v2') {
-            $version = '2c';
-        } elseif ($version === 'v1') {
-            $version = '1';
-        } elseif ($version === '') {
-            $version = !empty($pdu['snmp_v3_profile_id']) || !empty($pdu['snmp_security_name'])
-                ? '3'
-                : '2c';
         }
         $community = (string)(Crypto::decryptQuiet($pdu['snmp_community'] ?? null) ?? 'public');
         $secName = (string)($pdu['snmp_security_name'] ?? '');
@@ -2887,7 +2879,6 @@ class SnmpDiscover
             'port' => (int)($pdu['snmp_port'] ?? 161) ?: 161,
             'snmp_version' => $version,
             'security_name' => $secName,
-            'security_level' => (string)($pdu['snmp_v3_sec_level'] ?? ''),
             'auth_protocol' => (string)($pdu['snmp_auth_protocol'] ?? 'SHA'),
             'auth_passphrase' => (string)(Crypto::decryptQuiet($pdu['snmp_auth_passphrase'] ?? null) ?? ''),
             'priv_protocol' => (string)($pdu['snmp_priv_protocol'] ?? 'AES'),
@@ -2903,9 +2894,6 @@ class SnmpDiscover
                 );
                 if ($prof) {
                     $creds['security_name'] = (string)($prof['security_name'] ?? $creds['security_name']);
-                    if (trim((string)($prof['security_level'] ?? '')) !== '') {
-                        $creds['security_level'] = (string)$prof['security_level'];
-                    }
                     $creds['auth_protocol'] = (string)($prof['auth_protocol'] ?? $creds['auth_protocol']);
                     $creds['priv_protocol'] = (string)($prof['priv_protocol'] ?? $creds['priv_protocol']);
                     if (!empty($prof['auth_passphrase'])) {

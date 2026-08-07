@@ -1426,7 +1426,9 @@ if ($action === 'new' || $id) {
                                 </span>
                             </label>
                             <button type="button" class="btn btn-secondary btn-sm" id="btnSnmpDiscover"
-                                <?= $discoverReady ? '' : 'disabled title="Need manufacturer, model, and iDRAC/IP"' ?>>
+                                title="<?= $discoverReady
+                                    ? 'Walk SNMP and propose a site OID template'
+                                    : 'Needs manufacturer, model, and iDRAC/IP — click for details' ?>">
                                 Discover OIDs
                             </button>
                             <button type="button" class="btn btn-primary btn-sm" id="btnSnmpPollNow"
@@ -1450,10 +1452,20 @@ if ($action === 'new' || $id) {
                                 $snmpProfName = null;
                             }
                         }
-                        $isV3 = (string)($device['snmp_version'] ?? '') === '3';
+                        $viewSnmpVer = strtolower(trim((string)($device['snmp_version'] ?? '')));
+                        if (in_array($viewSnmpVer, ['v3', '3', '3.0'], true)) {
+                            $viewSnmpVer = '3';
+                        } elseif (in_array($viewSnmpVer, ['v2c', '2c', '2', 'v2'], true)) {
+                            $viewSnmpVer = '2c';
+                        } elseif (in_array($viewSnmpVer, ['v1', '1'], true)) {
+                            $viewSnmpVer = '1';
+                        }
+                        $isV3 = $viewSnmpVer === '3'
+                            || !empty($device['snmp_v3_profile_id'])
+                            || !empty($device['snmp_v3_user']);
                         ?>
                         <dl class="view-dl">
-                            <div><dt>Version</dt><dd><?= App::e((string)$device['snmp_version']) ?></dd></div>
+                            <div><dt>Version</dt><dd><?= App::e($viewSnmpVer !== '' ? $viewSnmpVer : (string)$device['snmp_version']) ?></dd></div>
                             <div><dt>SNMP host</dt><dd>
                                 <?php if ($discoverHost !== ''): ?>
                                     <?= App::e($discoverHost) ?>
@@ -1625,15 +1637,26 @@ if ($action === 'new' || $id) {
                         if (window.ColdAisle && ColdAisle.toast) ColdAisle.toast(msg, type || 'info');
                         else alert(msg);
                     }
+                    var discoverReady = <?= $discoverReady ? 'true' : 'false' ?>;
+                    var discoverMissing = <?= json_encode(array_values($snmpPrereqs['missing'] ?? []), JSON_UNESCAPED_SLASHES) ?>;
                     function api(body) {
+                        if (!window.ColdAisle || typeof ColdAisle.api !== 'function') {
+                            return Promise.reject(new Error('ColdAisle API helper not loaded — hard-refresh the page (Ctrl+F5).'));
+                        }
                         return ColdAisle.api('api/snmp_device.php', { method: 'POST', body: body });
                     }
                     function openModal() {
+                        if (!modal) return;
                         modal.hidden = false;
+                        modal.removeAttribute('hidden');
+                        modal.style.display = 'flex';
                         document.body.classList.add('modal-open');
                     }
                     function closeModal() {
+                        if (!modal) return;
                         modal.hidden = true;
+                        modal.setAttribute('hidden', '');
+                        modal.style.display = 'none';
                         document.body.classList.remove('modal-open');
                     }
                     function showErr(msg) {
@@ -1805,10 +1828,24 @@ if ($action === 'new' || $id) {
 
                     if (btnDiscover) {
                         btnDiscover.addEventListener('click', function () {
+                            if (!modal) {
+                                toast('Discover UI failed to load. Refresh the page and try again.', 'error');
+                                return;
+                            }
                             openModal();
-                            setLoading(true);
+                            setLoading(false);
                             showErr('');
                             lastDiscover = null;
+                            if (resEl) resEl.hidden = true;
+                            if (!discoverReady) {
+                                var miss = (discoverMissing && discoverMissing.length)
+                                    ? discoverMissing.join(', ')
+                                    : 'manufacturer, model, and iDRAC host or management/primary IP';
+                                showErr('Cannot discover yet — set ' + miss + ' on this device (Edit), then try again.');
+                                toast('Discover needs ' + miss, 'error');
+                                return;
+                            }
+                            setLoading(true);
                             api({ action: 'discover', device_id: deviceId })
                                 .then(function (data) {
                                     setLoading(false);
@@ -2334,6 +2371,31 @@ if ($action === 'new' || $id) {
         </div>
 
         <!-- SNMP -->
+        <?php
+        // Normalize SNMP version for the select (aliases / driver type quirks)
+        $devSnmpVerRaw = strtolower(trim((string)($device['snmp_version'] ?? '')));
+        if (in_array($devSnmpVerRaw, ['v3', '3', '3.0'], true)) {
+            $devSnmpVerNorm = '3';
+        } elseif (in_array($devSnmpVerRaw, ['v2c', '2c', '2', 'v2'], true)) {
+            $devSnmpVerNorm = '2c';
+        } elseif (in_array($devSnmpVerRaw, ['v1', '1'], true)) {
+            $devSnmpVerNorm = '1';
+        } elseif ($devSnmpVerRaw === '') {
+            $devSnmpVerNorm = (!empty($device['snmp_v3_profile_id']) || !empty($device['snmp_v3_user']))
+                ? '3'
+                : '';
+        } else {
+            $devSnmpVerNorm = $devSnmpVerRaw;
+        }
+        $devAuthProtoNorm = strtoupper((string)preg_replace('/[^A-Za-z0-9]/', '', (string)($device['snmp_v3_auth_proto'] ?? '')));
+        $devPrivProtoNorm = strtoupper((string)preg_replace('/[^A-Za-z0-9]/', '', (string)($device['snmp_v3_priv_proto'] ?? '')));
+        if ($devAuthProtoNorm === 'SHA1') {
+            $devAuthProtoNorm = 'SHA';
+        }
+        $devSecLvlNorm = trim((string)($device['snmp_v3_sec_level'] ?? ''));
+        $devAuthProtoOpts = ['MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512'];
+        $devPrivProtoOpts = ['DES', 'AES', 'AES192', 'AES256'];
+        ?>
         <div class="card">
             <div class="card-header"><h2>SNMP</h2></div>
             <div class="card-body form-grid">
@@ -2342,7 +2404,7 @@ if ($action === 'new' || $id) {
                         <option value="">— Disabled —</option>
                         <?php foreach (['1' => '1', '2c' => '2c', '3' => '3'] as $val => $lab): ?>
                             <option value="<?= $val ?>"
-                                <?= (string)($device['snmp_version'] ?? '') === $val ? 'selected' : '' ?>>
+                                <?= $devSnmpVerNorm === $val ? 'selected' : '' ?>>
                                 <?= $lab ?>
                             </option>
                         <?php endforeach; ?>
@@ -2388,13 +2450,13 @@ if ($action === 'new' || $id) {
                 </div>
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 User (security name)</label>
                     <input class="form-control" name="snmp_v3_user" id="snmp_v3_user"
-                           value="<?= App::e($device['snmp_v3_user'] ?? '') ?>" autocomplete="off"></div>
+                           value="<?= App::e((string)($device['snmp_v3_user'] ?? '')) ?>" autocomplete="off"></div>
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 Security Level</label>
                     <select class="form-control" name="snmp_v3_sec_level" id="snmp_v3_sec_level">
                         <option value="">—</option>
                         <?php foreach (['noAuthNoPriv', 'authNoPriv', 'authPriv'] as $lvl): ?>
                             <option value="<?= $lvl ?>"
-                                <?= ($device['snmp_v3_sec_level'] ?? '') === $lvl ? 'selected' : '' ?>>
+                                <?= strcasecmp($devSecLvlNorm, $lvl) === 0 ? 'selected' : '' ?>>
                                 <?= $lvl ?>
                             </option>
                         <?php endforeach; ?>
@@ -2403,12 +2465,15 @@ if ($action === 'new' || $id) {
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 Auth Protocol</label>
                     <select class="form-control" name="snmp_v3_auth_proto" id="snmp_v3_auth_proto">
                         <option value="">—</option>
-                        <?php foreach (['MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512'] as $p): ?>
+                        <?php foreach ($devAuthProtoOpts as $p): ?>
                             <option value="<?= $p ?>"
-                                <?= strtoupper((string)($device['snmp_v3_auth_proto'] ?? '')) === $p ? 'selected' : '' ?>>
+                                <?= $devAuthProtoNorm === $p ? 'selected' : '' ?>>
                                 <?= $p ?>
                             </option>
                         <?php endforeach; ?>
+                        <?php if ($devAuthProtoNorm !== '' && !in_array($devAuthProtoNorm, $devAuthProtoOpts, true)): ?>
+                            <option value="<?= App::e($devAuthProtoNorm) ?>" selected><?= App::e($devAuthProtoNorm) ?></option>
+                        <?php endif; ?>
                     </select>
                 </div>
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 Auth Passphrase</label>
@@ -2419,12 +2484,15 @@ if ($action === 'new' || $id) {
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 Priv Protocol (encryption)</label>
                     <select class="form-control" name="snmp_v3_priv_proto" id="snmp_v3_priv_proto">
                         <option value="">—</option>
-                        <?php foreach (['DES', 'AES', 'AES192', 'AES256'] as $p): ?>
+                        <?php foreach ($devPrivProtoOpts as $p): ?>
                             <option value="<?= $p ?>"
-                                <?= strtoupper((string)($device['snmp_v3_priv_proto'] ?? '')) === $p ? 'selected' : '' ?>>
+                                <?= $devPrivProtoNorm === $p ? 'selected' : '' ?>>
                                 <?= $p ?>
                             </option>
                         <?php endforeach; ?>
+                        <?php if ($devPrivProtoNorm !== '' && !in_array($devPrivProtoNorm, $devPrivProtoOpts, true)): ?>
+                            <option value="<?= App::e($devPrivProtoNorm) ?>" selected><?= App::e($devPrivProtoNorm) ?></option>
+                        <?php endif; ?>
                     </select>
                 </div>
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 Priv Passphrase</label>
@@ -2434,7 +2502,7 @@ if ($action === 'new' || $id) {
                            autocomplete="new-password"></div>
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 Context</label>
                     <input class="form-control" name="snmp_v3_context" id="snmp_v3_context"
-                           value="<?= App::e($device['snmp_v3_context'] ?? '') ?>"></div>
+                           value="<?= App::e((string)($device['snmp_v3_context'] ?? '')) ?>"></div>
 
             </div>
         </div>
@@ -2725,26 +2793,42 @@ if ($action === 'new' || $id) {
         var snmpVer = document.getElementById('snmp_version');
         var snmpProf = document.getElementById('snmp_v3_profile_id');
         var deviceForm = document.getElementById('deviceForm');
-        function toggleSnmpV3Fields() {
+        var lastSnmpWasV3 = snmpVer && snmpVer.value === '3';
+        function normalizeDevSnmpVersion(v) {
+            v = String(v == null ? '' : v).trim().toLowerCase();
+            if (v === 'v3' || v === '3.0') return '3';
+            if (v === 'v2c' || v === '2' || v === 'v2') return '2c';
+            if (v === 'v1') return '1';
+            if (v === '1' || v === '2c' || v === '3') return v;
+            return v;
+        }
+        function toggleSnmpV3Fields(fromUserChange) {
+            if (snmpVer) {
+                var nv = normalizeDevSnmpVersion(snmpVer.value);
+                if (nv && snmpVer.value !== nv) snmpVer.value = nv;
+            }
             var v3 = snmpVer && snmpVer.value === '3';
             document.querySelectorAll('.snmp-v3-fields').forEach(function (el) {
                 el.style.display = v3 ? '' : 'none';
             });
-            // Leaving v3: clear profile so Save does not re-apply it and force version 3
-            if (!v3 && snmpProf) {
+            // Only clear the profile when the user leaves v3 — never on initial page load
+            // (that wiped the selected credential profile and made edit look empty).
+            if (fromUserChange && !v3 && lastSnmpWasV3 && snmpProf) {
                 snmpProf.value = '';
             }
+            lastSnmpWasV3 = !!v3;
         }
         function setSnmpField(id, val) {
             var el = document.getElementById(id);
             if (!el || val == null) return;
             var s = String(val);
-            // Selects: match case-insensitively against options so SHA/sha256 from profiles apply
+            // Selects: match case-insensitively; strip non-alnum so SHA-256 matches SHA256
             if (el.tagName === 'SELECT' && s !== '') {
-                var want = s.toUpperCase();
+                var want = s.toUpperCase().replace(/[^A-Z0-9]/g, '');
                 var matched = false;
                 for (var i = 0; i < el.options.length; i++) {
-                    if (String(el.options[i].value).toUpperCase() === want) {
+                    var ov = String(el.options[i].value).toUpperCase().replace(/[^A-Z0-9]/g, '');
+                    if (ov === want || String(el.options[i].value).toUpperCase() === s.toUpperCase()) {
                         el.selectedIndex = i;
                         matched = true;
                         break;
@@ -2766,10 +2850,10 @@ if ($action === 'new' || $id) {
             if (!snmpProf) return;
             var opt = snmpProf.options[snmpProf.selectedIndex];
             if (!opt || !opt.value) return;
-            // Only apply when user is on SNMPv3 (do not override v1/v2c)
+            // Selecting a profile implies SNMPv3
             if (snmpVer && snmpVer.value !== '3') {
                 snmpVer.value = '3';
-                toggleSnmpV3Fields();
+                toggleSnmpV3Fields(false);
             }
             setSnmpField('snmp_v3_user', opt.getAttribute('data-user') || '');
             setSnmpField('snmp_v3_sec_level', opt.getAttribute('data-level') || '');
@@ -2784,10 +2868,11 @@ if ($action === 'new' || $id) {
             if (authEl) authEl.placeholder = 'From selected profile (applied on Save)';
             if (privEl) privEl.placeholder = 'From selected profile (applied on Save)';
         }
-        if (snmpVer) snmpVer.addEventListener('change', toggleSnmpV3Fields);
+        if (snmpVer) snmpVer.addEventListener('change', function () { toggleSnmpV3Fields(true); });
         if (snmpProf) snmpProf.addEventListener('change', applySnmpProfile);
-        toggleSnmpV3Fields();
-        // If already on v3 with a profile selected, fill fields from the profile
+        toggleSnmpV3Fields(false);
+        // If already on v3 with a profile selected, fill non-secret fields from the profile
+        // (passphrases stay as server-side placeholders)
         if (snmpVer && snmpVer.value === '3' && snmpProf && snmpProf.value) {
             applySnmpProfile();
         }
