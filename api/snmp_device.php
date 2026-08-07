@@ -187,8 +187,20 @@ try {
 
             try {
                 $mark('discover_call');
-                $result = SnmpDiscover::discover($creds);
-                $mark('discover_ok walk=' . (int)($result['walk_count'] ?? 0));
+                $discoverOpts = [
+                    'manufacturer' => $prereqs['vendor'],
+                    'model' => $prereqs['model'],
+                    'family' => 'auto',
+                ];
+                // Dell inventory → dedicated iDRAC ruleset (does not use APC PowerNet walks)
+                if (SnmpDiscover::isDellManufacturer($prereqs['vendor'])) {
+                    $discoverOpts['family'] = 'idrac';
+                }
+                $result = SnmpDiscover::discover($creds, $discoverOpts);
+                $mark(
+                    'discover_ok walk=' . (int)($result['walk_count'] ?? 0)
+                    . ' ruleset=' . (string)($result['ruleset'] ?? '?')
+                );
             } catch (Throwable $e) {
                 $mark('discover_fail ' . $e->getMessage());
                 App::log('Device discover failed device_id=' . $id . ': ' . $e->getMessage(), 'error');
@@ -212,6 +224,7 @@ try {
                 'device_id' => $id,
                 'host' => $result['host'],
                 'uses_idrac' => !empty($prereqs['uses_idrac']),
+                'ruleset' => (string)($result['ruleset'] ?? 'default'),
                 'sysDescr' => $result['sysDescr'],
                 'candidates' => $result['candidates'],
                 'proposed_map' => $result['proposed_map'],

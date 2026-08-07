@@ -110,7 +110,16 @@ try {
             }
 
             $creds = SnmpDiscover::credsFromPdu($pdu);
-            $result = SnmpDiscover::discover($creds);
+            $discoverOpts = [
+                'manufacturer' => $prereqs['vendor'],
+                'model' => $prereqs['model'],
+                'family' => 'auto',
+            ];
+            // Explicit APC inventory → PowerNet ruleset; other vendors use default (or sysDescr)
+            if (SnmpDiscover::isApcManufacturer($prereqs['vendor'])) {
+                $discoverOpts['family'] = 'apc';
+            }
+            $result = SnmpDiscover::discover($creds, $discoverOpts);
             $templateName = SnmpDiscover::templateName($prereqs['vendor'], $prereqs['model']);
             $existing = SnmpDiscover::findSiteTemplateByName($templateName);
 
@@ -140,6 +149,7 @@ try {
                 'ok' => true,
                 'pdu_id' => $id,
                 'host' => $result['host'],
+                'ruleset' => (string)($result['ruleset'] ?? 'default'),
                 'sysDescr' => $result['sysDescr'],
                 'candidates' => $result['candidates'],
                 'proposed_map' => $result['proposed_map'],

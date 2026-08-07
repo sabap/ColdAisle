@@ -10,18 +10,30 @@ require_once __DIR__ . '/SnmpPoller.php';
 class SnmpDiscover
 {
     /**
-     * Roots to walk after a successful sysDescr probe.
-     * Keep this short — each root costs a full SNMP timeout on dead branches.
-     * Broad 1.3.6.1.4.1.318 is intentionally omitted (too large for IIS Discover).
+     * Manufacturer / family rulesets for Discover.
+     * - apc:     APC PowerNet / rPDU2 / EMS (existing tuned path — do not dilute)
+     * - liebert: Vertiv / Emerson / Liebert LGP cooling
+     * - idrac:   Dell iDRAC / OMSA BMC
+     * - default: unknown vendors — generic MIB-II only (no vendor enterprise walks)
+     *
+     * Keep each walk list short: every empty root burns a full SNMP timeout under IIS.
      */
-    /**
-     * Only narrow trees — never walk all of 318.1.1.10 (EMS config tables are huge
-     * and hang IIS FastCGI → bare "Internal Server Error").
-     */
-    private const WALK_ROOTS = [
+
+    /** Shared system + interface roots (MAC / identity). */
+    private const WALK_ROOTS_SYSTEM = [
         '1.3.6.1.2.1.1',                  // MIB-II system
-        '1.3.6.1.2.1.2.2.1.2',            // IF-MIB ifDescr (MAC selection)
-        '1.3.6.1.2.1.2.2.1.6',            // IF-MIB ifPhysAddress (MAC)
+        '1.3.6.1.2.1.2.2.1.2',            // IF-MIB ifDescr
+        '1.3.6.1.2.1.2.2.1.6',            // IF-MIB ifPhysAddress
+    ];
+
+    /**
+     * APC PowerNet (enterprise 318) — narrow only.
+     * Never walk all of 318.1.1.10 (EMS config tables hang IIS FastCGI).
+     */
+    private const WALK_ROOTS_APC = [
+        '1.3.6.1.2.1.1',
+        '1.3.6.1.2.1.2.2.1.2',
+        '1.3.6.1.2.1.2.2.1.6',
         '1.3.6.1.4.1.318.1.1.10.3.13',    // emsProbeStatus* live temp/humidity
         '1.3.6.1.4.1.318.1.1.10.3.5',     // alternate EMS probe status
         '1.3.6.1.4.1.318.1.1.10.2.3',     // IEM status probes
@@ -32,21 +44,39 @@ class SnmpDiscover
     ];
 
     /**
-     * Emerson / Liebert / Vertiv thermal (LGP condition tables).
-     * Enterprise is 1.3.6.1.4.1.476 — keep roots narrow for IIS.
-     */
-    /**
-     * Keep this short — empty condition roots each burn a full SNMP timeout and can
-     * blow PHP max_execution_time (25s) on slow Unity cards.
+     * Emerson / Liebert / Vertiv thermal (enterprise 476).
+     * Empty condition roots each burn a full timeout on slow Unity cards.
      */
     private const WALK_ROOTS_LIEBERT = [
-        // Product identity (IS-UNITY-ICOM2) — often the only LGP branch that answers
         '1.3.6.1.4.1.476.1.42.2.1',
         '1.3.6.1.4.1.476.1.42.2',
-        // One shallow condition probe (not the whole 476 / 42.3 tree)
         '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2',
-        // MIB-2 system
         '1.3.6.1.2.1.1',
+    ];
+
+    /**
+     * Dell iDRAC / OpenManage Server Administrator (enterprise 674.10892.5).
+     * Narrow status/inventory trees only — never walk all of 674.
+     */
+    private const WALK_ROOTS_IDRAC = [
+        '1.3.6.1.2.1.1',
+        '1.3.6.1.2.1.2.2.1.2',
+        '1.3.6.1.2.1.2.2.1.6',
+        '1.3.6.1.4.1.674.10892.5.1',       // MIB-Dell-10892 system information
+        '1.3.6.1.4.1.674.10892.5.4.200',   // system status / state
+        '1.3.6.1.4.1.674.10892.5.4.300',   // chassis information
+        '1.3.6.1.4.1.674.10892.5.4.700',   // temperature probes
+        '1.3.6.1.4.1.674.10892.5.4.1100',  // power unit group
+        '1.3.6.1.4.1.674.10892.5.4.1200',  // power supplies
+        '1.3.6.1.4.1.674.10892.5.5.1',     // firmware inventory (narrow)
+    ];
+
+    /** Unknown manufacturer — safe generic only (no enterprise vendor trees). */
+    private const WALK_ROOTS_DEFAULT = [
+        '1.3.6.1.2.1.1',
+        '1.3.6.1.2.1.2.2.1.2',
+        '1.3.6.1.2.1.2.2.1.6',
+        '1.3.6.1.4.1.99999',              // ColdAisle lab
     ];
 
     private const MAX_OIDS = 120;
@@ -79,19 +109,30 @@ class SnmpDiscover
      *   priv_protocol?:string,priv_passphrase?:string,context?:string,
      *   community?:string
      * } $creds
-     * @param array{family?:string} $options family: auto|cooling|power|ems (cooling prioritizes Liebert 476)
+     * @param array{
+     *   family?:string,
+     *   manufacturer?:string,
+     *   model?:string,
+     *   ruleset?:string
+     * } $options
+     *   family: auto|cooling|power|ems|idrac|apc|liebert|default
+     *   manufacturer / model: inventory hints (prefer over sysDescr when set)
+     *   ruleset: force a ruleset id (apc|liebert|idrac|default)
      * @return array{
      *   ok:bool,host:string,sysDescr:?string,candidates:list<array>,
      *   proposed_map:array<string,string>,walk_count:int,message:string,
-     *   named_count:int
+     *   named_count:int,ruleset?:string
      * }
      */
     public static function discover(array $creds, array $options = []): array
     {
         $familyHint = strtolower(trim((string)($options['family'] ?? 'auto')));
-        if (!in_array($familyHint, ['auto', 'cooling', 'power', 'ems'], true)) {
+        $allowedFamily = ['auto', 'cooling', 'power', 'ems', 'idrac', 'apc', 'liebert', 'default', 'server_bmc'];
+        if (!in_array($familyHint, $allowedFamily, true)) {
             $familyHint = 'auto';
         }
+        $inventoryMfr = trim((string)($options['manufacturer'] ?? ''));
+        $forcedRuleset = strtolower(trim((string)($options['ruleset'] ?? '')));
         $host = trim((string)($creds['host'] ?? ''));
         if ($host === '') {
             throw new RuntimeException('Host / IP is required for discovery.');
@@ -179,32 +220,16 @@ class SnmpDiscover
         $errors = [];
 
         // LEAF GETS FIRST — reliable and bounded (walks are optional enrichment).
-        // Order matters: wrong-type OIDs each cost LEAF_TIMEOUT on miss; put likely
-        // device family first so we never burn 20s on PDU probes for an EMS host.
+        // Ruleset picks vendor-specific leaves so APC paths never pay for Dell/Liebert probes.
         $sysHay = strtolower((string)$sysDescr);
-        $looksEms = (bool)preg_match(
-            '/ap9340|environmental|ems|iem|netbotz|temp|humid|sensor/i',
-            $sysHay
-        );
-        $looksPdu = (bool)preg_match('/rpdu|pdu|rack.?pdu|switched.?rack|metered/i', $sysHay);
-        // Emerson / Liebert / Vertiv thermal (DS, PCW, PDX, iCOM, CRAH…)
-        $looksLiebert = (bool)preg_match(
-            '/liebert|emerson|vertiv|icom|liebert.?ds|liebert.?pcw|liebert.?pdx|'
-            . 'crac|crah|thermal.?management|lgp|global.?products/i',
-            $sysHay
-        );
-        if ($familyHint === 'cooling') {
-            $looksLiebert = true;
-        } elseif ($familyHint === 'ems') {
-            $looksEms = true;
-        } elseif ($familyHint === 'power') {
-            $looksPdu = true;
-        }
+        $ruleset = self::resolveRulesetId($forcedRuleset, $familyHint, $inventoryMfr, $sysDescr);
+        $coolingFocus = ($ruleset === 'liebert');
+        $apcFocus = ($ruleset === 'apc');
+        $idracFocus = ($ruleset === 'idrac');
         $logStep(
-            'family hint=' . $familyHint
-            . ' liebert=' . ($looksLiebert ? '1' : '0')
-            . ' ems=' . ($looksEms ? '1' : '0')
-            . ' pdu=' . ($looksPdu ? '1' : '0')
+            'ruleset=' . $ruleset
+            . ' family=' . $familyHint
+            . ' mfr=' . ($inventoryMfr !== '' ? $inventoryMfr : '-')
         );
 
         $leafSys = [
@@ -215,14 +240,12 @@ class SnmpDiscover
         ];
         // Known Liebert LGP leaves (IS-UNITY-ICOM2 identity from live SolarWinds walks + classic conditions)
         $leafLiebert = [
-            // Product identity (answers on v2c community when condition tables do not)
-            '1.3.6.1.4.1.476.1.42.2.1.1.0', // manufacturer e.g. Vertiv
-            '1.3.6.1.4.1.476.1.42.2.1.2.0', // model e.g. IS-UNITY-ICOM2
-            '1.3.6.1.4.1.476.1.42.2.1.3.0', // firmware / version
+            '1.3.6.1.4.1.476.1.42.2.1.1.0',
+            '1.3.6.1.4.1.476.1.42.2.1.2.0',
+            '1.3.6.1.4.1.476.1.42.2.1.3.0',
             '1.3.6.1.4.1.476.1.42.2.1.4.0',
             '1.3.6.1.4.1.476.1.42.2.1.5.0',
             '1.3.6.1.4.1.476.1.42.2.5.1.0',
-            // Present values under condition table (…1.20.1.2.1.<id>) — empty on many Unity cards
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5002',
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.4291',
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.307',
@@ -236,10 +259,17 @@ class SnmpDiscover
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.2',
             '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.3',
         ];
+        $leafLiebertId = [
+            '1.3.6.1.4.1.476.1.42.2.1.1.0',
+            '1.3.6.1.4.1.476.1.42.2.1.2.0',
+            '1.3.6.1.4.1.476.1.42.2.1.3.0',
+            '1.3.6.1.4.1.476.1.42.2.1.5.0',
+            '1.3.6.1.4.1.476.1.42.2.5.1.0',
+        ];
         // APC EMS / AP9340 live status (PowerNet columns × probe index 1–4)
         $leafEms = [
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.1', // emsProbeStatusProbeTemperature.1
-            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.1', // emsProbeStatusProbeHumidity.1
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.1',
+            '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.1',
             '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.2',
             '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.2',
             '1.3.6.1.4.1.318.1.1.10.3.13.1.1.3.3',
@@ -248,11 +278,11 @@ class SnmpDiscover
             '1.3.6.1.4.1.318.1.1.10.3.13.1.1.6.4',
             '1.3.6.1.4.1.318.1.1.10.3.13.1.1.4.1',
             '1.3.6.1.4.1.318.1.1.10.3.13.1.1.5.1',
-            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.4.1', // IEM status temp
-            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.6.1', // IEM status humid
+            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.4.1',
+            '1.3.6.1.4.1.318.1.1.10.2.3.2.1.6.1',
             '1.3.6.1.4.1.318.1.1.10.3.5.1.1.3.1',
             '1.3.6.1.4.1.318.1.1.10.3.5.1.1.6.1',
-            '1.3.6.1.4.1.318.1.1.10.3.1.1.0',     // emsIdentSerialNumber (common)
+            '1.3.6.1.4.1.318.1.1.10.3.1.1.0',
             '1.3.6.1.4.1.318.1.1.10.3.1.2.0',
         ];
         $leafPdu = [
@@ -270,25 +300,53 @@ class SnmpDiscover
             '1.3.6.1.4.1.3808.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.3808.1.1.1.4.2.5.0',
         ];
+        // Dell iDRAC / OMSA identity + power / thermal status leaves
+        $leafIdrac = [
+            '1.3.6.1.4.1.674.10892.5.1.3.1.0',   // systemFormFactor?
+            '1.3.6.1.4.1.674.10892.5.1.3.2.0',   // systemExpressServiceCode / related
+            '1.3.6.1.4.1.674.10892.5.1.3.6.0',   // systemModelName
+            '1.3.6.1.4.1.674.10892.5.1.3.12.0',  // systemServiceTag (common)
+            '1.3.6.1.4.1.674.10892.5.1.3.13.0',
+            '1.3.6.1.4.1.674.10892.5.4.200.10.1.2.1',   // chassis status
+            '1.3.6.1.4.1.674.10892.5.4.200.10.1.21.1',  // power supply status combined
+            '1.3.6.1.4.1.674.10892.5.4.200.10.1.42.1',  // power consumption
+            '1.3.6.1.4.1.674.10892.5.4.600.12.1.5.1',   // amps? (varies by firmware)
+            '1.3.6.1.4.1.674.10892.5.4.700.20.1.6.1',   // temp reading probe 1
+            '1.3.6.1.4.1.674.10892.5.4.700.20.1.8.1',   // temp status probe 1
+            '1.3.6.1.4.1.674.10892.5.4.1100.50.1.5.1',  // power unit status
+            '1.3.6.1.4.1.674.10892.5.4.1100.50.1.7.1',  // power unit watts-ish
+            '1.3.6.1.4.1.674.10892.5.4.1200.10.1.5.1',  // power supply status
+        ];
 
-        $coolingFocus = $looksLiebert || $familyHint === 'cooling';
+        // EMS vs rPDU leaf order inside APC ruleset (preserve prior tuning)
+        $looksEms = $apcFocus && (bool)preg_match(
+            '/ap9340|environmental|ems|iem|netbotz|temp|humid|sensor/i',
+            $sysHay
+        );
+        $looksPdu = $apcFocus && (bool)preg_match('/rpdu|pdu|rack.?pdu|switched.?rack|metered/i', $sysHay);
+        if ($familyHint === 'ems') {
+            $looksEms = true;
+            $looksPdu = false;
+        } elseif ($familyHint === 'power') {
+            $looksPdu = true;
+        }
+
         if ($coolingFocus) {
-            // Identity leaves only (condition GETs rarely answer and burn the 25s budget)
-            $leafLiebertId = [
-                '1.3.6.1.4.1.476.1.42.2.1.1.0',
-                '1.3.6.1.4.1.476.1.42.2.1.2.0',
-                '1.3.6.1.4.1.476.1.42.2.1.3.0',
-                '1.3.6.1.4.1.476.1.42.2.1.5.0',
-                '1.3.6.1.4.1.476.1.42.2.5.1.0',
-            ];
             $leafGets = array_merge($leafSys, $leafLiebertId);
-        } elseif ($looksEms && !$looksPdu) {
-            $leafGets = array_merge($leafSys, $leafEms, $leafPdu);
-        } elseif ($looksPdu && !$looksEms) {
-            $leafGets = array_merge($leafSys, $leafPdu, $leafEms);
+        } elseif ($idracFocus) {
+            $leafGets = array_merge($leafSys, $leafIdrac);
+        } elseif ($apcFocus) {
+            if ($looksEms && !$looksPdu) {
+                $leafGets = array_merge($leafSys, $leafEms, $leafPdu);
+            } elseif ($looksPdu && !$looksEms) {
+                $leafGets = array_merge($leafSys, $leafPdu, $leafEms);
+            } else {
+                // Classic APC auto: EMS first (cheap if present), then PDU
+                $leafGets = array_merge($leafSys, $leafEms, $leafPdu);
+            }
         } else {
-            // Unknown / APC generic: EMS first (cheap if present), then PDU, then Liebert
-            $leafGets = array_merge($leafSys, $leafEms, $leafPdu, $leafLiebert);
+            // default ruleset — no vendor enterprise leaf thrash
+            $leafGets = $leafSys;
         }
 
         $leafStarted = microtime(true);
@@ -388,12 +446,7 @@ class SnmpDiscover
             && (microtime(true) - $discoverStarted) < $totalBudget
         ) {
             self::setOidOutputFormat('numeric');
-            $roots = $coolingFocus
-                ? self::WALK_ROOTS_LIEBERT
-                : self::WALK_ROOTS;
-            if ($familyHint === 'cooling' && !$looksLiebert && !$coolingFocus) {
-                $roots = array_values(array_unique(array_merge($roots, self::WALK_ROOTS)));
-            }
+            $roots = self::walkRootsForRuleset($ruleset);
             $walkRootStats = self::collectWalks(
                 $hostPort,
                 $version,
@@ -405,7 +458,7 @@ class SnmpDiscover
                 $totalBudget
             );
             $logStep('walks collected=' . count($collected) . ' errors=' . count($errors)
-                . ' roots=' . ($coolingFocus ? 'liebert+' : 'default'));
+                . ' roots=' . $ruleset);
         } else {
             $logStep('walks_skipped elapsed=' . round($elapsed, 2));
         }
@@ -532,20 +585,35 @@ class SnmpDiscover
                 'sysUpTime' => '1.3.6.1.2.1.1.3.0',
             ];
         }
-        // Inject LGP identity OIDs from full collection (may be filtered out of score pool)
-        foreach ([
-            '1.3.6.1.4.1.476.1.42.2.1.1.0' => 'lgp_manufacturer',
-            '1.3.6.1.4.1.476.1.42.2.1.2.0' => 'lgp_model',
-            '1.3.6.1.4.1.476.1.42.2.1.3.0' => 'lgp_version',
-            '1.3.6.1.4.1.476.1.42.2.1.5.0' => 'lgp_firmware',
-        ] as $loid => $lkey) {
-            if (isset($collected[$loid]) && !isset($proposed[$lkey])) {
-                $proposed[$lkey] = $loid;
+        // Liebert ruleset: inject LGP identity OIDs from full collection
+        if ($coolingFocus) {
+            foreach ([
+                '1.3.6.1.4.1.476.1.42.2.1.1.0' => 'lgp_manufacturer',
+                '1.3.6.1.4.1.476.1.42.2.1.2.0' => 'lgp_model',
+                '1.3.6.1.4.1.476.1.42.2.1.3.0' => 'lgp_version',
+                '1.3.6.1.4.1.476.1.42.2.1.5.0' => 'lgp_firmware',
+            ] as $loid => $lkey) {
+                if (isset($collected[$loid]) && !isset($proposed[$lkey])) {
+                    $proposed[$lkey] = $loid;
+                }
             }
         }
-        // Always try known APC rPDU2 outlet table bases when the agent responds
-        // (full enterprise walks often exhaust MAX_OIDS before 26.9 outlet tables).
-        $proposed = self::injectApcOutletBases($proposed, $hostPort, $version, $creds, $sysDescr, $collected);
+        // iDRAC ruleset: surface common Dell identity leaves if present
+        if ($idracFocus) {
+            foreach ([
+                '1.3.6.1.4.1.674.10892.5.1.3.12.0' => 'service_tag',
+                '1.3.6.1.4.1.674.10892.5.1.3.6.0' => 'system_model',
+            ] as $loid => $lkey) {
+                if (isset($collected[$loid]) && !isset($proposed[$lkey])) {
+                    $proposed[$lkey] = $loid;
+                }
+            }
+        }
+        // APC ruleset only: probe known rPDU2 outlet table bases (preserves PowerNet tuning).
+        // Never run this on iDRAC/Liebert/default — wastes budget and can confuse maps.
+        if ($apcFocus) {
+            $proposed = self::injectApcOutletBases($proposed, $hostPort, $version, $creds, $sysDescr, $collected);
+        }
 
         // Serial number from walk / leaf GETs (also propose map key)
         $serialHit = self::extractSerialFromCollected($collected);
@@ -646,6 +714,7 @@ class SnmpDiscover
             }
         }
 
+        $msg .= ' Ruleset: ' . $ruleset . '.';
         $msg .= ' Enterprise objects: ' . (int)$enterpriseHits
             . ' (Liebert/Emerson 476: ' . (int)$liebertHits . ').';
         $lgpIdentity = 0;
@@ -685,11 +754,16 @@ class SnmpDiscover
             'ok' => true,
             'host' => self::utf8Safe($host),
             'sysDescr' => is_string($sysDescr) ? self::utf8Safe($sysDescr) : null,
+            'ruleset' => $ruleset,
             'candidates' => $candidates,
             'proposed_map' => $safeProposed,
             'diagnostics' => [
                 'family' => $familyHint,
+                'ruleset' => $ruleset,
+                'manufacturer' => $inventoryMfr,
                 'cooling_focus' => $coolingFocus,
+                'apc_focus' => $apcFocus,
+                'idrac_focus' => $idracFocus,
                 'liebert_objects' => $liebertHits,
                 'enterprise_objects' => $enterpriseHits,
                 'walk_roots' => $walkRootStats,
@@ -1026,7 +1100,7 @@ class SnmpDiscover
     /**
      * @param array<string,array{raw:mixed,name:?string,module:?string,raw_key:string}> $collected
      * @param list<string> $errors
-     * @param list<string>|null $roots walk roots (default WALK_ROOTS)
+     * @param list<string>|null $roots walk roots (default = default ruleset)
      * @return list<array{root:string,ok:bool,added:int,error:?string}>
      */
     private static function collectWalks(
@@ -1040,7 +1114,7 @@ class SnmpDiscover
         ?float $budgetSec = null
     ): array {
         $consecutiveFails = 0;
-        $rootList = $roots ?? self::WALK_ROOTS;
+        $rootList = $roots ?? self::WALK_ROOTS_DEFAULT;
         $stats = [];
         $startedAt = $startedAt ?? microtime(true);
         $budgetSec = $budgetSec ?? 20.0;
@@ -2551,6 +2625,113 @@ class SnmpDiscover
             || str_starts_with($m, 'dell ')
             || str_starts_with($m, 'dell,')
             || str_starts_with($m, 'dell.');
+    }
+
+    /**
+     * True when manufacturer looks like APC / Schneider PowerNet.
+     */
+    public static function isApcManufacturer(?string $manufacturer): bool
+    {
+        $m = strtolower(trim((string)$manufacturer));
+        if ($m === '') {
+            return false;
+        }
+        return (bool)preg_match(
+            '/^(apc|american power conversion|schneider(\s+electric)?(\s+it)?|schneider-electric)\b/',
+            $m
+        ) || str_contains($m, 'american power');
+    }
+
+    /**
+     * True when manufacturer looks like Liebert / Emerson / Vertiv cooling.
+     */
+    public static function isLiebertManufacturer(?string $manufacturer): bool
+    {
+        $m = strtolower(trim((string)$manufacturer));
+        if ($m === '') {
+            return false;
+        }
+        return (bool)preg_match('/\b(liebert|emerson|vertiv)\b/', $m);
+    }
+
+    /**
+     * Pick Discover ruleset: apc | liebert | idrac | default.
+     * Priority: forced ruleset → family hint → inventory manufacturer → sysDescr → default.
+     */
+    public static function resolveRulesetId(
+        string $forcedRuleset,
+        string $familyHint,
+        string $manufacturer,
+        ?string $sysDescr
+    ): string {
+        $forced = strtolower(trim($forcedRuleset));
+        if (in_array($forced, ['apc', 'liebert', 'idrac', 'default'], true)) {
+            return $forced;
+        }
+
+        $family = strtolower(trim($familyHint));
+        if (in_array($family, ['cooling', 'liebert'], true)) {
+            return 'liebert';
+        }
+        if (in_array($family, ['idrac', 'server_bmc'], true)) {
+            return 'idrac';
+        }
+        if (in_array($family, ['power', 'ems', 'apc'], true)) {
+            // Power/EMS Discover stays on the tuned APC PowerNet path
+            return 'apc';
+        }
+        if ($family === 'default') {
+            return 'default';
+        }
+
+        // Inventory manufacturer (most reliable when set)
+        if (self::isDellManufacturer($manufacturer)) {
+            return 'idrac';
+        }
+        if (self::isLiebertManufacturer($manufacturer)) {
+            return 'liebert';
+        }
+        if (self::isApcManufacturer($manufacturer)) {
+            return 'apc';
+        }
+
+        // sysDescr heuristics
+        $sys = strtolower(trim((string)$sysDescr));
+        if ($sys !== '') {
+            if (preg_match(
+                '/\b(idrac|integrated dell|dell inc|powered by dell|dellemc|openmanage)\b/',
+                $sys
+            )) {
+                return 'idrac';
+            }
+            if (preg_match(
+                '/\b(liebert|emerson|vertiv|icom|lgp|global products|crac|crah)\b/',
+                $sys
+            )) {
+                return 'liebert';
+            }
+            if (preg_match(
+                '/\b(apc|powernet|schneider|rpdu|ap8\d{3}|ap9\d{3}|netbotz|american power)\b/',
+                $sys
+            )) {
+                return 'apc';
+            }
+        }
+
+        return 'default';
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function walkRootsForRuleset(string $ruleset): array
+    {
+        return match ($ruleset) {
+            'apc' => self::WALK_ROOTS_APC,
+            'liebert' => self::WALK_ROOTS_LIEBERT,
+            'idrac' => self::WALK_ROOTS_IDRAC,
+            default => self::WALK_ROOTS_DEFAULT,
+        };
     }
 
     /**

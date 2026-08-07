@@ -1313,6 +1313,7 @@ if ($pduId) {
                 <div id="pduSnmpDiscoverResults" hidden>
                     <dl class="snmp-discover-meta">
                         <div><dt>Host</dt><dd id="pduSnmpDiscHost">—</dd></div>
+                        <div><dt>Ruleset</dt><dd id="pduSnmpDiscRuleset">—</dd></div>
                         <div><dt>Template name</dt><dd id="pduSnmpDiscTplName">—</dd></div>
                         <div><dt>Walk count</dt><dd id="pduSnmpDiscWalk">—</dd></div>
                         <div><dt>sysDescr</dt><dd id="pduSnmpDiscSys">—</dd></div>
@@ -1390,6 +1391,12 @@ if ($pduId) {
         function renderDiscover(data) {
             lastDiscover = data;
             document.getElementById('pduSnmpDiscHost').textContent = data.host || '—';
+            var rsEl = document.getElementById('pduSnmpDiscRuleset');
+            if (rsEl) {
+                var rs = data.ruleset || 'default';
+                var rsLabel = { apc: 'APC PowerNet', liebert: 'Liebert / Vertiv', idrac: 'Dell iDRAC', default: 'Default (generic)' };
+                rsEl.textContent = (rsLabel[rs] || rs) + ' (' + rs + ')';
+            }
             document.getElementById('pduSnmpDiscTplName').textContent = data.template_name || '—';
             document.getElementById('pduSnmpDiscWalk').textContent = String(data.walk_count != null ? data.walk_count : '—');
             document.getElementById('pduSnmpDiscSys').textContent = data.sysDescr || '—';

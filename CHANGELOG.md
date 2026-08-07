@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Discover manufacturer rulesets:** APC PowerNet, Liebert/Vertiv, Dell iDRAC, and a safe **default** for everyone else. Inventory manufacturer (then sysDescr) picks the path so iDRAC work cannot walk APC enterprise trees. Discover UI shows which ruleset ran.
+
 ### Enhancements
 
 ### Bug fixes

@@ -1625,6 +1625,7 @@ if ($action === 'new' || $id) {
                             <div id="snmpDiscoverResults" hidden>
                                 <dl class="snmp-discover-meta">
                                     <div><dt>Host</dt><dd id="snmpDiscHost">—</dd></div>
+                                    <div><dt>Ruleset</dt><dd id="snmpDiscRuleset">—</dd></div>
                                     <div><dt>Template name</dt><dd id="snmpDiscTplName">—</dd></div>
                                     <div><dt>Walk count</dt><dd id="snmpDiscWalk">—</dd></div>
                                     <div><dt>sysDescr</dt><dd id="snmpDiscSys">—</dd></div>
@@ -1730,6 +1731,12 @@ if ($action === 'new' || $id) {
                             if (data.uses_idrac && data.host) {
                                 hostEl.textContent = (data.host || '—') + ' (iDRAC)';
                             }
+                        }
+                        var rsEl = document.getElementById('snmpDiscRuleset');
+                        if (rsEl) {
+                            var rs = data.ruleset || 'default';
+                            var rsLabel = { apc: 'APC PowerNet', liebert: 'Liebert / Vertiv', idrac: 'Dell iDRAC', default: 'Default (generic)' };
+                            rsEl.textContent = (rsLabel[rs] || rs) + ' (' + rs + ')';
                         }
                         document.getElementById('snmpDiscTplName').textContent = data.template_name || '—';
                         document.getElementById('snmpDiscWalk').textContent = String(data.walk_count != null ? data.walk_count : '—');
