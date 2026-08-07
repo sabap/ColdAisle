@@ -406,12 +406,34 @@ class SnmpPoller
             throw new RuntimeException($msg);
         }
 
-        Database::update('devices', [
+        $devicePatch = [
             'snmp_last_poll_at' => date('Y-m-d H:i:s'),
             'snmp_last_poll_watts' => $got['watts'],
             'snmp_last_poll_amps' => $got['amps'],
             'snmp_fail_count' => 0,
-        ], 'device_id = :id', [':id' => (int)$device['device_id']]);
+        ];
+        // Identity from template keys (service_tag / system_model) → fill empty inventory fields
+        if (!empty($got['serial_no']) && trim((string)($device['serial_no'] ?? '')) === '') {
+            $devicePatch['serial_no'] = $got['serial_no'];
+        }
+        $modelFromSnmp = null;
+        if (!empty($metrics['system_model']['raw'])) {
+            require_once __DIR__ . '/SnmpDiscover.php';
+            $modelFromSnmp = SnmpDiscover::cleanSerialValue($metrics['system_model']['raw']);
+            // cleanSerialValue is fine for alphanumeric model strings; fallback strip
+            if ($modelFromSnmp === null || $modelFromSnmp === '') {
+                $mv = is_scalar($metrics['system_model']['raw'])
+                    ? trim((string)$metrics['system_model']['raw']) : '';
+                $mv = preg_replace('/^(STRING|OCTET STRING)\s*:\s*/i', '', $mv) ?? $mv;
+                $modelFromSnmp = trim($mv, " \t\"'");
+            }
+        }
+        if ($modelFromSnmp !== null && $modelFromSnmp !== ''
+            && trim((string)($device['model'] ?? '')) === ''
+        ) {
+            $devicePatch['model'] = mb_substr($modelFromSnmp, 0, 100);
+        }
+        Database::update('devices', $devicePatch, 'device_id = :id', [':id' => (int)$device['device_id']]);
 
         // Env sensors: temperature.* / humidity.* → last_value + env_readings
         $env = ['updated' => 0, 'readings' => 0, 'unmatched' => 0, 'keys' => 0];
@@ -1184,8 +1206,8 @@ class SnmpPoller
                     $onMetric((string)$metric, $raw, $num);
                 }
 
-                // String identity metrics (serial / MAC)
-                if (preg_match('/^(serial_no|serial|serialnumber)\b/', $metricKey)) {
+                // String identity metrics (serial / MAC / Dell service tag)
+                if (preg_match('/^(serial_no|serial|serialnumber|service_tag|servicetag)\b/', $metricKey)) {
                     require_once __DIR__ . '/SnmpDiscover.php';
                     $serialNo = SnmpDiscover::cleanSerialValue($raw) ?? $serialNo;
                     $ok++;
@@ -1194,6 +1216,11 @@ class SnmpPoller
                 if (preg_match('/^(mac_address|mac|ifphysaddress)\b/', $metricKey)) {
                     require_once __DIR__ . '/SnmpDiscover.php';
                     $macAddress = SnmpDiscover::cleanMacValue($raw) ?? $macAddress;
+                    $ok++;
+                    continue;
+                }
+                // Dell system model string — kept in metrics; applied to device if model empty
+                if (preg_match('/^(system_model|model_name|systemmodel)\b/', $metricKey)) {
                     $ok++;
                     continue;
                 }
