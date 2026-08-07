@@ -99,6 +99,7 @@ try {
             'back_side' => !empty($data['back_side']) ? 1 : 0,
             'primary_ip' => $data['primary_ip'] ?? null,
             'mgmt_ip' => $data['mgmt_ip'] ?? null,
+            'idrac_host' => $data['idrac_host'] ?? null,
             'hostname' => $data['hostname'] ?? null,
             'nominal_watts' => $data['nominal_watts'] ?? null,
             'status' => $data['status'] ?? 'production',
@@ -162,7 +163,7 @@ try {
         foreach ([
             'cabinet_id', 'template_id', 'department_id', 'label', 'serial_no', 'asset_tag',
             'device_type', 'manufacturer', 'model', 'position_u', 'u_height', 'half_depth',
-            'back_side', 'primary_ip', 'mgmt_ip', 'hostname', 'nominal_watts', 'status',
+            'back_side', 'primary_ip', 'mgmt_ip', 'idrac_host', 'hostname', 'nominal_watts', 'status',
             'install_date', 'warranty_end', 'notes',
         ] as $k) {
             if (array_key_exists($k, $data)) {
