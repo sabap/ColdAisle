@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **iDRAC identity poll:** template keys `service_tag` / `system_model` fill empty device **Serial** and **Model** on successful Poll (does not overwrite existing values).
-
 ### Bug fixes
 
 ---
 
+## [0.3.64] - 2026-08-07
+
+### Enhancements
+
+- **iDRAC identity poll:** template keys `service_tag` / `system_model` fill empty device **Serial** and **Model** on successful Poll (does not overwrite existing values).
+
+---
 ## [0.3.63] - 2026-08-07
 
 ### Bug fixes
