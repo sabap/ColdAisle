@@ -1,11 +1,13 @@
 <?php
 /**
- * Printable PDU ID label.
+ * Printable PDU ID label(s).
  *
  * Query:
- *   id, printer=brady_bmp51|zebra|avery|generic, media=bmp51_2x2|…,
- *   f_ip, f_serial, f_mac, f_qr, cfg=1,
- *   format=html|svg, embed=1 (minimal chrome for iframe/modal preview)
+ *   id=N  or  ids=1,2,3
+ *   printer, media, f_ip, f_serial, f_mac, f_qr, cfg=1
+ *   format=html|svg  (svg = first PDU only)
+ *   embed=1  preview (first of batch)
+ *   print=1  multi-page print (all ids)
  */
 declare(strict_types=1);
 
@@ -15,34 +17,106 @@ require_once dirname(__DIR__) . '/src/Services/LabelLayoutService.php';
 App::boot();
 $user = App::requirePermission('view_power');
 
-$pduId = (int)($_GET['id'] ?? 0);
-if ($pduId < 1) {
-    http_response_code(400);
-    echo 'PDU id required';
-    exit;
+/** @return list<int> */
+function pdu_label_parse_ids(): array
+{
+    $ids = [];
+    if (!empty($_GET['ids'])) {
+        foreach (preg_split('/[,\s]+/', (string)$_GET['ids']) ?: [] as $part) {
+            $n = (int)$part;
+            if ($n > 0) {
+                $ids[$n] = $n;
+            }
+        }
+    }
+    $one = (int)($_GET['id'] ?? 0);
+    if ($one > 0) {
+        $ids[$one] = $one;
+    }
+    return array_values($ids);
 }
 
-$pdu = Database::fetchOne(
-    'SELECT pdu_id, name, ip_address, serial_no, mac_address, is_active
-     FROM pdus WHERE pdu_id = ?',
-    [$pduId]
-);
-if (!$pdu || empty($pdu['is_active'])) {
+/**
+ * @return array<string,mixed>|null
+ */
+function pdu_label_fetch_row(int $pduId): ?array
+{
+    $pdu = Database::fetchOne(
+        'SELECT pdu_id, name, ip_address, serial_no, mac_address, is_active
+         FROM pdus WHERE pdu_id = ? AND is_active = 1',
+        [$pduId]
+    );
+    if ($pdu) {
+        return $pdu;
+    }
     try {
         $pdu = Database::fetchOne(
-            'SELECT pdu_id, name, ip_address, serial_no, is_active FROM pdus WHERE pdu_id = ?',
+            'SELECT pdu_id, name, ip_address, serial_no, is_active FROM pdus WHERE pdu_id = ? AND is_active = 1',
             [$pduId]
         );
         if ($pdu) {
             $pdu['mac_address'] = null;
+            return $pdu;
         }
     } catch (Throwable $e) {
-        $pdu = null;
+        // ignore
     }
+    return null;
 }
-if (!$pdu || empty($pdu['is_active'])) {
-    http_response_code(404);
-    echo 'PDU not found';
+
+/**
+ * @param array<string,mixed> $pdu
+ * @return array{layout:array<string,mixed>,svg:string,name:string,w:float,h:float}
+ */
+function pdu_label_build(
+    array $pdu,
+    string $printer,
+    string $media,
+    bool $showIp,
+    bool $showSerial,
+    bool $showMac,
+    bool $showQr
+): array {
+    $pduId = (int)$pdu['pdu_id'];
+    $qrUrl = App::url('pages/power_pdus.php?id=' . $pduId);
+    $layout = LabelLayoutService::pduLabel([
+        'name' => (string)($pdu['name'] ?? 'PDU'),
+        'ip' => $pdu['ip_address'] ?? null,
+        'serial' => $pdu['serial_no'] ?? null,
+        'mac' => $pdu['mac_address'] ?? null,
+        'url' => $qrUrl,
+        'show_ip' => $showIp,
+        'show_serial' => $showSerial,
+        'show_mac' => $showMac,
+        'show_qr' => $showQr,
+        'printer' => $printer,
+        'media' => $media,
+        'orient' => $_GET['orient'] ?? null,
+        'length_in' => isset($_GET['length_in']) ? (float)$_GET['length_in'] : null,
+    ]);
+    $qrSvg = '';
+    if (!empty($layout['show_qr'])) {
+        try {
+            $qrSvg = QrCodeService::svgLabel($qrUrl);
+        } catch (Throwable $e) {
+            App::log('PDU label QR: ' . $e->getMessage(), 'warning');
+            $layout['show_qr'] = false;
+        }
+    }
+    $svg = LabelLayoutService::toSvg($layout, $qrSvg);
+    return [
+        'layout' => $layout,
+        'svg' => $svg,
+        'name' => (string)($pdu['name'] ?? 'PDU'),
+        'w' => (float)$layout['width_in'],
+        'h' => (float)$layout['height_in'],
+    ];
+}
+
+$idList = pdu_label_parse_ids();
+if (!$idList) {
+    http_response_code(400);
+    echo 'PDU id or ids required';
     exit;
 }
 
@@ -60,109 +134,91 @@ if (isset($_GET['cfg'])) {
     $showQr = !empty($_GET['f_qr']);
 }
 
-$qrUrl = App::url('pages/power_pdus.php?id=' . $pduId);
-$layout = LabelLayoutService::pduLabel([
-    'name' => (string)($pdu['name'] ?? 'PDU'),
-    'ip' => $pdu['ip_address'] ?? null,
-    'serial' => $pdu['serial_no'] ?? null,
-    'mac' => $pdu['mac_address'] ?? null,
-    'url' => $qrUrl,
-    'show_ip' => $showIp,
-    'show_serial' => $showSerial,
-    'show_mac' => $showMac,
-    'show_qr' => $showQr,
-    'printer' => $printer,
-    'media' => $media,
-    'orient' => $_GET['orient'] ?? null,
-    'length_in' => isset($_GET['length_in']) ? (float)$_GET['length_in'] : null,
-]);
-$printer = (string)($layout['printer'] ?? $printer);
-$media = (string)($layout['media'] ?? $media);
-
-$qrSvg = '';
-if (!empty($layout['show_qr'])) {
-    try {
-        $qrSvg = QrCodeService::svgLabel($qrUrl);
-    } catch (Throwable $e) {
-        App::log('PDU label QR: ' . $e->getMessage(), 'warning');
-        $qrSvg = '';
-        $layout['show_qr'] = false;
+/** @var list<array<string,mixed>> $pdus */
+$pdus = [];
+foreach ($idList as $pid) {
+    $row = pdu_label_fetch_row($pid);
+    if ($row) {
+        $pdus[] = $row;
     }
 }
-
-$format = strtolower(trim((string)($_GET['format'] ?? 'html')));
-if ($format === 'svg') {
-    $doc = LabelLayoutService::toSvg($layout, $qrSvg);
-    $safeName = preg_replace('/[^A-Za-z0-9._-]+/', '_', (string)$pdu['name']) ?: 'pdu';
-    header('Content-Type: image/svg+xml; charset=utf-8');
-    header('Content-Disposition: attachment; filename="pdu-label-' . $safeName . '.svg"');
-    header('Cache-Control: no-store');
-    echo $doc;
+if (!$pdus) {
+    http_response_code(404);
+    echo 'No matching PDUs found';
     exit;
 }
 
-$w = (float)$layout['width_in'];
-$h = (float)$layout['height_in'];
-$svgPreview = LabelLayoutService::toSvg($layout, $qrSvg);
-$embed = !empty($_GET['embed']);
-$printOnly = !empty($_GET['print']);
+$built = [];
+foreach ($pdus as $pdu) {
+    $built[] = pdu_label_build($pdu, $printer, $media, $showIp, $showSerial, $showMac, $showQr);
+}
 
-// JSON meta for modal (optional)
+$first = $built[0];
+$layout = $first['layout'];
+$printer = (string)($layout['printer'] ?? $printer);
+$media = (string)($layout['media'] ?? $media);
+$w = $first['w'];
+$h = $first['h'];
+$count = count($built);
+
+$format = strtolower(trim((string)($_GET['format'] ?? 'html')));
+if ($format === 'svg') {
+    $safeName = preg_replace('/[^A-Za-z0-9._-]+/', '_', $first['name']) ?: 'pdu';
+    header('Content-Type: image/svg+xml; charset=utf-8');
+    header('Content-Disposition: attachment; filename="pdu-label-' . $safeName . '.svg"');
+    header('Cache-Control: no-store');
+    echo $first['svg'];
+    exit;
+}
+
 if ($format === 'json') {
     App::json([
         'ok' => true,
+        'count' => $count,
+        'ids' => array_map(static fn($p) => (int)$p['pdu_id'], $pdus),
         'width_in' => $w,
         'height_in' => $h,
         'printer' => $printer,
         'media' => $media,
         'preset_label' => $layout['preset_label'] ?? '',
         'notes' => $layout['notes'] ?? '',
-        'svg' => $svgPreview,
-        'qr_url' => $qrUrl,
+        'svg' => $first['svg'],
+        'names' => array_map(static fn($b) => $b['name'], $built),
     ]);
 }
 
-function pdu_label_q(array $base, array $over = []): string
-{
-    $q = array_merge($base, $over);
-    return App::url('pages/pdu_label.php?' . http_build_query($q));
-}
+$embed = !empty($_GET['embed']);
+$printOnly = !empty($_GET['print']);
 
-$baseQuery = [
-    'id' => $pduId,
-    'printer' => $printer,
-    'media' => $media,
-    'cfg' => 1,
-];
-if ($showIp) {
-    $baseQuery['f_ip'] = 1;
-}
-if ($showSerial) {
-    $baseQuery['f_serial'] = 1;
-}
-if ($showMac) {
-    $baseQuery['f_mac'] = 1;
-}
-if ($showQr) {
-    $baseQuery['f_qr'] = 1;
-}
-
-$notes = (string)($layout['notes'] ?? '');
-$presetLabel = (string)($layout['preset_label'] ?? '');
-
-// --- Embed / print-only: minimal HTML (iframe or popup print) ---
+// --- Embed / print-only ---
 if ($embed || $printOnly):
+    $title = $count === 1
+        ? 'PDU label — ' . $first['name']
+        : 'PDU labels (' . $count . ')';
     ?><!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>PDU label — <?= App::e((string)$pdu['name']) ?></title>
+  <title><?= App::e($title) ?></title>
   <style>
     html, body { margin: 0; padding: 0; background: #fff; }
     .preview-stage { padding: <?= $embed ? '12px' : '0' ?>; background: <?= $embed ? '#e2e8f0' : '#fff' ?>; }
+    .label-page { background: #fff; }
     .label-svg { display: block; background: #fff; max-width: 100%; height: auto; }
+    .embed-meta { font: 13px/1.4 "Segoe UI", system-ui, sans-serif; color: #475569; margin: 0 0 8px; }
     @media print {
       html, body, .preview-stage { margin: 0; padding: 0; background: #fff; }
+      .embed-meta { display: none !important; }
+      .label-page {
+        page-break-after: always;
+        break-after: page;
+        margin: 0;
+        padding: 0;
+      }
+      .label-page:last-child {
+        page-break-after: auto;
+        break-after: auto;
+      }
       .label-svg {
         max-width: none !important;
         width: <?= App::e((string)$w) ?>in !important;
@@ -172,44 +228,61 @@ if ($embed || $printOnly):
     }
   </style>
   <?php if ($printOnly): ?>
-  <script>window.addEventListener('load', function () { setTimeout(function () { window.print(); }, 200); });</script>
+  <script>window.addEventListener('load', function () { setTimeout(function () { window.print(); }, 250); });</script>
   <?php endif; ?>
 </head>
 <body>
-  <div class="preview-stage"><?= $svgPreview ?></div>
+  <?php if ($embed && $count > 1): ?>
+    <p class="embed-meta">Preview: <strong><?= App::e($first['name']) ?></strong>
+      · printing will include <strong><?= (int)$count ?></strong> labels</p>
+  <?php endif; ?>
+  <?php if ($embed): ?>
+    <div class="preview-stage"><?= $first['svg'] ?></div>
+  <?php else: ?>
+    <?php foreach ($built as $b): ?>
+      <div class="label-page"><?= $b['svg'] ?></div>
+    <?php endforeach; ?>
+  <?php endif; ?>
 </body>
 </html>
     <?php
     exit;
 endif;
 
-// --- Full page (fallback / direct link) ---
-$backUrl = App::url('pages/power_pdus.php?id=' . $pduId);
+// --- Full page fallback ---
+$backUrl = count($pdus) === 1
+    ? App::url('pages/power_pdus.php?id=' . (int)$pdus[0]['pdu_id'])
+    : App::url('pages/power_pdus.php');
+$idsParam = implode(',', array_map(static fn($p) => (int)$p['pdu_id'], $pdus));
+$printQ = http_build_query(array_filter([
+    'ids' => $idsParam,
+    'printer' => $printer,
+    'media' => $media,
+    'cfg' => 1,
+    'f_ip' => $showIp ? 1 : null,
+    'f_serial' => $showSerial ? 1 : null,
+    'f_mac' => $showMac ? 1 : null,
+    'f_qr' => $showQr ? 1 : null,
+    'print' => 1,
+]));
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PDU label — <?= App::e((string)$pdu['name']) ?></title>
+  <title><?= App::e($count === 1 ? $first['name'] : ($count . ' labels')) ?></title>
   <style>
     body { font-family: "Segoe UI", system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 1.25rem; }
     a { color: #38bdf8; }
     .label-svg { background: #fff; max-width: min(100%, 420px); height: auto; }
-    @media print {
-      body { background: #fff; padding: 0; }
-      .no-print { display: none !important; }
-      .label-svg { max-width: none; width: <?= App::e((string)$w) ?>in; height: <?= App::e((string)$h) ?>in; }
-      @page { size: <?= App::e((string)$w) ?>in <?= App::e((string)$h) ?>in; margin: 0; }
-    }
   </style>
 </head>
 <body>
-  <p class="no-print"><a href="<?= App::e($backUrl) ?>">← Back to PDU</a>
-    · <?= App::e((string)$w) ?>″ × <?= App::e((string)$h) ?>″
-    · <a href="<?= App::e(pdu_label_q($baseQuery, ['format' => 'svg'])) ?>">Download SVG</a>
-    · <button type="button" onclick="window.print()">Print</button>
+  <p>
+    <a href="<?= App::e($backUrl) ?>">← Back</a>
+    · <?= (int)$count ?> label(s)
+    · <a href="<?= App::e(App::url('pages/pdu_label.php?' . $printQ)) ?>">Print…</a>
   </p>
-  <?= $svgPreview ?>
-  <?php if ($notes !== ''): ?><p class="no-print" style="color:#94a3b8;font-size:.85rem"><?= App::e($notes) ?></p><?php endif; ?>
+  <?= $first['svg'] ?>
 </body>
 </html>

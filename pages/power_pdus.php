@@ -1853,9 +1853,9 @@ if ($pduId) {
             notesEl.textContent = p.notes || '';
         }
 
-        function buildQuery() {
+        function buildQuery(extra) {
             var q = {
-                id: cfg.pduId,
+                ids: String(cfg.pduId),
                 printer: printerEl.value,
                 media: mediaEl.value,
                 embed: 1,
@@ -1865,6 +1865,9 @@ if ($pduId) {
             if (document.getElementById('pduLabelFSerial').checked) q.f_serial = 1;
             if (document.getElementById('pduLabelFMac').checked) q.f_mac = 1;
             if (document.getElementById('pduLabelFQr').checked) q.f_qr = 1;
+            if (extra) {
+                Object.keys(extra).forEach(function (k) { q[k] = extra[k]; });
+            }
             return q;
         }
 
@@ -1875,12 +1878,11 @@ if ($pduId) {
         }
 
         function refresh() {
-            var q = buildQuery();
+            var q = buildQuery({ embed: 1 });
             var url = cfg.baseUrl + (cfg.baseUrl.indexOf('?') >= 0 ? '&' : '?') + qs(q);
             frame.src = url;
-            var svgQ = Object.assign({}, q);
+            var svgQ = buildQuery({ format: 'svg' });
             delete svgQ.embed;
-            svgQ.format = 'svg';
             svgLink.href = cfg.baseUrl + (cfg.baseUrl.indexOf('?') >= 0 ? '&' : '?') + qs(svgQ);
             var p = cfg.printers[printerEl.value];
             var pr = p && p.presets ? p.presets[mediaEl.value] : null;
@@ -1901,9 +1903,8 @@ if ($pduId) {
             if (el) el.addEventListener('change', refresh);
         });
         printBtn.addEventListener('click', function () {
-            var q = buildQuery();
+            var q = buildQuery({ print: 1 });
             delete q.embed;
-            q.print = 1;
             var url = cfg.baseUrl + (cfg.baseUrl.indexOf('?') >= 0 ? '&' : '?') + qs(q);
             window.open(url, 'pduLabelPrint', 'width=640,height=720');
         });
@@ -2592,11 +2593,22 @@ layout_header('PDU Management', $user, 'power_pdus');
     </div>
 </div>
 
+<?php
+require_once dirname(__DIR__) . '/src/Services/LabelLayoutService.php';
+$labelPrinters = LabelLayoutService::PRINTERS;
+$labelDefaultPrinter = LabelLayoutService::DEFAULT_PRINTER;
+$labelDefaultMedia = LabelLayoutService::DEFAULT_MEDIA;
+$labelBase = App::url('pages/pdu_label.php');
+?>
 <div class="card">
     <div class="card-header flex-between">
         <h2>All PDUs</h2>
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
             <span class="text-muted" style="font-size:.85rem"><?= count($pdus) ?> active</span>
+            <button type="button" class="btn btn-sm btn-secondary" id="pduLabelBatchBtn" disabled
+                    data-open-modal="modal-pdu-label" title="Print labels for selected PDUs">
+                Print labels <span id="pduLabelSelCount" class="text-muted"></span>
+            </button>
             <?php if ($canEditPdu): ?>
                 <button type="button" class="btn btn-sm btn-primary" data-open-modal="modal-add-pdu">Add PDU</button>
             <?php endif; ?>
@@ -2604,9 +2616,12 @@ layout_header('PDU Management', $user, 'power_pdus');
     </div>
     <div class="card-body flush">
         <div class="table-wrap pdu-list-wrap">
-        <table class="data pdu-list-table">
+        <table class="data pdu-list-table" id="pduListTable">
             <thead>
             <tr>
+                <th class="col-check" style="width:2.2rem">
+                    <input type="checkbox" id="pduSelectAll" title="Select all on this list" aria-label="Select all PDUs">
+                </th>
                 <th>Name</th>
                 <th>IP</th>
                 <th>Scope</th>
@@ -2647,7 +2662,12 @@ layout_header('PDU Management', $user, 'power_pdus');
                     ? ((int)($p['num_breaker_slots'] ?? 0) . ' brk')
                     : ((int)($p['num_outlets'] ?? 0) . ' out');
                 ?>
-                <tr>
+                <tr data-pdu-id="<?= (int)$p['pdu_id'] ?>">
+                    <td class="col-check">
+                        <input type="checkbox" class="pdu-row-check" value="<?= (int)$p['pdu_id'] ?>"
+                               data-pdu-name="<?= App::e((string)$p['name']) ?>"
+                               aria-label="Select <?= App::e((string)$p['name']) ?>">
+                    </td>
                     <td class="pdu-col-name"><a href="?id=<?= (int)$p['pdu_id'] ?>"><strong><?= App::e($p['name']) ?></strong></a></td>
                     <td class="pdu-col-ip mono"><?= $ip !== '' ? App::e($ip) : '<span class="text-muted">—</span>' ?></td>
                     <td><span class="badge"><?= App::e($p['pdu_scope'] ?? 'rack') ?></span></td>
@@ -2686,7 +2706,7 @@ layout_header('PDU Management', $user, 'power_pdus');
             <?php endforeach; ?>
             <?php if (!$pdus): ?>
                 <tr>
-                    <td colspan="12" class="text-muted">
+                    <td colspan="13" class="text-muted">
                         No PDUs yet.
                         <?php if ($canEditPdu): ?>
                             Use <strong>Add PDU</strong> to create one.
@@ -2754,6 +2774,13 @@ layout_header('PDU Management', $user, 'power_pdus');
     width: 1%;
     white-space: nowrap;
 }
+.pdu-list-table .col-check {
+    width: 2rem;
+    text-align: center;
+}
+.pdu-list-table tr.pdu-row-selected {
+    background: rgba(56, 189, 248, 0.08);
+}
 </style>
 
 <?php if ($canEditPdu): ?>
@@ -2792,7 +2819,64 @@ layout_header('PDU Management', $user, 'power_pdus');
         </div>
     </div>
 </div>
+<?php endif; ?>
+
+<div class="app-modal" id="modal-pdu-label" hidden aria-hidden="true">
+    <div class="app-modal-backdrop" data-modal-close></div>
+    <div class="app-modal-panel app-modal-panel-xl" role="dialog" aria-modal="true" aria-labelledby="modal-pdu-label-title">
+        <div class="app-modal-head">
+            <h3 id="modal-pdu-label-title">Print labels</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
+        </div>
+        <div class="app-modal-body">
+            <p class="text-muted" id="pduLabelBatchSummary" style="font-size:.9rem;margin:0 0 .75rem"></p>
+            <div class="form-row" style="display:flex;flex-wrap:wrap;gap:.75rem 1rem;align-items:flex-end;margin-bottom:.75rem">
+                <div>
+                    <label class="text-muted" style="font-size:.78rem;display:block;margin-bottom:.25rem">Printer</label>
+                    <select class="form-control" id="pduLabelPrinter" style="min-width:12rem">
+                        <?php foreach ($labelPrinters as $pk => $pd): ?>
+                            <option value="<?= App::e($pk) ?>" <?= $pk === $labelDefaultPrinter ? 'selected' : '' ?>>
+                                <?= App::e($pd['label']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-muted" style="font-size:.78rem;display:block;margin-bottom:.25rem">Label size</label>
+                    <select class="form-control" id="pduLabelMedia" style="min-width:16rem"></select>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:.65rem;align-items:center;padding-bottom:.2rem">
+                    <label style="margin:0;font-size:.85rem"><input type="checkbox" id="pduLabelFIp" checked> IP</label>
+                    <label style="margin:0;font-size:.85rem"><input type="checkbox" id="pduLabelFSerial" checked> Serial</label>
+                    <label style="margin:0;font-size:.85rem"><input type="checkbox" id="pduLabelFMac" checked> MAC</label>
+                    <label style="margin:0;font-size:.85rem"><input type="checkbox" id="pduLabelFQr" checked> QR</label>
+                </div>
+            </div>
+            <p class="text-muted" id="pduLabelNotes" style="font-size:.82rem;margin:.25rem 0 .75rem"></p>
+            <p class="text-muted" style="font-size:.82rem;margin:0 0 .5rem">
+                Size: <strong id="pduLabelSizeChip">—</strong>
+                · Match this size in the printer dialog · one label per page
+            </p>
+            <div style="background:#334155;border-radius:10px;padding:1rem;min-height:200px">
+                <iframe id="pduLabelFrame" title="Label preview"
+                        style="width:100%;min-height:280px;border:0;border-radius:8px;background:#e2e8f0"></iframe>
+            </div>
+        </div>
+        <div class="app-modal-foot" style="display:flex;flex-wrap:wrap;gap:.5rem;justify-content:flex-end;padding:.75rem 1rem;border-top:1px solid var(--border)">
+            <button type="button" class="btn btn-ghost" data-modal-close>Close</button>
+            <a class="btn btn-secondary" id="pduLabelSvg" href="#" target="_blank" rel="noopener">Download SVG (first)</a>
+            <button type="button" class="btn btn-primary" id="pduLabelPrint">Print…</button>
+        </div>
+    </div>
+</div>
 <script>
+window.ColdAislePduLabel = {
+    baseUrl: <?= json_encode($labelBase, JSON_UNESCAPED_SLASHES) ?>,
+    printers: <?= json_encode($labelPrinters, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>,
+    defaultPrinter: <?= json_encode($labelDefaultPrinter) ?>,
+    defaultMedia: <?= json_encode($labelDefaultMedia) ?>,
+    pduIds: []
+};
 (function () {
     function openModal(id) {
         var el = document.getElementById(id);
@@ -2812,7 +2896,11 @@ layout_header('PDU Management', $user, 'power_pdus');
         }
     }
     document.querySelectorAll('[data-open-modal]').forEach(function (btn) {
-        btn.addEventListener('click', function () {
+        btn.addEventListener('click', function (e) {
+            if (btn.disabled) {
+                e.preventDefault();
+                return;
+            }
             openModal(btn.getAttribute('data-open-modal'));
         });
     });
@@ -2826,11 +2914,173 @@ layout_header('PDU Management', $user, 'power_pdus');
         var open = document.querySelector('.app-modal:not([hidden])');
         if (open) closeModal(open);
     });
-    // Deep links from Power dashboard / Zones: #add-pdu
     if (location.hash === '#add-pdu') {
         openModal('modal-add-pdu');
     }
+
+    // --- Multi-select + label modal ---
+    var cfg = window.ColdAislePduLabel;
+    var selectAll = document.getElementById('pduSelectAll');
+    var batchBtn = document.getElementById('pduLabelBatchBtn');
+    var selCountEl = document.getElementById('pduLabelSelCount');
+    var printerEl = document.getElementById('pduLabelPrinter');
+    var mediaEl = document.getElementById('pduLabelMedia');
+    var frame = document.getElementById('pduLabelFrame');
+    var notesEl = document.getElementById('pduLabelNotes');
+    var sizeChip = document.getElementById('pduLabelSizeChip');
+    var svgLink = document.getElementById('pduLabelSvg');
+    var printBtn = document.getElementById('pduLabelPrint');
+    var titleEl = document.getElementById('modal-pdu-label-title');
+    var summaryEl = document.getElementById('pduLabelBatchSummary');
+
+    function rowChecks() {
+        return Array.prototype.slice.call(document.querySelectorAll('.pdu-row-check'));
+    }
+
+    function selectedIds() {
+        return rowChecks().filter(function (c) { return c.checked; }).map(function (c) {
+            return parseInt(c.value, 10);
+        }).filter(function (n) { return n > 0; });
+    }
+
+    function selectedNames() {
+        return rowChecks().filter(function (c) { return c.checked; }).map(function (c) {
+            return c.getAttribute('data-pdu-name') || ('#' + c.value);
+        });
+    }
+
+    function syncSelectionUi() {
+        var ids = selectedIds();
+        cfg.pduIds = ids;
+        var n = ids.length;
+        if (batchBtn) {
+            batchBtn.disabled = n < 1;
+        }
+        if (selCountEl) {
+            selCountEl.textContent = n > 0 ? '(' + n + ')' : '';
+        }
+        rowChecks().forEach(function (c) {
+            var tr = c.closest('tr');
+            if (tr) tr.classList.toggle('pdu-row-selected', c.checked);
+        });
+        if (selectAll) {
+            var all = rowChecks();
+            selectAll.checked = all.length > 0 && all.every(function (c) { return c.checked; });
+            selectAll.indeterminate = n > 0 && n < all.length;
+        }
+    }
+
+    if (selectAll) {
+        selectAll.addEventListener('change', function () {
+            rowChecks().forEach(function (c) { c.checked = selectAll.checked; });
+            syncSelectionUi();
+        });
+    }
+    rowChecks().forEach(function (c) {
+        c.addEventListener('change', syncSelectionUi);
+    });
+    syncSelectionUi();
+
+    function fillMedia(printerKey, keepMedia) {
+        var p = cfg.printers[printerKey];
+        mediaEl.innerHTML = '';
+        if (!p || !p.presets) return;
+        var keys = Object.keys(p.presets);
+        var selected = keepMedia && p.presets[keepMedia] ? keepMedia : keys[0];
+        keys.forEach(function (k) {
+            var opt = document.createElement('option');
+            opt.value = k;
+            opt.textContent = p.presets[k].label || k;
+            if (k === selected) opt.selected = true;
+            mediaEl.appendChild(opt);
+        });
+        if (notesEl) notesEl.textContent = p.notes || '';
+    }
+
+    function qs(obj) {
+        return Object.keys(obj).map(function (k) {
+            return encodeURIComponent(k) + '=' + encodeURIComponent(obj[k]);
+        }).join('&');
+    }
+
+    function buildQuery(extra) {
+        var ids = cfg.pduIds && cfg.pduIds.length ? cfg.pduIds : selectedIds();
+        var q = {
+            ids: ids.join(','),
+            printer: printerEl.value,
+            media: mediaEl.value,
+            cfg: 1
+        };
+        if (document.getElementById('pduLabelFIp').checked) q.f_ip = 1;
+        if (document.getElementById('pduLabelFSerial').checked) q.f_serial = 1;
+        if (document.getElementById('pduLabelFMac').checked) q.f_mac = 1;
+        if (document.getElementById('pduLabelFQr').checked) q.f_qr = 1;
+        if (extra) {
+            Object.keys(extra).forEach(function (k) { q[k] = extra[k]; });
+        }
+        return q;
+    }
+
+    function refresh() {
+        var ids = selectedIds();
+        if (!ids.length || !frame) return;
+        var q = buildQuery({ embed: 1 });
+        frame.src = cfg.baseUrl + (cfg.baseUrl.indexOf('?') >= 0 ? '&' : '?') + qs(q);
+        if (svgLink) {
+            var svgQ = buildQuery({ format: 'svg' });
+            svgLink.href = cfg.baseUrl + (cfg.baseUrl.indexOf('?') >= 0 ? '&' : '?') + qs(svgQ);
+        }
+        var p = cfg.printers[printerEl.value];
+        var pr = p && p.presets ? p.presets[mediaEl.value] : null;
+        if (sizeChip) {
+            sizeChip.textContent = pr ? (pr.w + '″ × ' + pr.h + '″') : '—';
+        }
+        var names = selectedNames();
+        if (titleEl) {
+            titleEl.textContent = ids.length === 1
+                ? ('Print label — ' + names[0])
+                : ('Print labels (' + ids.length + ')');
+        }
+        if (summaryEl) {
+            if (ids.length === 1) {
+                summaryEl.textContent = '1 PDU selected: ' + names[0];
+            } else {
+                var preview = names.slice(0, 5).join(', ');
+                if (names.length > 5) preview += '…';
+                summaryEl.textContent = ids.length + ' PDUs selected: ' + preview
+                    + ' · Print… will send ' + ids.length + ' pages (one label each).';
+            }
+        }
+    }
+
+    if (printerEl && mediaEl) {
+        printerEl.addEventListener('change', function () {
+            fillMedia(printerEl.value, null);
+            refresh();
+        });
+        mediaEl.addEventListener('change', refresh);
+        ['pduLabelFIp', 'pduLabelFSerial', 'pduLabelFMac', 'pduLabelFQr'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) el.addEventListener('change', refresh);
+        });
+        if (printBtn) {
+            printBtn.addEventListener('click', function () {
+                var ids = selectedIds();
+                if (!ids.length) return;
+                var q = buildQuery({ print: 1 });
+                var url = cfg.baseUrl + (cfg.baseUrl.indexOf('?') >= 0 ? '&' : '?') + qs(q);
+                window.open(url, 'pduLabelPrint', 'width=720,height=800');
+            });
+        }
+        if (batchBtn) {
+            batchBtn.addEventListener('click', function () {
+                if (batchBtn.disabled) return;
+                fillMedia(printerEl.value || cfg.defaultPrinter, mediaEl.value || cfg.defaultMedia);
+                setTimeout(refresh, 50);
+            });
+        }
+        fillMedia(cfg.defaultPrinter, cfg.defaultMedia);
+    }
 })();
 </script>
-<?php endif; ?>
 <?php layout_footer(); ?>
