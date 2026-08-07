@@ -21,13 +21,6 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ## [0.3.68] - 2026-08-07
 
-### Enhancements
-
-- Maintenance release.
-
----
-## [0.3.68] - 2026-08-07
-
 ### New features
 
 - **Alerts & notifications hub (Settings):** one panel for global delivery, ICMP / power / env thresholds, and routing subscriptions (global, department, device, PDU). Platform foundation for future SNMP thresholds.
