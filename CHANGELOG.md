@@ -17,12 +17,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.58] - 2026-08-07
+
+### Bug fixes
+
 - **Device edit SNMPv3 fields blank:** stop clearing the credential profile on page load; normalize version/protocol matching so saved v3 profile, user, level, and auth/priv show correctly on Edit (Dell iDRAC and other devices).
 - **Device Discover OIDs unresponsive:** button always opens the discover UI and explains missing manufacturer/model/iDRAC-or-IP instead of doing nothing when disabled.
 - **Revert mistaken 0.3.57 PDU UI changes:** restore PDU form / Discover / snmp_pdu.php to 0.3.56 behavior (those edits were aimed at Devices, not PDUs).
 
 ---
-
 ## [0.3.57] - 2026-08-07
 
 ### Bug fixes
