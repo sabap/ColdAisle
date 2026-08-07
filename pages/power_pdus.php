@@ -284,37 +284,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             if ($siteTplId > 0) {
                 $snmpEnabled = 1; // template implies SNMP on
             }
-            if ($profileId || $snmpUser) {
-                $snmpEnabled = 1; // credentials imply SNMP on
-            }
             $snmpAutoPoll = (!empty($_POST['snmp_auto_poll']) && $siteTplId > 0) ? 1 : 0;
-
-            // Normalize SNMP version to 1 / 2c / 3
-            $snmpVerSave = strtolower(trim((string)($_POST['snmp_version'] ?? '')));
-            if (in_array($snmpVerSave, ['v3', '3', '3.0'], true)) {
-                $snmpVerSave = '3';
-            } elseif (in_array($snmpVerSave, ['v2c', '2c', '2', 'v2'], true)) {
-                $snmpVerSave = '2c';
-            } elseif (in_array($snmpVerSave, ['v1', '1'], true)) {
-                $snmpVerSave = '1';
-            } elseif ($profileId || $snmpUser) {
-                $snmpVerSave = '3';
-            } else {
-                $snmpVerSave = $snmpVerSave !== '' ? $snmpVerSave : '2c';
-            }
-            if ($profileId) {
-                $snmpVerSave = '3';
-            }
-            // Normalize auth/priv protocol names for select matching later
-            if (is_string($snmpAuthProto) && $snmpAuthProto !== '') {
-                $snmpAuthProto = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $snmpAuthProto) ?? '');
-                if ($snmpAuthProto === 'SHA1') {
-                    $snmpAuthProto = 'SHA';
-                }
-            }
-            if (is_string($snmpPrivProto) && $snmpPrivProto !== '') {
-                $snmpPrivProto = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $snmpPrivProto) ?? '');
-            }
 
             $row = array_merge([
                 'cabinet_id' => $_POST['cabinet_id'] !== '' ? (int)$_POST['cabinet_id'] : null,
@@ -342,7 +312,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'rated_amps' => $_POST['rated_amps'] !== '' ? (float)$_POST['rated_amps'] : null,
                 'input_type' => $_POST['input_type'] !== '' ? $_POST['input_type'] : null,
                 'snmp_enabled' => $snmpEnabled,
-                'snmp_version' => $snmpVerSave,
+                'snmp_version' => $_POST['snmp_version'] ?? '2c',
                 'snmp_port' => (int)($_POST['snmp_port'] ?? 161),
                 'snmp_community' => $_POST['snmp_community'] !== '' ? $_POST['snmp_community'] : null,
                 'snmp_security_name' => $snmpUser,
@@ -944,41 +914,9 @@ if ($pduId) {
             $pduSiteTpl = null;
         }
     }
-    $pduDiscoverMissing = [];
-    if (trim((string)($p['manufacturer'] ?? '')) === '') {
-        $pduDiscoverMissing[] = 'vendor/manufacturer';
-    }
-    if (trim((string)($p['model'] ?? '')) === '') {
-        $pduDiscoverMissing[] = 'model';
-    }
-    if (trim((string)($p['ip_address'] ?? '')) === '') {
-        $pduDiscoverMissing[] = 'IP address';
-    }
-    $pduDiscoverReady = $pduDiscoverMissing === [];
-    $pduSnmpConfigured = !empty($p['snmp_enabled'])
-        || !empty($p['snmp_v3_profile_id'])
-        || !empty($p['snmp_security_name'])
-        || !empty($p['snmp_site_template_id']);
-    $pduSnmpVerLabel = strtolower(trim((string)($p['snmp_version'] ?? '')));
-    if (in_array($pduSnmpVerLabel, ['v3', '3', '3.0'], true)) {
-        $pduSnmpVerLabel = '3';
-    } elseif (in_array($pduSnmpVerLabel, ['v2c', '2c', '2', 'v2'], true)) {
-        $pduSnmpVerLabel = '2c';
-    } elseif (in_array($pduSnmpVerLabel, ['v1', '1'], true)) {
-        $pduSnmpVerLabel = '1';
-    }
-    $pduSnmpProfName = null;
-    $pduSnmpProfId = (int)($p['snmp_v3_profile_id'] ?? 0);
-    if ($pduSnmpProfId > 0) {
-        try {
-            $pduSnmpProfName = Database::fetchValue(
-                'SELECT name FROM snmp_v3_profiles WHERE profile_id = ?',
-                [$pduSnmpProfId]
-            );
-        } catch (Throwable $e) {
-            $pduSnmpProfName = null;
-        }
-    }
+    $pduDiscoverReady = trim((string)($p['manufacturer'] ?? '')) !== ''
+        && trim((string)($p['model'] ?? '')) !== ''
+        && trim((string)($p['ip_address'] ?? '')) !== '';
 
     layout_header('PDU: ' . $p['name'], $user, 'power_pdus');
     $tplExists = !empty($_GET['tpl_exists']) && !empty($_SESSION['pdu_template_overwrite'])
@@ -1041,9 +979,7 @@ if ($pduId) {
                 </span>
             </label>
             <button type="button" class="btn btn-secondary" id="btnPduSnmpDiscover"
-                title="<?= $pduDiscoverReady
-                    ? 'Walk SNMP and propose a site OID template'
-                    : 'Needs ' . App::e(implode(', ', $pduDiscoverMissing)) . ' — click for details' ?>">
+                <?= $pduDiscoverReady ? '' : 'disabled title="Need manufacturer, model, and IP on this PDU"' ?>>
                 Discover OIDs
             </button>
             <form method="post" style="display:inline">
@@ -1102,16 +1038,9 @@ if ($pduId) {
         </div>
         <div class="metric-card">
             <div class="label">SNMP</div>
-            <div class="value"><?= $pduSnmpConfigured
-                ? ('v' . App::e($pduSnmpVerLabel !== '' ? $pduSnmpVerLabel : (string)($p['snmp_version'] ?? '?')))
-                : 'off' ?></div>
+            <div class="value"><?= !empty($p['snmp_enabled']) ? 'v' . App::e((string)$p['snmp_version']) : 'off' ?></div>
             <div class="sub">
                 <?= App::e($p['ip_address'] ?? 'No IP') ?>
-                <?php if ($pduSnmpProfName): ?>
-                    · <?= App::e((string)$pduSnmpProfName) ?>
-                <?php elseif ($pduSnmpVerLabel === '3' && !empty($p['snmp_security_name'])): ?>
-                    · <?= App::e((string)$p['snmp_security_name']) ?>
-                <?php endif; ?>
                 <?php if ($pduSiteTpl):
                     $pduTplLabel = trim(($pduSiteTpl['vendor'] ?? '') . ' / ' . ($pduSiteTpl['model'] ?? ''), ' /');
                     if ($pduTplLabel === '') {
@@ -1417,15 +1346,7 @@ if ($pduId) {
     (function () {
         var pduId = <?= (int)$pduId ?>;
         var modal = document.getElementById('pduSnmpDiscoverModal');
-        var btnDiscover = document.getElementById('btnPduSnmpDiscover');
-        if (!modal) {
-            if (btnDiscover) {
-                btnDiscover.addEventListener('click', function () {
-                    alert('Discover UI failed to load. Refresh the page and try again.');
-                });
-            }
-            return;
-        }
+        if (!modal) return;
         var loadingEl = document.getElementById('pduSnmpDiscoverLoading');
         var errEl = document.getElementById('pduSnmpDiscoverError');
         var resEl = document.getElementById('pduSnmpDiscoverResults');
@@ -1433,30 +1354,20 @@ if ($pduId) {
         var overwriteBtn = document.getElementById('pduSnmpDiscoverOverwrite');
         var existsWarn = document.getElementById('pduSnmpExistsWarn');
         var lastDiscover = null;
-        var discoverReady = <?= $pduDiscoverReady ? 'true' : 'false' ?>;
-        var discoverMissing = <?= json_encode(array_values($pduDiscoverMissing), JSON_UNESCAPED_SLASHES) ?>;
-        var snmpConfigured = <?= $pduSnmpConfigured ? 'true' : 'false' ?>;
 
         function toast(msg, type) {
             if (window.ColdAisle && ColdAisle.toast) ColdAisle.toast(msg, type || 'info');
             else alert(msg);
         }
         function api(body) {
-            if (!window.ColdAisle || typeof ColdAisle.api !== 'function') {
-                return Promise.reject(new Error('ColdAisle API helper not loaded — hard-refresh the page (Ctrl+F5).'));
-            }
             return ColdAisle.api('api/snmp_pdu.php', { method: 'POST', body: body });
         }
         function openModal() {
             modal.hidden = false;
-            modal.removeAttribute('hidden');
-            modal.style.display = 'flex';
             document.body.classList.add('modal-open');
         }
         function closeModal() {
             modal.hidden = true;
-            modal.setAttribute('hidden', '');
-            modal.style.display = 'none';
             document.body.classList.remove('modal-open');
         }
         function showErr(msg) {
@@ -1608,24 +1519,9 @@ if ($pduId) {
         }
         function startDiscover() {
             openModal();
-            setLoading(false);
+            setLoading(true);
             showErr('');
             lastDiscover = null;
-            if (resEl) resEl.hidden = true;
-            if (!discoverReady) {
-                var miss = (discoverMissing && discoverMissing.length)
-                    ? discoverMissing.join(', ')
-                    : 'vendor, model, and IP address';
-                showErr('Cannot discover yet — set ' + miss + ' on this PDU (Edit PDU), then try again.');
-                toast('Discover needs ' + miss, 'error');
-                return;
-            }
-            if (!snmpConfigured) {
-                showErr('Enable SNMP and set version/credentials on this PDU first (Edit PDU → Enable SNMP).');
-                toast('Configure SNMP credentials first', 'error');
-                return;
-            }
-            setLoading(true);
             api({ action: 'discover', pdu_id: pduId })
                 .then(function (data) {
                     setLoading(false);
@@ -1638,6 +1534,7 @@ if ($pduId) {
                 });
         }
 
+        var btnDiscover = document.getElementById('btnPduSnmpDiscover');
         if (btnDiscover) btnDiscover.addEventListener('click', startDiscover);
 
         var autoToggle = document.getElementById('pduSnmpAutoPollToggle');
@@ -1833,45 +1730,6 @@ if ($pduId) {
                 <div>
                     <dt>IP address</dt>
                     <dd><?= !empty($p['ip_address']) ? App::e((string)$p['ip_address']) : '<span class="text-muted">—</span>' ?></dd>
-                </div>
-                <div>
-                    <dt>SNMP</dt>
-                    <dd>
-                        <?php if ($pduSnmpConfigured): ?>
-                            <strong>v<?= App::e($pduSnmpVerLabel !== '' ? $pduSnmpVerLabel : (string)($p['snmp_version'] ?? '?')) ?></strong>
-                            <?php if ($pduSnmpProfName): ?>
-                                · profile <?= App::e((string)$pduSnmpProfName) ?>
-                            <?php endif; ?>
-                            <?php if ($pduSnmpVerLabel === '3' || (string)($p['snmp_version'] ?? '') === '3'): ?>
-                                <?php if (!empty($p['snmp_security_name'])): ?>
-                                    · user <?= App::e((string)$p['snmp_security_name']) ?>
-                                <?php endif; ?>
-                                <?php if (!empty($p['snmp_v3_sec_level'])): ?>
-                                    · <?= App::e((string)$p['snmp_v3_sec_level']) ?>
-                                <?php endif; ?>
-                                <?php
-                                $ap = trim((string)($p['snmp_auth_protocol'] ?? ''));
-                                $pp = trim((string)($p['snmp_priv_protocol'] ?? ''));
-                                if ($ap !== '' || $pp !== ''): ?>
-                                    · <?= App::e($ap !== '' ? $ap : '—') ?>/<?= App::e($pp !== '' ? $pp : '—') ?>
-                                <?php endif; ?>
-                                <?php if (!empty($p['snmp_auth_passphrase'])): ?> · auth ••••<?php endif; ?>
-                                <?php if (!empty($p['snmp_priv_passphrase'])): ?> · priv ••••<?php endif; ?>
-                            <?php endif; ?>
-                            <?php if ($pduSiteTpl):
-                                $ovTpl = trim(($pduSiteTpl['vendor'] ?? '') . ' / ' . ($pduSiteTpl['model'] ?? ''), ' /');
-                                if ($ovTpl === '') {
-                                    $ovTpl = (string)($pduSiteTpl['name'] ?? '');
-                                }
-                                ?>
-                                · OID <?= App::e($ovTpl) ?>
-                            <?php else: ?>
-                                · <span class="text-muted">no OID template</span>
-                            <?php endif; ?>
-                        <?php else: ?>
-                            <span class="text-muted">off</span>
-                        <?php endif; ?>
-                    </dd>
                 </div>
                 <?php if (!empty($p['notes'])): ?>
                 <div style="grid-column:1 / -1">

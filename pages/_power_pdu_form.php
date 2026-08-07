@@ -259,40 +259,13 @@ $formModal = !empty($formModal);
 
     <?php
     $snmpProfiles = $snmpProfiles ?? [];
-    // Normalize version for select matching (PDO/sqlsrv may return int 3; 'v3' must map to '3')
-    $snmpVerRaw = strtolower(trim((string)($edit['snmp_version'] ?? '')));
-    if ($snmpVerRaw === 'v3' || $snmpVerRaw === '3.0') {
-        $snmpVerNorm = '3';
-    } elseif ($snmpVerRaw === 'v2c' || $snmpVerRaw === '2' || $snmpVerRaw === 'v2') {
-        $snmpVerNorm = '2c';
-    } elseif ($snmpVerRaw === 'v1') {
-        $snmpVerNorm = '1';
-    } elseif (in_array($snmpVerRaw, ['1', '2c', '3'], true)) {
-        $snmpVerNorm = $snmpVerRaw;
-    } else {
-        // Default: prefer 3 when a v3 profile/user is already stored
-        $snmpVerNorm = (!empty($edit['snmp_v3_profile_id']) || !empty($edit['snmp_security_name']))
-            ? '3'
-            : '2c';
-    }
-    // If profile/user present, treat SNMP as on even if the BIT was never flipped
-    $snmpEnabledUi = !empty($edit['snmp_enabled'])
-        || !empty($edit['snmp_v3_profile_id'])
-        || !empty($edit['snmp_security_name'])
-        || !empty($edit['snmp_site_template_id']);
-    $authProtoNorm = strtoupper((string)preg_replace('/[^A-Za-z0-9]/', '', (string)($edit['snmp_auth_protocol'] ?? '')));
-    $privProtoNorm = strtoupper((string)preg_replace('/[^A-Za-z0-9]/', '', (string)($edit['snmp_priv_protocol'] ?? '')));
-    // Map common aliases (SHA-1 / SHA1 → SHA; SHA-256 already becomes SHA256 via strip)
-    if ($authProtoNorm === 'SHA1') {
-        $authProtoNorm = 'SHA';
-    }
     ?>
     <div class="form-row full"><label><input type="checkbox" name="snmp_enabled" value="1" id="power_snmp_enabled"
-        <?= $snmpEnabledUi ? 'checked' : '' ?>> Enable SNMP</label></div>
+        <?= !empty($edit['snmp_enabled']) ? 'checked' : '' ?>> Enable SNMP</label></div>
     <div class="form-row power-snmp-any" style="display:none"><label>SNMP version</label>
         <select class="form-control" name="snmp_version" id="power_snmp_version">
             <?php foreach (['1','2c','3'] as $v): ?>
-                <option value="<?= $v ?>" <?= $snmpVerNorm === $v ? 'selected' : '' ?>><?= $v ?></option>
+                <option value="<?= $v ?>" <?= ($edit['snmp_version'] ?? '2c') === $v ? 'selected' : '' ?>><?= $v ?></option>
             <?php endforeach; ?>
         </select>
     </div>
@@ -329,25 +302,20 @@ $formModal = !empty($formModal);
     <div class="form-row power-snmp-v3" style="display:none"><label>Security level</label>
         <select class="form-control" name="snmp_v3_sec_level" id="power_snmp_v3_sec_level">
             <option value="">—</option>
-            <?php
-            $secLvlNorm = trim((string)($edit['snmp_v3_sec_level'] ?? ''));
-            foreach (['noAuthNoPriv','authNoPriv','authPriv'] as $lvl): ?>
-                <option value="<?= $lvl ?>" <?= strcasecmp($secLvlNorm, $lvl) === 0 ? 'selected' : '' ?>><?= $lvl ?></option>
+            <?php foreach (['noAuthNoPriv','authNoPriv','authPriv'] as $lvl): ?>
+                <option value="<?= $lvl ?>" <?= ($edit['snmp_v3_sec_level'] ?? '') === $lvl ? 'selected' : '' ?>><?= $lvl ?></option>
             <?php endforeach; ?>
         </select>
     </div>
     <div class="form-row power-snmp-v3" style="display:none"><label>SNMP user</label>
         <input class="form-control" name="snmp_security_name" id="power_snmp_security_name"
-               value="<?= App::e((string)($edit['snmp_security_name'] ?? '')) ?>" autocomplete="off"></div>
+               value="<?= App::e($edit['snmp_security_name'] ?? '') ?>" autocomplete="off"></div>
     <div class="form-row power-snmp-v3" style="display:none"><label>Auth protocol</label>
         <select class="form-control" name="snmp_auth_protocol" id="power_snmp_auth_protocol">
             <option value="">—</option>
             <?php foreach (['SHA','SHA256','SHA384','SHA512','MD5'] as $ap): ?>
-                <option value="<?= $ap ?>" <?= $authProtoNorm === $ap ? 'selected' : '' ?>><?= $ap ?></option>
+                <option value="<?= $ap ?>" <?= strtoupper((string)($edit['snmp_auth_protocol'] ?? '')) === $ap ? 'selected' : '' ?>><?= $ap ?></option>
             <?php endforeach; ?>
-            <?php if ($authProtoNorm !== '' && !in_array($authProtoNorm, ['SHA','SHA256','SHA384','SHA512','MD5'], true)): ?>
-                <option value="<?= App::e($authProtoNorm) ?>" selected><?= App::e($authProtoNorm) ?></option>
-            <?php endif; ?>
         </select>
     </div>
     <div class="form-row power-snmp-v3" style="display:none"><label>Auth passphrase</label>
@@ -358,11 +326,8 @@ $formModal = !empty($formModal);
         <select class="form-control" name="snmp_priv_protocol" id="power_snmp_priv_protocol">
             <option value="">—</option>
             <?php foreach (['AES','AES256','AES192','DES'] as $pp): ?>
-                <option value="<?= $pp ?>" <?= $privProtoNorm === $pp ? 'selected' : '' ?>><?= $pp ?></option>
+                <option value="<?= $pp ?>" <?= strtoupper((string)($edit['snmp_priv_protocol'] ?? '')) === $pp ? 'selected' : '' ?>><?= $pp ?></option>
             <?php endforeach; ?>
-            <?php if ($privProtoNorm !== '' && !in_array($privProtoNorm, ['AES','AES256','AES192','DES'], true)): ?>
-                <option value="<?= App::e($privProtoNorm) ?>" selected><?= App::e($privProtoNorm) ?></option>
-            <?php endif; ?>
         </select>
     </div>
     <div class="form-row power-snmp-v3" style="display:none"><label>Priv passphrase</label>
@@ -485,20 +450,9 @@ $formModal = !empty($formModal);
         var isRack = !scope || scope.value === 'rack';
         qsa('.power-u-fields').forEach(function (el) { el.style.display = (isRack && isU) ? '' : 'none'; });
     }
-    function normalizeSnmpVersion(v) {
-        v = String(v == null ? '' : v).trim().toLowerCase();
-        if (v === 'v3' || v === '3.0') return '3';
-        if (v === 'v2c' || v === '2' || v === 'v2') return '2c';
-        if (v === 'v1') return '1';
-        if (v === '1' || v === '2c' || v === '3') return v;
-        return '';
-    }
     function toggleSnmp() {
         var on = snmpEn && snmpEn.checked;
-        var v = snmpVer ? normalizeSnmpVersion(snmpVer.value) : '2c';
-        if (snmpVer && v && snmpVer.value !== v) {
-            snmpVer.value = v;
-        }
+        var v = snmpVer ? snmpVer.value : '2c';
         qsa('.power-snmp-any').forEach(function (el) { el.style.display = on ? '' : 'none'; });
         qsa('.power-snmp-v12').forEach(function (el) { el.style.display = on && (v === '1' || v === '2c') ? '' : 'none'; });
         qsa('.power-snmp-v3').forEach(function (el) { el.style.display = on && v === '3' ? '' : 'none'; });
@@ -781,16 +735,7 @@ $formModal = !empty($formModal);
     toggleScope();
     toggleOutputMode();
     refreshWiringOptions(false);
-    // Ensure version option matches stored value (handles non-string / alias quirks)
-    if (snmpVer) {
-        var nv = normalizeSnmpVersion(snmpVer.value) || <?= json_encode($snmpVerNorm) ?>;
-        if (nv) snmpVer.value = nv;
-    }
     toggleSnmp();
-    // Re-fill non-secret v3 fields from the selected credential profile (passphrases stay server-side)
-    if (snmpProf && snmpProf.value && snmpVer && snmpVer.value === '3') {
-        applySnmpProfileFromSelect(false);
-    }
 })();
 </script>
 <style>
