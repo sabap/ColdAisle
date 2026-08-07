@@ -169,15 +169,41 @@ if (class_exists('SnmpSchedulerService')) {
     }
 }
 
-echo '[' . date('c') . "] Starting SNMP poll...\n";
+echo '[' . date('c') . "] Starting poll worker...\n";
 
 try {
-    if (class_exists('SnmpSchedulerService') && !SnmpSchedulerService::isEnabled()) {
-        $msg = 'Scheduler disabled in Settings (no work).';
+    $ok = 0;
+    $fail = 0;
+    $skip = 0;
+    $snmpDisabled = class_exists('SnmpSchedulerService') && !SnmpSchedulerService::isEnabled();
+
+    // --- ICMP reachability (devices + PDUs with icmp_monitor) ---
+    // Runs even when SNMP schedule is off so "Monitor via ICMP" still works.
+    $icmpSummary = '';
+    if (is_file($root . '/src/Services/IcmpMonitorService.php')) {
+        require_once $root . '/src/Services/IcmpMonitorService.php';
+        try {
+            $icmp = IcmpMonitorService::pollAll();
+            $icmpSummary = 'icmp checked=' . (int)($icmp['checked'] ?? 0)
+                . ' up=' . (int)($icmp['up'] ?? 0)
+                . ' down=' . (int)($icmp['down'] ?? 0);
+            echo "ICMP: {$icmpSummary}\n";
+            $earlyLog($icmpSummary);
+        } catch (Throwable $e) {
+            $earlyLog('icmp: ' . $e->getMessage());
+            echo 'ICMP error: ' . $e->getMessage() . "\n";
+        }
+    }
+
+    if ($snmpDisabled) {
+        $msg = 'SNMP scheduler disabled in Settings.'
+            . ($icmpSummary !== '' ? ' ' . $icmpSummary : ' No SNMP work.');
         echo $msg . "\n";
         $earlyHb($msg);
         $earlyLog($msg);
-        SnmpSchedulerService::recordRun(0, 0, $msg);
+        if (class_exists('SnmpSchedulerService')) {
+            SnmpSchedulerService::recordRun(0, 0, $msg);
+        }
         exit(0);
     }
 
@@ -194,7 +220,8 @@ try {
 
     $result = SnmpPoller::pollAll();
     if (!empty($result['disabled'])) {
-        $msg = 'Scheduler disabled in Settings (no work).';
+        $msg = 'SNMP scheduler disabled in Settings.'
+            . ($icmpSummary !== '' ? ' ' . $icmpSummary : '');
         echo $msg . "\n";
         $earlyHb($msg);
         $earlyLog($msg);
@@ -207,8 +234,9 @@ try {
     $ok = (int)($result['success'] ?? 0);
     $fail = (int)($result['failed'] ?? 0);
     $skip = (int)($result['skipped'] ?? 0);
-    $summary = "ok={$ok} fail={$fail} skip={$skip}";
-    echo "Success: {$ok}, Failed: {$fail}, Skipped (not due): {$skip}\n";
+    $summary = "snmp ok={$ok} fail={$fail} skip={$skip}"
+        . ($icmpSummary !== '' ? ' · ' . $icmpSummary : '');
+    echo "SNMP Success: {$ok}, Failed: {$fail}, Skipped (not due): {$skip}\n";
     $earlyHb($summary);
     $earlyLog($summary);
 

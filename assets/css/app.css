@@ -1635,6 +1635,37 @@ body.modal-open { overflow: hidden; }
 .snmp-toggle input:disabled ~ .snmp-toggle-label {
   opacity: .55;
 }
+.icmp-status {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(30, 41, 59, 0.65);
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+.icmp-status-up {
+  border-color: rgba(34, 197, 94, 0.55);
+  background: rgba(22, 101, 52, 0.35);
+  color: #86efac;
+}
+.icmp-status-down {
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(127, 29, 29, 0.4);
+  color: #fca5a5;
+}
+.icmp-status-degraded {
+  border-color: rgba(234, 179, 8, 0.55);
+  background: rgba(113, 63, 18, 0.4);
+  color: #fde047;
+}
+.icmp-status-unknown,
+.icmp-status-off {
+  color: #94a3b8;
+}
 .snmp-toggle-label {
   font-size: .85rem;
   white-space: nowrap;
