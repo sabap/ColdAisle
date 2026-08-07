@@ -105,7 +105,11 @@ try {
                     'missing' => $prereqs['missing'],
                 ], 400);
             }
-            if (empty($pdu['snmp_enabled']) && empty($pdu['snmp_version'])) {
+            $hasCreds = !empty($pdu['snmp_version'])
+                || !empty($pdu['snmp_v3_profile_id'])
+                || !empty($pdu['snmp_security_name'])
+                || !empty($pdu['snmp_community']);
+            if (empty($pdu['snmp_enabled']) && !$hasCreds) {
                 App::json(['error' => 'Enable SNMP and set version/credentials on this PDU first.'], 400);
             }
 

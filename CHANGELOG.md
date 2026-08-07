@@ -17,6 +17,9 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **PDU edit SNMPv3 fields blank:** normalize SNMP version/protocol matching so saved v3 profile, user, level, and auth/priv show correctly in Edit PDU (strict type/alias mismatch had left version as v1 and hid v3 fields).
+- **PDU Discover OIDs unresponsive:** button always opens the discover UI and explains missing vendor/model/IP or SNMP credentials instead of doing nothing when disabled.
+
 ---
 
 ## [0.3.56] - 2026-08-07
