@@ -104,6 +104,8 @@ class Schema
                 'snmp_last_poll_at' => 'DATETIME2 NULL',
                 'snmp_last_poll_watts' => 'DECIMAL(18,4) NULL',
                 'snmp_last_poll_amps' => 'DECIMAL(18,4) NULL',
+                // Dell iDRAC BMC address (IP or hostname) — preferred SNMP / web target when set
+                'idrac_host' => 'NVARCHAR(255) NULL',
             ];
             foreach ($deviceCols as $col => $def) {
                 self::ensureColumn('devices', $col, $def);
@@ -632,6 +634,7 @@ class Schema
                 'warranty_provider', 'tags', 'snmp_version', 'snmp_community', 'snmp_fail_count',
                 'snmp_v3_profile_id', 'snmp_site_template_id', 'snmp_auto_poll',
                 'snmp_last_poll_at', 'snmp_last_poll_watts', 'snmp_last_poll_amps',
+                'idrac_host',
             ],
             'snmp_site_oid_templates' => ['template_id', 'name', 'oid_map'],
             'pdu_templates' => ['template_id', 'name', 'fields_json'],

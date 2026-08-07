@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
 require_once dirname(__DIR__) . '/includes/power_helpers.php';
+require_once dirname(__DIR__) . '/src/Services/SnmpDiscover.php';
 App::boot();
 $user = App::requirePermission('view_devices');
 
@@ -195,6 +196,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         'snmp_v3_context' => device_empty_to_null($_POST['snmp_v3_context'] ?? null),
         'hostname' => device_empty_to_null($_POST['hostname'] ?? null),
         'mgmt_ip' => device_empty_to_null($_POST['mgmt_ip'] ?? null),
+        'idrac_host' => device_empty_to_null($_POST['idrac_host'] ?? null),
     ];
 
     // Prevent self-parent
@@ -1022,6 +1024,29 @@ if ($action === 'new' || $id) {
                             <div><dt>Asset tag</dt><dd><?= $dash($device['asset_tag'] ?? null) ?></dd></div>
                             <div><dt>Primary IP</dt><dd><?= $dash($device['primary_ip'] ?? null) ?></dd></div>
                             <div><dt>Management IP</dt><dd><?= $dash($device['mgmt_ip'] ?? null) ?></dd></div>
+                            <?php
+                            $idracHostView = trim((string)($device['idrac_host'] ?? ''));
+                            $showIdracView = $idracHostView !== ''
+                                || SnmpDiscover::isDellManufacturer($device['manufacturer'] ?? null);
+                            if ($showIdracView):
+                                $idracUrl = $idracHostView !== ''
+                                    ? SnmpDiscover::idracWebUrl($idracHostView)
+                                    : null;
+                                ?>
+                            <div><dt>iDRAC</dt><dd>
+                                <?php if ($idracUrl): ?>
+                                    <a href="<?= App::e($idracUrl) ?>" target="_blank" rel="noopener noreferrer"
+                                       title="Open iDRAC web interface in a new tab">
+                                        <?= App::e($idracHostView) ?>
+                                    </a>
+                                    <span class="text-muted" style="font-size:.8rem"> · opens in new tab</span>
+                                <?php elseif ($idracHostView !== ''): ?>
+                                    <?= App::e($idracHostView) ?>
+                                <?php else: ?>
+                                    —
+                                <?php endif; ?>
+                            </dd></div>
+                            <?php endif; ?>
                             <div><dt>Manufacture date</dt><dd><?= $dash($device['manufacture_date'] ?? null) ?></dd></div>
                             <div><dt>Install date</dt><dd><?= $dash($device['install_date'] ?? null) ?></dd></div>
                             <div><dt>Warranty company</dt><dd><?= $dash($device['warranty_provider'] ?? null) ?></dd></div>
@@ -1374,14 +1399,15 @@ if ($action === 'new' || $id) {
                         }
                     }
                     $autoPoll = !empty($device['snmp_auto_poll']);
-                    $discoverHost = trim((string)($device['mgmt_ip'] ?? ''));
-                    if ($discoverHost === '') {
-                        $discoverHost = trim((string)($device['primary_ip'] ?? ''));
-                    }
-                    $discoverReady = trim((string)($device['manufacturer'] ?? '')) !== ''
-                        && trim((string)($device['model'] ?? '')) !== ''
-                        && $discoverHost !== '';
+                    $snmpPrereqs = SnmpDiscover::discoverPrereqs($device);
+                    $discoverHost = $snmpPrereqs['host'];
+                    $usesIdracHost = !empty($snmpPrereqs['uses_idrac']);
+                    $discoverReady = $snmpPrereqs['ok'];
                     $canSnmpActions = $canEditThis || AuthManager::canEditSnmp($user);
+                    $idracWebUrlSnmp = null;
+                    if ($usesIdracHost || trim((string)($device['idrac_host'] ?? '')) !== '') {
+                        $idracWebUrlSnmp = SnmpDiscover::idracWebUrl($device['idrac_host'] ?? null);
+                    }
                 ?>
                 <div class="card view-pane" id="deviceSnmpCard">
                     <div class="card-header flex-between">
@@ -1400,7 +1426,7 @@ if ($action === 'new' || $id) {
                                 </span>
                             </label>
                             <button type="button" class="btn btn-secondary btn-sm" id="btnSnmpDiscover"
-                                <?= $discoverReady ? '' : 'disabled title="Need manufacturer, model, and IP"' ?>>
+                                <?= $discoverReady ? '' : 'disabled title="Need manufacturer, model, and iDRAC/IP"' ?>>
                                 Discover OIDs
                             </button>
                             <button type="button" class="btn btn-primary btn-sm" id="btnSnmpPollNow"
@@ -1428,6 +1454,19 @@ if ($action === 'new' || $id) {
                         ?>
                         <dl class="view-dl">
                             <div><dt>Version</dt><dd><?= App::e((string)$device['snmp_version']) ?></dd></div>
+                            <div><dt>SNMP host</dt><dd>
+                                <?php if ($discoverHost !== ''): ?>
+                                    <?= App::e($discoverHost) ?>
+                                    <?php if ($usesIdracHost): ?>
+                                        <span class="badge badge-info" style="margin-left:.35rem">iDRAC</span>
+                                        <?php if ($idracWebUrlSnmp): ?>
+                                            · <a href="<?= App::e($idracWebUrlSnmp) ?>" target="_blank" rel="noopener noreferrer">Open iDRAC</a>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </dd></div>
                             <?php if ($isV3): ?>
                             <div><dt>v3 profile</dt><dd>
                                 <?php if ($snmpProfName): ?>
@@ -1488,7 +1527,10 @@ if ($action === 'new' || $id) {
                         </dl>
                         <?php if (!$discoverReady && $canSnmpActions): ?>
                             <p class="text-muted snmp-poll-stats">
-                                Discover needs manufacturer, model, and management/primary IP.
+                                Discover needs manufacturer, model, and
+                                <?= SnmpDiscover::isDellManufacturer($device['manufacturer'] ?? null)
+                                    ? 'iDRAC host (preferred), management IP, or primary IP'
+                                    : 'management/primary IP' ?>.
                             </p>
                         <?php elseif ($siteTplId < 1 && $canSnmpActions): ?>
                             <p class="text-muted snmp-poll-stats">
@@ -1499,6 +1541,12 @@ if ($action === 'new' || $id) {
                                 <strong>Env host:</strong> keep <em>Scheduled poll</em> on so linked env sensors
                                 refresh via the Windows task (<code>poll_snmp.php</code>).
                                 Saving a new site template turns scheduled poll on automatically for env devices.
+                            </p>
+                        <?php elseif ($usesIdracHost && $canSnmpActions): ?>
+                            <p class="text-muted snmp-poll-stats">
+                                <strong>Dell iDRAC:</strong> Discover / Poll target this BMC address
+                                (not the OS primary IP). iDRAC often still requires a community name
+                                configured on the controller even when using SNMPv3.
                             </p>
                         <?php endif; ?>
                     </div>
@@ -1607,7 +1655,13 @@ if ($action === 'new' || $id) {
                     }
                     function renderDiscover(data) {
                         lastDiscover = data;
-                        document.getElementById('snmpDiscHost').textContent = data.host || '—';
+                        var hostEl = document.getElementById('snmpDiscHost');
+                        if (hostEl) {
+                            hostEl.textContent = data.host || '—';
+                            if (data.uses_idrac && data.host) {
+                                hostEl.textContent = (data.host || '—') + ' (iDRAC)';
+                            }
+                        }
                         document.getElementById('snmpDiscTplName').textContent = data.template_name || '—';
                         document.getElementById('snmpDiscWalk').textContent = String(data.walk_count != null ? data.walk_count : '—');
                         document.getElementById('snmpDiscSys').textContent = data.sysDescr || '—';
@@ -2092,6 +2146,18 @@ if ($action === 'new' || $id) {
                 <div class="form-row"><label>Mgmt IP</label>
                     <input class="form-control" name="mgmt_ip"
                            value="<?= App::e($device['mgmt_ip'] ?? '') ?>"></div>
+                <div class="form-row full idrac-host-fields" id="idracHostRow" hidden>
+                    <label>iDRAC IP or Hostname</label>
+                    <input class="form-control" name="idrac_host" id="idrac_host"
+                           value="<?= App::e($device['idrac_host'] ?? '') ?>"
+                           placeholder="e.g. 10.0.0.50 or idrac-server01.example.com"
+                           autocomplete="off">
+                    <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                        Shown when manufacturer is Dell. Used for SNMP Discover / Poll and the
+                        <strong>Open iDRAC</strong> link on the device page (HTTPS, new tab).
+                        Leave blank to use Mgmt / Primary IP for SNMP instead.
+                    </p>
+                </div>
             </div>
         </div>
 
@@ -2286,7 +2352,12 @@ if ($action === 'new' || $id) {
                     <input class="form-control" name="snmp_community" id="snmp_community"
                            value=""
                            placeholder="<?= !empty($device['snmp_community']) ? '•••• saved (leave blank to keep)' : '' ?>"
-                           autocomplete="off"></div>
+                           autocomplete="off">
+                    <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                        Used for v1/v2c. <strong>Dell iDRAC:</strong> a community is often still required
+                        on the controller to enable SNMP even when you poll with SNMPv3 below.
+                    </p>
+                </div>
                 <div class="form-row"><label>SNMP Consecutive Failures</label>
                     <input class="form-control" type="number" min="0" name="snmp_fail_count"
                            value="<?= (int)($device['snmp_fail_count'] ?? 0) ?>"
@@ -2622,8 +2693,33 @@ if ($action === 'new' || $id) {
                 setVal('nominal_watts', watts);
                 setVal('num_data_ports', dp);
                 if (snmp) setVal('snmp_version', snmp);
+                toggleIdracFields();
             });
         }
+
+        // Dell iDRAC host field (manufacturer starts with "Dell")
+        function isDellManufacturer(val) {
+            var m = String(val || '').trim().toLowerCase();
+            if (!m) return false;
+            return m === 'dell' || m.indexOf('dell ') === 0
+                || m.indexOf('dell,') === 0 || m.indexOf('dell.') === 0;
+        }
+        function toggleIdracFields() {
+            var mfrEl = document.querySelector('[name="manufacturer"]');
+            var row = document.getElementById('idracHostRow');
+            var hostEl = document.getElementById('idrac_host');
+            if (!row) return;
+            var mfr = mfrEl ? mfrEl.value : '';
+            var hasHost = hostEl && String(hostEl.value || '').trim() !== '';
+            var show = isDellManufacturer(mfr) || hasHost;
+            row.hidden = !show;
+        }
+        var mfrInput = document.querySelector('[name="manufacturer"]');
+        if (mfrInput) {
+            mfrInput.addEventListener('input', toggleIdracFields);
+            mfrInput.addEventListener('change', toggleIdracFields);
+        }
+        toggleIdracFields();
 
         // SNMP version / v3 profile helpers
         var snmpVer = document.getElementById('snmp_version');

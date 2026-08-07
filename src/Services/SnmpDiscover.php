@@ -2538,16 +2538,78 @@ class SnmpDiscover
     }
 
     /**
+     * True when manufacturer looks like Dell (for iDRAC field / host preference).
+     */
+    public static function isDellManufacturer(?string $manufacturer): bool
+    {
+        $m = strtolower(trim((string)$manufacturer));
+        if ($m === '') {
+            return false;
+        }
+        // "dell", "dell inc.", "dell technologies", "dell emc", ...
+        return $m === 'dell'
+            || str_starts_with($m, 'dell ')
+            || str_starts_with($m, 'dell,')
+            || str_starts_with($m, 'dell.');
+    }
+
+    /**
+     * SNMP target host for a device: Dell iDRAC when set, else mgmt_ip, else primary_ip.
+     * @param array<string,mixed> $device
+     */
+    public static function snmpHostFromDevice(array $device): string
+    {
+        $idrac = trim((string)($device['idrac_host'] ?? ''));
+        if ($idrac !== '' && self::isDellManufacturer($device['manufacturer'] ?? null)) {
+            // Strip accidental scheme if pasted from a browser URL
+            if (preg_match('#^https?://#i', $idrac)) {
+                $idrac = (string)preg_replace('#^https?://#i', '', $idrac);
+                $idrac = rtrim(explode('/', $idrac, 2)[0], '/');
+            }
+            return $idrac;
+        }
+        $host = trim((string)($device['mgmt_ip'] ?? ''));
+        if ($host === '') {
+            $host = trim((string)($device['primary_ip'] ?? ''));
+        }
+        return $host;
+    }
+
+    /**
+     * Build https://… URL for the iDRAC web UI (opens in a new tab from the device page).
+     */
+    public static function idracWebUrl(?string $idracHost): ?string
+    {
+        $h = trim((string)$idracHost);
+        if ($h === '') {
+            return null;
+        }
+        if (preg_match('#^https?://#i', $h)) {
+            return $h;
+        }
+        // IPv6 without brackets → wrap for URL
+        if (str_contains($h, ':') && !str_starts_with($h, '[')
+            && filter_var($h, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)
+        ) {
+            $h = '[' . $h . ']';
+        }
+        // Basic host safety (hostname, IPv4, bracketed IPv6, optional :port)
+        if (!preg_match('#^(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9][a-zA-Z0-9._-]*)(:\d{1,5})?$#', $h)
+            && !filter_var($h, FILTER_VALIDATE_IP)
+        ) {
+            return null;
+        }
+        return 'https://' . $h . '/';
+    }
+
+    /**
      * Credentials array from a devices row.
      * @param array<string,mixed> $device
      * @return array<string,mixed>
      */
     public static function credsFromDevice(array $device): array
     {
-        $host = trim((string)($device['mgmt_ip'] ?? ''));
-        if ($host === '') {
-            $host = trim((string)($device['primary_ip'] ?? ''));
-        }
+        $host = self::snmpHostFromDevice($device);
         $version = strtolower((string)($device['snmp_version'] ?? '3'));
         if ($version === '') {
             $version = '3';
@@ -2563,6 +2625,7 @@ class SnmpDiscover
             'priv_protocol' => (string)($device['snmp_v3_priv_proto'] ?? 'AES'),
             'priv_passphrase' => (string)(Crypto::decryptQuiet($device['snmp_v3_priv_pass'] ?? null) ?? ''),
             'community' => (string)(Crypto::decryptQuiet($device['snmp_community'] ?? null) ?? 'public'),
+            'context' => (string)($device['snmp_v3_context'] ?? ''),
         ];
         // Profile overrides when set (same rules as device Save)
         if (!empty($device['snmp_v3_profile_id'])) {
@@ -2590,6 +2653,9 @@ class SnmpDiscover
                     if (!empty($prof['priv_passphrase'])) {
                         $creds['priv_passphrase'] = (string)(Crypto::decryptQuiet((string)$prof['priv_passphrase']) ?? '');
                     }
+                    if (trim((string)($prof['context_name'] ?? '')) !== '') {
+                        $creds['context'] = (string)$prof['context_name'];
+                    }
                     $creds['snmp_version'] = '3';
                 }
             } catch (Throwable $e) {
@@ -2602,16 +2668,16 @@ class SnmpDiscover
     /**
      * Pre-flight: vendor (manufacturer), model, and IP must be set.
      * @param array<string,mixed> $device
-     * @return array{ok:bool,vendor:string,model:string,host:string,missing:list<string>}
+     * @return array{ok:bool,vendor:string,model:string,host:string,missing:list<string>,uses_idrac:bool}
      */
     public static function discoverPrereqs(array $device): array
     {
         $vendor = trim((string)($device['manufacturer'] ?? ''));
         $model = trim((string)($device['model'] ?? ''));
-        $host = trim((string)($device['mgmt_ip'] ?? ''));
-        if ($host === '') {
-            $host = trim((string)($device['primary_ip'] ?? ''));
-        }
+        $host = self::snmpHostFromDevice($device);
+        $usesIdrac = $host !== ''
+            && trim((string)($device['idrac_host'] ?? '')) !== ''
+            && self::isDellManufacturer($vendor);
         $missing = [];
         if ($vendor === '') {
             $missing[] = 'manufacturer (vendor)';
@@ -2620,7 +2686,11 @@ class SnmpDiscover
             $missing[] = 'model';
         }
         if ($host === '') {
-            $missing[] = 'management or primary IP';
+            if (self::isDellManufacturer($vendor)) {
+                $missing[] = 'iDRAC host, management IP, or primary IP';
+            } else {
+                $missing[] = 'management or primary IP';
+            }
         }
         return [
             'ok' => $missing === [],
@@ -2628,6 +2698,7 @@ class SnmpDiscover
             'model' => $model,
             'host' => $host,
             'missing' => $missing,
+            'uses_idrac' => $usesIdrac,
         ];
     }
 

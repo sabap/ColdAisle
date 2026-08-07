@@ -419,8 +419,11 @@ try {
     $scheduledPdus = [];
 }
 try {
+    if (!class_exists('SnmpDiscover') && is_file(dirname(__DIR__) . '/src/Services/SnmpDiscover.php')) {
+        require_once dirname(__DIR__) . '/src/Services/SnmpDiscover.php';
+    }
     $scheduledDevices = Database::fetchAll(
-        'SELECT d.device_id, d.label, d.mgmt_ip, d.primary_ip, d.snmp_version,
+        'SELECT d.device_id, d.label, d.mgmt_ip, d.primary_ip, d.idrac_host, d.manufacturer, d.snmp_version,
                 d.snmp_last_poll_at, d.snmp_last_poll_watts, d.snmp_last_poll_amps,
                 d.snmp_site_template_id, t.vendor AS template_vendor, t.model AS template_model, t.name AS template_name
          FROM devices d
@@ -1044,10 +1047,9 @@ layout_header('SNMP Polling', $user, 'snmp');
             <?php endforeach; ?>
 
             <?php foreach ($scheduledDevices as $sd):
-                $host = trim((string)($sd['mgmt_ip'] ?? ''));
-                if ($host === '') {
-                    $host = trim((string)($sd['primary_ip'] ?? ''));
-                }
+                $host = class_exists('SnmpDiscover')
+                    ? SnmpDiscover::snmpHostFromDevice($sd)
+                    : (trim((string)($sd['mgmt_ip'] ?? '')) ?: trim((string)($sd['primary_ip'] ?? '')));
                 $last = (string)($sd['snmp_last_poll_at'] ?? '');
                 $bits = [];
                 if ($sd['snmp_last_poll_watts'] !== null && $sd['snmp_last_poll_watts'] !== '') {

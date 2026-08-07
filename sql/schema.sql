@@ -312,6 +312,7 @@ CREATE TABLE devices (
     primary_ip NVARCHAR(45) NULL,
     mgmt_ip NVARCHAR(45) NULL,
     hostname NVARCHAR(255) NULL,
+    idrac_host NVARCHAR(255) NULL, -- Dell iDRAC IP or hostname (SNMP + web UI)
     -- Power
     nominal_watts DECIMAL(10,2) NULL,
     -- Status lifecycle: production,testing,disposed,development,reserved,spare

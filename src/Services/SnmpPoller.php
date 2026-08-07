@@ -283,7 +283,10 @@ class SnmpPoller
 
         $creds = SnmpDiscover::credsFromDevice($device);
         if ($creds['host'] === '') {
-            throw new RuntimeException('Device has no management/primary IP for SNMP.');
+            $hint = SnmpDiscover::isDellManufacturer($device['manufacturer'] ?? null)
+                ? 'iDRAC host, management IP, or primary IP'
+                : 'management/primary IP';
+            throw new RuntimeException('Device has no ' . $hint . ' for SNMP.');
         }
 
         $ver = strtolower(trim((string)($creds['snmp_version'] ?? '3')));
