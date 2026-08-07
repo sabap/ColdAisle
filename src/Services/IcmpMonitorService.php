@@ -81,18 +81,12 @@ class IcmpMonitorService
 
     /**
      * Host to ping for a devices row.
-     * Prefer iDRAC for Dell when set, else mgmt_ip, else primary_ip.
+     * Prefer OS-facing addresses only (mgmt_ip, then primary_ip).
+     * Do NOT use iDRAC — BMC answers even when the OS is down, so it is a poor OS up/down signal.
      * @param array<string,mixed> $device
      */
     public static function hostFromDevice(array $device): string
     {
-        if (class_exists('SnmpDiscover')) {
-            require_once __DIR__ . '/SnmpDiscover.php';
-            $h = SnmpDiscover::snmpHostFromDevice($device);
-            if ($h !== '') {
-                return $h;
-            }
-        }
         $h = trim((string)($device['mgmt_ip'] ?? ''));
         if ($h === '') {
             $h = trim((string)($device['primary_ip'] ?? ''));

@@ -71,7 +71,7 @@ try {
                 App::json([
                     'error' => $kind === 'pdu'
                         ? 'Set an IP address on this PDU before enabling ICMP monitor.'
-                        : 'Set iDRAC host, management IP, or primary IP before enabling ICMP monitor.',
+                        : 'Set management IP or primary IP (OS address) before enabling ICMP monitor. iDRAC is not used for OS up/down.',
                 ], 400);
             }
             $table = $kind === 'pdu' ? 'pdus' : 'devices';
