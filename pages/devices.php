@@ -913,7 +913,9 @@ if ($action === 'new' || $id) {
                 }
                 $icmpHostDev = class_exists('IcmpMonitorService')
                     ? IcmpMonitorService::hostFromDevice($device)
-                    : trim((string)($device['mgmt_ip'] ?? $device['primary_ip'] ?? ''));
+                    : (trim((string)($device['mgmt_ip'] ?? '')) !== ''
+                        ? trim((string)$device['mgmt_ip'])
+                        : trim((string)($device['primary_ip'] ?? '')));
                 $icmpMonDev = !empty($device['icmp_monitor']);
                 $icmpStDev = class_exists('IcmpMonitorService')
                     ? IcmpMonitorService::statusFromRow('device', $device)
@@ -921,8 +923,8 @@ if ($action === 'new' || $id) {
                 if ($canIcmpDev):
                     ?>
                 <label class="snmp-toggle" title="<?= $icmpHostDev !== ''
-                    ? 'Ping ' . App::e($icmpHostDev) . ' (3 packets · 1s · DOWN after 3 fails)'
-                    : 'Set iDRAC / management / primary IP first' ?>">
+                    ? 'Ping OS address ' . App::e($icmpHostDev) . ' (mgmt/primary — not iDRAC; 3 packets · DOWN after 3 fails)'
+                    : 'Set management IP or primary IP (OS) first — iDRAC is not used for ICMP up/down' ?>">
                     <input type="checkbox" id="devIcmpMonitorToggle"
                         <?= $icmpMonDev ? 'checked' : '' ?>
                         <?= $icmpHostDev !== '' ? '' : 'disabled' ?>>
