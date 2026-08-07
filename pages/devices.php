@@ -214,7 +214,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         $snmpVerPosted = '2c';
         $data['snmp_version'] = '2c';
     }
-    if ($snmpVerPosted === 'v3') {
+    if ($snmpVerPosted === 'v3' || $snmpVerPosted === '3.0') {
+        $snmpVerPosted = '3';
+        $data['snmp_version'] = '3';
+    }
+    // Profile / v3 user posted without version → treat as SNMPv3 (broken edit UI used to post version blank)
+    if ($snmpVerPosted === ''
+        && (!empty($data['snmp_v3_profile_id']) || !empty($data['snmp_v3_user']) || !empty($data['snmp_v3_sec_level']))
+    ) {
         $snmpVerPosted = '3';
         $data['snmp_version'] = '3';
     }
@@ -223,6 +230,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
     // Switching to v1/v2c/disabled: drop profile so it cannot force version back to 3 on save
     if (!$wantsV3) {
         $data['snmp_v3_profile_id'] = null;
+    }
+
+    // If model/manufacturer left blank but a device template is linked, copy from template
+    // (properties page already shows template model; Discover needs these on the device row)
+    if ((!empty($data['template_id'])) && (empty($data['model']) || empty($data['manufacturer']))) {
+        try {
+            $tplId = (int)$data['template_id'];
+            $tplRow = Database::fetchOne(
+                'SELECT t.model, m.name AS manufacturer_name
+                 FROM device_templates t
+                 LEFT JOIN manufacturers m ON m.manufacturer_id = t.manufacturer_id
+                 WHERE t.template_id = ?',
+                [$tplId]
+            );
+            if ($tplRow) {
+                if (empty($data['model']) && trim((string)($tplRow['model'] ?? '')) !== '') {
+                    $data['model'] = trim((string)$tplRow['model']);
+                }
+                if (empty($data['manufacturer']) && trim((string)($tplRow['manufacturer_name'] ?? '')) !== '') {
+                    $data['manufacturer'] = trim((string)$tplRow['manufacturer_name']);
+                }
+            }
+        } catch (Throwable $e) {
+            // ignore
+        }
     }
 
     // Apply SNMPv3 credential profile only when version is explicitly SNMPv3
@@ -569,6 +601,7 @@ if ($action === 'new' || $id) {
                         t.rear_picture AS tpl_rear,
                         t.model AS tpl_model,
                         t.device_type AS tpl_device_type,
+                        mfr.name AS tpl_manufacturer,
                         dep.name AS department_name,
                         dep.color_hex AS department_color,
                         ct.first_name AS contact_first,
@@ -578,6 +611,7 @@ if ($action === 'new' || $id) {
                         pd.position_u AS parent_position_u
                  FROM devices d
                  LEFT JOIN device_templates t ON t.template_id = d.template_id
+                 LEFT JOIN manufacturers mfr ON mfr.manufacturer_id = t.manufacturer_id
                  LEFT JOIN departments dep ON dep.department_id = d.department_id
                  LEFT JOIN contacts ct ON ct.contact_id = d.owner_contact_id
                  LEFT JOIN devices pd ON pd.device_id = d.parent_device_id
@@ -935,8 +969,17 @@ if ($action === 'new' || $id) {
                     <div class="card-body">
                         <dl class="view-dl">
                             <div><dt>Class / type</dt><dd><?= App::e($typeLabel) ?></dd></div>
-                            <div><dt>Manufacturer</dt><dd><?= $dash($device['manufacturer'] ?? null) ?></dd></div>
-                            <div><dt>Model</dt><dd><?= $dash($device['model'] ?? ($device['tpl_model'] ?? null)) ?></dd></div>
+                            <div><dt>Manufacturer</dt><dd><?= $dash(
+                                (trim((string)($device['manufacturer'] ?? '')) !== ''
+                                    ? $device['manufacturer']
+                                    : ($device['tpl_manufacturer'] ?? null))
+                            ) ?><?php if (trim((string)($device['manufacturer'] ?? '')) === '' && !empty($device['tpl_manufacturer'])): ?>
+                                <span class="view-derived">(from template)</span>
+                            <?php endif; ?></dd></div>
+                            <div><dt>Model</dt><dd><?= $dash($device['model'] ?? ($device['tpl_model'] ?? null)) ?><?php
+                                if (trim((string)($device['model'] ?? '')) === '' && !empty($device['tpl_model'])): ?>
+                                <span class="view-derived">(from template)</span>
+                            <?php endif; ?></dd></div>
                             <div><dt>Template</dt><dd><?= !empty($device['template_id']) ? $dash($device['tpl_model'] ?? ('#' . $device['template_id'])) : '—' ?></dd></div>
                             <div><dt>Height</dt><dd><?= (int)$uH ?>U</dd></div>
                             <div><dt>Weight</dt><dd><?= $device['weight_kg'] !== null && $device['weight_kg'] !== '' ? App::e((string)$device['weight_kg']) . ' kg' : '—' ?></dd></div>
@@ -1370,7 +1413,10 @@ if ($action === 'new' || $id) {
                 endif; ?>
                 <?php endif; ?>
 
-                <?php if (!empty($device['snmp_version'])):
+                <?php if (!empty($device['snmp_version'])
+                    || !empty($device['snmp_v3_profile_id'])
+                    || !empty($device['snmp_v3_user'])
+                    || !empty($device['snmp_site_template_id'])):
                     $siteTpl = null;
                     $siteTplId = (int)($device['snmp_site_template_id'] ?? 0);
                     if ($siteTplId > 0) {
@@ -2159,12 +2205,28 @@ if ($action === 'new' || $id) {
                     </select>
                     <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">e.g. blade chassis</p>
                 </div>
+                <?php
+                $editMfr = trim((string)($device['manufacturer'] ?? ''));
+                if ($editMfr === '') {
+                    $editMfr = trim((string)($device['tpl_manufacturer'] ?? ''));
+                }
+                $editModel = trim((string)($device['model'] ?? ''));
+                if ($editModel === '') {
+                    $editModel = trim((string)($device['tpl_model'] ?? ''));
+                }
+                ?>
                 <div class="form-row"><label>Manufacturer</label>
                     <input class="form-control" name="manufacturer"
-                           value="<?= App::e($device['manufacturer'] ?? '') ?>"></div>
+                           value="<?= App::e($editMfr) ?>"
+                           placeholder="<?= trim((string)($device['manufacturer'] ?? '')) === '' && $editMfr !== ''
+                               ? 'From template — save to store on device'
+                               : '' ?>"></div>
                 <div class="form-row"><label>Model</label>
                     <input class="form-control" name="model"
-                           value="<?= App::e($device['model'] ?? '') ?>"></div>
+                           value="<?= App::e($editModel) ?>"
+                           placeholder="<?= trim((string)($device['model'] ?? '')) === '' && $editModel !== ''
+                               ? 'From template — save to store on device'
+                               : '' ?>"></div>
                 <div class="form-row"><label>Manufacture Date</label>
                     <input class="form-control" type="date" name="manufacture_date"
                            value="<?= App::e($device['manufacture_date'] ?? '') ?>"></div>
@@ -2396,12 +2458,19 @@ if ($action === 'new' || $id) {
         $devAuthProtoOpts = ['MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512'];
         $devPrivProtoOpts = ['DES', 'AES', 'AES192', 'AES256'];
         ?>
-        <div class="card">
+        <div class="card" id="deviceSnmpEditCard"
+             data-snmp-version="<?= App::e($devSnmpVerNorm) ?>"
+             data-snmp-profile="<?= (int)($device['snmp_v3_profile_id'] ?? 0) ?>"
+             data-snmp-user="<?= App::e((string)($device['snmp_v3_user'] ?? '')) ?>"
+             data-snmp-level="<?= App::e($devSecLvlNorm) ?>"
+             data-snmp-auth="<?= App::e($devAuthProtoNorm) ?>"
+             data-snmp-priv="<?= App::e($devPrivProtoNorm) ?>"
+             data-snmp-context="<?= App::e((string)($device['snmp_v3_context'] ?? '')) ?>">
             <div class="card-header"><h2>SNMP</h2></div>
             <div class="card-body form-grid">
                 <div class="form-row"><label>SNMP Version</label>
-                    <select class="form-control" name="snmp_version" id="snmp_version">
-                        <option value="">— Disabled —</option>
+                    <select class="form-control" name="snmp_version" id="snmp_version" autocomplete="off">
+                        <option value="" <?= $devSnmpVerNorm === '' ? 'selected' : '' ?>>— Disabled —</option>
                         <?php foreach (['1' => '1', '2c' => '2c', '3' => '3'] as $val => $lab): ?>
                             <option value="<?= $val ?>"
                                 <?= $devSnmpVerNorm === $val ? 'selected' : '' ?>>
@@ -2409,6 +2478,17 @@ if ($action === 'new' || $id) {
                             </option>
                         <?php endforeach; ?>
                     </select>
+                    <?php if ($devSnmpVerNorm !== ''): ?>
+                    <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                        Saved version: <strong><?= App::e($devSnmpVerNorm) ?></strong>
+                        <?php if (!empty($device['snmp_v3_user'])): ?>
+                            · user <code><?= App::e((string)$device['snmp_v3_user']) ?></code>
+                        <?php endif; ?>
+                        <?php if (!empty($device['snmp_v3_profile_id'])): ?>
+                            · profile #<?= (int)$device['snmp_v3_profile_id'] ?>
+                        <?php endif; ?>
+                    </p>
+                    <?php endif; ?>
                 </div>
                 <div class="form-row"><label>SNMP Read-Only Community</label>
                     <input class="form-control" name="snmp_community" id="snmp_community"
@@ -2805,18 +2885,50 @@ if ($action === 'new' || $id) {
         function toggleSnmpV3Fields(fromUserChange) {
             if (snmpVer) {
                 var nv = normalizeDevSnmpVersion(snmpVer.value);
-                if (nv && snmpVer.value !== nv) snmpVer.value = nv;
+                // Keep empty string for Disabled; only normalize non-empty aliases
+                if (snmpVer.value !== '' && nv && snmpVer.value !== nv) snmpVer.value = nv;
             }
             var v3 = snmpVer && snmpVer.value === '3';
             document.querySelectorAll('.snmp-v3-fields').forEach(function (el) {
                 el.style.display = v3 ? '' : 'none';
             });
-            // Only clear the profile when the user leaves v3 — never on initial page load
-            // (that wiped the selected credential profile and made edit look empty).
-            if (fromUserChange && !v3 && lastSnmpWasV3 && snmpProf) {
-                snmpProf.value = '';
+            // Only clear v3 fields when the user leaves v3 — never on initial page load
+            if (fromUserChange && !v3 && lastSnmpWasV3) {
+                if (snmpProf) snmpProf.value = '';
+                ['snmp_v3_user', 'snmp_v3_sec_level', 'snmp_v3_auth_proto', 'snmp_v3_priv_proto', 'snmp_v3_context'].forEach(function (id) {
+                    var el = document.getElementById(id);
+                    if (el) el.value = '';
+                });
+                var ap = document.getElementById('snmp_v3_auth_pass');
+                var pp = document.getElementById('snmp_v3_priv_pass');
+                if (ap) { ap.value = ''; ap.placeholder = ''; }
+                if (pp) { pp.value = ''; pp.placeholder = ''; }
             }
             lastSnmpWasV3 = !!v3;
+        }
+        function hydrateSnmpFromServer() {
+            var card = document.getElementById('deviceSnmpEditCard');
+            if (!card || !snmpVer) return;
+            var savedVer = normalizeDevSnmpVersion(card.getAttribute('data-snmp-version') || '');
+            var savedProf = card.getAttribute('data-snmp-profile') || '';
+            var savedUser = card.getAttribute('data-snmp-user') || '';
+            if (!savedVer && ((savedProf && savedProf !== '0') || savedUser)) {
+                savedVer = '3';
+            }
+            if (savedVer && snmpVer.value !== savedVer) {
+                snmpVer.value = savedVer;
+            }
+            if (savedVer === '3' && snmpProf && savedProf && savedProf !== '0') {
+                snmpProf.value = String(savedProf);
+            }
+            if (savedVer === '3') {
+                if (savedUser) setSnmpField('snmp_v3_user', savedUser);
+                setSnmpField('snmp_v3_sec_level', card.getAttribute('data-snmp-level') || '');
+                setSnmpField('snmp_v3_auth_proto', card.getAttribute('data-snmp-auth') || '');
+                setSnmpField('snmp_v3_priv_proto', card.getAttribute('data-snmp-priv') || '');
+                setSnmpField('snmp_v3_context', card.getAttribute('data-snmp-context') || '');
+            }
+            toggleSnmpV3Fields(false);
         }
         function setSnmpField(id, val) {
             var el = document.getElementById(id);
@@ -2870,12 +2982,20 @@ if ($action === 'new' || $id) {
         }
         if (snmpVer) snmpVer.addEventListener('change', function () { toggleSnmpV3Fields(true); });
         if (snmpProf) snmpProf.addEventListener('change', applySnmpProfile);
-        toggleSnmpV3Fields(false);
+        // Restore saved SNMP into the form (fixes selects that rendered as Disabled)
+        hydrateSnmpFromServer();
         // If already on v3 with a profile selected, fill non-secret fields from the profile
         // (passphrases stay as server-side placeholders)
         if (snmpVer && snmpVer.value === '3' && snmpProf && snmpProf.value) {
             applySnmpProfile();
         }
+        // Second pass after other scripts / browser autofill
+        setTimeout(function () {
+            hydrateSnmpFromServer();
+            if (snmpVer && snmpVer.value === '3' && snmpProf && snmpProf.value) {
+                applySnmpProfile();
+            }
+        }, 50);
         // Before submit: only re-apply profile when staying on SNMPv3
         if (deviceForm) {
             deviceForm.addEventListener('submit', function () {
