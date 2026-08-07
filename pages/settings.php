@@ -174,12 +174,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'debug'
             );
             App::setRequestTimerFlag($timerOn);
-            App::flash(
-                'success',
-                $timerOn
-                    ? 'Request timer enabled — shown in the footer on the next page load.'
-                    : 'Request timer disabled.'
-            );
+            if (is_file(dirname(__DIR__) . '/src/Services/IcmpMonitorService.php')) {
+                require_once dirname(__DIR__) . '/src/Services/IcmpMonitorService.php';
+            }
+            $testingOn = !empty($_POST['testing_mode']);
+            $testingKey = class_exists('IcmpMonitorService')
+                ? IcmpMonitorService::SETTING_TESTING_MODE
+                : 'testing_mode';
+            SettingsService::set($testingKey, $testingOn ? '1' : '0', 'debug');
+            $bits = [];
+            $bits[] = $timerOn ? 'request timer on' : 'request timer off';
+            $bits[] = $testingOn ? 'testing mode ON' : 'testing mode off';
+            App::flash('success', 'Diagnostics saved — ' . implode('; ', $bits) . '.');
             App::redirect('pages/settings.php#diagnostics');
         }
 
@@ -953,24 +959,60 @@ if ($nocToken !== '') {
 </div>
 
 <?php if (AuthManager::isAdmin($user)):
+    if (is_file(dirname(__DIR__) . '/src/Services/IcmpMonitorService.php')) {
+        require_once dirname(__DIR__) . '/src/Services/IcmpMonitorService.php';
+    }
     $timerOn = SettingsService::get('debug_request_timer', '0') === '1'
         || App::requestTimerEnabled();
     $timerFromEnvOrConfig = App::requestTimerEnabled()
         && SettingsService::get('debug_request_timer', '0') !== '1';
+    $testingModeOn = class_exists('IcmpMonitorService')
+        ? IcmpMonitorService::testingModeEnabled()
+        : SettingsService::get('testing_mode', '0') === '1';
     ?>
-<div class="card" id="diagnostics">
-    <div class="card-header"><h2>Diagnostics (Global Admin)</h2></div>
+<div class="card settings-feature-card <?= $testingModeOn ? 'settings-feature-active' : 'settings-feature-inactive' ?>"
+     id="diagnostics">
+    <div class="card-header flex-between">
+        <h2>Diagnostics (Global Admin)</h2>
+        <?php if ($testingModeOn): ?>
+            <span class="badge badge-warning">Testing mode</span>
+        <?php endif; ?>
+    </div>
     <div class="card-body">
         <form method="post" class="form-grid">
             <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
             <input type="hidden" name="section" value="diagnostics">
             <div class="form-row full">
                 <p class="text-muted" style="margin:0;font-size:.85rem">
-                    Developer tools for performance troubleshooting. The request timer is visible in the
-                    site footer for <strong>all signed-in users</strong> while enabled — turn it off when finished.
-                    Only Global Admin can change this setting.
+                    Developer tools. Only <strong>Global Admin</strong> can change these settings.
+                    Turn testing mode off when finished so simulate-outage controls disappear.
                 </p>
             </div>
+
+            <div class="form-row full" style="padding:.85rem 1rem;border-radius:10px;border:1px solid rgba(234,179,8,.35);background:rgba(113,63,18,.15)">
+                <label class="snmp-toggle" style="margin:0" title="Expose Simulate Outage / Recovery on Devices and PDUs">
+                    <input type="checkbox" name="testing_mode" value="1" id="testingModeToggle"
+                        <?= $testingModeOn ? 'checked' : '' ?>>
+                    <span class="snmp-switch" aria-hidden="true"></span>
+                    <span class="snmp-toggle-label">
+                        <strong>Testing mode</strong>
+                        <span class="text-muted" style="font-weight:400;display:block;font-size:.78rem;margin-top:.15rem">
+                            Shows <em>Simulate outage</em> / <em>Simulate recovery</em> on device and PDU
+                            pages (and list bulk actions). Forces ICMP DOWN/UP state and fires
+                            <code>[TEST]</code> alerts through the notifications hub — no real packet loss.
+                        </span>
+                    </span>
+                </label>
+            </div>
+            <?php if ($testingModeOn): ?>
+                <div class="form-row full">
+                    <div class="alert alert-warning" style="margin:0;font-size:.85rem">
+                        Testing mode is <strong>active</strong>. Simulated events still write to
+                        notifications / email routes. Disable when demos or drills are done.
+                    </div>
+                </div>
+            <?php endif; ?>
+
             <div class="form-row full"><label>
                 <input type="checkbox" name="debug_request_timer" value="1"
                     <?= SettingsService::get('debug_request_timer', '0') === '1' ? 'checked' : '' ?>>
@@ -992,7 +1034,7 @@ if ($nocToken !== '') {
             <?php elseif ($timerOn): ?>
                 <div class="form-row full">
                     <p class="text-muted" style="margin:0;font-size:.8rem">
-                        Status: <strong style="color:var(--warning,#fbbf24)">enabled</strong>
+                        Request timer: <strong style="color:var(--warning,#fbbf24)">enabled</strong>
                         — look at the bottom of any page after save.
                     </p>
                 </div>

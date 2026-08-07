@@ -1014,6 +1014,17 @@ if ($pduId) {
                 <?= $icmpHostPdu !== '' ? '' : 'disabled title="Need IP address"' ?>>
                 Ping now
             </button>
+            <?php
+            $testingModePdu = class_exists('IcmpMonitorService') && IcmpMonitorService::testingModeEnabled();
+            if ($testingModePdu):
+                ?>
+            <button type="button" class="btn btn-warning btn-sm" id="btnPduIcmpSimDown"
+                title="Testing mode: force ICMP DOWN and fire [TEST] alert"
+                <?= $icmpHostPdu !== '' ? '' : 'disabled' ?>>Simulate outage</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btnPduIcmpSimUp"
+                title="Testing mode: clear simulated DOWN and fire recovery alert"
+                <?= $icmpHostPdu !== '' ? '' : 'disabled' ?>>Simulate recovery</button>
+            <?php endif; ?>
             <?php endif; ?>
             <?php if ($canConfigSnmp): ?>
             <button type="button" class="btn btn-secondary" id="btnPduSnmpDiscover"
@@ -1663,6 +1674,33 @@ if ($pduId) {
                     });
             });
         }
+        function wirePduSim(id, action) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('click', function () {
+                if (!confirm(action === 'simulate_outage'
+                    ? 'Simulate ICMP outage and fire a [TEST] alert for this PDU?'
+                    : 'Simulate recovery and fire a [TEST] recovery alert?')) {
+                    return;
+                }
+                el.disabled = true;
+                icmpApi({ action: action, kind: 'pdu', id: pduId })
+                    .then(function (data) {
+                        toast(data.message || 'Done', action === 'simulate_outage' ? 'warning' : 'success');
+                        if (data.status) renderIcmpStatus(data.status);
+                        if (icmpToggle && data.icmp_monitor) {
+                            icmpToggle.checked = true;
+                            if (icmpLabel) icmpLabel.textContent = 'Monitor via ICMP on';
+                        }
+                    })
+                    .catch(function (err) {
+                        toast((err && err.message) || 'Failed', 'error');
+                    })
+                    .finally(function () { el.disabled = !icmpHostOk; });
+            });
+        }
+        wirePduSim('btnPduIcmpSimDown', 'simulate_outage');
+        wirePduSim('btnPduIcmpSimUp', 'simulate_recovery');
         if (createBtn) {
             createBtn.addEventListener('click', function () {
                 if (lastDiscover && lastDiscover.existing_template) {
@@ -2624,6 +2662,11 @@ $sql .= ' ORDER BY p.name';
 $pdus = Database::fetchAll($sql, $params);
 
 $canEditPdu = AuthManager::canEditPower($user);
+$canBatchIcmpPdu = AuthManager::canEditPower($user) || AuthManager::canEditSnmp($user);
+if (is_file(dirname(__DIR__) . '/src/Services/IcmpMonitorService.php')) {
+    require_once dirname(__DIR__) . '/src/Services/IcmpMonitorService.php';
+}
+$testingModePduList = class_exists('IcmpMonitorService') && IcmpMonitorService::testingModeEnabled();
 $countRack = count(array_filter($pdus, static fn($x) => ($x['pdu_scope'] ?? 'rack') === 'rack'));
 $countRow = count(array_filter($pdus, static fn($x) => ($x['pdu_scope'] ?? '') === 'row'));
 $countRoom = count(array_filter($pdus, static fn($x) => ($x['pdu_scope'] ?? '') === 'room'));
@@ -2713,6 +2756,18 @@ $labelBase = App::url('pages/pdu_label.php');
         <h2>All PDUs</h2>
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
             <span class="text-muted" style="font-size:.85rem"><?= count($pdus) ?> active</span>
+            <?php if ($canBatchIcmpPdu): ?>
+                <button type="button" class="btn btn-sm btn-secondary" id="pduIcmpOnBtn" disabled
+                        title="Enable ICMP monitor on selected PDUs">Monitor ICMP</button>
+                <button type="button" class="btn btn-sm btn-ghost" id="pduIcmpOffBtn" disabled
+                        title="Disable ICMP monitor on selected PDUs">Stop ICMP</button>
+                <?php if ($testingModePduList): ?>
+                    <button type="button" class="btn btn-sm btn-warning" id="pduSimDownBtn" disabled
+                            title="Testing mode: simulate outage">Simulate outage</button>
+                    <button type="button" class="btn btn-sm btn-secondary" id="pduSimUpBtn" disabled
+                            title="Testing mode: simulate recovery">Simulate recovery</button>
+                <?php endif; ?>
+            <?php endif; ?>
             <button type="button" class="btn btn-sm btn-secondary" id="pduLabelBatchBtn" disabled
                     data-open-modal="modal-pdu-label" title="Print labels for selected PDUs">
                 Print labels <span id="pduLabelSelCount" class="text-muted"></span>
@@ -3077,6 +3132,11 @@ window.ColdAislePduLabel = {
         });
     }
 
+    var pduIcmpOn = document.getElementById('pduIcmpOnBtn');
+    var pduIcmpOff = document.getElementById('pduIcmpOffBtn');
+    var pduSimDown = document.getElementById('pduSimDownBtn');
+    var pduSimUp = document.getElementById('pduSimUpBtn');
+
     function syncSelectionUi() {
         var ids = selectedIds();
         cfg.pduIds = ids;
@@ -3087,6 +3147,9 @@ window.ColdAislePduLabel = {
         if (selCountEl) {
             selCountEl.textContent = n > 0 ? '(' + n + ')' : '';
         }
+        [pduIcmpOn, pduIcmpOff, pduSimDown, pduSimUp].forEach(function (b) {
+            if (b) b.disabled = n < 1;
+        });
         rowChecks().forEach(function (c) {
             var tr = c.closest('tr');
             if (tr) tr.classList.toggle('pdu-row-selected', c.checked);
@@ -3097,6 +3160,43 @@ window.ColdAislePduLabel = {
             selectAll.indeterminate = n > 0 && n < all.length;
         }
     }
+
+    function pduIcmpBatch(action, enabled, confirmMsg) {
+        var ids = selectedIds();
+        if (!ids.length) return;
+        if (confirmMsg && !confirm(confirmMsg.replace('{n}', String(ids.length)))) return;
+        var body = { action: action, kind: 'pdu', ids: ids };
+        if (action === 'set_monitor_batch') body.enabled = !!enabled;
+        var btns = [pduIcmpOn, pduIcmpOff, pduSimDown, pduSimUp];
+        btns.forEach(function (b) { if (b) b.disabled = true; });
+        function toast(msg, type) {
+            if (window.ColdAisle && ColdAisle.toast) ColdAisle.toast(msg, type || 'info');
+            else alert(msg);
+        }
+        ColdAisle.api('api/icmp.php', { method: 'POST', body: body })
+            .then(function (data) {
+                toast(data.message || 'Done', data.fail_count ? 'warning' : 'success');
+                if (!data.fail_count || data.ok_count > 0) {
+                    setTimeout(function () { location.reload(); }, 600);
+                }
+            })
+            .catch(function (err) {
+                toast((err && err.message) || 'Batch failed', 'error');
+            })
+            .finally(syncSelectionUi);
+    }
+    if (pduIcmpOn) pduIcmpOn.addEventListener('click', function () {
+        pduIcmpBatch('set_monitor_batch', true, 'Enable ICMP monitoring on {n} PDU(s)? PDUs without an IP will be skipped.');
+    });
+    if (pduIcmpOff) pduIcmpOff.addEventListener('click', function () {
+        pduIcmpBatch('set_monitor_batch', false, 'Disable ICMP monitoring on {n} PDU(s)?');
+    });
+    if (pduSimDown) pduSimDown.addEventListener('click', function () {
+        pduIcmpBatch('simulate_outage_batch', null, 'Simulate outage + [TEST] alerts on {n} PDU(s)?');
+    });
+    if (pduSimUp) pduSimUp.addEventListener('click', function () {
+        pduIcmpBatch('simulate_recovery_batch', null, 'Simulate recovery on {n} PDU(s)?');
+    });
 
     if (selectAll) {
         selectAll.addEventListener('change', function () {

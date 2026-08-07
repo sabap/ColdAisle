@@ -13,6 +13,9 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Testing mode (Global Admin):** Settings → Diagnostics toggle exposes **Simulate outage** / **Simulate recovery** on device and PDU pages (and bulk on lists). Forces ICMP DOWN/UP and fires `[TEST]` alerts through the notification hub.
+- **Batch ICMP monitor:** select devices or PDUs on list pages → **Monitor ICMP** / **Stop ICMP** (and simulate actions when testing mode is on).
+
 ### Enhancements
 
 ### Bug fixes

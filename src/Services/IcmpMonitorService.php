@@ -22,6 +22,8 @@ class IcmpMonitorService
     public const SETTING_PACKETS = 'icmp_packets';
     public const SETTING_TIMEOUT_MS = 'icmp_timeout_ms';
     public const SETTING_COOLDOWN_MIN = 'icmp_alert_cooldown_min';
+    /** Global Admin testing mode — simulate outage / recovery without real packet loss. */
+    public const SETTING_TESTING_MODE = 'testing_mode';
 
     /** Default: 3 consecutive failed checks before marking DOWN (and alerting). */
     public const DEFAULT_CONSEC_DOWN = 3;
@@ -356,6 +358,136 @@ class IcmpMonitorService
         return $stats;
     }
 
+    /** Whether Settings → Diagnostics “Testing mode” is on (Global Admin). */
+    public static function testingModeEnabled(): bool
+    {
+        return SettingsService::get(self::SETTING_TESTING_MODE, '0') === '1';
+    }
+
+    /**
+     * Force ICMP DOWN state + alert (testing mode only). Enables monitor if off.
+     *
+     * @param 'device'|'pdu' $kind
+     * @param array<string,mixed> $row
+     * @return array{ok:bool,status:array,message:string,alerted:bool}
+     */
+    public static function simulateOutage(string $kind, array $row): array
+    {
+        if (!self::testingModeEnabled()) {
+            throw new RuntimeException('Testing mode is off. Enable it under Settings → Diagnostics (Global Admin).');
+        }
+        $cfg = self::settings();
+        $id = $kind === 'pdu' ? (int)($row['pdu_id'] ?? 0) : (int)($row['device_id'] ?? 0);
+        if ($id < 1) {
+            throw new RuntimeException('Invalid entity id.');
+        }
+        $host = $kind === 'pdu' ? self::hostFromPdu($row) : self::hostFromDevice($row);
+        $label = $kind === 'pdu'
+            ? (string)($row['name'] ?? ('PDU #' . $id))
+            : (string)($row['label'] ?? ('Device #' . $id));
+        if ($host === '') {
+            throw new RuntimeException(
+                $kind === 'pdu'
+                    ? 'Set an IP address before simulating an outage.'
+                    : 'Set management IP or primary IP before simulating an outage.'
+            );
+        }
+
+        $consec = max(1, (int)$cfg['consec_down']);
+        $wasDown = isset($row['icmp_last_ok']) && $row['icmp_last_ok'] !== null && !(int)$row['icmp_last_ok']
+            && (int)($row['icmp_fail_count'] ?? 0) >= $consec;
+
+        $patch = [
+            'icmp_monitor' => 1,
+            'icmp_last_at' => date('Y-m-d H:i:s'),
+            'icmp_last_ok' => 0,
+            'icmp_fail_count' => $consec,
+            'icmp_last_rtt_ms' => null,
+            'icmp_last_error' => 'Simulated outage (testing mode)',
+        ];
+        self::updateEntity($kind, $id, $patch);
+
+        $probe = [
+            'ok' => false,
+            'error' => 'Simulated outage (testing mode)',
+            'loss_pct' => 100,
+            'rtt_ms' => null,
+            'packets' => $cfg['packets'],
+            'received' => 0,
+        ];
+        // Always fire alert path for testing (bypass cooldown; allow even if icmp_alerts off)
+        self::maybeAlert($kind, $id, $label, $host, 'down', $probe, true, true);
+
+        $fresh = $kind === 'pdu'
+            ? Database::fetchOne('SELECT * FROM pdus WHERE pdu_id = ?', [$id])
+            : Database::fetchOne('SELECT * FROM devices WHERE device_id = ?', [$id]);
+        $st = self::statusFromRow($kind, $fresh ?: array_merge($row, $patch));
+
+        return [
+            'ok' => true,
+            'status' => $st,
+            'message' => ($wasDown ? 'Re-fired simulated DOWN for ' : 'Simulated outage for ')
+                . $label . ' — alert/notification path exercised.',
+            'alerted' => true,
+            'icmp_monitor' => true,
+        ];
+    }
+
+    /**
+     * Clear simulated DOWN → UP + recovery alert (testing mode only).
+     *
+     * @param 'device'|'pdu' $kind
+     * @param array<string,mixed> $row
+     * @return array{ok:bool,status:array,message:string,alerted:bool}
+     */
+    public static function simulateRecovery(string $kind, array $row): array
+    {
+        if (!self::testingModeEnabled()) {
+            throw new RuntimeException('Testing mode is off. Enable it under Settings → Diagnostics (Global Admin).');
+        }
+        $id = $kind === 'pdu' ? (int)($row['pdu_id'] ?? 0) : (int)($row['device_id'] ?? 0);
+        if ($id < 1) {
+            throw new RuntimeException('Invalid entity id.');
+        }
+        $host = $kind === 'pdu' ? self::hostFromPdu($row) : self::hostFromDevice($row);
+        $label = $kind === 'pdu'
+            ? (string)($row['name'] ?? ('PDU #' . $id))
+            : (string)($row['label'] ?? ('Device #' . $id));
+
+        $patch = [
+            'icmp_monitor' => 1,
+            'icmp_last_at' => date('Y-m-d H:i:s'),
+            'icmp_last_ok' => 1,
+            'icmp_fail_count' => 0,
+            'icmp_last_rtt_ms' => 1.0,
+            'icmp_last_error' => null,
+        ];
+        self::updateEntity($kind, $id, $patch);
+
+        $probe = [
+            'ok' => true,
+            'error' => null,
+            'loss_pct' => 0,
+            'rtt_ms' => 1.0,
+            'packets' => 3,
+            'received' => 3,
+        ];
+        self::maybeAlert($kind, $id, $label, $host !== '' ? $host : 'test', 'up', $probe, true, true);
+
+        $fresh = $kind === 'pdu'
+            ? Database::fetchOne('SELECT * FROM pdus WHERE pdu_id = ?', [$id])
+            : Database::fetchOne('SELECT * FROM devices WHERE device_id = ?', [$id]);
+        $st = self::statusFromRow($kind, $fresh ?: array_merge($row, $patch));
+
+        return [
+            'ok' => true,
+            'status' => $st,
+            'message' => 'Simulated recovery for ' . $label . ' — recovery alert path exercised.',
+            'alerted' => true,
+            'icmp_monitor' => true,
+        ];
+    }
+
     /**
      * @param array<string,mixed> $fields
      */
@@ -373,6 +505,8 @@ class IcmpMonitorService
 
     /**
      * @param array<string,mixed> $probe
+     * @param bool $force Ignore cooldown
+     * @param bool $testing Prefix [TEST] and allow when category alerts disabled
      */
     private static function maybeAlert(
         string $kind,
@@ -380,18 +514,22 @@ class IcmpMonitorService
         string $label,
         string $host,
         string $event,
-        array $probe
+        array $probe,
+        bool $force = false,
+        bool $testing = false
     ): void {
         $cfg = self::settings();
-        if (!$cfg['alerts']) {
+        if (!$cfg['alerts'] && !$testing) {
             return;
         }
         $ck = 'icmp_alert_' . $kind . '_' . $id . '_' . $event;
-        $last = SettingsService::get($ck, '');
-        if (is_string($last) && $last !== '') {
-            $ts = strtotime($last);
-            if ($ts !== false && (time() - $ts) < ($cfg['cooldown_min'] * 60) && $event === 'down') {
-                return; // suppress repeat DOWN
+        if (!$force) {
+            $last = SettingsService::get($ck, '');
+            if (is_string($last) && $last !== '') {
+                $ts = strtotime($last);
+                if ($ts !== false && (time() - $ts) < ($cfg['cooldown_min'] * 60) && $event === 'down') {
+                    return; // suppress repeat DOWN
+                }
             }
         }
         SettingsService::set($ck, date('Y-m-d H:i:s'), 'icmp');
@@ -399,10 +537,16 @@ class IcmpMonitorService
         $title = $event === 'down'
             ? ('ICMP DOWN: ' . $label)
             : ('ICMP recovered: ' . $label);
+        if ($testing) {
+            $title = '[TEST] ' . $title;
+        }
         $body = ($event === 'down' ? 'Host unreachable via ICMP.' : 'Host recovered (ICMP).') . "\n\n"
             . 'Entity: ' . $kind . ' #' . $id . ' — ' . $label . "\n"
             . 'Host: ' . $host . "\n"
             . 'Time: ' . date('c') . "\n";
+        if ($testing) {
+            $body = "⚠ TESTING MODE — this is a simulated event.\n\n" . $body;
+        }
         if ($event === 'down') {
             $body .= 'Error: ' . ($probe['error'] ?? 'no reply') . "\n"
                 . 'Loss: ' . ($probe['loss_pct'] ?? 100) . "%\n";
