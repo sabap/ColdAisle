@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **APC PDU load 0.00 kW (AP7862 / rPDU2):** auto-scale PowerNet rPDU2 power (hundredths of kW) and current (tenths A) from OID path even when the site map key is plain `watts`/`amps`; ignore APC `-1` unsupported; prefer phase power or I×V when Ident watts stays 0; stock AP78xx template + rPDU2 total-power key.
+
 ---
 
 ## [0.3.83] - 2026-08-10

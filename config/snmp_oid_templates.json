@@ -86,10 +86,11 @@
       "id": "apc_rpdu2_phases",
       "vendor": "APC / Schneider",
       "label": "APC rPDU2 3-phase + outlets (AP88xx typical)",
-      "notes": "AP8861-class: device watts from rPDUIdentDevicePowerWatts (true W). Phase power/VA are hundredths of kW (×10→W). Phase/outlet current tenths of A (÷10). PF phase ÷100, device Ident PF ÷1000. Outlet keys are table bases (walked .1…N). L–L volts + dual PS included. Verify after first Poll against the PDU web UI.",
+      "notes": "AP8861-class: prefer rPDU2DeviceStatusPower (hundredths of kW) for total load — rPDUIdentDevicePowerWatts can stay 0 on some AP7xxx/AP8xxx without L–L calibration. Phase power/VA are hundredths of kW (×10→W). Phase/outlet current tenths of A (÷10). Verify first Poll against the PDU web UI.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
         "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "watts_hundredths_kw": "1.3.6.1.4.1.318.1.1.26.4.3.1.5.1",
         "watts": "1.3.6.1.4.1.318.1.1.12.1.16.0",
         "va": "1.3.6.1.4.1.318.1.1.12.1.18.0",
         "pf_x1000": "1.3.6.1.4.1.318.1.1.12.1.17.0",
@@ -126,6 +127,26 @@
         "outlet_state": "1.3.6.1.4.1.318.1.1.26.9.4.3.1.5",
         "outlet_amps_x10": "1.3.6.1.4.1.318.1.1.26.9.4.3.1.6",
         "outlet_watts_hundredths_kw": "1.3.6.1.4.1.318.1.1.26.9.4.3.1.7"
+      }
+    },
+    {
+      "id": "apc_rpdu2_ap78xx",
+      "vendor": "APC / Schneider",
+      "label": "APC rPDU2 metered (AP78xx / AP7862 typical)",
+      "notes": "Zero-U / rack metered (AP7862 class). Device load from rPDU2DeviceStatusPower (0.01 kW units). Phase 1 current/voltage for I×V fallback. rPDUIdentDevicePowerWatts may report 0 if L–L voltage is not calibrated on AP7xxx — do not rely on it alone.",
+      "oid_map": {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "watts_hundredths_kw": "1.3.6.1.4.1.318.1.1.26.4.3.1.5.1",
+        "watts": "1.3.6.1.4.1.318.1.1.12.1.16.0",
+        "serial_no": "1.3.6.1.4.1.318.1.1.12.1.6.0",
+        "phase_rated_amps": "1.3.6.1.4.1.318.1.1.12.1.7.0",
+        "phase1_volts": "1.3.6.1.4.1.318.1.1.26.6.3.1.6.1",
+        "phase1_amps_x10": "1.3.6.1.4.1.318.1.1.26.6.3.1.5.1",
+        "phase1_watts_hundredths_kw": "1.3.6.1.4.1.318.1.1.26.6.3.1.7.1",
+        "phase1_va_hundredths_kw": "1.3.6.1.4.1.318.1.1.26.6.3.1.8.1",
+        "phase1_pf_x100": "1.3.6.1.4.1.318.1.1.26.6.3.1.9.1",
+        "phase1_load_state": "1.3.6.1.4.1.318.1.1.26.6.3.1.4.1"
       }
     },
     {

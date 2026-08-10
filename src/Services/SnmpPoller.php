@@ -1593,13 +1593,22 @@ class SnmpPoller
                 continue;
             }
             try {
-                $raw = self::get($session, ltrim($oid, '.'));
+                $oidNorm = ltrim($oid, '.');
+                $raw = self::get($session, $oidNorm);
                 $num = self::toNumber($raw);
+                // APC sentinel: -1 = "feature not supported" on many rPDU2 leaves
+                if ($num !== null && $num < 0
+                    && preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\./', $oidNorm)
+                ) {
+                    $num = null;
+                }
                 $num = self::applyMetricScale($metricKey, $num);
+                // OID-path scale when Discover saved plain "watts"/"amps" without _hundredths_kw / _x10
+                $num = self::applyApcRpdu2OidScale($metricKey, $oidNorm, $num);
                 $metrics[$metricKey] = [
                     'numeric' => $num,
                     'raw' => $raw,
-                    'oid' => ltrim($oid, '.'),
+                    'oid' => $oidNorm,
                 ];
                 if ($onMetric) {
                     $onMetric((string)$metric, $raw, $num);
@@ -1645,9 +1654,19 @@ class SnmpPoller
                 } elseif (preg_match('/^phase_l31_volts\b/', $metricKey) && $num !== null) {
                     $ll['L3-1'] = $num;
                 } elseif (self::isDeviceTotalWattsKey($metricKey) && $num !== null) {
-                    $deviceWatts = $num;
+                    // Prefer first real load; ignore later zeros (e.g. rPDUIdentDevicePowerWatts=0
+                    // after rPDU2DeviceStatusPower already reported load on AP78xx).
+                    if ($deviceWatts === null
+                        || (abs((float)$deviceWatts) < 0.5 && abs((float)$num) >= 0.5)
+                    ) {
+                        $deviceWatts = $num;
+                    }
                 } elseif (self::isDeviceTotalAmpsKey($metricKey) && $num !== null) {
-                    $deviceAmps = $num;
+                    if ($deviceAmps === null
+                        || (abs((float)$deviceAmps) < 0.01 && abs((float)$num) >= 0.01)
+                    ) {
+                        $deviceAmps = $num;
+                    }
                 } elseif (preg_match('/^(va|device_va|total_va)\b/', $metricKey) && $num !== null) {
                     $deviceVa = $num;
                 } elseif (preg_match('/^(pf|device_pf|power_factor)\b/', $metricKey) && $num !== null) {
@@ -1728,27 +1747,49 @@ class SnmpPoller
             }
         }
 
-        // Prefer explicit device totals; else sum phases for zone rollup
+        // Prefer explicit device totals; else sum phases for zone rollup.
+        // Treat near-zero device total as missing when phases report real load (common on AP78xx
+        // when rPDUIdentDevicePowerWatts stays 0 without L–L voltage calibration).
         $watts = $deviceWatts;
         $amps = $deviceAmps;
-        if ($watts === null && is_array($phasesOut)) {
+        if (($watts === null || abs((float)$watts) < 0.5) && is_array($phasesOut)) {
             $sum = 0.0;
             $any = false;
             foreach (['L1', 'L2', 'L3'] as $lab) {
-                if (isset($phasesOut[$lab]['watts']) && $phasesOut[$lab]['watts'] !== null) {
+                if (isset($phasesOut[$lab]['watts']) && $phasesOut[$lab]['watts'] !== null
+                    && (float)$phasesOut[$lab]['watts'] >= 0
+                ) {
                     $sum += (float)$phasesOut[$lab]['watts'];
                     $any = true;
                 }
             }
-            if ($any) {
+            if ($any && $sum >= 0.5) {
                 $watts = round($sum, 3);
             }
         }
-        if ($amps === null && is_array($phasesOut)) {
+        // Last resort: Σ(I×V) when power leaves are missing/zero but phase current+voltage exist
+        if (($watts === null || abs((float)$watts) < 0.5) && is_array($phasesOut)) {
+            $est = 0.0;
+            $any = false;
+            foreach (['L1', 'L2', 'L3'] as $lab) {
+                $a = $phasesOut[$lab]['amps'] ?? null;
+                $v = $phasesOut[$lab]['volts'] ?? null;
+                if ($a !== null && $v !== null && (float)$a > 0 && (float)$v > 0) {
+                    $est += (float)$a * (float)$v;
+                    $any = true;
+                }
+            }
+            if ($any && $est >= 0.5) {
+                $watts = round($est, 1);
+            }
+        }
+        if (($amps === null || abs((float)$amps) < 0.01) && is_array($phasesOut)) {
             $sum = 0.0;
             $any = false;
             foreach (['L1', 'L2', 'L3'] as $lab) {
-                if (isset($phasesOut[$lab]['amps']) && $phasesOut[$lab]['amps'] !== null) {
+                if (isset($phasesOut[$lab]['amps']) && $phasesOut[$lab]['amps'] !== null
+                    && (float)$phasesOut[$lab]['amps'] > 0
+                ) {
                     $sum += (float)$phasesOut[$lab]['amps'];
                     $any = true;
                 }
@@ -1963,9 +2004,70 @@ class SnmpPoller
         return $num;
     }
 
+    /**
+     * APC PowerNet rPDU2 scales power in hundredths of kW and current in tenths of A.
+     * When site templates map those leaves as plain "watts"/"amps", apply the correct scale
+     * from the OID path so AP78xx / AP86xx / AP88xx loads are not under-reported as 0.00 kW.
+     */
+    private static function applyApcRpdu2OidScale(string $metricKey, string $oid, ?float $num): ?float
+    {
+        if ($num === null) {
+            return null;
+        }
+        $k = strtolower($metricKey);
+        $oid = ltrim($oid, '.');
+        $already = str_contains($k, 'hundredths_kw') || str_contains($k, '0_01kw') || str_contains($k, 'centikw')
+            || str_contains($k, 'tenths_kw')
+            || str_contains($k, 'x10') || str_contains($k, 'x100');
+
+        // Device status: Power(5), PeakPower(6), ApparentPower(16) — hundredths of kW/kVA
+        if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.4\.3\.1\.(5|6|16)(?:\.|$)/', $oid)) {
+            if ($num < 0) {
+                return null;
+            }
+            if (!$already && preg_match('/watt|power|va/', $k) && !str_contains($k, 'factor')) {
+                return round($num * 10.0, 3);
+            }
+            return $num;
+        }
+        // Phase status: Current(5) tenths A; Power(7)/ApparentPower(8) hundredths kW/kVA
+        if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.6\.3\.1\.5(?:\.|$)/', $oid)) {
+            if (!$already && preg_match('/amp|current/', $k)) {
+                return round($num / 10.0, 3);
+            }
+            return $num;
+        }
+        if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.6\.3\.1\.(7|8)(?:\.|$)/', $oid)) {
+            if ($num < 0) {
+                return null;
+            }
+            if (!$already && preg_match('/watt|power|va/', $k) && !str_contains($k, 'factor')) {
+                return round($num * 10.0, 3);
+            }
+            return $num;
+        }
+        // Outlet metered: current(6) tenths A; power(7) hundredths kW
+        if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.9\.4\.3\.1\.6(?:\.|$)/', $oid)) {
+            if (!$already && preg_match('/amp|current/', $k)) {
+                return round($num / 10.0, 3);
+            }
+            return $num;
+        }
+        if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.9\.4\.3\.1\.7(?:\.|$)/', $oid)) {
+            if ($num < 0) {
+                return null;
+            }
+            if (!$already && preg_match('/watt|power/', $k)) {
+                return round($num * 10.0, 3);
+            }
+            return $num;
+        }
+        return $num;
+    }
+
     private static function isDeviceTotalWattsKey(string $key): bool
     {
-        if (str_starts_with($key, 'phase')) {
+        if (str_starts_with($key, 'phase') || str_starts_with($key, 'outlet')) {
             return false;
         }
         return (bool)preg_match(
