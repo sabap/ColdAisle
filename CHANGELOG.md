@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Natural sort for PDU (and UPS) names:** lists use alphanumeric order so unit 1…9 appear before 10 (e.g. RA-R1 before RA-R10)
+
 ### Bug fixes
 
 ---

@@ -185,18 +185,18 @@ if ($zoneId) {
         'SELECT * FROM power_panels WHERE zone_id = ? ORDER BY name',
         [$zoneId]
     );
-    $zonePdus = Database::fetchAll(
+    $zonePdus = power_natural_sort_rows(Database::fetchAll(
         'SELECT p.*, c.name AS cabinet_name
          FROM pdus p
          LEFT JOIN cabinets c ON c.cabinet_id = p.cabinet_id
          WHERE p.zone_id = ? AND p.is_active = 1
          ORDER BY p.name',
         [$zoneId]
-    );
+    ), 'name');
     $zoneUps = [];
     try {
         require_once dirname(__DIR__) . '/includes/ups_helpers.php';
-        $zoneUps = Database::fetchAll(
+        $zoneUps = power_natural_sort_rows(Database::fetchAll(
             'SELECT u.ups_id, u.name, u.ups_scope, u.manufacturer, u.model, u.primary_ip,
                     u.last_output_status, u.last_load_pct, u.last_battery_pct, u.last_runtime_min,
                     u.rated_kva, u.rated_kw, u.snmp_enabled, u.snmp_last_poll_at, u.last_poll_json
@@ -204,7 +204,7 @@ if ($zoneId) {
              WHERE u.zone_id = ? AND u.is_active = 1
              ORDER BY u.name',
             [$zoneId]
-        );
+        ), 'name');
         foreach ($zoneUps as &$zu) {
             $zu['health'] = function_exists('ups_health_status') ? ups_health_status($zu) : 'unknown';
         }

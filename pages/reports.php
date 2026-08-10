@@ -31,6 +31,9 @@ try {
     $phPdus = Database::fetchAll(
         'SELECT pdu_id, name FROM pdus WHERE is_active = 1 ORDER BY name'
     );
+    if (function_exists('power_natural_sort_rows')) {
+        $phPdus = power_natural_sort_rows($phPdus, 'name');
+    }
 } catch (Throwable $e) {
     $phZones = [];
     $phPdus = [];
@@ -75,14 +78,19 @@ function report_power_capacity(): array
 {
     return [
         'zones' => Database::fetchAll('SELECT * FROM power_zones ORDER BY name'),
-        'pdus' => Database::fetchAll(
-            'SELECT p.name, p.pdu_scope, p.rated_amps, p.rated_volts, p.last_poll_watts, p.last_poll_amps, p.last_poll_at,
-                    c.name AS cabinet_name, z.name AS zone_name
-             FROM pdus p
-             LEFT JOIN cabinets c ON c.cabinet_id = p.cabinet_id
-             LEFT JOIN power_zones z ON z.zone_id = p.zone_id
-             WHERE p.is_active = 1 ORDER BY p.name'
-        ),
+        'pdus' => (function () {
+            $rows = Database::fetchAll(
+                'SELECT p.name, p.pdu_scope, p.rated_amps, p.rated_volts, p.last_poll_watts, p.last_poll_amps, p.last_poll_at,
+                        c.name AS cabinet_name, z.name AS zone_name
+                 FROM pdus p
+                 LEFT JOIN cabinets c ON c.cabinet_id = p.cabinet_id
+                 LEFT JOIN power_zones z ON z.zone_id = p.zone_id
+                 WHERE p.is_active = 1 ORDER BY p.name'
+            );
+            return function_exists('power_natural_sort_rows')
+                ? power_natural_sort_rows($rows, 'name')
+                : $rows;
+        })(),
     ];
 }
 

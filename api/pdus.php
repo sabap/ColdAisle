@@ -231,7 +231,13 @@ try {
             $params[] = $cabinetId;
         }
         $sql .= ' ORDER BY p.name';
-        App::json(['pdus' => Database::fetchAll($sql, $params)]);
+        $pdus = Database::fetchAll($sql, $params);
+        if (function_exists('power_natural_sort_rows')) {
+            $pdus = power_natural_sort_rows($pdus, 'name');
+        } else {
+            usort($pdus, static fn($a, $b) => strnatcasecmp((string)($a['name'] ?? ''), (string)($b['name'] ?? '')));
+        }
+        App::json(['pdus' => $pdus]);
     }
 
     if ($method === 'POST') {

@@ -23,7 +23,7 @@ $zones = Database::fetchAll(
      ORDER BY z.name'
 );
 
-$pdus = Database::fetchAll(
+$pdus = power_natural_sort_rows(Database::fetchAll(
     'SELECT p.*, c.name AS cabinet_name, z.name AS zone_name, z.color_hex AS zone_color,
             r.name AS row_name
      FROM pdus p
@@ -32,7 +32,7 @@ $pdus = Database::fetchAll(
      LEFT JOIN cabinet_rows r ON r.row_id = p.row_id
      WHERE p.is_active = 1
      ORDER BY p.name'
-);
+), 'name');
 
 $panelCount = (int) Database::fetchValue('SELECT COUNT(*) FROM power_panels');
 $snmpOn = count(array_filter($pdus, static fn($p) => !empty($p['snmp_enabled'])));
