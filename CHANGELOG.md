@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **APC AP7862 still 0.00 kW after UPS work:** poll recovery probes rPDU2 power + legacy rPDU phase amps and estimates W via I×V; reclassifies Discover maps that put `rPDULoadStatusLoad` (tenths A) under `watts`; Discover no longer treats current/load-status or UPS trees as PDU watts. UPS commits did not rewrite PDU OIDs — chart drop tracks zeroed poll samples after bad/zero watts maps.
+
 ---
 
 ## [0.3.85] - 2026-08-10
