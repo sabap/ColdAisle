@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **PDU Discover auto-fills serial and model:** writes empty inventory Serial / Model from PowerNet ident OIDs (or sysDescr `SN:` / `MN:`); model no longer required before Discover; Overview and Edit form update live when saved
-
 ### Bug fixes
 
 ---
 
+## [0.3.98] - 2026-08-10
+
+### Enhancements
+
+- **PDU Discover auto-fills serial and model:** writes empty inventory Serial / Model from PowerNet ident OIDs (or sysDescr `SN:` / `MN:`); model no longer required before Discover; Overview and Edit form update live when saved
+
+---
 ## [0.3.97] - 2026-08-10
 
 ### Bug fixes
