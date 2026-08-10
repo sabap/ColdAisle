@@ -367,6 +367,23 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
                     <span class="snmp-toggle-label">Scheduled poll</span>
                 </label>
             <?php endif; ?>
+            <?php
+            $testingModeUps = class_exists('IcmpMonitorService') && IcmpMonitorService::testingModeEnabled();
+            if ($testingModeUps && $canSnmp):
+                ?>
+                <button type="button" class="btn btn-warning btn-sm" id="btnUpsSimConn"
+                    title="Testing mode: simulate connectivity / management unreachable and fire [TEST] alert">
+                    Simulate connectivity outage
+                </button>
+                <button type="button" class="btn btn-warning btn-sm" id="btnUpsSimBatt"
+                    title="Testing mode: simulate transfer from line-in to On battery and fire [TEST] alert">
+                    Simulate on battery
+                </button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnUpsSimRec"
+                    title="Testing mode: restore On line and fire [TEST] recovery">
+                    Simulate recovery
+                </button>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -640,6 +657,39 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
                 .catch(function (e) { auto.checked = !on; toast(e.message || 'Failed', 'error'); })
                 .finally(function () { auto.disabled = false; });
         });
+        function wireSim(btnId, action, confirmMsg, toastType) {
+            var btn = document.getElementById(btnId);
+            if (!btn) return;
+            btn.addEventListener('click', function () {
+                if (!confirm(confirmMsg)) return;
+                btn.disabled = true;
+                api({ action: action, ups_id: upsId })
+                    .then(function (data) {
+                        toast(data.message || 'Done', toastType || 'warning');
+                        setTimeout(function () { location.reload(); }, 700);
+                    })
+                    .catch(function (e) { toast(e.message || 'Failed', 'error'); })
+                    .finally(function () { btn.disabled = false; });
+            });
+        }
+        wireSim(
+            'btnUpsSimConn',
+            'simulate_connectivity_outage',
+            'Simulate connectivity outage and fire a [TEST] alert for this UPS?',
+            'warning'
+        );
+        wireSim(
+            'btnUpsSimBatt',
+            'simulate_on_battery',
+            'Simulate transfer from line-in to On battery and fire a [TEST] alert?',
+            'warning'
+        );
+        wireSim(
+            'btnUpsSimRec',
+            'simulate_recovery',
+            'Simulate recovery to On line and fire a [TEST] recovery alert?',
+            'success'
+        );
     })();
     </script>
     <?php endif; ?>
