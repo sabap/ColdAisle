@@ -121,6 +121,11 @@ class SnmpDiscover
     private const WALK_RETRIES = 0;
     /** Probe GET timeout (microseconds) — fail closed agents quickly. */
     private const PROBE_TIMEOUT_USEC = 600_000;
+    /**
+     * xPDU (old InfraStruXure NMC / 0M-5103) GETs — match poller (~2s).
+     * 300–600ms leaves often return nothing while Poll succeeds on the same OIDs.
+     */
+    private const XPDU_GET_TIMEOUT_USEC = 1_500_000;
     /** Leaf exploratory GETs — shorter than probe; many will miss on wrong device type. */
     private const LEAF_TIMEOUT_USEC = 300_000;
     /** Wall-clock budget for leaf phase (seconds). */
@@ -463,8 +468,8 @@ class SnmpDiscover
             $leafGets = array_merge($leafSys, $leafIdrac);
         } elseif ($apcFocus) {
             if ($looksXpdu) {
-                // Row/modular xPDU only — do not thrash rPDU/rPDU2 leaves first
-                $leafGets = array_merge($leafSys, $leafXpdu, $leafPdu);
+                // Row/modular xPDU only — never thrash rPDU 12/26 leaves (burns slow NMC budget)
+                $leafGets = array_merge($leafSys, $leafXpdu);
             } elseif ($looksEms && !$looksPdu) {
                 $leafGets = array_merge($leafSys, $leafEms, $leafPdu);
             } elseif ($looksPdu && !$looksEms) {
@@ -483,9 +488,11 @@ class SnmpDiscover
         $leafLiebertHits = 0;
         $emsTempHits = 0;
         $emsHumHits = 0;
-        // AP7862 / xPDU need many leaf GETs (phase tables)
+        // AP7862 / xPDU need many leaf GETs (phase tables); xPDU uses longer per-OID timeout
         $leafBudget = $coolingFocus ? 4.0 : self::LEAF_PHASE_BUDGET_SEC;
-        if ($apcFocus && ($looksPdu || $looksXpdu)) {
+        if ($apcFocus && $looksXpdu) {
+            $leafBudget = 14.0; // ~1.5s/OID on old NMC; core totals + phases
+        } elseif ($apcFocus && $looksPdu) {
             $leafBudget = 9.0;
         }
         $totalBudget = $coolingFocus ? self::COOLING_TOTAL_BUDGET_SEC : 22.0;
@@ -511,12 +518,27 @@ class SnmpDiscover
                 $logStep('leaf_early_stop ems_live hits=' . $leafHits);
                 break;
             }
+            // xPDU: once total power + three phase currents answer, skip remaining leaves
+            if (!empty($looksXpdu) && $leafHits >= 8) {
+                $haveTotal = isset($collected['1.3.6.1.4.1.318.1.1.15.3.4.3.0']);
+                $havePhases = isset($collected['1.3.6.1.4.1.318.1.1.15.3.4.14.1.4.1'])
+                    && isset($collected['1.3.6.1.4.1.318.1.1.15.3.4.14.1.4.2'])
+                    && isset($collected['1.3.6.1.4.1.318.1.1.15.3.4.14.1.4.3']);
+                if ($haveTotal && $havePhases) {
+                    $logStep('leaf_early_stop xpdu_core hits=' . $leafHits);
+                    break;
+                }
+            }
             // Identity leaves are enough for cooling — skip remaining empty condition GETs
             if ($coolingFocus && $leafLiebertHits >= 2) {
                 $logStep('leaf_early_stop liebert hits=' . $leafLiebertHits);
                 break;
             }
-            $v = self::snmpGet($hostPort, $version, $creds, $oid, self::LEAF_TIMEOUT_USEC);
+            // Slow old xPDU cards need longer GETs; keep other leaves short
+            $leafTo = (!empty($looksXpdu) && str_starts_with($oid, '1.3.6.1.4.1.318.1.1.15.'))
+                ? self::XPDU_GET_TIMEOUT_USEC
+                : self::LEAF_TIMEOUT_USEC;
+            $v = self::snmpGet($hostPort, $version, $creds, $oid, $leafTo);
             if ($v !== null && $v !== false) {
                 $collected[$oid] = [
                     'raw' => $v,
@@ -544,6 +566,55 @@ class SnmpDiscover
             . ' liebertLeaf=' . $leafLiebertHits
             . ' emsT=' . $emsTempHits . ' emsH=' . $emsHumHits);
 
+        // xPDU second chance: short leaf budget often misses 15.x when mixed with EMS/rPDU thrash.
+        // Probe key system-output leaves with full PROBE timeout so Discover candidates match Poll.
+        $xpduHits = 0;
+        foreach ($collected as $oidKey => $_) {
+            if (str_starts_with((string)$oidKey, '1.3.6.1.4.1.318.1.1.15.')) {
+                $xpduHits++;
+            }
+        }
+        if ($apcFocus && !empty($looksXpdu) && $xpduHits < 3
+            && (microtime(true) - $discoverStarted) < ($totalBudget - 2.0)
+        ) {
+            $xpduCore = [
+                '1.3.6.1.4.1.318.1.1.15.1.8.0',
+                '1.3.6.1.4.1.318.1.1.15.3.4.3.0',
+                '1.3.6.1.4.1.318.1.1.15.3.4.4.0',
+                '1.3.6.1.4.1.318.1.1.15.3.4.5.0',
+                '1.3.6.1.4.1.318.1.1.15.3.4.1.0',
+                '1.3.6.1.4.1.318.1.1.15.3.4.14.1.4.1',
+                '1.3.6.1.4.1.318.1.1.15.3.4.14.1.4.2',
+                '1.3.6.1.4.1.318.1.1.15.3.4.14.1.4.3',
+                '1.3.6.1.4.1.318.1.1.15.3.4.14.1.5.1',
+                '1.3.6.1.4.1.318.1.1.15.3.4.14.1.5.2',
+                '1.3.6.1.4.1.318.1.1.15.3.4.14.1.5.3',
+                '1.3.6.1.4.1.318.1.1.15.3.4.14.1.3.1',
+                '1.3.6.1.4.1.318.1.1.15.3.4.14.1.3.2',
+                '1.3.6.1.4.1.318.1.1.15.3.4.14.1.3.3',
+            ];
+            foreach ($xpduCore as $oid) {
+                if (isset($collected[$oid])) {
+                    continue;
+                }
+                if ((microtime(true) - $discoverStarted) >= ($totalBudget - 1.0)) {
+                    break;
+                }
+                $v = self::snmpGet($hostPort, $version, $creds, $oid, self::XPDU_GET_TIMEOUT_USEC);
+                if ($v !== null && $v !== false) {
+                    $collected[$oid] = [
+                        'raw' => $v,
+                        'name' => null,
+                        'module' => 'PowerNet-MIB',
+                        'raw_key' => $oid,
+                    ];
+                    $xpduHits++;
+                    $leafHits++;
+                }
+            }
+            $logStep('xpdu_probe hits=' . $xpduHits);
+        }
+
         // Narrow walks only if still needed and under wall-clock deadline
         $elapsed = microtime(true) - $discoverStarted;
         $haveEmsLive = ($emsTempHits + $emsHumHits) >= 2;
@@ -554,8 +625,13 @@ class SnmpDiscover
             }
         }
         $walkDeadline = $coolingFocus ? self::COOLING_WALK_DEADLINE_SEC : self::WALK_DEADLINE_SEC;
+        // Give xPDU more walk time — table under 15.3.4 is small but old NMC is slow
+        if ($apcFocus && !empty($looksXpdu)) {
+            $walkDeadline = max($walkDeadline, 14.0);
+        }
         $walkRootStats = [];
-        if ($haveEmsLive && !$coolingFocus) {
+        // Never skip xPDU walks just because EMS leaf probes found something elsewhere
+        if ($haveEmsLive && !$coolingFocus && empty($looksXpdu)) {
             $logStep('walks_skipped have_ems_live elapsed=' . round($elapsed, 2));
         } elseif ($coolingFocus && $liebertHits >= 2) {
             // Identity already from leaf GETs — only need a short system walk if missing
@@ -760,6 +836,29 @@ class SnmpDiscover
             }
             if ($looksXpduNow) {
                 $proposed = self::injectApcXpduMap($proposed, $sysS, $collected);
+                // Fill live values into $collected for candidate scoring when walks were empty
+                $proposed = self::probeXpduMapValues(
+                    $proposed,
+                    $collected,
+                    $hostPort,
+                    $version,
+                    $creds,
+                    $discoverStarted,
+                    $totalBudget,
+                    $scored
+                );
+                // Re-count enterprise after probe GETs (used in message / diagnostics)
+                $enterpriseHits = 0;
+                $liebertHits = 0;
+                foreach ($collected as $oidKey => $_) {
+                    $ok = (string)$oidKey;
+                    if (str_starts_with($ok, '1.3.6.1.4.1.476')) {
+                        $liebertHits++;
+                    }
+                    if (str_starts_with($ok, '1.3.6.1.4.1.') && !str_starts_with($ok, '1.3.6.1.4.1.99999')) {
+                        $enterpriseHits++;
+                    }
+                }
             } else {
                 $proposed = self::injectApcClassicRpduMap($proposed, $sysS, $collected);
                 $proposed = self::injectApcOutletBases($proposed, $hostPort, $version, $creds, $sysS, $collected);
@@ -829,6 +928,10 @@ class SnmpDiscover
             }
         }
 
+        $xpduMapSeeded = isset($proposed['watts_tenths_kw'])
+            && is_string($proposed['watts_tenths_kw'])
+            && str_contains((string)$proposed['watts_tenths_kw'], '318.1.1.15.');
+
         $msg = 'Walked ' . count($collected) . ' object(s)';
         if (count($candidates)) {
             $msg = 'Found ' . count($candidates) . ' high-signal candidate OID(s) from '
@@ -858,6 +961,12 @@ class SnmpDiscover
                 $msg .= '; offline index ' . $indexSize . ' objects';
             }
             $msg .= '.';
+            if ($xpduMapSeeded) {
+                $msg .= ' xPDU (PowerNet 15.x) map seeded for InfraStruXure row PDU.';
+            }
+        } elseif ($xpduMapSeeded) {
+            // Map is ready for Create Template even when live GETs timed out mid-Discover
+            $msg .= '; xPDU map seeded from sysDescr (InfraStruXure 15.x) — create template and Poll to verify live values.';
         } else {
             $msg .= '; limited power candidates - review and edit map.';
             if ($outletKeyCount > 0) {
@@ -889,6 +998,8 @@ class SnmpDiscover
         } elseif ($coolingFocus && $lgpIdentity > 0 && $lgpConditions === 0) {
             $msg .= ' LGP product identity present (…476.1.42.2…, e.g. Vertiv IS-UNITY-ICOM2) but '
                 . 'condition/measurement tables (…476.1.42.3…) are empty — no supply/return temps over SNMP until the card exposes them.';
+        } elseif ($xpduMapSeeded) {
+            // Skip generic MIB mismatch noise when xPDU map is intentional
         } elseif ($mibsLoaded > 0 && $namedCount === 0 && $indexSize === 0) {
             $msg .= ' Could not parse OBJECT-TYPE assignments from uploaded MIBs.';
         } elseif ($indexSize > 0 && $namedCount === 0 && $enterpriseHits === 0) {
@@ -1499,6 +1610,9 @@ class SnmpDiscover
             $timeout = 800_000; // identity: small tree
         } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.476/', $root)) {
             $timeout = 500_000; // empty condition roots: fail fast
+        } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.15/', $root)) {
+            // Old InfraStruXure NMC — short walk timeout often returns zero vars
+            $timeout = 1_200_000;
         }
         try {
             // Prefer SNMP class: supports SNMPv3 context + bounded timeouts
@@ -1835,6 +1949,15 @@ class SnmpDiscover
             $score -= 10;
         }
 
+        // InfraStruXure xPDU 15.x — boost even when MIB name resolve fails (common without full PowerNet)
+        if (str_starts_with($oid, '1.3.6.1.4.1.318.1.1.15.')) {
+            $score += 18;
+            // Live system-output / phase table leaves over ident-only
+            if (preg_match('/\.15\.3\.4\./', $oid)) {
+                $score += 8;
+            }
+        }
+
         // --- MIB symbolic name scoring (Phase 1.5) ---
         if ($name) {
             $score += 2; // resolved name helps; keep modest so noise can't ride on it
@@ -1876,11 +1999,9 @@ class SnmpDiscover
             if (preg_match('/statusvoltage|phasestatusvoltage|phasetophase|voltagelto|voltageltol|(?<![a-z])voltage(?![a-z])/', $s)) {
                 $score += 8;
             }
-            // InfraStruXure xPDU system output (row PDUs PD40 / 0M-5103)
-            if (preg_match('/xpdusystemoutput|xpdumaininput|xpduident/', $s)
-                || str_starts_with($oid, '1.3.6.1.4.1.318.1.1.15.')
-            ) {
-                $score += 14;
+            // InfraStruXure xPDU symbolic names
+            if (preg_match('/xpdusystemoutput|xpdumaininput|xpduident/', $s)) {
+                $score += 8;
             }
             if (preg_match('/systemoutputtotalpower|systemoutputpower(?!factor)|systemoutputphasecurrent/', $s)) {
                 $score += 12;
@@ -2701,6 +2822,103 @@ class SnmpDiscover
                 $proposed[$key] = $oid;
             }
         }
+        return $proposed;
+    }
+
+    /**
+     * After seeding an xPDU map, GET key OIDs (longer timeout) and append scored candidates
+     * so Discover UI is not empty when snmpwalk of 15.x fails on old NMCs.
+     *
+     * @param array<string,string> $proposed
+     * @param array<string,array{raw:mixed,name?:?string,module?:?string,raw_key?:string}> $collected
+     * @param list<array<string,mixed>> $scored
+     * @return array<string,string>
+     */
+    private static function probeXpduMapValues(
+        array $proposed,
+        array &$collected,
+        string $hostPort,
+        string $version,
+        array $creds,
+        float $discoverStarted,
+        float $totalBudget,
+        array &$scored
+    ): array {
+        $priority = [
+            'watts_tenths_kw', 'va_tenths_kw', 'pf_x100', 'serial_no',
+            'phase1_amps_x10', 'phase2_amps_x10', 'phase3_amps_x10',
+            'phase1_watts_tenths_kw', 'phase2_watts_tenths_kw', 'phase3_watts_tenths_kw',
+            'phase1_volts_x10', 'phase2_volts_x10', 'phase3_volts_x10',
+        ];
+        $hints = [
+            'watts_tenths_kw' => 'xPDU total power (tenths kW) → load kW',
+            'va_tenths_kw' => 'xPDU total apparent power (tenths kVA)',
+            'pf_x100' => 'xPDU total power factor (hundredths)',
+            'serial_no' => 'xPDU serial',
+            'phase1_amps_x10' => 'xPDU L1 current (tenths A)',
+            'phase2_amps_x10' => 'xPDU L2 current (tenths A)',
+            'phase3_amps_x10' => 'xPDU L3 current (tenths A)',
+            'phase1_watts_tenths_kw' => 'xPDU L1 power (tenths kW)',
+            'phase2_watts_tenths_kw' => 'xPDU L2 power (tenths kW)',
+            'phase3_watts_tenths_kw' => 'xPDU L3 power (tenths kW)',
+            'phase1_volts_x10' => 'xPDU L1 L–N volts (tenths V)',
+            'phase2_volts_x10' => 'xPDU L2 L–N volts (tenths V)',
+            'phase3_volts_x10' => 'xPDU L3 L–N volts (tenths V)',
+        ];
+        $seenOid = [];
+        foreach ($scored as $existing) {
+            $eo = isset($existing['oid']) ? ltrim((string)$existing['oid'], '.') : '';
+            if ($eo !== '') {
+                $seenOid[$eo] = true;
+            }
+        }
+        foreach ($priority as $key) {
+            if ((microtime(true) - $discoverStarted) >= ($totalBudget - 0.5)) {
+                break;
+            }
+            $oid = isset($proposed[$key]) ? ltrim((string)$proposed[$key], '.') : '';
+            if ($oid === '' || !preg_match('/^\d/', $oid)) {
+                continue;
+            }
+            if (!isset($collected[$oid])) {
+                $v = self::snmpGet($hostPort, $version, $creds, $oid, self::XPDU_GET_TIMEOUT_USEC);
+                if ($v === null || $v === false) {
+                    continue;
+                }
+                $collected[$oid] = [
+                    'raw' => $v,
+                    'name' => $key,
+                    'module' => 'PowerNet-MIB',
+                    'raw_key' => $oid,
+                ];
+            }
+            if (!empty($seenOid[$oid])) {
+                continue;
+            }
+            $seenOid[$oid] = true;
+            $raw = $collected[$oid]['raw'] ?? null;
+            $num = self::toNumber($raw);
+            // Prefer high score so candidates table is not empty (MIN_DISPLAY_SCORE = 14)
+            $score = 42;
+            if (str_contains($key, 'watts') || str_contains($key, 'amps')) {
+                $score = 58;
+            }
+            if ($key === 'serial_no') {
+                $score = 100;
+            }
+            $scored[] = [
+                'oid' => $oid,
+                'name' => $key,
+                'module' => 'PowerNet-MIB',
+                'value' => self::utf8Safe(is_scalar($raw) ? (string)$raw : (json_encode($raw) ?: '')),
+                'numeric' => $num,
+                'score' => $score,
+                'hint' => $hints[$key] ?? 'xPDU metric',
+            ];
+        }
+        usort($scored, static function ($a, $b) {
+            return ($b['score'] ?? 0) <=> ($a['score'] ?? 0);
+        });
         return $proposed;
     }
 
