@@ -43,7 +43,7 @@ layout_header('Floor Planner', $user, 'floorplan');
         </button>
         <button type="button" class="btn btn-primary btn-sm" id="toggleGrid" title="Show 1 ft grid on the floor">Grid: On</button>
         <button type="button" class="btn btn-primary btn-sm" id="toggleSnap" title="Snap cabinets to grid when placing or moving">Snap: On</button>
-        <span class="nudge-controls" title="Arrow keys nudge selected (unlocked) cabinets">
+        <span class="nudge-controls" title="Arrow keys nudge selected (unlocked) cabinets, PDUs, UPS, or cooling units">
             <label class="text-muted" style="font-size:.8rem;margin:0">Nudge</label>
             <input type="number" id="nudgeAmount" class="form-control" style="width:4.2rem;padding:.2rem .35rem;font-size:.85rem" min="0.01" step="any" value="1">
             <select id="nudgeUnit" class="form-control" style="width:auto;min-width:3.5rem;padding:.2rem .35rem;font-size:.85rem">
@@ -133,5 +133,5 @@ layout_header('Floor Planner', $user, 'floorplan');
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=13"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=24"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=25"></script>
 <?php layout_footer(); ?>
