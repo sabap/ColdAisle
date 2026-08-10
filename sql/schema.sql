@@ -684,6 +684,20 @@ CREATE TABLE snmp_site_oid_templates (
 GO
 
 -- PDU inventory templates (electrical + optional outlet type layout; no IP/name/serial)
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ups_templates')
+CREATE TABLE ups_templates (
+    template_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL,
+    vendor NVARCHAR(100) NULL,
+    model NVARCHAR(100) NULL,
+    fields_json NVARCHAR(MAX) NOT NULL CONSTRAINT DF_ups_tpl_fields DEFAULT '{}',
+    notes NVARCHAR(500) NULL,
+    is_active BIT NOT NULL CONSTRAINT DF_ups_tpl_active DEFAULT 1,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_ups_tpl_created DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_ups_tpl_updated DEFAULT SYSUTCDATETIME()
+);
+GO
+
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'pdu_templates')
 CREATE TABLE pdu_templates (
     template_id INT IDENTITY(1,1) PRIMARY KEY,

@@ -84,7 +84,7 @@ function layout_header(string $title, array $user, string $active = ''): void
                 'settings' => ['Settings', 'pages/settings.php', '⚙'],
             ];
             $devicesActive = in_array($active, ['devices', 'device_templates'], true);
-            $powerActive = in_array($active, ['power', 'power_zones', 'power_pdus', 'power_pdu_templates', 'power_ups'], true);
+            $powerActive = in_array($active, ['power', 'power_zones', 'power_pdus', 'power_pdu_templates', 'power_templates', 'power_ups'], true);
             $coolingActive = in_array($active, ['cooling', 'cooling_units', 'env_sensors'], true);
             foreach ($nav as $key => [$label, $href, $icon]):
                 if (!AuthManager::canViewNav($user, $key)) {
@@ -126,9 +126,9 @@ function layout_header(string $title, array $user, string $active = ''): void
                        href="<?= App::e(App::url('pages/power_ups.php')) ?>">
                         <span class="nav-icon"></span><span>UPS</span>
                     </a>
-                    <a class="nav-item nav-sub <?= $active === 'power_pdu_templates' ? 'active' : '' ?>"
+                    <a class="nav-item nav-sub <?= in_array($active, ['power_pdu_templates', 'power_templates'], true) ? 'active' : '' ?>"
                        href="<?= App::e(App::url('pages/power_pdu_templates.php')) ?>">
-                        <span class="nav-icon"></span><span>PDU Templates</span>
+                        <span class="nav-icon"></span><span>Power Templates</span>
                     </a>
                 <?php endif; ?>
                 <?php if ($key === 'cooling'): ?>

@@ -54,7 +54,171 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
     }
     $act = (string)($_POST['action'] ?? '');
     try {
+        if ($act === 'save_ups_template') {
+            $uid = (int)($_POST['ups_id'] ?? 0);
+            $overwrite = !empty($_POST['overwrite']);
+            if ($uid < 1) {
+                throw new RuntimeException('UPS id required.');
+            }
+            $src = Database::fetchOne('SELECT * FROM ups_units WHERE ups_id = ? AND is_active = 1', [$uid]);
+            if (!$src) {
+                throw new RuntimeException('UPS not found.');
+            }
+            $vendor = trim((string)($src['manufacturer'] ?? ''));
+            $model = trim((string)($src['model'] ?? ''));
+            if ($vendor === '' || $model === '') {
+                throw new RuntimeException('Set manufacturer and model on this UPS before creating a template.');
+            }
+            $name = trim((string)($_POST['template_name'] ?? ''));
+            if ($name === '') {
+                $name = ups_template_display_name($vendor, $model);
+            }
+            $fields = ups_template_payload_from_unit($src);
+            $fieldsJson = json_encode($fields, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $oidTplId = (int)($fields['snmp_site_template_id'] ?? 0);
+            $oidTplLabel = '';
+            if ($oidTplId > 0) {
+                try {
+                    $oidRow = Database::fetchOne(
+                        'SELECT name FROM snmp_site_oid_templates WHERE template_id = ?',
+                        [$oidTplId]
+                    );
+                    $oidTplLabel = $oidRow ? (string)$oidRow['name'] : ('#' . $oidTplId);
+                } catch (Throwable $e) {
+                    $oidTplLabel = '#' . $oidTplId;
+                }
+            }
+            if (class_exists('Schema')) {
+                Schema::ensure();
+            }
+            $existing = Database::fetchOne(
+                'SELECT template_id, name FROM ups_templates
+                 WHERE is_active = 1 AND (name = ? OR (vendor = ? AND model = ?))',
+                [$name, $vendor, $model]
+            );
+            if ($existing && !$overwrite) {
+                $_SESSION['ups_template_overwrite'] = [
+                    'ups_id' => $uid,
+                    'template_id' => (int)$existing['template_id'],
+                    'name' => $name,
+                ];
+                App::flash(
+                    'error',
+                    'UPS template "' . $name . '" already exists. Confirm overwrite on the UPS page, or cancel.'
+                );
+                App::redirect('pages/power_ups.php?id=' . $uid . '&tpl_exists=1');
+            }
+            $rowTpl = [
+                'name' => mb_substr($name, 0, 150),
+                'vendor' => $vendor !== '' ? $vendor : null,
+                'model' => $model !== '' ? $model : null,
+                'fields_json' => $fieldsJson,
+                'is_active' => 1,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ];
+            if ($existing) {
+                Database::update(
+                    'ups_templates',
+                    $rowTpl,
+                    'template_id = :id',
+                    [':id' => (int)$existing['template_id']]
+                );
+                $tid = (int)$existing['template_id'];
+                unset($_SESSION['ups_template_overwrite']);
+                $msg = 'Overwrote UPS template "' . $name . '".';
+            } else {
+                $rowTpl['created_at'] = date('Y-m-d H:i:s');
+                $tid = (int)Database::insert('ups_templates', $rowTpl);
+                $msg = 'Created UPS template "' . $name . '". Apply it when adding new UPS units.';
+            }
+            try {
+                Database::update(
+                    'ups_units',
+                    ['ups_template_id' => $tid, 'updated_at' => date('Y-m-d H:i:s')],
+                    'ups_id = :id',
+                    [':id' => $uid]
+                );
+            } catch (Throwable $e) {
+                // column may lag ensure
+            }
+            if ($oidTplLabel !== '') {
+                $msg .= ' Includes OID map "' . $oidTplLabel . '".';
+            } else {
+                $msg .= ' No site OID template on this UPS — assign one then re-save the inventory template for poll-ready copies.';
+            }
+            App::flash('success', $msg);
+            App::redirect('pages/power_ups.php?id=' . $uid);
+        }
+
         if ($act === 'add_ups' || $act === 'update_ups') {
+            $applyTplId = (int)($_POST['ups_template_id'] ?? 0);
+            if ($act === 'add_ups' && $applyTplId > 0) {
+                try {
+                    $tplRow = Database::fetchOne(
+                        'SELECT * FROM ups_templates WHERE template_id = ? AND is_active = 1',
+                        [$applyTplId]
+                    );
+                    if ($tplRow) {
+                        $tplFields = json_decode((string)($tplRow['fields_json'] ?? '{}'), true) ?: [];
+                        // Fill blank POST slots from template (like PDU create)
+                        foreach (ups_template_static_keys() as $sk) {
+                            if (!array_key_exists($sk, $tplFields)) {
+                                continue;
+                            }
+                            $posted = $_POST[$sk] ?? null;
+                            $blank = $posted === null || $posted === '' || $posted === '0';
+                            if ($sk === 'snmp_enabled' && empty($_POST['snmp_enabled'])
+                                && (!empty($tplFields['snmp_enabled']) || !empty($tplFields['snmp_site_template_id']))
+                            ) {
+                                $_POST['snmp_enabled'] = '1';
+                                continue;
+                            }
+                            if ($blank && $tplFields[$sk] !== null && $tplFields[$sk] !== '') {
+                                // Don't treat manufacturer/model defaults as intentional blanks on new form
+                                if (in_array($sk, ['manufacturer', 'model', 'ups_scope', 'phases', 'width_mm', 'depth_mm', 'height_mm', 'color_hex', 'rated_kva', 'rated_kw', 'snmp_version', 'snmp_port'], true)
+                                    || $blank
+                                ) {
+                                    // Prefer template values when form still has stock defaults
+                                    $defaults = [
+                                        'manufacturer' => 'Schneider Electric',
+                                        'model' => 'Symmetra 40K',
+                                        'ups_scope' => 'in_row',
+                                        'color_hex' => '#7c3aed',
+                                        'snmp_version' => '3',
+                                        'snmp_port' => '161',
+                                    ];
+                                    if (isset($defaults[$sk]) && (string)$posted === (string)$defaults[$sk]) {
+                                        $_POST[$sk] = (string)$tplFields[$sk];
+                                    } elseif ($posted === null || $posted === '' || $posted === '0') {
+                                        $_POST[$sk] = is_bool($tplFields[$sk])
+                                            ? ($tplFields[$sk] ? '1' : '0')
+                                            : (string)$tplFields[$sk];
+                                    }
+                                }
+                            }
+                        }
+                        // Always take site OID map from template if form left empty
+                        if ((int)($_POST['snmp_site_template_id'] ?? 0) < 1
+                            && !empty($tplFields['snmp_site_template_id'])
+                        ) {
+                            $_POST['snmp_site_template_id'] = (string)(int)$tplFields['snmp_site_template_id'];
+                        }
+                        if (!isset($_POST['snmp_auto_poll']) && !empty($tplFields['snmp_auto_poll'])) {
+                            $_POST['snmp_auto_poll'] = '1';
+                        }
+                        if (empty($_POST['snmp_enabled'])
+                            && (!empty($tplFields['snmp_enabled']) || !empty($tplFields['snmp_site_template_id']))
+                        ) {
+                            $_POST['snmp_enabled'] = '1';
+                        }
+                    } else {
+                        $applyTplId = 0;
+                    }
+                } catch (Throwable $e) {
+                    $applyTplId = 0;
+                }
+            }
+
             $row = ups_fields_from_post($_POST);
             if ($row['name'] === '') {
                 throw new RuntimeException('Name is required.');
@@ -78,6 +242,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 ]);
                 App::flash('success', 'UPS updated.');
                 App::redirect('pages/power_ups.php?id=' . $uid);
+            }
+            if ($applyTplId > 0) {
+                $row['ups_template_id'] = $applyTplId;
             }
             $row = ups_finalize_snmp($row, null);
             $row['created_at'] = date('Y-m-d H:i:s');
@@ -141,8 +308,25 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
     if (!empty($u['last_poll_json'])) {
         $poll = json_decode((string)$u['last_poll_json'], true);
     }
+    $tplExists = !empty($_GET['tpl_exists']) && !empty($_SESSION['ups_template_overwrite'])
+        && (int)($_SESSION['ups_template_overwrite']['ups_id'] ?? 0) === $upsId;
+    $tplExistName = $tplExists ? (string)($_SESSION['ups_template_overwrite']['name'] ?? '') : '';
     layout_header('UPS: ' . $u['name'], $user, 'power_ups');
     ?>
+    <?php if ($tplExists && $canEdit): ?>
+    <div class="alert alert-warning" style="margin-bottom:1rem">
+        <strong>UPS template already exists:</strong> <?= App::e($tplExistName) ?>
+        <form method="post" style="display:inline;margin-left:.75rem">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="action" value="save_ups_template">
+            <input type="hidden" name="ups_id" value="<?= (int)$upsId ?>">
+            <input type="hidden" name="overwrite" value="1">
+            <input type="hidden" name="template_name" value="<?= App::e($tplExistName) ?>">
+            <button type="submit" class="btn btn-sm btn-primary">Overwrite template</button>
+        </form>
+        <a class="btn btn-sm btn-secondary" href="?id=<?= (int)$upsId ?>">Cancel</a>
+    </div>
+    <?php endif; ?>
     <div class="flex-between mb-2">
         <div>
             <span class="text-muted"><?= App::e(($u['dc_name'] ?? '') . ' / ' . ($u['room_name'] ?? 'Unplaced')) ?></span>
@@ -158,6 +342,13 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_ups.php')) ?>">← UPSs</a>
             <?php if ($canEdit): ?>
                 <a class="btn btn-primary" href="?id=<?= (int)$upsId ?>&action=edit">Edit</a>
+                <form method="post" style="display:inline;margin:0"
+                      onsubmit="return confirm('Create a Power → UPS inventory template from this unit (manufacturer, model, dimensions, SNMP/OID map)?');">
+                    <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                    <input type="hidden" name="action" value="save_ups_template">
+                    <input type="hidden" name="ups_id" value="<?= (int)$upsId ?>">
+                    <button type="submit" class="btn btn-secondary">Create UPS template</button>
+                </form>
                 <form method="post" style="display:inline;margin:0"
                       onsubmit="return confirm('Remove this UPS from inventory? It will leave the floor plan and list. This soft-deletes the record (can be restored from DB if needed).');">
                     <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
@@ -471,9 +662,14 @@ if ($action === 'new' || ($action === 'edit' && $upsId > 0)) {
             App::redirect('pages/power_ups.php');
         }
     }
+    $upsInvTemplates = ups_template_list();
+    $upsTplPayloads = [];
+    foreach ($upsInvTemplates as $t) {
+        $upsTplPayloads[(int)$t['template_id']] = json_decode((string)($t['fields_json'] ?? '{}'), true) ?: [];
+    }
     layout_header($u ? 'Edit UPS' : 'New UPS', $user, 'power_ups');
     ?>
-    <form method="post" class="card">
+    <form method="post" class="card" id="upsEditForm">
         <div class="card-header flex-between">
             <h2><?= $u ? 'Edit UPS' : 'Add UPS' ?></h2>
             <a class="btn btn-secondary btn-sm" href="<?= App::e(App::url('pages/power_ups.php' . ($upsId ? '?id=' . $upsId : ''))) ?>">Cancel</a>
@@ -483,19 +679,46 @@ if ($action === 'new' || ($action === 'edit' && $upsId > 0)) {
             <input type="hidden" name="action" value="<?= $u ? 'update_ups' : 'add_ups' ?>">
             <?php if ($u): ?><input type="hidden" name="ups_id" value="<?= (int)$u['ups_id'] ?>"><?php endif; ?>
 
+            <?php if (!$u): ?>
+            <div class="form-row full">
+                <label>UPS template</label>
+                <select class="form-control" name="ups_template_id" id="ups_template_id">
+                    <option value="">— None (manual entry) —</option>
+                    <?php foreach ($upsInvTemplates as $t):
+                        $tid = (int)$t['template_id'];
+                        $lab = (string)($t['name'] ?? ('Template #' . $tid));
+                        $vm = trim(($t['vendor'] ?? '') . ' ' . ($t['model'] ?? ''));
+                        ?>
+                        <option value="<?= $tid ?>"
+                                data-fields="<?= App::e(json_encode($upsTplPayloads[$tid] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>">
+                            <?= App::e($lab) ?><?= $vm !== '' ? ' · ' . App::e($vm) : '' ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                    Inventory templates from <a href="<?= App::e(App::url('pages/power_pdu_templates.php#ups-templates')) ?>">Power → Power Templates</a>
+                    (create from a configured UPS with <strong>Create UPS template</strong>).
+                    Selecting one fills manufacturer, model, size, SNMP, and site OID map.
+                    <?php if (!$upsInvTemplates): ?>
+                        <br><strong>No UPS templates yet</strong> — configure a UPS, then create a template from its detail page.
+                    <?php endif; ?>
+                </p>
+            </div>
+            <?php endif; ?>
+
             <div class="form-row"><label>Name *</label>
                 <input class="form-control" name="name" required value="<?= App::e($u['name'] ?? '') ?>" placeholder="Symmetra 40K: UPS A"></div>
             <div class="form-row"><label>Scope</label>
-                <select class="form-control" name="ups_scope">
+                <select class="form-control" name="ups_scope" id="ups_scope">
                     <?php foreach ($scopes as $k => $lab): ?>
                         <option value="<?= App::e($k) ?>" <?= ($u['ups_scope'] ?? 'in_row') === $k ? 'selected' : '' ?>><?= App::e($lab) ?></option>
                     <?php endforeach; ?>
                 </select>
             </div>
             <div class="form-row"><label>Manufacturer</label>
-                <input class="form-control" name="manufacturer" value="<?= App::e($u['manufacturer'] ?? 'Schneider Electric') ?>"></div>
+                <input class="form-control" name="manufacturer" id="ups_manufacturer" value="<?= App::e($u['manufacturer'] ?? 'Schneider Electric') ?>"></div>
             <div class="form-row"><label>Model</label>
-                <input class="form-control" name="model" value="<?= App::e($u['model'] ?? 'Symmetra 40K') ?>"></div>
+                <input class="form-control" name="model" id="ups_model" value="<?= App::e($u['model'] ?? 'Symmetra 40K') ?>"></div>
             <div class="form-row"><label>Serial</label>
                 <input class="form-control" name="serial_no" value="<?= App::e($u['serial_no'] ?? '') ?>"
                        placeholder="Filled from SNMP poll when available"></div>
@@ -504,13 +727,13 @@ if ($action === 'new' || ($action === 'edit' && $upsId > 0)) {
             <div class="form-row"><label>Primary IP</label>
                 <input class="form-control" name="primary_ip" value="<?= App::e($u['primary_ip'] ?? '') ?>" placeholder="NMC / management IP"></div>
             <div class="form-row"><label>Rated kVA</label>
-                <input class="form-control" type="number" step="0.1" name="rated_kva" value="<?= App::e((string)($u['rated_kva'] ?? '40')) ?>"></div>
+                <input class="form-control" type="number" step="0.1" name="rated_kva" id="ups_rated_kva" value="<?= App::e((string)($u['rated_kva'] ?? '40')) ?>"></div>
             <div class="form-row"><label>Rated kW</label>
-                <input class="form-control" type="number" step="0.1" name="rated_kw" value="<?= App::e((string)($u['rated_kw'] ?? '40')) ?>"></div>
+                <input class="form-control" type="number" step="0.1" name="rated_kw" id="ups_rated_kw" value="<?= App::e((string)($u['rated_kw'] ?? '40')) ?>"></div>
             <div class="form-row"><label>Phases</label>
-                <input class="form-control" type="number" min="1" max="3" name="phases" value="<?= (int)($u['phases'] ?? 3) ?>"></div>
+                <input class="form-control" type="number" min="1" max="3" name="phases" id="ups_phases" value="<?= (int)($u['phases'] ?? 3) ?>"></div>
             <div class="form-row"><label>Warranty company</label>
-                <input class="form-control" name="warranty_provider" value="<?= App::e($u['warranty_provider'] ?? '') ?>"
+                <input class="form-control" name="warranty_provider" id="ups_warranty_provider" value="<?= App::e($u['warranty_provider'] ?? '') ?>"
                        placeholder="e.g. Schneider Electric"></div>
             <div class="form-row"><label>Warranty expiration</label>
                 <input class="form-control" type="date" name="warranty_end" value="<?= App::e($u['warranty_end'] ?? '') ?>"></div>
@@ -546,30 +769,30 @@ if ($action === 'new' || ($action === 'edit' && $upsId > 0)) {
                 </select>
             </div>
             <div class="form-row"><label>Color</label>
-                <input class="form-control" type="color" name="color_hex" value="<?= App::e($u['color_hex'] ?? '#7c3aed') ?>"></div>
+                <input class="form-control" type="color" name="color_hex" id="ups_color_hex" value="<?= App::e($u['color_hex'] ?? '#7c3aed') ?>"></div>
             <div class="form-row"><label>Width mm</label>
-                <input class="form-control" type="number" name="width_mm" value="<?= (int)($u['width_mm'] ?? 600) ?>"></div>
+                <input class="form-control" type="number" name="width_mm" id="ups_width_mm" value="<?= (int)($u['width_mm'] ?? 600) ?>"></div>
             <div class="form-row"><label>Depth mm</label>
-                <input class="form-control" type="number" name="depth_mm" value="<?= (int)($u['depth_mm'] ?? 1100) ?>"></div>
+                <input class="form-control" type="number" name="depth_mm" id="ups_depth_mm" value="<?= (int)($u['depth_mm'] ?? 1100) ?>"></div>
             <div class="form-row"><label>Height mm</label>
-                <input class="form-control" type="number" name="height_mm" value="<?= (int)($u['height_mm'] ?? 2000) ?>"></div>
+                <input class="form-control" type="number" name="height_mm" id="ups_height_mm" value="<?= (int)($u['height_mm'] ?? 2000) ?>"></div>
 
             <div class="form-row full"><h4 class="mt-0" style="font-size:.95rem;color:var(--muted)">SNMP</h4></div>
             <div class="form-row full"><label>
-                <input type="checkbox" name="snmp_enabled" value="1" <?= !empty($u['snmp_enabled']) || !$u ? 'checked' : '' ?>>
+                <input type="checkbox" name="snmp_enabled" id="ups_snmp_enabled" value="1" <?= !empty($u['snmp_enabled']) || !$u ? 'checked' : '' ?>>
                 SNMP enabled
             </label></div>
             <div class="form-row"><label>Version</label>
-                <select class="form-control" name="snmp_version">
+                <select class="form-control" name="snmp_version" id="ups_snmp_version">
                     <?php foreach (['3' => 'v3', '2c' => 'v2c', '1' => 'v1'] as $v => $lab): ?>
                         <option value="<?= $v ?>" <?= (string)($u['snmp_version'] ?? '3') === $v ? 'selected' : '' ?>><?= $lab ?></option>
                     <?php endforeach; ?>
                 </select>
             </div>
             <div class="form-row"><label>Port</label>
-                <input class="form-control" type="number" name="snmp_port" value="<?= (int)($u['snmp_port'] ?? 161) ?>"></div>
+                <input class="form-control" type="number" name="snmp_port" id="ups_snmp_port" value="<?= (int)($u['snmp_port'] ?? 161) ?>"></div>
             <div class="form-row"><label>SNMPv3 profile</label>
-                <select class="form-control" name="snmp_v3_profile_id">
+                <select class="form-control" name="snmp_v3_profile_id" id="ups_snmp_v3_profile_id">
                     <option value="">— manual / keep —</option>
                     <?php foreach ($snmpProfiles as $p): ?>
                         <option value="<?= (int)$p['profile_id'] ?>" <?= (int)($u['snmp_v3_profile_id'] ?? 0) === (int)$p['profile_id'] ? 'selected' : '' ?>>
@@ -624,6 +847,45 @@ if ($action === 'new' || ($action === 'edit' && $upsId > 0)) {
             </div>
         </div>
     </form>
+    <?php if (!$u): ?>
+    <script>
+    (function () {
+        var sel = document.getElementById('ups_template_id');
+        if (!sel) return;
+        function setVal(name, val) {
+            var el = document.querySelector('#upsEditForm [name="' + name + '"]');
+            if (!el || val == null || val === '') return;
+            if (el.type === 'checkbox') {
+                el.checked = !!val && val !== '0' && val !== 0;
+                return;
+            }
+            el.value = String(val);
+        }
+        sel.addEventListener('change', function () {
+            var opt = sel.options[sel.selectedIndex];
+            if (!opt || !opt.value) return;
+            var raw = opt.getAttribute('data-fields') || '{}';
+            var f;
+            try { f = JSON.parse(raw); } catch (e) { f = {}; }
+            if (!f || typeof f !== 'object') return;
+            [
+                'manufacturer', 'model', 'ups_scope', 'rated_kva', 'rated_kw', 'phases',
+                'width_mm', 'depth_mm', 'height_mm', 'color_hex', 'warranty_provider',
+                'snmp_version', 'snmp_port', 'snmp_v3_profile_id', 'snmp_site_template_id',
+                'snmp_v3_sec_level', 'snmp_auto_poll', 'snmp_enabled'
+            ].forEach(function (k) {
+                if (f[k] != null && f[k] !== '') setVal(k, f[k]);
+            });
+            if (f.snmp_enabled || f.snmp_site_template_id) {
+                setVal('snmp_enabled', 1);
+            }
+            if (window.ColdAisle && ColdAisle.toast) {
+                ColdAisle.toast('Applied UPS template fields — review and set name / IP', 'info');
+            }
+        });
+    })();
+    </script>
+    <?php endif; ?>
     <?php
     layout_footer();
     exit;
