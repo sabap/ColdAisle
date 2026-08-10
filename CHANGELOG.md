@@ -15,13 +15,18 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **UPS inventory:** asset tag, warranty company/expiration, install & manufacture dates (same pattern as devices).
-- **UPS SNMP poll:** writes polled serial into the Serial Number field; formats `sysuptime` / TimeTicks as human-readable uptime (not raw hundredths).
-
 ### Bug fixes
 
 ---
 
+## [0.3.75] - 2026-08-10
+
+### Enhancements
+
+- **UPS inventory:** asset tag, warranty company/expiration, install & manufacture dates (same pattern as devices).
+- **UPS SNMP poll:** writes polled serial into the Serial Number field; formats `sysuptime` / TimeTicks as human-readable uptime (not raw hundredths).
+
+---
 ## [0.3.74] - 2026-08-10
 
 ### New features
