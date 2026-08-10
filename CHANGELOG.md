@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **PDU list split:** Power → PDUs shows separate **Row PDUs** and **Cabinet PDUs** tables (room section when present); shared batch ICMP/labels toolbar; select-all is per section
+
 ### Bug fixes
 
 ---
