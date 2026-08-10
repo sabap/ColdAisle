@@ -39,7 +39,7 @@ if ($gotToken !== '') {
 $cssUrl = App::url('assets/css/noc.css') . '?v=4';
 $jsUrl = App::url('assets/js/noc.js') . '?v=7';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=12';
+$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=13';
 $org = '';
 try {
     $org = (string)SettingsService::get('org_name', '');

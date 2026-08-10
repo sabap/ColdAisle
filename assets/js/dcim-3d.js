@@ -350,6 +350,7 @@
     var cabinets = options.cabinets || [];
     var floorPdus = options.pdus || options.floor_pdus || [];
     var floorCooling = options.cooling || options.cooling_units || options.floor_cooling || [];
+    var floorUps = options.ups || options.ups_units || options.floor_ups || [];
     var envSensors = options.envSensors || options.env_sensors || [];
     var heatOverlay = options.heatOverlay !== false;
     var rooms = options.rooms || [];
@@ -1089,6 +1090,128 @@
       );
       // Sit just above the logo toward one edge so both stay readable
       label.position.set(0, h / 2 + 0.012, d * 0.28);
+      label.rotation.x = -Math.PI / 2;
+      mesh.add(label);
+
+      rackGroup.add(mesh);
+    });
+
+    // Floor UPS (in-row frames) — purple body + soft health glow like cabinets
+    floorUps.forEach(function (uu) {
+      var w = mmToM(uu.width_mm) || 0.6;
+      var d = mmToM(uu.depth_mm) || 1.1;
+      var h = mmToM(uu.height_mm) || 2.0;
+      if (h < 0.1) h = 2.0;
+      var x = Number(uu.pos_x) || 0;
+      var z = Number(uu.pos_y) || 0;
+      var rot = (Number(uu.rotation_deg) || 0) * Math.PI / 180;
+      var hex = uu.color_hex || '#7c3aed';
+      if (!/^#[0-9A-Fa-f]{6}$/.test(String(hex))) hex = '#7c3aed';
+      var healthSt = normalizeHealthStatus(
+        (uu.health_status || (uu.health && uu.health.status) || 'unknown')
+      );
+      var color = new THREE.Color(hex);
+      if (healthSt === 'crit') color.lerp(new THREE.Color(0xef4444), 0.55);
+      else if (healthSt === 'warn') color.lerp(new THREE.Color(0xeab308), 0.4);
+
+      var geo = new THREE.BoxGeometry(w, h, d);
+      var mat = new THREE.MeshStandardMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.55,
+        roughness: 0.45,
+        metalness: 0.35,
+        depthWrite: false,
+      });
+      if (healthSt === 'crit' || healthSt === 'warn') {
+        mat.emissive = new THREE.Color(healthSt === 'crit' ? 0xef4444 : 0xeab308);
+        mat.emissiveIntensity = healthSt === 'crit' ? 0.32 : 0.18;
+        healthPulseMats.push({
+          mat: mat,
+          prop: 'emissiveIntensity',
+          base: healthSt === 'crit' ? 0.25 : 0.12,
+          amp: healthSt === 'crit' ? 0.35 : 0.16,
+          speed: healthSt === 'crit' ? 2.3 : 1.6,
+        });
+      }
+      var mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x + w / 2, h / 2, z + d / 2);
+      mesh.rotation.y = rot;
+      mesh.userData = { ups: uu, health: healthSt };
+
+      // Soft additive shells on warn/crit
+      if (healthSt === 'crit' || healthSt === 'warn') {
+        var alertHex = healthSt === 'crit' ? 0xef4444 : 0xeab308;
+        [1.1, 1.22].forEach(function (scale, si) {
+          var shellMat = new THREE.MeshBasicMaterial({
+            color: alertHex,
+            transparent: true,
+            opacity: 0.1 - si * 0.03,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+            side: THREE.DoubleSide,
+          });
+          healthPulseMats.push({
+            mat: shellMat,
+            prop: 'opacity',
+            base: 0.06 + si * 0.02,
+            amp: 0.1,
+            speed: healthSt === 'crit' ? 2.2 : 1.5,
+          });
+          var shell = new THREE.Mesh(
+            new THREE.BoxGeometry(w * scale, h * (1 + si * 0.02), d * scale),
+            shellMat
+          );
+          shell.renderOrder = 2 + si;
+          mesh.add(shell);
+        });
+        var floorGlowMat = new THREE.MeshBasicMaterial({
+          map: softRadialTexture(alertHex),
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.45,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+        });
+        healthPulseMats.push({
+          mat: floorGlowMat,
+          prop: 'opacity',
+          base: 0.32,
+          amp: 0.2,
+          speed: 1.8,
+        });
+        var floorGlow = new THREE.Mesh(
+          new THREE.PlaneGeometry(Math.max(w, d) * 2.2, Math.max(w, d) * 2.2),
+          floorGlowMat
+        );
+        floorGlow.rotation.x = -Math.PI / 2;
+        floorGlow.position.set(0, -h / 2 + 0.02, 0);
+        mesh.add(floorGlow);
+      }
+
+      var canvas = document.createElement('canvas');
+      canvas.width = 320;
+      canvas.height = 72;
+      var ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'rgba(30, 10, 50, 0.9)';
+      ctx.fillRect(0, 0, 320, 72);
+      ctx.fillStyle = '#e9d5ff';
+      ctx.font = 'bold 22px Segoe UI, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(uu.name || 'UPS').slice(0, 16), 160, 28);
+      ctx.font = '16px Segoe UI, sans-serif';
+      ctx.fillStyle = '#c4b5fd';
+      var sub = 'UPS';
+      if (uu.last_load_pct != null) sub += ' · ' + uu.last_load_pct + '%';
+      if (uu.last_battery_pct != null) sub += ' · batt ' + uu.last_battery_pct + '%';
+      ctx.fillText(sub.slice(0, 28), 160, 52);
+      var tex = new THREE.CanvasTexture(canvas);
+      var label = new THREE.Mesh(
+        new THREE.PlaneGeometry(Math.max(w * 0.92, 0.55), Math.max(w * 0.92, 0.55) * 0.24),
+        new THREE.MeshBasicMaterial({ map: tex, transparent: true })
+      );
+      label.position.set(0, h / 2 + 0.06, 0);
       label.rotation.x = -Math.PI / 2;
       mesh.add(label);
 

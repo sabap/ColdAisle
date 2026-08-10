@@ -149,6 +149,37 @@ class SnmpPoller
             // columns may not exist yet
         }
 
+        // 5) UPS units (in-row / in-rack) with site OID template
+        try {
+            $upsList = Database::fetchAll(
+                'SELECT * FROM ups_units
+                 WHERE is_active = 1 AND snmp_auto_poll = 1
+                   AND snmp_site_template_id IS NOT NULL
+                   AND primary_ip IS NOT NULL AND primary_ip <> \'\''
+            );
+            foreach ($upsList as $uu) {
+                $last = $uu['snmp_last_poll_at'] ?? null;
+                if (class_exists('SnmpSchedulerService')
+                    && !SnmpSchedulerService::isDue(is_string($last) ? $last : null, $defaultInterval)
+                ) {
+                    $skipped++;
+                    continue;
+                }
+                try {
+                    self::pollUpsUnit($uu);
+                    $success++;
+                } catch (Throwable $e) {
+                    $failed++;
+                    App::log(
+                        'UPS SNMP poll failed for ' . ($uu['name'] ?? $uu['ups_id']) . ': ' . $e->getMessage(),
+                        'error'
+                    );
+                }
+            }
+        } catch (Throwable $e) {
+            // table may not exist yet
+        }
+
         // After a multi-PDU cycle: flush digest only if hold window already elapsed
         // (so 84 PDUs in one event batch together; next scheduled poll also flushes).
         if (class_exists('PowerAlertService')) {
@@ -618,6 +649,203 @@ class SnmpPoller
             'ok' => (int)$got['ok'],
             'failed' => (int)($got['failed'] ?? 0),
             'metrics' => $clean,
+            'message' => $msg,
+            'snapshot' => $snapshot,
+        ];
+    }
+
+    /**
+     * Poll a UPS via site OID template (APC PowerNet / Symmetra).
+     * @param array<string,mixed> $unit ups_units row
+     * @return array{ok:int,failed:int,metrics:array<string,mixed>,message:string}
+     */
+    public static function pollUpsUnit(array $unit): array
+    {
+        require_once __DIR__ . '/SnmpDiscover.php';
+        $templateId = (int)($unit['snmp_site_template_id'] ?? 0);
+        if ($templateId < 1) {
+            throw new RuntimeException('UPS has no site OID template. Run Discover OIDs or assign the APC UPS template.');
+        }
+        $tpl = Database::fetchOne(
+            'SELECT * FROM snmp_site_oid_templates WHERE template_id = ? AND is_active = 1',
+            [$templateId]
+        );
+        if (!$tpl) {
+            throw new RuntimeException('Site OID template not found or inactive.');
+        }
+        $oidMap = json_decode((string)($tpl['oid_map'] ?? '{}'), true) ?: [];
+        if (!$oidMap) {
+            throw new RuntimeException('Site OID template has an empty OID map.');
+        }
+
+        $host = trim((string)($unit['primary_ip'] ?? ''));
+        if ($host === '') {
+            throw new RuntimeException('UPS has no primary IP for SNMP.');
+        }
+        $ver = strtolower(trim((string)($unit['snmp_version'] ?? '3')));
+        if ($ver === 'v3') {
+            $ver = '3';
+        }
+        if ($ver === '2' || $ver === 'v2c') {
+            $ver = '2c';
+        }
+        if ($ver === 'v1') {
+            $ver = '1';
+        }
+        $communityOrUser = ($ver === '3')
+            ? (string)($unit['snmp_security_name'] ?? '')
+            : (string)(Crypto::decryptQuiet($unit['snmp_community'] ?? null) ?? 'public');
+        $authProto = SnmpDiscover::normalizeSnmpProtocol((string)($unit['snmp_auth_protocol'] ?? 'SHA'), 'auth');
+        $privProto = SnmpDiscover::normalizeSnmpProtocol((string)($unit['snmp_priv_protocol'] ?? 'AES'), 'priv');
+        $authPass = (string)(Crypto::decryptQuiet($unit['snmp_auth_passphrase'] ?? null) ?? '');
+        $privPass = (string)(Crypto::decryptQuiet($unit['snmp_priv_passphrase'] ?? null) ?? '');
+        $secLevel = SnmpDiscover::resolveSecLevel([
+            'security_level' => (string)($unit['snmp_v3_sec_level'] ?? ''),
+            'auth_passphrase' => $authPass,
+            'priv_passphrase' => $privPass,
+        ]);
+        $pollHost = self::resolveSnmpHost($host);
+
+        $session = self::openSession(
+            $pollHost,
+            (int)($unit['snmp_port'] ?? 161),
+            $ver,
+            $communityOrUser,
+            $authProto,
+            $authPass,
+            $privProto,
+            $privPass,
+            (string)($unit['snmp_context'] ?? ''),
+            $secLevel
+        );
+        $got = self::collectOidMap($session, $oidMap);
+        self::closeSession($session);
+
+        if ((int)($got['ok'] ?? 0) === 0) {
+            throw new RuntimeException(
+                'All SNMP GETs failed for this UPS. Last error: ' . ($got['last_error'] ?? 'no response')
+            );
+        }
+
+        $metrics = is_array($got['metrics'] ?? null) ? $got['metrics'] : [];
+        $flat = class_exists('SnmpThresholdService')
+            ? SnmpThresholdService::flattenPollMetrics($metrics)
+            : [];
+
+        $loadPct = $flat['output_load'] ?? null;
+        $battPct = $flat['battery_capacity'] ?? null;
+        $outStatusCode = $flat['output_status'] ?? null;
+        $runtimeMin = null;
+        if (isset($flat['runtime_ticks'])) {
+            // TimeTicks: hundredths of a second
+            $runtimeMin = round(((float)$flat['runtime_ticks']) / 100.0 / 60.0, 1);
+        }
+        $inV = $flat['input_voltage'] ?? null;
+        $outV = $flat['output_voltage'] ?? null;
+        $tempC = $flat['battery_temp_c'] ?? null;
+        $statusLabel = null;
+        if (function_exists('ups_output_status_label') && $outStatusCode !== null) {
+            $statusLabel = ups_output_status_label($outStatusCode);
+        } elseif ($outStatusCode !== null) {
+            $statusLabel = (string)$outStatusCode;
+        }
+
+        $now = date('Y-m-d H:i:s');
+        $snapshot = [
+            'polled_at' => $now,
+            'template_id' => $templateId,
+            'template_name' => (string)($tpl['name'] ?? ''),
+            'ok' => (int)$got['ok'],
+            'failed' => (int)($got['failed'] ?? 0),
+            'metrics' => $metrics,
+            'derived' => [
+                'load_pct' => $loadPct,
+                'battery_pct' => $battPct,
+                'runtime_min' => $runtimeMin,
+                'output_status_label' => $statusLabel,
+            ],
+        ];
+
+        $patch = [
+            'snmp_last_poll_at' => $now,
+            'last_poll_json' => json_encode($snapshot, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            'last_output_status' => $statusLabel,
+            'last_load_pct' => $loadPct,
+            'last_battery_pct' => $battPct,
+            'last_runtime_min' => $runtimeMin,
+            'last_input_voltage' => $inV,
+            'last_output_voltage' => $outV,
+            'last_internal_temp_c' => $tempC,
+            'updated_at' => $now,
+        ];
+        // Fill empty model from SNMP
+        if (!empty($flat['model']) || !empty($metrics['model']['raw'])) {
+            $modelRaw = $metrics['model']['raw'] ?? $flat['model'] ?? null;
+            if (is_scalar($modelRaw) && trim((string)($unit['model'] ?? '')) === '') {
+                $mv = preg_replace('/^(STRING|OCTET STRING)\s*:\s*/i', '', trim((string)$modelRaw)) ?? '';
+                $mv = trim($mv, " \t\"'");
+                if ($mv !== '') {
+                    $patch['model'] = mb_substr($mv, 0, 100);
+                }
+            }
+        }
+        Database::update('ups_units', $patch, 'ups_id = :id', [':id' => (int)$unit['ups_id']]);
+
+        if (class_exists('SnmpThresholdService')) {
+            try {
+                SnmpThresholdService::evaluateEntity(
+                    'ups',
+                    (int)$unit['ups_id'],
+                    (string)($unit['name'] ?? ('UPS #' . (int)$unit['ups_id'])),
+                    array_merge($flat, array_filter([
+                        'load_pct' => $loadPct,
+                        'battery_pct' => $battPct,
+                        'runtime_min' => $runtimeMin,
+                    ], static fn($v) => $v !== null))
+                );
+            } catch (Throwable $e) {
+                App::log('SnmpThreshold ups: ' . $e->getMessage(), 'warning');
+            }
+        }
+
+        // Critical operational state → alert hub (on battery / bypass)
+        if ($statusLabel && class_exists('AlertService') && preg_match('/battery|bypass|off|emergency/i', $statusLabel)
+            && !preg_match('/on line|online/i', $statusLabel)
+        ) {
+            try {
+                AlertService::emit([
+                    'category' => AlertService::CAT_POWER,
+                    'severity' => preg_match('/battery|emergency|off/i', $statusLabel)
+                        ? AlertService::SEV_CRITICAL : AlertService::SEV_WARNING,
+                    'title' => 'UPS ' . $statusLabel . ': ' . ($unit['name'] ?? ''),
+                    'message' => "UPS operational status: {$statusLabel}\n"
+                        . 'Load: ' . ($loadPct !== null ? $loadPct . '%' : '—') . "\n"
+                        . 'Battery: ' . ($battPct !== null ? $battPct . '%' : '—') . "\n"
+                        . 'Runtime: ' . ($runtimeMin !== null ? $runtimeMin . ' min' : '—') . "\n"
+                        . 'Time: ' . date('c'),
+                    'entity_type' => 'ups',
+                    'entity_id' => (int)$unit['ups_id'],
+                ]);
+            } catch (Throwable $e) {
+                App::log('UPS status alert: ' . $e->getMessage(), 'warning');
+            }
+        }
+
+        $msg = 'Polled ' . (int)$got['ok'] . ' UPS metric(s)';
+        if ($loadPct !== null) {
+            $msg .= ' · load ' . $loadPct . '%';
+        }
+        if ($battPct !== null) {
+            $msg .= ' · batt ' . $battPct . '%';
+        }
+        if ($statusLabel) {
+            $msg .= ' · ' . $statusLabel;
+        }
+
+        return [
+            'ok' => (int)$got['ok'],
+            'failed' => (int)($got['failed'] ?? 0),
+            'metrics' => $metrics,
             'message' => $msg,
             'snapshot' => $snapshot,
         ];

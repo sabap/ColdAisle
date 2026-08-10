@@ -1946,6 +1946,7 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
                         <option value="device">Device</option>
                         <option value="pdu">PDU</option>
                         <option value="cooling">Cooling unit</option>
+                        <option value="ups">UPS</option>
                     </select>
                 </div>
                 <div class="form-row"><label>Entity ID (optional)</label>

@@ -114,6 +114,133 @@ try {
     // --- Cooling unit floor placement ---
     $fpAction = (string)($_GET['action'] ?? '');
     if ($method === 'POST' && in_array($fpAction, [
+        'place_ups', 'create_floor_ups', 'update_floor_ups', 'unplace_ups',
+    ], true)) {
+        api_require_any_permission(['edit_infrastructure', 'edit_power']);
+        api_require_csrf();
+        $data = api_read_json();
+
+        if ($fpAction === 'create_floor_ups') {
+            $roomId = (int)($data['room_id'] ?? 0);
+            if ($roomId < 1) {
+                App::json(['error' => 'room_id required'], 400);
+            }
+            $facing = strtoupper(trim((string)($data['front_facing'] ?? 'N')));
+            if (!in_array($facing, ['N', 'S', 'E', 'W'], true)) {
+                $facing = 'N';
+            }
+            $scope = strtolower(trim((string)($data['ups_scope'] ?? 'in_row')));
+            if (!in_array($scope, ['in_row', 'in_rack'], true)) {
+                $scope = 'in_row';
+            }
+            $geo = floorplan_ups_geometry_from_data($data, $facing, $scope);
+            $name = trim((string)($data['name'] ?? 'UPS'));
+            if ($name === '') {
+                $name = 'UPS';
+            }
+            $row = array_merge($geo, [
+                'name' => mb_substr($name, 0, 150),
+                'ups_scope' => $scope,
+                'room_id' => $roomId,
+                'manufacturer' => (string)($data['manufacturer'] ?? 'Schneider Electric'),
+                'model' => (string)($data['model'] ?? 'Symmetra 40K'),
+                'rated_kva' => isset($data['rated_kva']) ? (float)$data['rated_kva'] : 40.0,
+                'rated_kw' => isset($data['rated_kw']) ? (float)$data['rated_kw'] : 40.0,
+                'phases' => 3,
+                'status' => 'production',
+                'is_active' => 1,
+                'created_at' => date('Y-m-d H:i:s'),
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+            $uid = Database::insert('ups_units', $row);
+            AuditService::log((int)$user['user_id'], $user['username'], 'create', 'ups', (int)$uid, [
+                'name' => $name, 'floorplan' => true,
+            ]);
+            App::json(['ups_unit' => floorplan_fetch_ups((int)$uid)], 201);
+        }
+
+        if ($fpAction === 'place_ups') {
+            $uid = (int)($data['ups_id'] ?? 0);
+            $roomId = (int)($data['room_id'] ?? 0);
+            if ($uid < 1 || $roomId < 1) {
+                App::json(['error' => 'ups_id and room_id required'], 400);
+            }
+            $existing = Database::fetchOne(
+                'SELECT * FROM ups_units WHERE ups_id = ? AND is_active = 1',
+                [$uid]
+            );
+            if (!$existing) {
+                App::json(['error' => 'UPS not found'], 404);
+            }
+            $facing = strtoupper(trim((string)($data['front_facing'] ?? $existing['front_facing'] ?? 'N')));
+            if (!in_array($facing, ['N', 'S', 'E', 'W'], true)) {
+                $facing = 'N';
+            }
+            $scope = (string)($existing['ups_scope'] ?? 'in_row');
+            $geo = floorplan_ups_geometry_from_data(
+                array_merge($existing, $data),
+                $facing,
+                $scope
+            );
+            $fields = array_merge($geo, [
+                'room_id' => $roomId,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+            Database::update('ups_units', $fields, 'ups_id = :id', [':id' => $uid]);
+            AuditService::log((int)$user['user_id'], $user['username'], 'update', 'ups', $uid, [
+                'floorplan_place' => true,
+            ]);
+            App::json(['ups_unit' => floorplan_fetch_ups($uid)]);
+        }
+
+        if ($fpAction === 'update_floor_ups') {
+            $uid = (int)($data['ups_id'] ?? 0);
+            if ($uid < 1) {
+                App::json(['error' => 'ups_id required'], 400);
+            }
+            $existing = Database::fetchOne(
+                'SELECT * FROM ups_units WHERE ups_id = ? AND is_active = 1',
+                [$uid]
+            );
+            if (!$existing) {
+                App::json(['error' => 'UPS not found'], 404);
+            }
+            $facing = strtoupper(trim((string)($data['front_facing'] ?? $existing['front_facing'] ?? 'N')));
+            if (!in_array($facing, ['N', 'S', 'E', 'W'], true)) {
+                $facing = 'N';
+            }
+            $geo = floorplan_ups_geometry_from_data(
+                array_merge($existing, $data),
+                $facing,
+                (string)($existing['ups_scope'] ?? 'in_row')
+            );
+            $fields = array_merge($geo, ['updated_at' => date('Y-m-d H:i:s')]);
+            if (array_key_exists('name', $data) && trim((string)$data['name']) !== '') {
+                $fields['name'] = mb_substr(trim((string)$data['name']), 0, 150);
+            }
+            Database::update('ups_units', $fields, 'ups_id = :id', [':id' => $uid]);
+            App::json(['ups_unit' => floorplan_fetch_ups($uid)]);
+        }
+
+        if ($fpAction === 'unplace_ups') {
+            $uid = (int)($data['ups_id'] ?? 0);
+            if ($uid < 1) {
+                App::json(['error' => 'ups_id required'], 400);
+            }
+            Database::update('ups_units', [
+                'pos_x' => null,
+                'pos_y' => null,
+                'pos_z' => null,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ], 'ups_id = :id', [':id' => $uid]);
+            AuditService::log((int)$user['user_id'], $user['username'], 'update', 'ups', $uid, [
+                'floorplan_unplace' => true,
+            ]);
+            App::json(['ok' => true, 'ups_id' => $uid]);
+        }
+    }
+
+    if ($method === 'POST' && in_array($fpAction, [
         'place_cooling', 'create_floor_cooling', 'update_floor_cooling', 'unplace_cooling',
     ], true)) {
         api_require_any_permission(['edit_infrastructure', 'edit_cooling']);
@@ -580,6 +707,43 @@ try {
         App::log('floorplan cooling query: ' . $e->getMessage(), 'warning');
     }
 
+    $placedUps = [];
+    $unplacedUps = [];
+    try {
+        $placedUps = Database::fetchAll(
+            'SELECT u.ups_id, u.name, u.ups_scope, u.room_id, u.pos_x, u.pos_y, u.pos_z,
+                    u.rotation_deg, u.front_facing, u.width_mm, u.depth_mm, u.height_mm, u.color_hex,
+                    u.primary_ip, u.status, u.rated_kva, u.rated_kw,
+                    u.last_output_status, u.last_load_pct, u.last_battery_pct, u.last_runtime_min
+             FROM ups_units u
+             WHERE u.is_active = 1 AND u.room_id = ?
+               AND u.pos_x IS NOT NULL AND u.pos_y IS NOT NULL
+             ORDER BY u.name',
+            [$roomId]
+        );
+        if (function_exists('ups_health_status') || is_file(dirname(__DIR__) . '/includes/ups_helpers.php')) {
+            require_once dirname(__DIR__) . '/includes/ups_helpers.php';
+            foreach ($placedUps as &$pu) {
+                $pu['health_status'] = ups_health_status($pu);
+            }
+            unset($pu);
+        }
+        $unplacedUps = Database::fetchAll(
+            'SELECT u.ups_id, u.name, u.ups_scope, u.width_mm, u.depth_mm, u.height_mm, u.color_hex,
+                    u.primary_ip, u.status, u.room_id, u.rated_kva
+             FROM ups_units u
+             WHERE u.is_active = 1
+               AND (u.pos_x IS NULL OR u.pos_y IS NULL)
+               AND (u.room_id IS NULL OR u.room_id = ?)
+             ORDER BY u.name',
+            [$roomId]
+        );
+    } catch (Throwable $e) {
+        $placedUps = [];
+        $unplacedUps = [];
+        App::log('floorplan UPS query: ' . $e->getMessage(), 'warning');
+    }
+
     $paths = Database::fetchAll('SELECT * FROM cable_paths WHERE room_id = ?', [$roomId]);
     $units = SettingsService::get('length_units', 'metric');
 
@@ -601,6 +765,8 @@ try {
         'unplaced_pdus' => $unplacedPdus,
         'placed_cooling' => $placedCooling,
         'unplaced_cooling' => $unplacedCooling,
+        'placed_ups' => $placedUps,
+        'unplaced_ups' => $unplacedUps,
         'env_sensors' => $envSensors3d,
         'cable_paths' => $paths,
         'units' => $units === 'imperial' ? 'imperial' : 'metric',
@@ -726,6 +892,52 @@ function floorplan_fetch_cooling(int $coolingUnitId): ?array
          WHERE u.cooling_unit_id = ?',
         [$coolingUnitId]
     );
+}
+
+/**
+ * @param array<string,mixed> $data
+ * @return array<string,mixed>
+ */
+function floorplan_ups_geometry_from_data(array $data, string $facing, string $scope = 'in_row'): array
+{
+    $color = (string)($data['color_hex'] ?? '#7c3aed');
+    if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $color)) {
+        $color = '#7c3aed';
+    }
+    $defaultW = 600;
+    $defaultD = $scope === 'in_rack' ? 1000 : 1100;
+    $defaultH = $scope === 'in_rack' ? 1800 : 2000;
+    return [
+        'pos_x' => round((float)($data['pos_x'] ?? 0), 3),
+        'pos_y' => round((float)($data['pos_y'] ?? 0), 3),
+        'pos_z' => isset($data['pos_z']) && $data['pos_z'] !== '' && $data['pos_z'] !== null
+            ? round((float)$data['pos_z'], 3) : 0.0,
+        'width_mm' => max(100, min(8000, (int)($data['width_mm'] ?? $defaultW))),
+        'depth_mm' => max(100, min(8000, (int)($data['depth_mm'] ?? $defaultD))),
+        'height_mm' => max(100, min(8000, (int)($data['height_mm'] ?? $defaultH))),
+        'front_facing' => $facing,
+        'rotation_deg' => isset($data['rotation_deg']) && $data['rotation_deg'] !== '' && $data['rotation_deg'] !== null
+            ? (float)$data['rotation_deg'] : 0.0,
+        'color_hex' => $color,
+    ];
+}
+
+function floorplan_fetch_ups(int $upsId): ?array
+{
+    $row = Database::fetchOne(
+        'SELECT u.ups_id, u.name, u.ups_scope, u.room_id, u.pos_x, u.pos_y, u.pos_z,
+                u.rotation_deg, u.front_facing, u.width_mm, u.depth_mm, u.height_mm, u.color_hex,
+                u.primary_ip, u.status, u.rated_kva, u.rated_kw, u.is_active,
+                u.last_output_status, u.last_load_pct, u.last_battery_pct, u.last_runtime_min
+         FROM ups_units u
+         WHERE u.ups_id = ?',
+        [$upsId]
+    );
+    if ($row && (function_exists('ups_health_status') || is_file(dirname(__DIR__) . '/includes/ups_helpers.php'))) {
+        require_once dirname(__DIR__) . '/includes/ups_helpers.php';
+        $row['health_status'] = ups_health_status($row);
+    }
+    return $row;
 }
 
 function floorplan_fetch_pdu(int $pduId): ?array

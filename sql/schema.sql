@@ -1070,6 +1070,65 @@ INSERT INTO settings (setting_key, setting_value, category) VALUES
 ('auth_entra_enabled', '0', 'auth');
 GO
 
+-- UPS units (in-row / in-rack; floor placement + SNMP)
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ups_units')
+CREATE TABLE ups_units (
+    ups_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL,
+    ups_scope NVARCHAR(20) NOT NULL CONSTRAINT DF_ups_scope DEFAULT 'in_row',
+    room_id INT NULL,
+    row_id INT NULL,
+    cabinet_id INT NULL,
+    zone_id INT NULL,
+    manufacturer NVARCHAR(100) NULL,
+    model NVARCHAR(100) NULL,
+    serial_no NVARCHAR(100) NULL,
+    asset_tag NVARCHAR(100) NULL,
+    primary_ip NVARCHAR(45) NULL,
+    hostname NVARCHAR(255) NULL,
+    rated_kva DECIMAL(10,2) NULL,
+    rated_kw DECIMAL(10,2) NULL,
+    phases INT NULL,
+    status NVARCHAR(30) NOT NULL CONSTRAINT DF_ups_status DEFAULT 'production',
+    pos_x DECIMAL(10,3) NULL,
+    pos_y DECIMAL(10,3) NULL,
+    pos_z DECIMAL(10,3) NULL,
+    rotation_deg DECIMAL(8,2) NULL,
+    front_facing NVARCHAR(10) NULL,
+    width_mm INT NULL,
+    depth_mm INT NULL,
+    height_mm INT NULL,
+    color_hex NVARCHAR(7) NULL,
+    snmp_enabled BIT NOT NULL CONSTRAINT DF_ups_snmp_en DEFAULT 0,
+    snmp_version NVARCHAR(10) NULL,
+    snmp_community NVARCHAR(100) NULL,
+    snmp_port INT NULL,
+    snmp_v3_profile_id INT NULL,
+    snmp_v3_sec_level NVARCHAR(30) NULL,
+    snmp_security_name NVARCHAR(100) NULL,
+    snmp_auth_protocol NVARCHAR(20) NULL,
+    snmp_auth_passphrase NVARCHAR(255) NULL,
+    snmp_priv_protocol NVARCHAR(20) NULL,
+    snmp_priv_passphrase NVARCHAR(255) NULL,
+    snmp_context NVARCHAR(100) NULL,
+    snmp_site_template_id INT NULL,
+    snmp_auto_poll BIT NOT NULL CONSTRAINT DF_ups_snmp_auto DEFAULT 0,
+    snmp_last_poll_at DATETIME2 NULL,
+    last_poll_json NVARCHAR(MAX) NULL,
+    last_output_status NVARCHAR(40) NULL,
+    last_load_pct DECIMAL(8,2) NULL,
+    last_battery_pct DECIMAL(8,2) NULL,
+    last_runtime_min DECIMAL(10,2) NULL,
+    last_input_voltage DECIMAL(10,2) NULL,
+    last_output_voltage DECIMAL(10,2) NULL,
+    last_internal_temp_c DECIMAL(8,2) NULL,
+    notes NVARCHAR(MAX) NULL,
+    is_active BIT NOT NULL CONSTRAINT DF_ups_active DEFAULT 1,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_ups_created DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_ups_updated DEFAULT SYSUTCDATETIME()
+);
+GO
+
 -- Cooling units + environmental sensors (ensure() also creates these)
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'cooling_units')
 CREATE TABLE cooling_units (

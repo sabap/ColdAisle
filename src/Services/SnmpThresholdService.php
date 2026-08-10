@@ -54,7 +54,7 @@ class SnmpThresholdService
             $name = 'SNMP threshold';
         }
         $entityType = strtolower(trim((string)($data['entity_type'] ?? 'device')));
-        if (!in_array($entityType, ['device', 'pdu', 'cooling'], true)) {
+        if (!in_array($entityType, ['device', 'pdu', 'cooling', 'ups'], true)) {
             $entityType = 'device';
         }
         $metricKey = trim((string)($data['metric_key'] ?? ''));
@@ -128,7 +128,7 @@ class SnmpThresholdService
             return ['checked' => 0, 'alerted' => 0];
         }
         $entityType = strtolower($entityType);
-        if (!in_array($entityType, ['device', 'pdu', 'cooling'], true)) {
+        if (!in_array($entityType, ['device', 'pdu', 'cooling', 'ups'], true)) {
             return ['checked' => 0, 'alerted' => 0];
         }
 
