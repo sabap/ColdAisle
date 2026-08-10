@@ -1076,7 +1076,7 @@
     }
 
     /**
-     * Nudge selected unlocked cabinets, floor PDU, or cooling unit by (dx, dy) in plan meters.
+     * Nudge selected unlocked cabinets, floor PDU, UPS, or cooling unit by (dx, dy) in plan meters.
      * dirX/dirY are -1, 0, or 1 (plan axes: +X right, +Y down).
      */
     function nudgeSelected(dirX, dirY) {
@@ -1089,13 +1089,55 @@
       const dy = (dirY || 0) * step;
       const unitLabel = nudgeAmount + ' ' + nudgeUnit;
 
+      // UPS selection
+      if (selectedUpsId) {
+        const u = floorUps.find(function (x) {
+          return Number(x.ups_id) === Number(selectedUpsId);
+        });
+        if (!u) {
+          ColdAisle.toast('Select a cabinet, PDU, UPS, or cooling unit first', 'error');
+          return;
+        }
+        if (isUpsPositionLocked(u)) {
+          ColdAisle.toast('UPS is locked — Unlock position first', 'error');
+          return;
+        }
+        const cl = clampCabinetPosition(
+          (Number(u.pos_x) || 0) + dx,
+          (Number(u.pos_y) || 0) + dy,
+          {
+            width_mm: u.width_mm || 600,
+            depth_mm: u.depth_mm || 1100,
+            pos_x: u.pos_x,
+            pos_y: u.pos_y,
+            front_facing: u.front_facing,
+            rotation_deg: u.rotation_deg,
+          }
+        );
+        u.pos_x = cl.x;
+        u.pos_y = cl.y;
+        const xEl = propsEl.querySelector('#fu_x');
+        const yEl = propsEl.querySelector('#fu_y');
+        if (xEl) {
+          xEl.value = fmtLen(u.pos_x);
+          xEl.dataset.userEdited = '0';
+        }
+        if (yEl) {
+          yEl.value = fmtLen(u.pos_y);
+          yEl.dataset.userEdited = '0';
+        }
+        draw();
+        ColdAisle.toast('Nudged UPS by ' + unitLabel + ' — Save to keep', 'info');
+        return;
+      }
+
       // Cooling unit selection
       if (selectedCoolingId) {
         const u = floorCooling.find(function (x) {
           return Number(x.cooling_unit_id) === Number(selectedCoolingId);
         });
         if (!u) {
-          ColdAisle.toast('Select a cabinet, PDU, or cooling unit first', 'error');
+          ColdAisle.toast('Select a cabinet, PDU, UPS, or cooling unit first', 'error');
           return;
         }
         if (isCoolingPositionLocked(u)) {
@@ -1116,10 +1158,16 @@
         );
         u.pos_x = cl.x;
         u.pos_y = cl.y;
-        const xEl = propsEl.querySelector('#fp_x');
-        const yEl = propsEl.querySelector('#fp_y');
-        if (xEl) xEl.value = fmtLen(u.pos_x);
-        if (yEl) yEl.value = fmtLen(u.pos_y);
+        const xEl = propsEl.querySelector('#fc_x');
+        const yEl = propsEl.querySelector('#fc_y');
+        if (xEl) {
+          xEl.value = fmtLen(u.pos_x);
+          xEl.dataset.userEdited = '0';
+        }
+        if (yEl) {
+          yEl.value = fmtLen(u.pos_y);
+          yEl.dataset.userEdited = '0';
+        }
         draw();
         ColdAisle.toast('Nudged cooling unit by ' + unitLabel + ' — Save to keep', 'info');
         return;
@@ -1145,8 +1193,14 @@
         p.pos_y = cl.y;
         const xEl = propsEl.querySelector('#fp_x');
         const yEl = propsEl.querySelector('#fp_y');
-        if (xEl) xEl.value = fmtLen(p.pos_x);
-        if (yEl) yEl.value = fmtLen(p.pos_y);
+        if (xEl) {
+          xEl.value = fmtLen(p.pos_x);
+          xEl.dataset.userEdited = '0';
+        }
+        if (yEl) {
+          yEl.value = fmtLen(p.pos_y);
+          yEl.dataset.userEdited = '0';
+        }
         draw();
         ColdAisle.toast('Nudged PDU by ' + unitLabel + ' — Save to keep', 'info');
         return;
@@ -1154,7 +1208,7 @@
 
       const sel = getSelectedCabinets();
       if (!sel.length) {
-        ColdAisle.toast('Select a cabinet, floor PDU, or cooling unit first', 'error');
+        ColdAisle.toast('Select a cabinet, floor PDU, UPS, or cooling unit first', 'error');
         return;
       }
       const unlocked = sel.filter(function (c) { return !isPositionLocked(c); });
@@ -1239,6 +1293,18 @@
         return;
       }
       if (overObject === true) {
+        if (selectedUpsId) {
+          const u = floorUps.find(function (x) { return Number(x.ups_id) === Number(selectedUpsId); });
+          canvas.style.cursor = (u && !isUpsPositionLocked(u)) ? 'move' : 'pointer';
+          return;
+        }
+        if (selectedCoolingId) {
+          const cu = floorCooling.find(function (x) {
+            return Number(x.cooling_unit_id) === Number(selectedCoolingId);
+          });
+          canvas.style.cursor = (cu && !isCoolingPositionLocked(cu)) ? 'move' : 'pointer';
+          return;
+        }
         if (selectedPduId) {
           const p = floorPdus.find(function (x) { return Number(x.pdu_id) === Number(selectedPduId); });
           canvas.style.cursor = (p && !isPduPositionLocked(p)) ? 'move' : 'pointer';
@@ -1253,6 +1319,18 @@
         return;
       }
       // default based on selection
+      if (selectedUpsId) {
+        const u2 = floorUps.find(function (x) { return Number(x.ups_id) === Number(selectedUpsId); });
+        canvas.style.cursor = (u2 && !isUpsPositionLocked(u2)) ? 'move' : 'grab';
+        return;
+      }
+      if (selectedCoolingId) {
+        const cu2 = floorCooling.find(function (x) {
+          return Number(x.cooling_unit_id) === Number(selectedCoolingId);
+        });
+        canvas.style.cursor = (cu2 && !isCoolingPositionLocked(cu2)) ? 'move' : 'grab';
+        return;
+      }
       if (selectedPduId) {
         const p2 = floorPdus.find(function (x) { return Number(x.pdu_id) === Number(selectedPduId); });
         canvas.style.cursor = (p2 && !isPduPositionLocked(p2)) ? 'move' : 'grab';
@@ -4495,7 +4573,7 @@
       };
       const d = map[e.key];
       if (!d) return;
-      if (!selectedIds.size && !selectedPduId) return;
+      if (!selectedIds.size && !selectedPduId && !selectedCoolingId && !selectedUpsId) return;
       e.preventDefault();
       nudgeSelected(d[0], d[1]);
     });

@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Floor plan UPS nudge:** arrow keys / nudge amount move an unlocked UPS (was ignored); cooling nudge also updates its own X/Y fields.
+
 ---
 
 ## [0.3.77] - 2026-08-10
