@@ -39,6 +39,78 @@ try {
             App::json(['ok' => true, 'snmp_auto_poll' => $on, 'message' => $on ? 'Scheduled poll on' : 'Scheduled poll off']);
         }
 
+        if ($action === 'assign_template') {
+            $tid = (int)($data['template_id'] ?? 0);
+            if ($tid > 0) {
+                $tpl = Database::fetchOne(
+                    'SELECT template_id, name FROM snmp_site_oid_templates WHERE template_id = ? AND is_active = 1',
+                    [$tid]
+                );
+                if (!$tpl) {
+                    App::json(['error' => 'Site OID template not found or inactive'], 404);
+                }
+                SnmpDiscover::assignTemplateToUps($upsId, $tid);
+                App::json([
+                    'ok' => true,
+                    'template_id' => $tid,
+                    'template_name' => (string)($tpl['name'] ?? ''),
+                    'message' => 'Assigned site OID template: ' . (string)($tpl['name'] ?? ('#' . $tid)),
+                ]);
+            }
+            // Clear assignment
+            SnmpDiscover::assignTemplateToUps($upsId, 0);
+            App::json([
+                'ok' => true,
+                'template_id' => null,
+                'message' => 'Site OID template cleared from this UPS.',
+            ]);
+        }
+
+        if ($action === 'create_default_template') {
+            // Create/update a default APC PowerNet UPS map and assign it (no live discover)
+            $map = ups_default_apc_oid_map();
+            $name = trim((string)($data['template_name'] ?? ''));
+            if ($name === '') {
+                $name = 'APC UPS — PowerNet (default)';
+            }
+            $existingId = (int)($unit['snmp_site_template_id'] ?? 0);
+            // Prefer reuse of any existing default-named template
+            $byName = Database::fetchOne(
+                'SELECT template_id FROM snmp_site_oid_templates WHERE name = ? AND is_active = 1',
+                [$name]
+            );
+            if ($byName && (int)$byName['template_id'] > 0) {
+                $existingId = (int)$byName['template_id'];
+            }
+            $payload = [
+                'name' => mb_substr($name, 0, 150),
+                'oid_map' => json_encode($map, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                'notes' => 'UPS / PowerNet default map (enterprise 318.1.1.1)',
+                'is_active' => 1,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ];
+            if ($existingId > 0) {
+                Database::update('snmp_site_oid_templates', $payload, 'template_id = :id', [':id' => $existingId]);
+                $tid = $existingId;
+            } else {
+                $payload['created_at'] = date('Y-m-d H:i:s');
+                try {
+                    $payload['vendor'] = 'APC';
+                    $payload['model'] = (string)($unit['model'] ?? 'Symmetra');
+                    $tid = (int)Database::insert('snmp_site_oid_templates', $payload);
+                } catch (Throwable $e) {
+                    unset($payload['vendor'], $payload['model']);
+                    $tid = (int)Database::insert('snmp_site_oid_templates', $payload);
+                }
+            }
+            SnmpDiscover::assignTemplateToUps($upsId, $tid);
+            App::json([
+                'ok' => true,
+                'template_id' => $tid,
+                'message' => 'Default APC UPS OID template ready and assigned.',
+            ]);
+        }
+
         if ($action === 'discover') {
             $host = trim((string)($unit['primary_ip'] ?? ''));
             if ($host === '') {

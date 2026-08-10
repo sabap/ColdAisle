@@ -3346,4 +3346,25 @@ class SnmpDiscover
             'updated_at' => date('Y-m-d H:i:s'),
         ], 'cooling_unit_id = :id', [':id' => $coolingUnitId]);
     }
+
+    /**
+     * Link a site OID template to a UPS unit for Poll now / scheduled poll.
+     * Pass templateId 0 to clear the assignment (also turns off scheduled poll).
+     */
+    public static function assignTemplateToUps(int $upsId, int $templateId): void
+    {
+        if ($templateId > 0) {
+            Database::update('ups_units', [
+                'snmp_site_template_id' => $templateId,
+                'snmp_enabled' => 1,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ], 'ups_id = :id', [':id' => $upsId]);
+            return;
+        }
+        Database::update('ups_units', [
+            'snmp_site_template_id' => null,
+            'snmp_auto_poll' => 0,
+            'updated_at' => date('Y-m-d H:i:s'),
+        ], 'ups_id = :id', [':id' => $upsId]);
+    }
 }
