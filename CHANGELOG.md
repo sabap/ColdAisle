@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **AP7862-style PDU detail (amps-only SNMP):** hide Polled load kW card and Output (usage) chart when the NMC only reports amps/load-state (like APC Load Management); show Polled current (A), load current chart, and phase load-state; treat Line-to-Line voltage as device L–L (not L1-only); fix classic load-state labels (1=normal)
-
 ### Bug fixes
 
 ---
 
+## [0.3.90] - 2026-08-10
+
+### Enhancements
+
+- **AP7862-style PDU detail (amps-only SNMP):** hide Polled load kW card and Output (usage) chart when the NMC only reports amps/load-state (like APC Load Management); show Polled current (A), load current chart, and phase load-state; treat Line-to-Line voltage as device L–L (not L1-only); fix classic load-state labels (1=normal)
+
+---
 ## [0.3.89] - 2026-08-10
 
 ### Bug fixes
