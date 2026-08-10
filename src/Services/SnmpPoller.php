@@ -1161,34 +1161,8 @@ class SnmpPoller
                 $got['mac_address'] = $mac;
             }
         }
-        // Last-chance device power probe when map GETs left load at ~0 (wrong Ident OID)
-        if (($got['watts'] === null || abs((float)$got['watts']) < 0.5)) {
-            $probed = self::probeApcRpdu2DevicePower($session);
-            if ($probed !== null && $probed >= 0.5) {
-                $got['watts'] = $probed;
-            }
-        }
-        // Σ(I × nominal V) when phase volts missing but amps present (older AP786x)
-        if (($got['watts'] === null || abs((float)$got['watts']) < 0.5) && is_array($got['phases'] ?? null)) {
-            $nominal = self::pduNominalVoltsLn($pdu);
-            if ($nominal !== null && $nominal > 0) {
-                $est = 0.0;
-                $any = false;
-                foreach (['L1', 'L2', 'L3'] as $lab) {
-                    $a = $got['phases'][$lab]['amps'] ?? null;
-                    $v = $got['phases'][$lab]['volts'] ?? null;
-                    if ($a === null || (float)$a <= 0) {
-                        continue;
-                    }
-                    $useV = ($v !== null && (float)$v > 0) ? (float)$v : $nominal;
-                    $est += (float)$a * $useV;
-                    $any = true;
-                }
-                if ($any && $est >= 0.5) {
-                    $got['watts'] = round($est, 1);
-                }
-            }
-        }
+        // Recover AP7862 / AP78xx load when Ident watts=0 or map mis-labeled current as watts
+        $got = self::recoverApcPduLoad($session, $got, $pdu, $oidMap);
         self::closeSession($session);
 
         if ($got['ok'] === 0) {
@@ -1452,6 +1426,177 @@ class SnmpPoller
     }
 
     /**
+     * After collectOidMap: fill missing APC PDU watts from rPDU2 power, legacy
+     * rPDU phase/bank current (tenths A), and I×V with inventory voltage.
+     * Also reclassifies map values when Discover put rPDULoadStatusLoad under "watts".
+     *
+     * @param array<string,mixed> $session
+     * @param array<string,mixed> $got collectOidMap result
+     * @param array<string,mixed> $pdu
+     * @param array<string,mixed> $oidMap
+     * @return array<string,mixed>
+     */
+    private static function recoverApcPduLoad(array $session, array $got, array $pdu, array $oidMap): array
+    {
+        $needW = ($got['watts'] === null || abs((float)$got['watts']) < 0.5);
+        $needA = ($got['amps'] === null || abs((float)$got['amps']) < 0.01);
+        if (!$needW && !$needA) {
+            return $got;
+        }
+
+        // --- Mis-map: plain "watts"/"amps" pointing at rPDULoadStatusLoad (tenths A) ---
+        $metrics = is_array($got['metrics'] ?? null) ? $got['metrics'] : [];
+        foreach ($metrics as $mk => $info) {
+            if (!is_array($info)) {
+                continue;
+            }
+            $oid = ltrim((string)($info['oid'] ?? ''), '.');
+            $rawN = isset($info['numeric']) && is_numeric($info['numeric'])
+                ? (float)$info['numeric'] : null;
+            // If key said watts but OID is load-status current, numeric may already be
+            // unscaled tenths (or wrongly treated as W). Re-read path from OID.
+            if (!preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.12\.2\.3\.1\.1\.2(?:\.|$)/', $oid)) {
+                continue;
+            }
+            // Prefer raw SNMP value before wrong scale: re-GET
+            try {
+                $raw = self::get($session, $oid);
+                $tenths = self::toNumber($raw);
+            } catch (Throwable $e) {
+                $tenths = $rawN;
+            }
+            if ($tenths === null || $tenths < 0) {
+                continue;
+            }
+            $amps = round($tenths / 10.0, 3);
+            if ($amps < 0.01) {
+                continue;
+            }
+            // Phase index from trailing .N
+            $ph = 1;
+            if (preg_match('/\.([123])$/', $oid, $m)) {
+                $ph = (int)$m[1];
+            }
+            $lab = 'L' . $ph;
+            if (!is_array($got['phases'] ?? null)) {
+                $got['phases'] = [];
+            }
+            if (!isset($got['phases'][$lab]) || !is_array($got['phases'][$lab])) {
+                $got['phases'][$lab] = [
+                    'watts' => null, 'amps' => null, 'volts' => null,
+                    'va' => null, 'pf' => null, 'peak_amps' => null, 'load_state' => null,
+                ];
+            }
+            if (($got['phases'][$lab]['amps'] ?? null) === null
+                || (float)$got['phases'][$lab]['amps'] < 0.01
+            ) {
+                $got['phases'][$lab]['amps'] = $amps;
+            }
+            // Drop bogus device watts that were really tenths-of-amps (e.g. 42 → 42 W)
+            if ($needW && isset($got['watts']) && abs((float)$got['watts'] - $tenths) < 0.01) {
+                $got['watts'] = null;
+                $needW = true;
+            }
+            if (preg_match('/watt|power/', strtolower((string)$mk)) && abs((float)($info['numeric'] ?? 0) - $tenths) < 0.01) {
+                // will recompute watts via I×V below
+                $needW = true;
+            }
+        }
+
+        // --- Direct rPDU2 device power ---
+        if ($needW) {
+            $probed = self::probeApcRpdu2DevicePower($session);
+            if ($probed !== null && $probed >= 0.5) {
+                $got['watts'] = $probed;
+                $needW = false;
+            }
+        }
+
+        // --- Legacy + rPDU2 phase/bank currents when map had no usable amps ---
+        $phaseAmps = self::probeApcPhaseAmps($session);
+        if ($phaseAmps) {
+            if (!is_array($got['phases'] ?? null)) {
+                $got['phases'] = [];
+            }
+            foreach ($phaseAmps as $lab => $a) {
+                if ($a === null || $a < 0.01) {
+                    continue;
+                }
+                if (!isset($got['phases'][$lab]) || !is_array($got['phases'][$lab])) {
+                    $got['phases'][$lab] = [
+                        'watts' => null, 'amps' => null, 'volts' => null,
+                        'va' => null, 'pf' => null, 'peak_amps' => null, 'load_state' => null,
+                    ];
+                }
+                $cur = $got['phases'][$lab]['amps'] ?? null;
+                if ($cur === null || (float)$cur < 0.01) {
+                    $got['phases'][$lab]['amps'] = $a;
+                }
+            }
+        }
+
+        // Sum phase amps → device amps
+        if ($needA && is_array($got['phases'] ?? null)) {
+            $sumA = 0.0;
+            $anyA = false;
+            foreach (['L1', 'L2', 'L3'] as $lab) {
+                $a = $got['phases'][$lab]['amps'] ?? null;
+                if ($a !== null && (float)$a > 0) {
+                    $sumA += (float)$a;
+                    $anyA = true;
+                }
+            }
+            if ($anyA) {
+                $got['amps'] = round($sumA, 3);
+                $needA = false;
+            }
+        }
+
+        // Sum phase watts if present
+        if ($needW && is_array($got['phases'] ?? null)) {
+            $sumW = 0.0;
+            $anyW = false;
+            foreach (['L1', 'L2', 'L3'] as $lab) {
+                $w = $got['phases'][$lab]['watts'] ?? null;
+                if ($w !== null && (float)$w >= 0) {
+                    $sumW += (float)$w;
+                    $anyW = true;
+                }
+            }
+            if ($anyW && $sumW >= 0.5) {
+                $got['watts'] = round($sumW, 3);
+                $needW = false;
+            }
+        }
+
+        // I×V with live phase volts or inventory nominal
+        if ($needW && is_array($got['phases'] ?? null)) {
+            $nominal = self::pduNominalVoltsLn($pdu);
+            // Default L–N when inventory voltage unset (AP7862 / 208Y common ≈ 120 V)
+            if ($nominal === null || $nominal <= 0) {
+                $nominal = 120.0;
+            }
+            $est = 0.0;
+            $any = false;
+            foreach (['L1', 'L2', 'L3'] as $lab) {
+                $a = $got['phases'][$lab]['amps'] ?? null;
+                $v = $got['phases'][$lab]['volts'] ?? null;
+                if ($a === null || (float)$a <= 0) {
+                    continue;
+                }
+                $useV = ($v !== null && (float)$v > 0) ? (float)$v : $nominal;
+                $est += (float)$a * $useV;
+                $any = true;
+            }
+            if ($any && $est >= 0.5) {
+                $got['watts'] = round($est, 1);
+            }
+        }
+
+        return $got;
+    }
+
+    /**
      * Direct GET of rPDU2DeviceStatusPower (.1 then .2) → watts (scaled).
      *
      * @param array<string,mixed> $session
@@ -1476,6 +1621,53 @@ class SnmpPoller
             }
         }
         return null;
+    }
+
+    /**
+     * Probe phase/bank current from rPDU2 then legacy rPDULoadStatusLoad (tenths A).
+     *
+     * @param array<string,mixed> $session
+     * @return array<string,float> L1/L2/L3 => amps
+     */
+    private static function probeApcPhaseAmps(array $session): array
+    {
+        $out = [];
+        // rPDU2 phase current (tenths A)
+        foreach ([1, 2, 3] as $n) {
+            $oid = '1.3.6.1.4.1.318.1.1.26.6.3.1.5.' . $n;
+            try {
+                $raw = self::get($session, $oid);
+                $num = self::toNumber($raw);
+                if ($num !== null && $num >= 0) {
+                    $a = round($num / 10.0, 3);
+                    if ($a >= 0.01) {
+                        $out['L' . $n] = $a;
+                    }
+                }
+            } catch (Throwable $e) {
+                // continue
+            }
+        }
+        if ($out) {
+            return $out;
+        }
+        // Legacy rPDULoadStatusLoad — tenths of Amps, index 1..N (phases then banks)
+        foreach ([1, 2, 3] as $n) {
+            $oid = '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.' . $n;
+            try {
+                $raw = self::get($session, $oid);
+                $num = self::toNumber($raw);
+                if ($num !== null && $num >= 0) {
+                    $a = round($num / 10.0, 3);
+                    if ($a >= 0.01) {
+                        $out['L' . $n] = $a;
+                    }
+                }
+            } catch (Throwable $e) {
+                // continue
+            }
+        }
+        return $out;
     }
 
     /**
@@ -1766,9 +1958,26 @@ class SnmpPoller
                 ) {
                     $num = null;
                 }
-                $num = self::applyMetricScale($metricKey, $num);
-                // OID-path scale when Discover saved plain "watts"/"amps" without _hundredths_kw / _x10
-                $num = self::applyApcRpdu2OidScale($metricKey, $oidNorm, $num);
+                // Discover sometimes maps rPDULoadStatusLoad (tenths A) as plain "watts"
+                if (self::isApcRpduLoadStatusLoadOid($oidNorm)) {
+                    if ($num !== null && $num >= 0) {
+                        // Always tenths of amps on this leaf — never treat as watts
+                        $num = round($num / 10.0, 3);
+                        if (preg_match('/watt|power/', $metricKey) && !preg_match('/amp|current/', $metricKey)) {
+                            // Re-home under phase amps; do not feed device watts
+                            $metricKey = 'phase1_amps';
+                            if (preg_match('/\.([123])$/', $oidNorm, $im)) {
+                                $metricKey = 'phase' . $im[1] . '_amps';
+                            }
+                        } elseif (!str_contains($metricKey, 'x10') && preg_match('/amp|current/', $metricKey)) {
+                            // already divided; key may have been amps_x10 — undo double ÷ later
+                        }
+                    }
+                } else {
+                    $num = self::applyMetricScale($metricKey, $num);
+                    // OID-path scale when Discover saved plain "watts"/"amps" without _hundredths_kw / _x10
+                    $num = self::applyApcRpdu2OidScale($metricKey, $oidNorm, $num);
+                }
                 $metrics[$metricKey] = [
                     'numeric' => $num,
                     'raw' => $raw,
@@ -2166,6 +2375,13 @@ class SnmpPoller
             return round($num / 10.0, 3);
         }
         return $num;
+    }
+
+    /** PowerNet rPDULoadStatusLoad — tenths of Amps (phases then banks). */
+    private static function isApcRpduLoadStatusLoadOid(string $oid): bool
+    {
+        $oid = ltrim($oid, '.');
+        return (bool)preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.12\.2\.3\.1\.1\.2(?:\.|$)/', $oid);
     }
 
     /**

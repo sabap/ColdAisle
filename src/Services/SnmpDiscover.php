@@ -2110,9 +2110,10 @@ class SnmpDiscover
 
         // Fallback watts only with explicit power signal — never steal temperature OIDs
         // (previously: first enterprise numeric ≥20 → often EMS temp.1).
+        // Never map rPDULoadStatusLoad (tenths A) or UPS-only trees as device watts for PDUs.
         if ($watts === null) {
             foreach ($candidates as $c) {
-                if ($c['numeric'] === null || $c['numeric'] < 20 || ($c['score'] ?? 0) < 8) {
+                if ($c['numeric'] === null || $c['numeric'] < 0 || ($c['score'] ?? 0) < 8) {
                     continue;
                 }
                 if (!str_starts_with((string)$c['oid'], '1.3.6.1.4.1.')) {
@@ -2128,17 +2129,40 @@ class SnmpDiscover
                 if (preg_match('/config|threshold|factor|supply|temp|humid|probe/', $hay)) {
                     continue;
                 }
-                // Require power keyword or known PDU trees (not bare numeric)
-                $oid = (string)$c['oid'];
-                $powerish = (bool)preg_match('/watt|activepower|realpower|devicepower|phasepower|statuspower|identdevicepower/', $hay)
-                    || (bool)preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.(1|12|26)\./', $oid)
+                $oid = ltrim((string)$c['oid'], '.');
+                // Current / load-state leaves are NOT watts (common AP7862 Discover mistake)
+                if (preg_match('/loadstatusload|statuscurrent|phasestatuscurrent|(?<![a-z])current(?![a-z])/', $hay)
+                    || preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.12\.2\.3\.1\.1\.2(?:\.|$)/', $oid)
+                    || preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.6\.3\.1\.5(?:\.|$)/', $oid)
+                ) {
+                    continue;
+                }
+                // UPS PowerNet output tree — not rack PDU load
+                if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.1\./', $oid)) {
+                    continue;
+                }
+                // Require power keyword or known *power* OID columns (not whole 12/26 trees)
+                $powerish = (bool)preg_match(
+                    '/watt|activepower|realpower|devicepower|phasepower|statuspower|identdevicepower|devicesstatuspower/',
+                    $hay
+                )
+                    || preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.4\.3\.1\.5(?:\.|$)/', $oid) // rPDU2DeviceStatusPower
+                    || preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.12\.1\.16(?:\.|$)/', $oid) // rPDUIdentDevicePowerWatts
                     || str_starts_with($oid, '1.3.6.1.4.1.99999.2.1')
-                    || str_starts_with($oid, '1.3.6.1.4.1.3808.');
+                    || (str_starts_with($oid, '1.3.6.1.4.1.3808.') && preg_match('/watt|power/', $hay));
                 if (!$powerish) {
                     continue;
                 }
-                $watts = $oid;
-                break;
+                // Prefer rPDU2 status power over Ident (Ident often 0 on AP78xx)
+                if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.4\.3\.1\.5(?:\.|$)/', $oid)
+                    || preg_match('/devicestatuspower(?!factor|supply)/', $hay)
+                ) {
+                    $watts = $oid;
+                    break;
+                }
+                if ($watts === null) {
+                    $watts = $oid;
+                }
             }
         }
         if ($ampsX10 !== null) {
@@ -2281,8 +2305,14 @@ class SnmpDiscover
                 continue;
             }
 
+            // Prefer rPDU2DeviceStatusPower (hundredths kW) over Ident watts (often 0 on AP78xx)
+            if (preg_match('/rpdu2devicesstatuspower(?!factor|supply)|devicestatuspower(?!factor|supply)/', $hay)
+                || preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.4\.3\.1\.5(?:\.|$)/', ltrim($oid, '.'))
+            ) {
+                $consider('watts_hundredths_kw', $c, 100);
+            }
             if (preg_match('/identdevicepowerwatts|rpduidentdevicepowerwatts/', $hay)) {
-                $consider('watts', $c, 80);
+                $consider('watts', $c, 40); // lower than rPDU2 — Ident often stuck at 0
             }
             if (preg_match('/identdevicepowerva|powerva\.0|devicepowerva/', $hay)
                 && !preg_match('/phase/', $hay)
