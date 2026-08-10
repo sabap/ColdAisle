@@ -1091,6 +1091,10 @@ class SnmpPoller
                 'outlet_diag' => $result['outlet_diag'] ?? null,
                 'device_num_outlets' => $result['device_num_outlets'] ?? null,
                 'outlet_sync' => $result['outlet_sync'] ?? null,
+                'ok' => $result['ok'] ?? 0,
+                'failed' => $result['failed'] ?? 0,
+                'metrics' => $result['metrics'] ?? null,
+                'load_diag' => $result['load_diag'] ?? null,
             ];
         }
 
@@ -1196,6 +1200,8 @@ class SnmpPoller
             }
         }
 
+        $loadDiag = self::buildPduLoadDiag($got, $pdu);
+
         return [
             'watts' => $got['watts'],
             'amps' => $got['amps'],
@@ -1208,6 +1214,94 @@ class SnmpPoller
             'mac_address' => $got['mac_address'] ?? null,
             'ok' => $got['ok'],
             'failed' => $got['failed'],
+            'metrics' => $got['metrics'] ?? null,
+            'load_diag' => $loadDiag,
+        ];
+    }
+
+    /**
+     * Human-readable load diagnosis for Poll now (no production access required).
+     *
+     * @param array<string,mixed> $got
+     * @param array<string,mixed> $pdu
+     * @return array{summary:string,hints:list<string>,raw:list<array{key:string,oid:string,raw:mixed,numeric:?float}>}
+     */
+    private static function buildPduLoadDiag(array $got, array $pdu): array
+    {
+        $raw = [];
+        $metrics = is_array($got['metrics'] ?? null) ? $got['metrics'] : [];
+        foreach ($metrics as $k => $info) {
+            if (!is_array($info)) {
+                continue;
+            }
+            $raw[] = [
+                'key' => (string)$k,
+                'oid' => (string)($info['oid'] ?? ''),
+                'raw' => is_scalar($info['raw'] ?? null) ? $info['raw'] : json_encode($info['raw'] ?? null),
+                'numeric' => isset($info['numeric']) && is_numeric($info['numeric'])
+                    ? (float)$info['numeric'] : null,
+            ];
+        }
+        $hints = [];
+        $w = $got['watts'] ?? null;
+        $a = $got['amps'] ?? null;
+        $phaseAmps = [];
+        if (is_array($got['phases'] ?? null)) {
+            foreach (['L1', 'L2', 'L3'] as $lab) {
+                $pa = $got['phases'][$lab]['amps'] ?? null;
+                if ($pa !== null) {
+                    $phaseAmps[$lab] = (float)$pa;
+                }
+            }
+        }
+        $sumA = $phaseAmps ? array_sum($phaseAmps) : (($a !== null) ? (float)$a : 0.0);
+
+        // Inspect classic Ident voltage / power from metrics
+        $identW = null;
+        $identV = null;
+        foreach ($raw as $row) {
+            $oid = ltrim($row['oid'], '.');
+            if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.12\.1\.16(?:\.|$)/', $oid)) {
+                $identW = $row['numeric'];
+            }
+            if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.12\.1\.15(?:\.|$)/', $oid)
+                || preg_match('/input_volts|line_volts/', $row['key'])
+            ) {
+                $identV = $row['numeric'];
+            }
+        }
+
+        if ($w !== null && abs((float)$w) >= 0.5) {
+            $summary = 'Load OK: ' . round((float)$w) . ' W'
+                . ($sumA > 0 ? ' · ' . round($sumA, 2) . ' A' : '');
+        } elseif ($sumA < 0.01) {
+            $summary = 'SNMP reports ~0 A on all phase/bank load indexes and no usable device watts.';
+            $hints[] = 'On the NMC web UI, confirm Load / Amps is non-zero for this PDU right now.';
+            $hints[] = 'snmpget rPDULoadStatusLoad.1–.6 (…12.2.3.1.1.2.1 … .6) — values are tenths of amps.';
+            $hints[] = 'AP7xxx Ident power (…12.1.16.0) stays 0 until Line-to-Line voltage (…12.1.15.0) is set on the NMC.';
+            if ($identV !== null && abs((float)$identV) < 1) {
+                $hints[] = 'L–L / input voltage OID returned ' . $identV
+                    . ' — set it on the NMC (or set Input voltage on the ColdAisle PDU form) so watts can be calculated from amps.';
+            }
+            if ($identW !== null && abs((float)$identW) < 0.5) {
+                $hints[] = 'rPDUIdentDevicePowerWatts raw numeric=' . $identW . ' (expected 0 when L–L not calibrated).';
+            }
+            $invV = self::pduNominalVoltsLn($pdu);
+            if ($invV === null) {
+                $hints[] = 'ColdAisle PDU inventory has no input voltage — set e.g. 120 or 208 for I×V estimates when amps are present.';
+            }
+        } else {
+            $summary = 'Have amps (' . round($sumA, 2) . ' A) but watts still ~0 after recovery.';
+            $hints[] = 'Check input_volts / phase volts and PF; I×V may have been skipped.';
+        }
+
+        return [
+            'summary' => $summary,
+            'hints' => $hints,
+            'raw' => $raw,
+            'phase_amps' => $phaseAmps,
+            'ident_watts' => $identW,
+            'ident_volts' => $identV,
         ];
     }
 
@@ -1334,9 +1428,10 @@ class SnmpPoller
                 $blob .= ' ' . $v;
             }
         }
-        if (!str_contains($blob, '1.3.6.1.4.1.318.1.1.26')
-            && !str_contains($blob, '1.3.6.1.4.1.318.1.1.12')
-        ) {
+        // Per-outlet metered table is rPDU2 26.9 only. Classic AP7862 (12.x phase/bank
+        // metered) has no outlet power table — injecting bases wastes GETs and can
+        // burn the poll window without improving load.
+        if (!str_contains($blob, '1.3.6.1.4.1.318.1.1.26.9')) {
             return $oidMap;
         }
         require_once __DIR__ . '/SnmpDiscover.php';
@@ -1365,54 +1460,52 @@ class SnmpPoller
                 $blob .= ' ' . $v;
             }
         }
-        $isApc = str_contains($blob, '1.3.6.1.4.1.318.1.1.26')
-            || str_contains($blob, '1.3.6.1.4.1.318.1.1.12')
-            || str_contains($blob, '1.3.6.1.4.1.318.1.1.1');
+        $isClassicRpdu = str_contains($blob, '1.3.6.1.4.1.318.1.1.12');
+        $isRpdu2 = str_contains($blob, '1.3.6.1.4.1.318.1.1.26');
+        $isApc = $isClassicRpdu || $isRpdu2 || str_contains($blob, '1.3.6.1.4.1.318.1.1.1');
         if (!$isApc) {
             return $oidMap;
         }
 
-        $hasRpdu2Power = false;
-        foreach ($oidMap as $oid) {
-            if (!is_string($oid)) {
-                continue;
-            }
-            $o = ltrim($oid, '.');
-            if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.4\.3\.1\.5(?:\.|$)/', $o)
-                || preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.6\.3\.1\.7(?:\.|$)/', $o)
-            ) {
-                $hasRpdu2Power = true;
-                break;
-            }
-        }
-
-        // Prefer inserting device power first so non-zero wins before Ident=0 later
         $inject = [];
-        if (!$hasRpdu2Power) {
-            $inject['watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.4.3.1.5.1';
-        }
-        // Phase 1–3 current (tenths A) + voltage + power when no phase_* yet
-        $hasPhase = false;
-        foreach ($oidMap as $k => $_) {
-            if (is_string($k) && preg_match('/^phase[123]_/', $k)) {
-                $hasPhase = true;
-                break;
+        // Classic AP7862 path: Ident watts + L–L voltage + phase/bank amps (12.x)
+        if ($isClassicRpdu) {
+            if (!isset($oidMap['watts']) && !isset($oidMap['watts_hundredths_kw'])) {
+                $inject['watts'] = '1.3.6.1.4.1.318.1.1.12.1.16.0';
+            }
+            if (!isset($oidMap['input_volts']) && !isset($oidMap['phase1_volts'])) {
+                $inject['input_volts'] = '1.3.6.1.4.1.318.1.1.12.1.15.0';
+            }
+            $hasPhaseAmps = false;
+            foreach ($oidMap as $k => $_) {
+                if (is_string($k) && preg_match('/^phase[123]_amps/', $k)) {
+                    $hasPhaseAmps = true;
+                    break;
+                }
+            }
+            if (!$hasPhaseAmps) {
+                $inject['phase1_amps_x10'] = '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.1';
+                $inject['phase2_amps_x10'] = '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.2';
+                $inject['phase3_amps_x10'] = '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.3';
             }
         }
-        if (!$hasPhase) {
-            // rPDU2 first; legacy rPDU load status is a second chance if rPDU2 fails (-1)
-            $inject['phase1_amps_x10'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.5.1';
-            $inject['phase2_amps_x10'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.5.2';
-            $inject['phase3_amps_x10'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.5.3';
-            $inject['phase1_volts'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.6.1';
-            $inject['phase2_volts'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.6.2';
-            $inject['phase3_volts'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.6.3';
-            $inject['phase1_watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.7.1';
-            $inject['phase2_watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.7.2';
-            $inject['phase3_watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.7.3';
+        // rPDU2 total power only when map already uses 26.x (or pure rPDU2 maps)
+        if ($isRpdu2) {
+            $hasRpdu2Power = false;
+            foreach ($oidMap as $oid) {
+                if (!is_string($oid)) {
+                    continue;
+                }
+                if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.4\.3\.1\.5(?:\.|$)/', ltrim($oid, '.'))) {
+                    $hasRpdu2Power = true;
+                    break;
+                }
+            }
+            if (!$hasRpdu2Power) {
+                $inject['watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.4.3.1.5.1';
+            }
         }
 
-        // Prepend inject keys so watts_hundredths_kw is evaluated before plain watts=0
         $out = [];
         foreach ($inject as $k => $oid) {
             if (!isset($oidMap[$k])) {
@@ -1569,27 +1662,80 @@ class SnmpPoller
             }
         }
 
-        // I×V with live phase volts or inventory nominal
+        // Classic AP7xxx L–L / input voltage (Ident 15) — used for power calc on NMC
+        $inputV = null;
+        try {
+            $rawV = self::get($session, '1.3.6.1.4.1.318.1.1.12.1.15.0');
+            $inputV = self::toNumber($rawV);
+            if ($inputV !== null && $inputV < 1) {
+                $inputV = null;
+            }
+        } catch (Throwable $e) {
+            $inputV = null;
+        }
+        if ($inputV !== null) {
+            if (!is_array($got['phases'] ?? null)) {
+                $got['phases'] = [];
+            }
+            if (!isset($got['phases']['L1']) || !is_array($got['phases']['L1'])) {
+                $got['phases']['L1'] = [
+                    'watts' => null, 'amps' => null, 'volts' => null,
+                    'va' => null, 'pf' => null, 'peak_amps' => null, 'load_state' => null,
+                ];
+            }
+            if (($got['phases']['L1']['volts'] ?? null) === null || (float)$got['phases']['L1']['volts'] <= 0) {
+                $got['phases']['L1']['volts'] = $inputV;
+            }
+            // Stash for diagnostics
+            if (!isset($got['metrics']['input_volts'])) {
+                $got['metrics']['input_volts'] = [
+                    'numeric' => $inputV,
+                    'raw' => $inputV,
+                    'oid' => '1.3.6.1.4.1.318.1.1.12.1.15.0',
+                ];
+            }
+        }
+
+        // I×V with live phase volts, Ident L–L, or inventory nominal
         if ($needW && is_array($got['phases'] ?? null)) {
-            $nominal = self::pduNominalVoltsLn($pdu);
-            // Default L–N when inventory voltage unset (AP7862 / 208Y common ≈ 120 V)
+            $nominal = $inputV;
+            if ($nominal === null || $nominal <= 0) {
+                $nominal = self::pduNominalVoltsLn($pdu);
+            }
+            // Default 120 V for single-phase AP7862 when nothing configured
             if ($nominal === null || $nominal <= 0) {
                 $nominal = 120.0;
             }
+            $pf = 1.0;
+            if (isset($got['phases']['_device']['pf']) && is_numeric($got['phases']['_device']['pf'])) {
+                $pfv = (float)$got['phases']['_device']['pf'];
+                // pf may already be scaled (0–1) or raw thousandths if scale missed
+                if ($pfv > 1.5) {
+                    $pfv = $pfv / 1000.0;
+                }
+                if ($pfv > 0.1 && $pfv <= 1.0) {
+                    $pf = $pfv;
+                }
+            }
             $est = 0.0;
             $any = false;
+            $phaseCount = 0;
             foreach (['L1', 'L2', 'L3'] as $lab) {
                 $a = $got['phases'][$lab]['amps'] ?? null;
                 $v = $got['phases'][$lab]['volts'] ?? null;
                 if ($a === null || (float)$a <= 0) {
                     continue;
                 }
+                $phaseCount++;
                 $useV = ($v !== null && (float)$v > 0) ? (float)$v : $nominal;
-                $est += (float)$a * $useV;
+                $est += (float)$a * $useV * $pf;
                 $any = true;
             }
+            // Single-phase rack: one current × voltage. Multi-phase with only L–L known:
+            // if only one phase has amps, simple I×V is correct for AP7862 120V.
             if ($any && $est >= 0.5) {
                 $got['watts'] = round($est, 1);
+                $needW = false;
             }
         }
 
@@ -2055,6 +2201,14 @@ class SnmpPoller
                     $deviceVa = $num;
                 } elseif (preg_match('/^(pf|device_pf|power_factor)\b/', $metricKey) && $num !== null) {
                     $devicePf = $num;
+                } elseif (preg_match('/^(input_volts|line_volts|ll_volts|device_volts)\b/', $metricKey) && $num !== null) {
+                    // rPDUIdentDeviceLinetoLineVoltage — use as L1 volts when phases lack voltage
+                    if (!isset($phaseBag[1])) {
+                        $phaseBag[1] = $emptyPhase();
+                    }
+                    if (($phaseBag[1]['volts'] ?? null) === null) {
+                        $phaseBag[1]['volts'] = $num;
+                    }
                 } elseif (preg_match('/^(phase_rated_amps|max_phase_amps|rated_phase_amps)\b/', $metricKey) && $num !== null) {
                     $ratedAmps = $num;
                 } elseif (preg_match('/^ps1_status\b/', $metricKey) && $num !== null) {

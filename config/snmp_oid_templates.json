@@ -74,20 +74,21 @@
       "id": "apc_rpdu_phase_load_state",
       "vendor": "APC / Schneider",
       "label": "APC rPDU 3-phase load state (AP786x typical)",
-      "notes": "AP7862/AP7864 class (classic rPDU 12.x, AOS 3.9 era). Phase current tenths of A under rPDULoadStatusLoad; load-state enums. Poller estimates kW from Σ(I×V) using inventory input voltage when Ident/rPDU2 watts are 0. Prefer this or re-Discover after ColdAisle ≥0.3.87.",
+      "notes": "AP7862 class (classic rPDU 12.x only — no rPDU2). Amps = rPDULoadStatusLoad tenths A. Watts = Ident DevicePowerWatts (0 until NMC L–L voltage …12.1.15.0 is set). Poller estimates W as I×V×PF using input_volts + inventory voltage. Single-phase 120 V models often only index .1 has current.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
         "sysUpTime": "1.3.6.1.2.1.1.3.0",
         "serial_no": "1.3.6.1.4.1.318.1.1.12.1.6.0",
-        "watts_hundredths_kw": "1.3.6.1.4.1.318.1.1.26.4.3.1.5.1",
+        "input_volts": "1.3.6.1.4.1.318.1.1.12.1.15.0",
         "watts": "1.3.6.1.4.1.318.1.1.12.1.16.0",
+        "va": "1.3.6.1.4.1.318.1.1.12.1.18.0",
+        "pf_x1000": "1.3.6.1.4.1.318.1.1.12.1.17.0",
         "phase1_amps_x10": "1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.1",
         "phase2_amps_x10": "1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.2",
         "phase3_amps_x10": "1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.3",
         "phase1_load_state": "1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.1",
         "phase2_load_state": "1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.2",
-        "phase3_load_state": "1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.3",
-        "near_overload": "1.3.6.1.4.1.318.1.1.12.2.3.1.1.4.1"
+        "phase3_load_state": "1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.3"
       }
     },
     {

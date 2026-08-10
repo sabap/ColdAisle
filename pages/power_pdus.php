@@ -626,6 +626,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             if ($fresh && $fresh['last_poll_watts'] !== null) {
                 $bits[] = 'Load ' . number_format((float)$fresh['last_poll_watts'] / 1000, 3) . ' kW'
                     . ($fresh['last_poll_amps'] !== null ? ' · ' . rtrim(rtrim(sprintf('%.2F', (float)$fresh['last_poll_amps']), '0'), '.') . ' A' : '');
+            } elseif (!empty($result['load_diag']['summary'])) {
+                $bits[] = (string)$result['load_diag']['summary'];
+            }
+            if (!empty($result['load_diag']['hints'][0])) {
+                $bits[] = (string)$result['load_diag']['hints'][0];
+            }
+            // Compact raw load metrics for paste-back (no production access from dev)
+            if (!empty($result['load_diag']['raw']) && is_array($result['load_diag']['raw'])) {
+                $snip = [];
+                foreach ($result['load_diag']['raw'] as $row) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+                    $k = (string)($row['key'] ?? '');
+                    if (!preg_match('/watt|amp|volt|pf|load|input/i', $k)) {
+                        continue;
+                    }
+                    $snip[] = $k . '=' . ($row['numeric'] !== null && $row['numeric'] !== ''
+                        ? $row['numeric']
+                        : (string)($row['raw'] ?? '?'));
+                    if (count($snip) >= 12) {
+                        break;
+                    }
+                }
+                if ($snip) {
+                    $bits[] = 'Raw: ' . implode(', ', $snip);
+                }
             }
             if (!empty($fresh['last_poll_outlets'])) {
                 $od = json_decode((string)$fresh['last_poll_outlets'], true);
@@ -633,7 +660,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                     $bits[] = count($od) . ' outlet(s)';
                 }
             }
-            App::flash('success', implode(' ', $bits));
+            $flashType = ($fresh && $fresh['last_poll_watts'] !== null && (float)$fresh['last_poll_watts'] >= 0.5)
+                ? 'success'
+                : 'warning';
+            App::flash($flashType, implode(' ', $bits));
             App::redirect('pages/power_pdus.php?id=' . $pid);
         }
 

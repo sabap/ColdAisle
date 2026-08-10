@@ -259,6 +259,8 @@ try {
                 $bits[] = 'Load ' . ($w >= 1000
                     ? number_format($w / 1000, 3) . ' kW'
                     : rtrim(rtrim(sprintf('%.2F', $w), '0'), '.') . ' W');
+            } elseif (!empty($result['load_diag']['summary'])) {
+                $bits[] = (string)$result['load_diag']['summary'];
             }
             if ($fresh && $fresh['last_poll_amps'] !== null) {
                 $bits[] = rtrim(rtrim(sprintf('%.2F', (float)$fresh['last_poll_amps']), '0'), '.') . ' A';
@@ -285,6 +287,10 @@ try {
             ) {
                 // already folded into result.message for form poll; keep JSON detail
             }
+            $loadDiag = $result['load_diag'] ?? null;
+            if (is_array($loadDiag) && !empty($loadDiag['hints'])) {
+                $bits[] = 'Hint: ' . (string)$loadDiag['hints'][0];
+            }
             App::json([
                 'ok' => true,
                 'result' => $result,
@@ -294,6 +300,7 @@ try {
                 'last_poll_phases' => is_array($phaseData) ? $phaseData : null,
                 'last_poll_outlets' => is_array($outletData) ? $outletData : null,
                 'outlet_diag' => $result['outlet_diag'] ?? null,
+                'load_diag' => $loadDiag,
                 'message' => implode(' ', $bits),
             ]);
         }
