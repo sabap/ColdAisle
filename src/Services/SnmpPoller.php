@@ -1284,12 +1284,21 @@ class SnmpPoller
                     . ' — set it on the NMC (or set Input voltage on the ColdAisle PDU form) so watts can be calculated from amps.';
             }
             if ($identW !== null && abs((float)$identW) < 0.5) {
-                $hints[] = 'rPDUIdentDevicePowerWatts raw numeric=' . $identW . ' (expected 0 when L–L not calibrated).';
+                $hints[] = 'rPDUIdentDevicePowerWatts=' . $identW
+                    . ' with input_volts set still yields 0 W — NMC calculates P from V×I; I is also 0 over SNMP.';
+            }
+            // Surface full load-status tenths walk if present
+            foreach ($raw as $row) {
+                if (($row['key'] ?? '') === '_apc_load_status_tenths' && !empty($row['raw'])) {
+                    $hints[] = 'LoadStatus tenths-of-A by index: ' . (string)$row['raw'];
+                    break;
+                }
             }
             $invV = self::pduNominalVoltsLn($pdu);
-            if ($invV === null) {
+            if ($invV === null && ($identV === null || abs((float)$identV) < 1)) {
                 $hints[] = 'ColdAisle PDU inventory has no input voltage — set e.g. 120 or 208 for I×V estimates when amps are present.';
             }
+            $hints[] = 'If the NMC web UI shows real load while SNMP is all zeros, this is an NMC SNMP/export issue (not ColdAisle map math).';
         } else {
             $summary = 'Have amps (' . round($sumA, 2) . ' A) but watts still ~0 after recovery.';
             $hints[] = 'Check input_volts / phase volts and PF; I×V may have been skipped.';
@@ -1606,7 +1615,9 @@ class SnmpPoller
         }
 
         // --- Legacy + rPDU2 phase/bank currents when map had no usable amps ---
-        $phaseAmps = self::probeApcPhaseAmps($session);
+        // Always probe classic load-status indexes 1–12 so bank loads are not missed
+        // even when phase1–3 map keys already returned 0.
+        $phaseAmps = self::probeApcPhaseAmps($session, $got);
         if ($phaseAmps) {
             if (!is_array($got['phases'] ?? null)) {
                 $got['phases'] = [];
@@ -1771,13 +1782,17 @@ class SnmpPoller
 
     /**
      * Probe phase/bank current from rPDU2 then legacy rPDULoadStatusLoad (tenths A).
+     * Also records every index found under metrics[_apc_load_status_tenths] for diagnostics.
      *
      * @param array<string,mixed> $session
+     * @param array<string,mixed>|null $got optional collect result to attach diag
      * @return array<string,float> L1/L2/L3 => amps
      */
-    private static function probeApcPhaseAmps(array $session): array
+    private static function probeApcPhaseAmps(array $session, ?array &$got = null): array
     {
         $out = [];
+        $tenthsByIndex = [];
+
         // rPDU2 phase current (tenths A)
         foreach ([1, 2, 3] as $n) {
             $oid = '1.3.6.1.4.1.318.1.1.26.6.3.1.5.' . $n;
@@ -1785,6 +1800,7 @@ class SnmpPoller
                 $raw = self::get($session, $oid);
                 $num = self::toNumber($raw);
                 if ($num !== null && $num >= 0) {
+                    $tenthsByIndex['rpdu2.' . $n] = $num;
                     $a = round($num / 10.0, 3);
                     if ($a >= 0.01) {
                         $out['L' . $n] = $a;
@@ -1794,36 +1810,54 @@ class SnmpPoller
                 // continue
             }
         }
-        if ($out) {
-            return $out;
-        }
-        // Legacy rPDULoadStatusLoad — tenths of Amps; phases then banks (index 1..6)
+
+        // Legacy rPDULoadStatusLoad — tenths of Amps; phases then banks (index 1..12)
         $legacySum = 0.0;
         $legacyAny = false;
-        foreach ([1, 2, 3, 4, 5, 6] as $n) {
+        for ($n = 1; $n <= 12; $n++) {
             $oid = '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.' . $n;
             try {
                 $raw = self::get($session, $oid);
                 $num = self::toNumber($raw);
-                if ($num !== null && $num >= 0) {
-                    $a = round($num / 10.0, 3);
-                    if ($a >= 0.01) {
-                        if ($n <= 3) {
-                            $out['L' . $n] = $a;
-                        } else {
-                            // Bank current — fold into L1 estimate when phases empty
-                            $legacySum += $a;
-                            $legacyAny = true;
-                        }
+                if ($num === null || $num < 0) {
+                    continue;
+                }
+                $tenthsByIndex['load.' . $n] = $num;
+                $a = round($num / 10.0, 3);
+                if ($a < 0.01) {
+                    continue;
+                }
+                if ($n <= 3) {
+                    if (!isset($out['L' . $n]) || $out['L' . $n] < 0.01) {
+                        $out['L' . $n] = $a;
                     }
+                } else {
+                    $legacySum += $a;
+                    $legacyAny = true;
                 }
             } catch (Throwable $e) {
-                // continue
+                // noSuchName ends the useful range on most NMCs
+                if ($n > 6) {
+                    break;
+                }
             }
         }
         if (!$out && $legacyAny && $legacySum >= 0.01) {
             $out['L1'] = round($legacySum, 3);
         }
+
+        if ($got !== null && $tenthsByIndex) {
+            if (!is_array($got['metrics'] ?? null)) {
+                $got['metrics'] = [];
+            }
+            // Diagnostic only — not used as a map key for totals
+            $got['metrics']['_apc_load_status_tenths'] = [
+                'numeric' => null,
+                'raw' => json_encode($tenthsByIndex),
+                'oid' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2',
+            ];
+        }
+
         return $out;
     }
 
