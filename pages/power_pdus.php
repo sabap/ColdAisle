@@ -1120,16 +1120,30 @@ if ($pduId) {
     $hasPhaseVoltsSnap = false;
     $hasPhaseLoadSnap = false;
     $hasPhaseAmpsSnap = false;
+    $phaseAmpsSum = 0.0;
+    $phaseAmpsAny = false;
+    $phaseAmpsNonZero = false;
+    $phaseVoltsCount = 0;
     foreach ($phaseRowsEarly as $pr) {
         if (($pr['volts'] ?? null) !== null) {
             $hasPhaseVoltsSnap = true;
+            $phaseVoltsCount++;
         }
         if (($pr['load_state'] ?? null) !== null) {
             $hasPhaseLoadSnap = true;
         }
         if (($pr['amps'] ?? null) !== null) {
             $hasPhaseAmpsSnap = true;
+            $phaseAmpsAny = true;
+            $phaseAmpsSum += (float)$pr['amps'];
+            if (abs((float)$pr['amps']) >= 0.01) {
+                $phaseAmpsNonZero = true;
+            }
         }
+    }
+    // Prefer sum of phase amps when device total amps empty
+    if ($loadAmps === null && $phaseAmpsAny) {
+        $loadAmps = round($phaseAmpsSum, 3);
     }
     $deviceLlVolts = null;
     if (!empty($phaseSnapEarly['device']['input_volts'])) {
@@ -1148,14 +1162,21 @@ if ($pduId) {
         $p['last_poll_watts'] !== null ? (float)$p['last_poll_watts'] : null
     );
     $loadStateFamily = power_phase_load_state_family_from_map($tplOidMap);
-    $showPhaseVoltsChart = $hasPhaseVoltsOid || $hasPhaseVoltsSnap;
-    $showLlVoltsChart = $hasDeviceLlOid || $deviceLlVolts !== null
-        || (isset($p['last_poll_volts']) && $p['last_poll_volts'] !== null && $p['last_poll_volts'] !== '');
-    $showAvgVoltsChart = $showPhaseVoltsChart && !$ampsCentric;
+    // Per-phase L–N only when 2+ phases report volts (device L–L on one phase is not enough)
+    $showPhaseVoltsChart = ($hasPhaseVoltsOid || $hasPhaseVoltsSnap) && $phaseVoltsCount >= 2 && !$ampsCentric;
+    // Device Line-to-Line (APC config) — single value, only if we have it
+    $showLlVoltsChart = ($hasDeviceLlOid || $deviceLlVolts !== null) && !$showPhaseVoltsChart;
+    $showAvgVoltsChart = false; // avoid L–N label when we only have L–L
     $showKwCard = !$ampsCentric;
     $showUsageChart = !$ampsCentric;
-    $showAmpsChart = $ampsCentric || $hasPhaseAmpsOid || $hasPhaseAmpsSnap || $loadAmps !== null;
+    // Live current only when SNMP returns meaningful amps (not always-zero AP7862 path)
+    $ampsSupported = $phaseAmpsNonZero
+        || ($loadAmps !== null && abs((float)$loadAmps) >= 0.01);
+    // Show amps chart only when supported; otherwise unsupported watermark if map expects amps
+    $showAmpsChart = $ampsSupported;
+    $showAmpsUnsupported = !$ampsSupported && ($ampsCentric || $hasPhaseAmpsOid || $hasPhaseAmpsSnap);
     $showLoadStateChart = $hasPhaseLoadOid || $hasPhaseLoadSnap;
+    $showPolledCurrentCard = $ampsCentric || $ampsSupported || $showAmpsUnsupported;
     $phaseNa = static function (): string {
         return '<span class="text-muted snmp-metric-na" title="The PDU&#39;s SNMP does not report this metric" style="cursor:help">N/A</span>';
     };
@@ -1169,7 +1190,7 @@ if ($pduId) {
             <div class="sub">
                 <?php if ($loadKw !== null && $p['last_poll_watts'] !== null): ?>
                     <?= (int)round((float)$p['last_poll_watts']) ?> W
-                    <?php if ($loadAmps !== null): ?>
+                    <?php if ($loadAmps !== null && abs((float)$loadAmps) >= 0.01): ?>
                         · <?= App::e(rtrim(rtrim(sprintf('%.2F', $loadAmps), '0'), '.')) ?> A
                     <?php endif; ?>
                     ·
@@ -1177,11 +1198,12 @@ if ($pduId) {
                 <?= !empty($p['last_poll_at']) ? App::e((string)$p['last_poll_at']) : 'Never polled' ?>
             </div>
         </div>
-        <?php else: ?>
-        <div class="metric-card warning">
+        <?php elseif ($showPolledCurrentCard): ?>
+        <div class="metric-card warning<?= $ampsSupported ? '' : ' metric-card-unsupported' ?>">
             <div class="label">Polled current</div>
+            <?php if ($ampsSupported): ?>
             <div class="value">
-                <?= $loadAmps !== null ? App::e(rtrim(rtrim(sprintf('%.2F', $loadAmps), '0'), '.')) : '—' ?>
+                <?= App::e(rtrim(rtrim(sprintf('%.2F', (float)$loadAmps), '0'), '.')) ?>
                 <span class="metric-unit">A</span>
             </div>
             <div class="sub">
@@ -1190,8 +1212,16 @@ if ($pduId) {
                     ·
                 <?php endif; ?>
                 <?= !empty($p['last_poll_at']) ? App::e((string)$p['last_poll_at']) : 'Never polled' ?>
-                <span class="text-muted" title="This PDU model reports load in amps over SNMP (like the NMC), not kW"> · no kW via SNMP</span>
             </div>
+            <?php else: ?>
+            <div class="value">Unsupported on this unit</div>
+            <div class="sub">
+                SNMP does not report usable load current
+                <?php if ($deviceLlVolts !== null): ?>
+                    · L–L <?= App::e(rtrim(rtrim(sprintf('%.0F', $deviceLlVolts), '0'), '.')) ?> V
+                <?php endif; ?>
+            </div>
+            <?php endif; ?>
         </div>
         <?php endif; ?>
         <div class="metric-card">
@@ -1244,8 +1274,10 @@ if ($pduId) {
         <div class="card-header flex-between">
             <h2 style="margin:0;font-size:1.05rem">Last 24 hours</h2>
             <span class="text-muted" style="font-size:.8rem">
-                SNMP samples · outage markers
-                <?= $ampsCentric ? '· amps / load-state (this model has no kW over SNMP)' : '· voltage charts only when reported' ?>
+                SNMP samples
+                <?= $showLoadStateChart ? '· load state' : '' ?>
+                <?= $showLlVoltsChart ? '· L–L voltage' : '' ?>
+                <?= $ampsCentric ? '· no kW over SNMP' : '' ?>
             </span>
         </div>
         <div class="card-body power-history-body">
@@ -1254,15 +1286,30 @@ if ($pduId) {
             <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Output (usage)" data-color="#38bdf8" data-height="180" data-hide-empty="0"></div>
             <?php endif; ?>
             <?php if ($showAmpsChart): ?>
-            <div class="power-chart power-chart-lg" data-metric="amps" data-unit="A" data-label="Load current" data-color="#38bdf8" data-height="180" data-hide-empty="0"></div>
+            <div class="power-chart power-chart-lg" data-metric="amps" data-unit="A" data-label="Load current" data-color="#38bdf8" data-height="180" data-hide-empty="1"></div>
+            <?php elseif ($showAmpsUnsupported): ?>
+            <div class="power-chart power-chart-lg"
+                 data-metric="amps"
+                 data-unit="A"
+                 data-label="Load current"
+                 data-unsupported="1"
+                 data-unsupported-title="Unsupported on this unit"
+                 data-unsupported-message="Load current is not available via SNMP for this PDU model (same as the NMC — phase amps are not reported)."
+                 data-height="160"></div>
             <?php endif; ?>
             <?php if ($showLoadStateChart): ?>
-            <div class="power-chart" data-metric="phase_load_state" data-unit="state" data-label="Phase load state L1 / L2 / L3" data-color="#94a3b8" data-height="120" data-hide-empty="1" data-outages="0"></div>
+            <div class="power-chart"
+                 data-metric="phase_load_state"
+                 data-unit="state"
+                 data-label="Phase load state L1 / L2 / L3"
+                 data-load-state-family="<?= App::e($loadStateFamily) ?>"
+                 data-color="#94a3b8"
+                 data-height="120"
+                 data-hide-empty="1"
+                 data-outages="0"></div>
             <?php endif; ?>
-            <?php if ($showLlVoltsChart && !$showPhaseVoltsChart): ?>
+            <?php if ($showLlVoltsChart): ?>
             <div class="power-chart" data-metric="volts" data-unit="V" data-label="Line-to-line voltage" data-color="#a78bfa" data-height="120" data-hide-empty="1"></div>
-            <?php elseif ($showAvgVoltsChart): ?>
-            <div class="power-chart" data-metric="volts" data-unit="V" data-label="Input voltage (avg L–N)" data-color="#a78bfa" data-height="140" data-hide-empty="1"></div>
             <?php endif; ?>
             <?php if ($showPhaseVoltsChart): ?>
             <div class="power-chart" data-metric="phase_volts" data-unit="V" data-label="Phase voltages L1 / L2 / L3" data-color="#94a3b8" data-height="160" data-hide-empty="1"></div>
@@ -1299,11 +1346,21 @@ if ($pduId) {
                 $phaseVoltsAny = true;
             }
         }
-        // Per-phase voltage column only when SNMP reports phase L–N (not device L–L alone)
-        $showVoltsCol = $phaseVoltsAny && !$ampsCentric;
-        $showPowerCol = $phaseWattsAny || !$ampsCentric;
+        // Per-phase voltage column only when 2+ phases report L–N (not device L–L alone)
+        $phaseVoltsN = 0;
+        foreach ($phaseRows as $prx) {
+            if (($prx['volts'] ?? null) !== null) {
+                $phaseVoltsN++;
+            }
+        }
+        $showVoltsCol = $phaseVoltsN >= 2 && !$ampsCentric;
+        $showPowerCol = $phaseWattsAny; // hide Power column when SNMP never reports watts
         $showState = true;
-        $showUtil = $ratedAmps !== null && $ratedAmps > 0;
+        $showUtil = $ratedAmps !== null && $ratedAmps > 0 && $phaseAmpsNonZero;
+        // Hide util % when current is always zero / unsupported (looks like a false indicator)
+        if (!$ampsSupported) {
+            $showUtil = false;
+        }
         $llHeader = $deviceLlVolts;
         ?>
     <div class="card mb-2" id="pdu-phase-status">
@@ -2743,7 +2800,7 @@ if ($pduId) {
     .breaker-slot .bs-slot { font-family: var(--mono); font-size: .68rem; font-weight: 600; }
     .breaker-slot .bs-slot-id { font-family: var(--mono); font-size: .58rem; opacity: .9; font-weight: 600; }
     </style>
-    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=7"></script>
+    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=8"></script>
     <?php
     layout_footer();
     exit;

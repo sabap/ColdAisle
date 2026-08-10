@@ -13,7 +13,7 @@
     return pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
-  function fmtVal(v, unit) {
+  function fmtVal(v, unit, stateFamily) {
     if (v == null || isNaN(v)) return '—';
     var n = Number(v);
     if (unit === 'kW') return (Math.abs(n) >= 10 ? n.toFixed(1) : n.toFixed(2)) + ' kW';
@@ -22,7 +22,11 @@
     if (unit === '%' || unit === 'pct') return n.toFixed(0) + '%';
     if (unit === 'min') return n.toFixed(0) + ' min';
     if (unit === 'state') {
-      var labels = { 1: 'low', 2: 'normal', 3: 'near OL', 4: 'overload' };
+      // classic rPDU: 1=normal,2=low · rPDU2: 1=low,2=normal
+      var fam = stateFamily || 'classic';
+      var labels = fam === 'rpdu2'
+        ? { 1: 'low', 2: 'normal', 3: 'near OL', 4: 'overload' }
+        : { 1: 'normal', 2: 'low', 3: 'near OL', 4: 'overload' };
       var i = Math.round(n);
       return labels[i] != null ? labels[i] + ' (' + i + ')' : String(i);
     }
@@ -62,8 +66,34 @@
    * @param {HTMLElement} el
    * @param {object} opts
    */
+  function renderUnsupported(el, label, message) {
+    if (!el) return;
+    var title = el.getAttribute('data-unsupported-title') || 'Unsupported on this unit';
+    var sub = el.getAttribute('data-unsupported-message')
+      || message
+      || 'This metric is not available via SNMP for this PDU model.';
+    var lab = label || el.getAttribute('data-label') || '';
+    el.innerHTML =
+      '<div class="power-chart-head">'
+      + '<span class="power-chart-label">' + escapeHtml(lab) + '</span>'
+      + '<span class="power-chart-now" style="font-size:.8rem;font-weight:600;color:var(--muted)">N/A</span>'
+      + '</div>'
+      + '<div class="power-chart-unsupported" role="status">'
+      + '<div class="power-chart-unsupported-title">' + escapeHtml(title) + '</div>'
+      + '<div class="power-chart-unsupported-sub">' + escapeHtml(sub) + '</div>'
+      + '</div>';
+    el.dataset.ready = '1';
+    el._pcPainted = true;
+    el.style.display = '';
+    el.removeAttribute('hidden');
+  }
+
   function renderLineChart(el, opts) {
     if (!el) return;
+    if (el.getAttribute('data-unsupported') === '1') {
+      renderUnsupported(el, opts && opts.label);
+      return;
+    }
     var t = opts.t || [];
     var values = opts.values || [];
     var seriesExtra = opts.seriesExtra || null; // {L1:[], L2:[], L3:[]} for phase volts
@@ -240,9 +270,10 @@
         + '<i style="background:#eab308"></i>L3</span>'
       : '';
 
+    var stateFam = el.getAttribute('data-load-state-family') || 'classic';
     var head = '<div class="power-chart-head">'
       + '<span class="power-chart-label">' + escapeHtml(label) + ' ' + phaseLegend + badge + '</span>'
-      + '<span class="power-chart-now">' + (last ? fmtVal(last.v, unit) : 'No data yet') + '</span>'
+      + '<span class="power-chart-now">' + (last ? fmtVal(last.v, unit, stateFam) : 'No data yet') + '</span>'
       + '</div>';
 
     var empty = !main.points.length && !seriesExtra
@@ -328,10 +359,16 @@
         hasData = valuesHaveData(values) || (seriesExtra && multiSeriesHasData(seriesExtra));
       }
 
+      // Explicit unsupported (model does not export this metric)
+      if (c.getAttribute('data-unsupported') === '1') {
+        renderUnsupported(c, c.getAttribute('data-label') || metric);
+        return;
+      }
+
       // Optional charts: hide when no data (older APCs without phase volts, etc.)
-      // Keep primary kw/amps + UPS load_pct visible with empty state
+      // Keep primary kw + UPS load_pct visible with empty state; amps only if supported
       var hideIfEmpty = c.getAttribute('data-hide-empty') !== '0';
-      var keepEmpty = (metric === 'kw' || metric === 'amps' || metric === 'load_pct');
+      var keepEmpty = (metric === 'kw' || metric === 'load_pct');
       if (hideIfEmpty && !hasData && !keepEmpty) {
         c.style.display = 'none';
         c.setAttribute('hidden', 'hidden');
@@ -379,6 +416,10 @@
   async function mount(root, opts) {
     if (!root) return;
     opts = opts || {};
+    // Paint unsupported charts immediately (no history API needed)
+    root.querySelectorAll('[data-metric][data-unsupported="1"]').forEach(function (c) {
+      renderUnsupported(c, c.getAttribute('data-label') || c.getAttribute('data-metric'));
+    });
     if (opts.repaintOnly && root._pcSeries) {
       paintFromCache(root);
       return;
@@ -409,7 +450,7 @@
       url += '&hours=' + hours;
     }
 
-    var charts = root.querySelectorAll('[data-metric]');
+    var charts = root.querySelectorAll('[data-metric]:not([data-unsupported="1"])');
     if (!root._pcSeries) {
       charts.forEach(function (c) {
         c.classList.add('power-chart-loading');
