@@ -19,6 +19,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.3.76] - 2026-08-10
+
+### Enhancements
+
+- **UPS delete:** detail page **Delete UPS** soft-removes inventory (clears floor position, stops scheduled poll).
+- **Floor plan UPS:** click shows properties panel (name, size, position, facing, color); unlock → drag/rotate/snap → Save; **Unplace** returns to palette. Facing normalized to north/east/south/west like PDUs/cooling.
+- **UPS SNMP:** poll fills **Manufacture date** from PowerNet `upsAdvIdentDateOfManufacture` when available (mm/dd/yy → inventory date).
+
+---
 ## [0.3.75] - 2026-08-10
 
 ### Enhancements
