@@ -15,13 +15,18 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **Power Templates:** renamed from PDU Templates; page has separate **PDU templates** and **UPS templates** cards.
-- **UPS inventory templates:** create from UPS detail (**Create UPS template**), manage under Power Templates, select on **New UPS** to prefill model/size/SNMP/OID map.
-
 ### Bug fixes
 
 ---
 
+## [0.3.82] - 2026-08-10
+
+### Enhancements
+
+- **Power Templates:** renamed from PDU Templates; page has separate **PDU templates** and **UPS templates** cards.
+- **UPS inventory templates:** create from UPS detail (**Create UPS template**), manage under Power Templates, select on **New UPS** to prefill model/size/SNMP/OID map.
+
+---
 ## [0.3.81] - 2026-08-10
 
 ### Enhancements
