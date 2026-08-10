@@ -1594,6 +1594,7 @@ body.modal-open { overflow: hidden; }
   font-size: .8rem;
 }
 .snmp-toggle {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: .55rem;
@@ -1611,6 +1612,66 @@ body.modal-open { overflow: hidden; }
   opacity: 0;
   width: 0;
   height: 0;
+  margin: 0;
+  pointer-events: none;
+}
+
+/* Multi-line settings toggle (e.g. Testing mode) — switch left, copy right, no overlap */
+.settings-testing-mode-box {
+  padding: .85rem 1rem;
+  border-radius: 10px;
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  background: rgba(113, 63, 18, 0.15);
+}
+.settings-toggle-stack {
+  display: flex;
+  align-items: flex-start;
+  gap: .75rem;
+  margin: 0;
+  cursor: pointer;
+  user-select: none;
+  width: 100%;
+}
+.settings-toggle-control {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  margin-top: .15rem; /* optically center switch with title line */
+}
+.settings-toggle-control input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  clip: rect(0, 0, 0, 0);
+}
+.settings-toggle-control input:checked + .snmp-switch {
+  background: rgba(34, 197, 94, 0.75);
+}
+.settings-toggle-control input:checked + .snmp-switch::after {
+  transform: translateX(1.1rem);
+}
+.settings-toggle-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
+}
+.settings-toggle-title {
+  display: block;
+  font-size: .95rem;
+  line-height: 1.35;
+  color: var(--text, #e2e8f0);
+}
+.settings-toggle-help {
+  display: block;
+  font-weight: 400;
+  font-size: .78rem;
+  line-height: 1.4;
+  white-space: normal;
 }
 .snmp-switch {
   position: relative;

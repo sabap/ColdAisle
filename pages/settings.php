@@ -989,14 +989,16 @@ if ($nocToken !== '') {
                 </p>
             </div>
 
-            <div class="form-row full" style="padding:.85rem 1rem;border-radius:10px;border:1px solid rgba(234,179,8,.35);background:rgba(113,63,18,.15)">
-                <label class="snmp-toggle" style="margin:0" title="Expose Simulate Outage / Recovery on Devices and PDUs">
-                    <input type="checkbox" name="testing_mode" value="1" id="testingModeToggle"
-                        <?= $testingModeOn ? 'checked' : '' ?>>
-                    <span class="snmp-switch" aria-hidden="true"></span>
-                    <span class="snmp-toggle-label">
-                        <strong>Testing mode</strong>
-                        <span class="text-muted" style="font-weight:400;display:block;font-size:.78rem;margin-top:.15rem">
+            <div class="form-row full settings-testing-mode-box">
+                <label class="settings-toggle-stack" title="Expose Simulate Outage / Recovery on Devices and PDUs">
+                    <span class="settings-toggle-control">
+                        <input type="checkbox" name="testing_mode" value="1" id="testingModeToggle"
+                            <?= $testingModeOn ? 'checked' : '' ?>>
+                        <span class="snmp-switch" aria-hidden="true"></span>
+                    </span>
+                    <span class="settings-toggle-copy">
+                        <strong class="settings-toggle-title">Testing mode</strong>
+                        <span class="settings-toggle-help text-muted">
                             Shows <em>Simulate outage</em> / <em>Simulate recovery</em> on device and PDU
                             pages (and list bulk actions). Forces ICMP DOWN/UP state and fires
                             <code>[TEST]</code> alerts through the notifications hub — no real packet loss.
