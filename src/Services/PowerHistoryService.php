@@ -24,6 +24,101 @@ class PowerHistoryService
     public const VOLTS_LOW_FRAC = 0.75;
 
     /**
+     * True when L–N volts sit in a normal utility band (not "low voltage").
+     * Avoids false low_v when inventory L–N was set to L–L (e.g. 208) so
+     * threshold becomes ~156 V while the feed is healthy 120 V wye.
+     */
+    public static function isHealthyLnVoltage(float $v): bool
+    {
+        if ($v >= 100.0 && $v <= 132.0) {
+            return true; // 110 / 120 V class
+        }
+        if ($v >= 200.0 && $v <= 254.0) {
+            return true; // 220 / 230 / 240 V class
+        }
+        if ($v >= 265.0 && $v <= 290.0) {
+            return true; // 277 V class
+        }
+        return false;
+    }
+
+    /**
+     * Normalize inventory "L–N" when operators typed L–L (208/400/480).
+     * Values already in L–N range are left alone.
+     */
+    public static function normalizeNominalLn(?float $nominalVoltsLn): ?float
+    {
+        if ($nominalVoltsLn === null || $nominalVoltsLn <= 0) {
+            return null;
+        }
+        // Common L–L ratings stuffed into the L–N field
+        if ($nominalVoltsLn >= 180.0) {
+            return round($nominalVoltsLn / 1.732, 1);
+        }
+        return $nominalVoltsLn;
+    }
+
+    /**
+     * Build outage_phases string from a slim phase map (L1/L2/L3 rows).
+     * Used at sample write time and when re-evaluating history for charts.
+     *
+     * @param array<string,mixed> $phaseSlim
+     */
+    public static function evaluatePhaseOutages(array $phaseSlim, ?float $nominalVoltsLn = null): ?string
+    {
+        $rawVolts = [];
+        foreach (['L1', 'L2', 'L3'] as $lab) {
+            if (!empty($phaseSlim[$lab]) && is_array($phaseSlim[$lab])
+                && isset($phaseSlim[$lab]['volts']) && is_numeric($phaseSlim[$lab]['volts'])
+            ) {
+                $rawVolts[] = (float)$phaseSlim[$lab]['volts'];
+            }
+        }
+        $nominalVoltsLn = self::normalizeNominalLn($nominalVoltsLn);
+        if ($nominalVoltsLn === null) {
+            $healthy = array_filter($rawVolts, static fn($v) => $v >= self::VOLTS_DEAD);
+            if ($healthy) {
+                $nominalVoltsLn = array_sum($healthy) / count($healthy);
+            } else {
+                $nominalVoltsLn = 120.0;
+            }
+        }
+        // If inventory nominal would flag a tight healthy measured cluster, trust the feed
+        if ($rawVolts) {
+            $avgM = array_sum($rawVolts) / count($rawVolts);
+            if (self::isHealthyLnVoltage($avgM) && $avgM < $nominalVoltsLn * self::VOLTS_LOW_FRAC) {
+                $nominalVoltsLn = $avgM;
+            }
+        }
+        $lowThresh = max(self::VOLTS_DEAD + 5, $nominalVoltsLn * self::VOLTS_LOW_FRAC);
+
+        $outageBits = [];
+        foreach (['L1', 'L2', 'L3'] as $lab) {
+            if (empty($phaseSlim[$lab]) || !is_array($phaseSlim[$lab])) {
+                continue;
+            }
+            $p = $phaseSlim[$lab];
+            $reasons = [];
+            if (isset($p['volts']) && is_numeric($p['volts'])) {
+                $v = (float)$p['volts'];
+                if ($v < self::VOLTS_DEAD) {
+                    $reasons[] = 'dead';
+                } elseif ($v < $lowThresh && !self::isHealthyLnVoltage($v)) {
+                    // Relative low only when outside normal utility L–N bands
+                    $reasons[] = 'low_v';
+                }
+            }
+            if (isset($p['load_state']) && is_numeric($p['load_state']) && (int)$p['load_state'] >= 4) {
+                $reasons[] = 'overload';
+            }
+            if ($reasons) {
+                $outageBits[] = $lab . ':' . implode('+', $reasons);
+            }
+        }
+        return $outageBits ? implode(',', $outageBits) : null;
+    }
+
+    /**
      * Persist a history sample after poll.
      * @param array<string,mixed>|null $phases last_poll_phases structure
      * @param float|null $nominalVoltsLn optional L–N nominal (from PDU form / zone)
@@ -90,24 +185,6 @@ class PowerHistoryService
         $vSum = 0.0;
         $vN = 0;
         $phaseSlim = [];
-        $outageBits = [];
-
-        // Infer nominal from healthy-looking phases if not provided
-        $rawVolts = [];
-        foreach (['L1', 'L2', 'L3'] as $lab) {
-            if (!empty($phases[$lab]['volts']) && is_numeric($phases[$lab]['volts'])) {
-                $rawVolts[] = (float)$phases[$lab]['volts'];
-            }
-        }
-        if ($nominalVoltsLn === null || $nominalVoltsLn <= 0) {
-            $healthy = array_filter($rawVolts, static fn($v) => $v >= self::VOLTS_DEAD);
-            if ($healthy) {
-                $nominalVoltsLn = array_sum($healthy) / count($healthy);
-            } else {
-                $nominalVoltsLn = 120.0;
-            }
-        }
-        $lowThresh = max(self::VOLTS_DEAD + 5, $nominalVoltsLn * self::VOLTS_LOW_FRAC);
 
         foreach (['L1', 'L2', 'L3'] as $lab) {
             if (empty($phases[$lab]) || !is_array($phases[$lab])) {
@@ -123,25 +200,27 @@ class PowerHistoryService
             if (!$row) {
                 continue;
             }
-            $reasons = [];
             if (isset($row['volts'])) {
                 $vSum += (float)$row['volts'];
                 $vN++;
-                if ($row['volts'] < self::VOLTS_DEAD) {
-                    $reasons[] = 'dead';
-                } elseif ($row['volts'] < $lowThresh) {
-                    $reasons[] = 'low_v';
-                }
-            }
-            // APC load-state 4 = overload (treat as phase fault/outage class event)
-            if (isset($row['load_state']) && (int)$row['load_state'] >= 4) {
-                $reasons[] = 'overload';
-            }
-            if ($reasons) {
-                $row['outage'] = implode('+', $reasons);
-                $outageBits[] = $lab . ':' . $row['outage'];
             }
             $phaseSlim[$lab] = $row;
+        }
+
+        // Annotate slim rows with outage reasons (for phases_json consumers)
+        $outageStr = self::evaluatePhaseOutages($phaseSlim, $nominalVoltsLn);
+        if ($outageStr) {
+            foreach (explode(',', $outageStr) as $bit) {
+                $bit = trim($bit);
+                if (!str_contains($bit, ':')) {
+                    continue;
+                }
+                [$ph, $rs] = explode(':', $bit, 2);
+                $ph = strtoupper(trim($ph));
+                if (isset($phaseSlim[$ph])) {
+                    $phaseSlim[$ph]['outage'] = trim($rs);
+                }
+            }
         }
 
         $voltsAvg = $vN > 0 ? round($vSum / $vN, 2) : null;
@@ -164,7 +243,7 @@ class PowerHistoryService
             'volts_avg' => $voltsAvg,
             'volts_ll' => $voltsLl,
             'phases_json' => $phaseSlim ? json_encode($phaseSlim, JSON_UNESCAPED_SLASHES) : null,
-            'outage_phases' => $outageBits ? implode(',', $outageBits) : null,
+            'outage_phases' => $outageStr,
         ];
     }
 
@@ -725,7 +804,17 @@ class PowerHistoryService
                 $buckets[$bKey]['v'][] = $v;
             }
 
-            $op = trim((string)($r['outage_phases'] ?? ''));
+            // Prefer re-evaluating outages from phases_json (clears legacy false low_v)
+            // so charts match current detection rules without rewriting history rows.
+            $op = '';
+            if (is_array($json) && ($phaseV['L1'] !== null || $phaseV['L2'] !== null || $phaseV['L3'] !== null
+                || isset($json['L1']['load_state']) || isset($json['L2']['load_state']) || isset($json['L3']['load_state']))
+            ) {
+                $re = self::evaluatePhaseOutages($json, null);
+                $op = $re !== null ? $re : '';
+            } else {
+                $op = trim((string)($r['outage_phases'] ?? ''));
+            }
             if ($op !== '') {
                 $buckets[$bKey]['out'][] = $op;
             }

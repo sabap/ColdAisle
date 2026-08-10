@@ -2043,7 +2043,8 @@ class SnmpPoller
                     );
                     if ($pduRow) {
                         if (isset($pduRow['input_voltage_ln']) && is_numeric($pduRow['input_voltage_ln'])) {
-                            $nominalLn = (float)$pduRow['input_voltage_ln'];
+                            // L–N field sometimes holds L–L (208/400/480) — normalize
+                            $nominalLn = PowerHistoryService::normalizeNominalLn((float)$pduRow['input_voltage_ln']);
                         } elseif (isset($pduRow['input_voltage']) && is_numeric($pduRow['input_voltage'])) {
                             // L–L often √3 × L–N for wye; if 208/240 treat as L–L
                             $ll = (float)$pduRow['input_voltage'];

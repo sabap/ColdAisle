@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **False “low voltage” outage markers on healthy 120 V row PDUs:** outage detection no longer treats normal L–N (~100–132 V) as low_v when inventory nominal is L–L (e.g. 208); charts re-evaluate markers from stored phase volts so existing false positives clear on refresh
+
 ---
 
 ## [0.3.98] - 2026-08-10
