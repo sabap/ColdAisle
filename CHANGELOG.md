@@ -13,15 +13,20 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **SNMP custom thresholds (Settings → Alerts):** define warn/crit rules by metric key for devices, PDUs, or cooling units; evaluated after SNMP poll; routes through AlertService (`snmp` category).
-- **NOC recent alerts glass toast:** persistent frosted panel (survives rotating Overview/Power/Zones/Cooling) fed by live `recent_alerts` from the NOC API.
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.73] - 2026-08-10
+
+### New features
+
+- **SNMP custom thresholds (Settings → Alerts):** define warn/crit rules by metric key for devices, PDUs, or cooling units; evaluated after SNMP poll; routes through AlertService (`snmp` category).
+- **NOC recent alerts glass toast:** persistent frosted panel (survives rotating Overview/Power/Zones/Cooling) fed by live `recent_alerts` from the NOC API.
+
+---
 ## [0.3.72] - 2026-08-10
 
 ### Bug fixes
