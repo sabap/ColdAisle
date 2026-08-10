@@ -37,14 +37,20 @@ try {
 
     if ($entity === 'pdus') {
         if ($method === 'GET') {
-            App::json(['pdus' => Database::fetchAll(
+            $pdus = Database::fetchAll(
                 'SELECT p.*, c.name AS cabinet_name, z.name AS zone_name
                  FROM pdus p
                  LEFT JOIN cabinets c ON c.cabinet_id = p.cabinet_id
                  LEFT JOIN power_zones z ON z.zone_id = p.zone_id
                  WHERE p.is_active = 1
                  ORDER BY p.name'
-            )]);
+            );
+            if (function_exists('power_natural_sort_rows')) {
+                $pdus = power_natural_sort_rows($pdus, 'name');
+            } else {
+                usort($pdus, static fn($a, $b) => strnatcasecmp((string)($a['name'] ?? ''), (string)($b['name'] ?? '')));
+            }
+            App::json(['pdus' => $pdus]);
         }
         if ($method === 'POST') {
             api_require_csrf();

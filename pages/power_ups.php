@@ -1006,7 +1006,10 @@ if ($action === 'new' || ($action === 'edit' && $upsId > 0)) {
 // List
 $units = [];
 try {
-    $units = Database::fetchAll(
+    if (!function_exists('power_natural_sort_rows')) {
+        require_once dirname(__DIR__) . '/includes/power_helpers.php';
+    }
+    $units = power_natural_sort_rows(Database::fetchAll(
         'SELECT u.*, rm.name AS room_name, dc.name AS dc_name, z.name AS zone_name
          FROM ups_units u
          LEFT JOIN rooms rm ON rm.room_id = u.room_id
@@ -1014,7 +1017,7 @@ try {
          LEFT JOIN power_zones z ON z.zone_id = u.zone_id
          WHERE u.is_active = 1
          ORDER BY u.name'
-    );
+    ), 'name');
 } catch (Throwable $e) {
     $units = [];
 }

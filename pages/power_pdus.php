@@ -2823,7 +2823,7 @@ if ($filterZone) {
     $params[] = $filterZone;
 }
 $sql .= ' ORDER BY p.name';
-$pdus = Database::fetchAll($sql, $params);
+$pdus = power_natural_sort_rows(Database::fetchAll($sql, $params), 'name');
 
 $canEditPdu = AuthManager::canEditPower($user);
 $canBatchIcmpPdu = AuthManager::canEditPower($user) || AuthManager::canEditSnmp($user);

@@ -5,6 +5,37 @@
 declare(strict_types=1);
 
 /**
+ * Natural (alphanumeric) string compare: "PDU 2" before "PDU 10".
+ */
+function power_natural_strcmp(string $a, string $b): int
+{
+    return strnatcasecmp($a, $b);
+}
+
+/**
+ * Sort list rows by a string column using natural order (digits as numbers).
+ *
+ * @param list<array<string,mixed>> $rows
+ * @return list<array<string,mixed>>
+ */
+function power_natural_sort_rows(array $rows, string $key = 'name'): array
+{
+    usort($rows, static function ($a, $b) use ($key) {
+        $sa = (string)($a[$key] ?? '');
+        $sb = (string)($b[$key] ?? '');
+        $cmp = strnatcasecmp($sa, $sb);
+        if ($cmp !== 0) {
+            return $cmp;
+        }
+        // Stable-ish tie-breakers
+        $ida = (int)($a['pdu_id'] ?? $a['ups_id'] ?? $a['zone_id'] ?? 0);
+        $idb = (int)($b['pdu_id'] ?? $b['ups_id'] ?? $b['zone_id'] ?? 0);
+        return $ida <=> $idb;
+    });
+    return $rows;
+}
+
+/**
  * Normalize PDU electrical topology from form POST.
  */
 function power_pdu_electrical_from_post(array $post): array
