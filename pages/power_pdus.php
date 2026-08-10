@@ -1062,14 +1062,14 @@ if ($pduId) {
                 <?= $pduDiscoverReady ? '' : 'disabled title="Need manufacturer, model, and IP on this PDU"' ?>>
                 Discover OIDs
             </button>
-            <form method="post" style="display:inline">
-                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
-                <input type="hidden" name="action" value="poll_pdu">
-                <input type="hidden" name="pdu_id" value="<?= $pduId ?>">
-                <button class="btn btn-secondary" type="submit" title="Poll now using the site OID template (not SNMP Targets)">
-                    Poll now
-                </button>
-            </form>
+            <button type="button" class="btn btn-secondary" id="btnPduSnmpPoll"
+                title="Poll now using the site OID template (not SNMP Targets)"
+                data-pdu-id="<?= (int)$pduId ?>"
+                data-pdu-name="<?= App::e((string)($p['name'] ?? '')) ?>"
+                data-pdu-host="<?= App::e((string)($p['ip_address'] ?? '')) ?>"
+                <?= $pduSiteTplId > 0 ? '' : 'disabled title="Assign a site OID template first (Discover OIDs)"' ?>>
+                Poll now
+            </button>
             <?php endif; ?>
             <?php if (!empty($p['cabinet_id'])): ?>
                 <a class="btn btn-secondary" href="<?= App::e(App::url('pages/cabinets.php?id=' . (int)$p['cabinet_id'])) ?>">Cabinet</a>
@@ -1573,8 +1573,10 @@ if ($pduId) {
             if (window.ColdAisle && ColdAisle.toast) ColdAisle.toast(msg, type || 'info');
             else alert(msg);
         }
-        function api(body) {
-            return ColdAisle.api('api/snmp_pdu.php', { method: 'POST', body: body });
+        function api(body, timeoutMs) {
+            var opts = { method: 'POST', body: body };
+            if (timeoutMs) opts.timeoutMs = timeoutMs;
+            return ColdAisle.api('api/snmp_pdu.php', opts);
         }
         function openModal() {
             modal.hidden = false;
@@ -1809,6 +1811,47 @@ if ($pduId) {
 
         var btnDiscover = document.getElementById('btnPduSnmpDiscover');
         if (btnDiscover) btnDiscover.addEventListener('click', startDiscover);
+
+        var btnPoll = document.getElementById('btnPduSnmpPoll');
+        if (btnPoll) {
+            btnPoll.addEventListener('click', function () {
+                if (btnPoll.disabled) return;
+                var host = btnPoll.getAttribute('data-pdu-host') || '';
+                var name = btnPoll.getAttribute('data-pdu-name') || '';
+                btnPoll.disabled = true;
+                if (typeof ColdAisle.runSnmpPoll !== 'function') {
+                    // Fallback if app.js is stale
+                    api({ action: 'poll_now', pdu_id: pduId })
+                        .then(function (data) {
+                            toast(data.message || 'Poll complete', 'success');
+                            setTimeout(function () { location.reload(); }, 600);
+                        })
+                        .catch(function (err) {
+                            toast((err && err.message) || 'Poll failed', 'error');
+                        })
+                        .finally(function () { btnPoll.disabled = false; });
+                    return;
+                }
+                ColdAisle.runSnmpPoll({
+                    title: 'SNMP poll — PDU',
+                    name: name,
+                    host: host,
+                    timeoutMs: 55000,
+                    request: function (ctx) {
+                        return api({ action: 'poll_now', pdu_id: pduId }, (ctx && ctx.timeoutMs) || 55000);
+                    },
+                    onSuccess: function (data) {
+                        toast(data.message || 'Poll complete', 'success');
+                        setTimeout(function () { location.reload(); }, 900);
+                    },
+                    onError: function () {
+                        btnPoll.disabled = false;
+                    }
+                }).then(function (data) {
+                    if (!data) btnPoll.disabled = false;
+                });
+            });
+        }
 
         var autoToggle = document.getElementById('pduSnmpAutoPollToggle');
         var autoLabel = document.getElementById('pduSnmpAutoPollLabel');

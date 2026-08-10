@@ -1732,12 +1732,16 @@ if ($action === 'new' || $id) {
                     }
                     var discoverReady = <?= $discoverReady ? 'true' : 'false' ?>;
                     var discoverMissing = <?= json_encode(array_values($snmpPrereqs['missing'] ?? []), JSON_UNESCAPED_SLASHES) ?>;
-                    function api(body) {
+                    function api(body, timeoutMs) {
                         if (!window.ColdAisle || typeof ColdAisle.api !== 'function') {
                             return Promise.reject(new Error('ColdAisle API helper not loaded — hard-refresh the page (Ctrl+F5).'));
                         }
-                        return ColdAisle.api('api/snmp_device.php', { method: 'POST', body: body });
+                        var opts = { method: 'POST', body: body };
+                        if (timeoutMs) opts.timeoutMs = timeoutMs;
+                        return ColdAisle.api('api/snmp_device.php', opts);
                     }
+                    var deviceLabel = <?= json_encode((string)($device['label'] ?? ''), JSON_UNESCAPED_SLASHES) ?>;
+                    var deviceHost = <?= json_encode(trim((string)($device['mgmt_ip'] ?? $device['primary_ip'] ?? '')), JSON_UNESCAPED_SLASHES) ?>;
                     function openModal() {
                         if (!modal) return;
                         modal.hidden = false;
@@ -1996,34 +2000,58 @@ if ($action === 'new' || $id) {
 
                     if (btnPoll) {
                         btnPoll.addEventListener('click', function () {
+                            if (btnPoll.disabled) return;
                             btnPoll.disabled = true;
-                            api({ action: 'poll_now', device_id: deviceId })
-                                .then(function (data) {
-                                    toast(data.message || 'Poll complete', 'success');
-                                    var el = document.getElementById('snmpLastPoll');
-                                    if (el) {
-                                        var txt = data.snmp_last_poll_at || '—';
-                                        var bits = [];
-                                        if (data.snmp_last_poll_watts != null) {
-                                            var w = parseFloat(data.snmp_last_poll_watts);
-                                            bits.push(w >= 1000
-                                                ? (w / 1000).toFixed(3) + ' kW'
-                                                : w.toFixed(2).replace(/\.?0+$/, '') + ' W');
-                                        }
-                                        if (data.snmp_last_poll_amps != null) {
-                                            bits.push(parseFloat(data.snmp_last_poll_amps).toFixed(2)
-                                                .replace(/\.?0+$/, '') + ' A');
-                                        }
-                                        if (bits.length) txt += ' · ' + bits.join(' · ');
-                                        el.textContent = txt;
+                            function applyPollResult(data) {
+                                if (!data) return;
+                                toast(data.message || 'Poll complete', 'success');
+                                var el = document.getElementById('snmpLastPoll');
+                                if (el) {
+                                    var txt = data.snmp_last_poll_at || '—';
+                                    var bits = [];
+                                    if (data.snmp_last_poll_watts != null) {
+                                        var w = parseFloat(data.snmp_last_poll_watts);
+                                        bits.push(w >= 1000
+                                            ? (w / 1000).toFixed(3) + ' kW'
+                                            : w.toFixed(2).replace(/\.?0+$/, '') + ' W');
                                     }
-                                })
-                                .catch(function (err) {
-                                    toast((err && err.message) || 'Poll failed', 'error');
-                                })
-                                .finally(function () {
+                                    if (data.snmp_last_poll_amps != null) {
+                                        bits.push(parseFloat(data.snmp_last_poll_amps).toFixed(2)
+                                            .replace(/\.?0+$/, '') + ' A');
+                                    }
+                                    if (bits.length) txt += ' · ' + bits.join(' · ');
+                                    el.textContent = txt;
+                                }
+                            }
+                            if (typeof ColdAisle.runSnmpPoll !== 'function') {
+                                api({ action: 'poll_now', device_id: deviceId }, 55000)
+                                    .then(applyPollResult)
+                                    .catch(function (err) {
+                                        toast((err && err.message) || 'Poll failed', 'error');
+                                    })
+                                    .finally(function () {
+                                        btnPoll.disabled = !hasTemplate;
+                                    });
+                                return;
+                            }
+                            ColdAisle.runSnmpPoll({
+                                title: 'SNMP poll — device',
+                                name: deviceLabel,
+                                host: deviceHost,
+                                timeoutMs: 55000,
+                                reload: false,
+                                request: function (ctx) {
+                                    return api({ action: 'poll_now', device_id: deviceId }, (ctx && ctx.timeoutMs) || 55000);
+                                },
+                                onSuccess: function (data, ctl) {
+                                    applyPollResult(data);
                                     btnPoll.disabled = !hasTemplate;
-                                });
+                                    if (ctl && ctl.close) setTimeout(ctl.close, 1200);
+                                },
+                                onError: function () {
+                                    btnPoll.disabled = !hasTemplate;
+                                }
+                            });
                         });
                     }
                     if (autoToggle) {

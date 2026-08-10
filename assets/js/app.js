@@ -32,13 +32,43 @@
         credentials: 'same-origin',
       });
       delete opts.forcePostOverride;
+      const timeoutMs = typeof opts.timeoutMs === 'number' ? opts.timeoutMs : 0;
+      delete opts.timeoutMs;
+
+      // Optional client timeout (SNMP poll / long ops) — aborts fetch so UI never hangs forever
+      let abortTimer = null;
+      let localController = null;
+      if (timeoutMs > 0 && !opts.signal && typeof AbortController !== 'undefined') {
+        localController = new AbortController();
+        opts.signal = localController.signal;
+        abortTimer = setTimeout(function () {
+          try { localController.abort(); } catch (e) { /* ignore */ }
+        }, timeoutMs);
+      }
 
       if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
         opts.body = JSON.stringify(opts.body);
       }
 
       const url = path.startsWith('http') ? path : (baseUrl.replace(/\/$/, '') + '/' + path.replace(/^\//, ''));
-      const res = await fetch(url, opts);
+      let res;
+      try {
+        res = await fetch(url, opts);
+      } catch (fetchErr) {
+        if (abortTimer) clearTimeout(abortTimer);
+        const aborted = (fetchErr && fetchErr.name === 'AbortError')
+          || (localController && localController.signal && localController.signal.aborted)
+          || /abort/i.test(String((fetchErr && fetchErr.message) || ''));
+        if (aborted) {
+          const err = new Error('SNMP poll timed out waiting for the server. The device may be slow or unreachable — try again, or check network/firewall to UDP/161.');
+          err.status = 0;
+          err.timeout = true;
+          err.aborted = true;
+          throw err;
+        }
+        throw fetchErr;
+      }
+      if (abortTimer) clearTimeout(abortTimer);
       const text = await res.text();
       let data;
       try { data = text ? JSON.parse(text) : {}; } catch (e) { data = { raw: text }; }
@@ -53,11 +83,21 @@
           msg = res.statusText || ('HTTP ' + res.status);
         }
         if (res.status === 500 && (!data || !data.error)) {
-          msg += ' — check storage/logs/app.log and snmp_discover_last.txt on the server';
+          // Blank / HTML 500s are often PHP timeouts on long SNMP polls
+          if (!text || /internal server error|maximum execution|timed? ?out/i.test(String(text))) {
+            msg = 'Server timed out or failed during SNMP poll (HTTP 500). Try again; if it persists, check storage/logs/app.log.';
+          } else {
+            msg += ' — check storage/logs/app.log and snmp_discover_last.txt on the server';
+          }
+        }
+        if (res.status === 504 || res.status === 408) {
+          msg = msg || 'SNMP poll timed out.';
         }
         const err = new Error(msg);
         err.status = res.status;
         err.data = data;
+        err.timeout = res.status === 504 || res.status === 408
+          || /timed? ?out/i.test(msg);
         throw err;
       }
       return data;
@@ -249,6 +289,220 @@
         document.body.classList.remove('modal-open');
       }
     },
+    /**
+     * Animated SNMP poll overlay (device ↔ ColdAisle GET packets).
+     * Usage:
+     *   ColdAisle.runSnmpPoll({
+     *     title: 'Poll PDU', name: 'RA-R1', host: '10.0.0.1',
+     *     request: function () { return ColdAisle.api('api/snmp_pdu.php', { method:'POST', body:{...}, timeoutMs: 55000 }); },
+     *     onSuccess: function (data) { location.reload(); }
+     *   });
+     */
+    runSnmpPoll: function (opts) {
+      opts = opts || {};
+      const self = api;
+      const title = opts.title || 'SNMP poll';
+      const name = opts.name || '';
+      const host = opts.host || '';
+      const timeoutMs = typeof opts.timeoutMs === 'number' ? opts.timeoutMs : 55000;
+      const tips = opts.tips || [
+        'Opening SNMP session…',
+        'GET sysDescr / identity…',
+        'Reading power metrics…',
+        'Fetching phase voltages & currents…',
+        'Packaging results…',
+      ];
+
+      let overlay = document.getElementById('caSnmpPollModal');
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'caSnmpPollModal';
+        overlay.className = 'modal-overlay modal-overlay-glass spoll-overlay';
+        overlay.hidden = true;
+        overlay.innerHTML =
+          '<div class="modal-panel modal-panel-glass spoll-panel" role="dialog" aria-modal="true" aria-labelledby="caSnmpPollTitle">'
+          + '  <div class="modal-header">'
+          + '    <h2 id="caSnmpPollTitle">SNMP poll</h2>'
+          + '    <button type="button" class="modal-close" id="caSnmpPollClose" aria-label="Close" hidden>&times;</button>'
+          + '  </div>'
+          + '  <div class="modal-body spoll-body">'
+          + '    <div class="spoll-anim" id="caSnmpPollAnim" aria-hidden="true">'
+          + '      <div class="spoll-node spoll-node-device">'
+          + '        <div class="spoll-device">'
+          + '          <span class="spoll-led spoll-led-1"></span>'
+          + '          <span class="spoll-led spoll-led-2"></span>'
+          + '          <span class="spoll-led spoll-led-3"></span>'
+          + '          <div class="spoll-antenna"><i></i><i></i><i></i></div>'
+          + '        </div>'
+          + '        <span class="spoll-node-label" id="caSnmpPollDeviceLabel">Device</span>'
+          + '      </div>'
+          + '      <div class="spoll-lane" aria-hidden="true">'
+          + '        <span class="spoll-pkt spoll-pkt-1">GET</span>'
+          + '        <span class="spoll-pkt spoll-pkt-2">.1.3.6</span>'
+          + '        <span class="spoll-pkt spoll-pkt-3">kW</span>'
+          + '        <span class="spoll-pkt spoll-pkt-4">A</span>'
+          + '        <span class="spoll-pkt spoll-pkt-5">V</span>'
+          + '      </div>'
+          + '      <div class="spoll-node spoll-node-app">'
+          + '        <div class="spoll-app">'
+          + '          <span class="spoll-app-ring"></span>'
+          + '          <span class="spoll-app-core">CA</span>'
+          + '        </div>'
+          + '        <span class="spoll-node-label">ColdAisle</span>'
+          + '      </div>'
+          + '    </div>'
+          + '    <p class="spoll-status" id="caSnmpPollStatus" aria-live="polite">Polling…</p>'
+          + '    <p class="spoll-detail text-muted" id="caSnmpPollDetail"></p>'
+          + '  </div>'
+          + '  <div class="modal-footer" id="caSnmpPollFooter" hidden>'
+          + '    <button type="button" class="btn btn-primary" id="caSnmpPollDone">Close</button>'
+          + '  </div>'
+          + '</div>';
+        document.body.appendChild(overlay);
+      }
+
+      const titleEl = document.getElementById('caSnmpPollTitle');
+      const statusEl = document.getElementById('caSnmpPollStatus');
+      const detailEl = document.getElementById('caSnmpPollDetail');
+      const footerEl = document.getElementById('caSnmpPollFooter');
+      const closeBtn = document.getElementById('caSnmpPollClose');
+      const doneBtn = document.getElementById('caSnmpPollDone');
+      const animEl = document.getElementById('caSnmpPollAnim');
+      const deviceLabel = document.getElementById('caSnmpPollDeviceLabel');
+      const panel = overlay.querySelector('.spoll-panel');
+
+      let tipTimer = null;
+      let tipIdx = 0;
+      let finished = false;
+      let canDismiss = false;
+
+      function setWorkingUi() {
+        finished = false;
+        canDismiss = false;
+        overlay.classList.remove('spoll-state-ok', 'spoll-state-err', 'spoll-state-timeout');
+        overlay.classList.add('spoll-state-working');
+        if (animEl) animEl.classList.add('spoll-anim-running');
+        if (closeBtn) closeBtn.hidden = true;
+        if (footerEl) footerEl.hidden = true;
+        if (statusEl) statusEl.textContent = tips[0] || 'Polling…';
+        if (detailEl) {
+          const bits = [];
+          if (name) bits.push(name);
+          if (host) bits.push(host);
+          detailEl.textContent = bits.length ? bits.join(' · ') + ' · UDP/161' : 'UDP/161';
+        }
+        if (deviceLabel) deviceLabel.textContent = name || host || 'Device';
+        if (titleEl) titleEl.textContent = title;
+        tipIdx = 0;
+        if (tipTimer) clearInterval(tipTimer);
+        tipTimer = setInterval(function () {
+          if (finished || !statusEl) return;
+          tipIdx = (tipIdx + 1) % tips.length;
+          statusEl.textContent = tips[tipIdx];
+        }, 2200);
+      }
+
+      function setDoneUi(kind, message, detail) {
+        finished = true;
+        canDismiss = true;
+        if (tipTimer) { clearInterval(tipTimer); tipTimer = null; }
+        overlay.classList.remove('spoll-state-working', 'spoll-state-ok', 'spoll-state-err', 'spoll-state-timeout');
+        overlay.classList.add(
+          kind === 'ok' ? 'spoll-state-ok'
+            : kind === 'timeout' ? 'spoll-state-timeout'
+              : 'spoll-state-err'
+        );
+        if (animEl) animEl.classList.remove('spoll-anim-running');
+        if (statusEl) statusEl.textContent = message || (kind === 'ok' ? 'Poll complete' : 'Poll failed');
+        if (detailEl && detail) detailEl.textContent = detail;
+        if (closeBtn) closeBtn.hidden = false;
+        if (footerEl) footerEl.hidden = false;
+      }
+
+      function close() {
+        if (!canDismiss && !finished) return;
+        if (tipTimer) { clearInterval(tipTimer); tipTimer = null; }
+        overlay.hidden = true;
+        document.body.classList.remove('modal-open');
+      }
+
+      function open() {
+        setWorkingUi();
+        overlay.hidden = false;
+        document.body.classList.add('modal-open');
+      }
+
+      if (closeBtn && !closeBtn._spollBound) {
+        closeBtn._spollBound = true;
+        closeBtn.addEventListener('click', close);
+      }
+      if (doneBtn && !doneBtn._spollBound) {
+        doneBtn._spollBound = true;
+        doneBtn.addEventListener('click', close);
+      }
+      if (!overlay._spollBound) {
+        overlay._spollBound = true;
+        overlay.addEventListener('click', function (e) {
+          if (e.target === overlay && canDismiss) close();
+        });
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape' && overlay && !overlay.hidden && canDismiss) close();
+        });
+      }
+      // Prevent accidental dismiss of panel clicks
+      if (panel && !panel._spollBound) {
+        panel._spollBound = true;
+        panel.addEventListener('click', function (e) { e.stopPropagation(); });
+      }
+
+      open();
+
+      const req = typeof opts.request === 'function'
+        ? opts.request
+        : function () {
+          return Promise.reject(new Error('No poll request configured'));
+        };
+
+      // Prefer caller's timeoutMs on the request helper; also wrap with our default
+      return Promise.resolve()
+        .then(function () {
+          return req({ timeoutMs: timeoutMs });
+        })
+        .then(function (data) {
+          const msg = (data && data.message) || 'Poll complete';
+          setDoneUi('ok', 'Poll complete', msg);
+          if (typeof opts.onSuccess === 'function') {
+            try { opts.onSuccess(data, { close: close }); } catch (e) { /* ignore */ }
+          } else {
+            // Default: brief pause so the success state is visible, then reload
+            setTimeout(function () {
+              if (opts.reload !== false) {
+                location.reload();
+              } else {
+                close();
+              }
+            }, opts.reloadDelayMs != null ? opts.reloadDelayMs : 900);
+          }
+          return data;
+        })
+        .catch(function (err) {
+          const timedOut = !!(err && (err.timeout || err.aborted || err.name === 'AbortError'));
+          const msg = timedOut
+            ? 'SNMP poll timed out'
+            : ((err && err.message) || 'Poll failed');
+          const detail = timedOut
+            ? 'No response within ' + Math.round(timeoutMs / 1000)
+              + 's. The agent may be slow, blocked, or offline. You can close this window and try again.'
+            : String((err && err.message) || 'Unexpected error');
+          setDoneUi(timedOut ? 'timeout' : 'err', msg, detail);
+          if (typeof opts.onError === 'function') {
+            try { opts.onError(err, { close: close, timedOut: timedOut }); } catch (e) { /* ignore */ }
+          }
+          // Re-throw only if caller wants — we already handled UI
+          return null;
+        });
+    },
+
     initModals: function (root) {
       root = root || document;
       root.querySelectorAll('[data-modal-open], [data-ca-modal-open]').forEach(function (btn) {

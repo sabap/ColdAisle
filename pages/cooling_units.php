@@ -417,9 +417,13 @@ if ($unitId > 0) {
             if (window.ColdAisle && ColdAisle.toast) ColdAisle.toast(msg, type || 'info');
             else alert(msg);
         }
-        function api(body) {
-            return ColdAisle.api('api/snmp_cooling.php', { method: 'POST', body: body });
+        function api(body, timeoutMs) {
+            var opts = { method: 'POST', body: body };
+            if (timeoutMs) opts.timeoutMs = timeoutMs;
+            return ColdAisle.api('api/snmp_cooling.php', opts);
         }
+        var unitLabel = <?= json_encode((string)($u['name'] ?? $u['label'] ?? ''), JSON_UNESCAPED_SLASHES) ?>;
+        var unitHost = <?= json_encode(trim((string)($u['primary_ip'] ?? '')), JSON_UNESCAPED_SLASHES) ?>;
         function openModal() {
             if (!modal) return;
             modal.hidden = false;
@@ -631,48 +635,71 @@ if ($unitId > 0) {
 
         if (btnPoll) {
             btnPoll.addEventListener('click', function () {
+                if (btnPoll.disabled) return;
                 btnPoll.disabled = true;
-                api({ action: 'poll_now', cooling_unit_id: unitId })
-                    .then(function (data) {
-                        toast(data.message || 'Poll complete', 'success');
-                        var el = document.getElementById('cuSnmpLastPoll');
-                        if (el) el.textContent = data.snmp_last_poll_at || '—';
-                        var metrics = data.metrics || {};
-                        var keys = Object.keys(metrics);
-                        if (keys.length) {
-                            var tbody = document.querySelector('#cuSnmpMetricsTable tbody');
-                            var empty = document.getElementById('cuSnmpMetricsEmpty');
-                            if (empty) empty.hidden = true;
-                            if (!tbody) {
-                                // Build table if missing
-                                var cardBody = document.querySelector('#coolingSnmpCard .card-body');
-                                if (cardBody) {
-                                    var wrap = document.createElement('div');
-                                    wrap.className = 'mt-2';
-                                    wrap.innerHTML = '<div class="text-muted" style="font-size:.8rem;margin-bottom:.35rem">Last metrics snapshot</div>' +
-                                        '<div class="table-wrap"><table class="table table-sm" id="cuSnmpMetricsTable">' +
-                                        '<thead><tr><th>Key</th><th>Value</th></tr></thead><tbody></tbody></table></div>';
-                                    cardBody.appendChild(wrap);
-                                    tbody = wrap.querySelector('tbody');
-                                }
-                            }
-                            if (tbody) {
-                                tbody.innerHTML = '';
-                                keys.slice(0, 24).forEach(function (k) {
-                                    var tr = document.createElement('tr');
-                                    tr.innerHTML = '<td><code style="font-size:.78rem">' + esc(k) + '</code></td>' +
-                                        '<td>' + esc(metrics[k]) + '</td>';
-                                    tbody.appendChild(tr);
-                                });
+                function applyPollResult(data) {
+                    if (!data) return;
+                    toast(data.message || 'Poll complete', 'success');
+                    var el = document.getElementById('cuSnmpLastPoll');
+                    if (el) el.textContent = data.snmp_last_poll_at || '—';
+                    var metrics = data.metrics || {};
+                    var keys = Object.keys(metrics);
+                    if (keys.length) {
+                        var tbody = document.querySelector('#cuSnmpMetricsTable tbody');
+                        var empty = document.getElementById('cuSnmpMetricsEmpty');
+                        if (empty) empty.hidden = true;
+                        if (!tbody) {
+                            var cardBody = document.querySelector('#coolingSnmpCard .card-body');
+                            if (cardBody) {
+                                var wrap = document.createElement('div');
+                                wrap.className = 'mt-2';
+                                wrap.innerHTML = '<div class="text-muted" style="font-size:.8rem;margin-bottom:.35rem">Last metrics snapshot</div>' +
+                                    '<div class="table-wrap"><table class="table table-sm" id="cuSnmpMetricsTable">' +
+                                    '<thead><tr><th>Key</th><th>Value</th></tr></thead><tbody></tbody></table></div>';
+                                cardBody.appendChild(wrap);
+                                tbody = wrap.querySelector('tbody');
                             }
                         }
-                    })
-                    .catch(function (err) {
-                        toast((err && err.message) || 'Poll failed', 'error');
-                    })
-                    .finally(function () {
+                        if (tbody) {
+                            tbody.innerHTML = '';
+                            keys.slice(0, 24).forEach(function (k) {
+                                var tr = document.createElement('tr');
+                                tr.innerHTML = '<td><code style="font-size:.78rem">' + esc(k) + '</code></td>' +
+                                    '<td>' + esc(metrics[k]) + '</td>';
+                                tbody.appendChild(tr);
+                            });
+                        }
+                    }
+                }
+                if (typeof ColdAisle.runSnmpPoll !== 'function') {
+                    api({ action: 'poll_now', cooling_unit_id: unitId }, 55000)
+                        .then(applyPollResult)
+                        .catch(function (err) {
+                            toast((err && err.message) || 'Poll failed', 'error');
+                        })
+                        .finally(function () {
+                            btnPoll.disabled = !hasTemplate;
+                        });
+                    return;
+                }
+                ColdAisle.runSnmpPoll({
+                    title: 'SNMP poll — cooling',
+                    name: unitLabel,
+                    host: unitHost,
+                    timeoutMs: 55000,
+                    reload: false,
+                    request: function (ctx) {
+                        return api({ action: 'poll_now', cooling_unit_id: unitId }, (ctx && ctx.timeoutMs) || 55000);
+                    },
+                    onSuccess: function (data, ctl) {
+                        applyPollResult(data);
                         btnPoll.disabled = !hasTemplate;
-                    });
+                        if (ctl && ctl.close) setTimeout(ctl.close, 1200);
+                    },
+                    onError: function () {
+                        btnPoll.disabled = !hasTemplate;
+                    }
+                });
             });
         }
         if (autoToggle) {

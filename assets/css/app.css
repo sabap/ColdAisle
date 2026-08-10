@@ -2217,6 +2217,291 @@ body.modal-open { overflow: hidden; }
   100% { filter: brightness(1); }
 }
 
+/* —— SNMP poll activity overlay (device ↔ ColdAisle GET packets) —— */
+.spoll-overlay {
+  z-index: 3600;
+}
+.spoll-panel {
+  width: min(28rem, 94vw);
+  max-width: 28rem;
+}
+.spoll-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .75rem;
+  padding-top: .25rem;
+}
+.spoll-anim {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .85rem;
+  width: 100%;
+  min-height: 5.5rem;
+  padding: .85rem 0.5rem 0.35rem;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+.spoll-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .4rem;
+  min-width: 4.25rem;
+}
+.spoll-node-label {
+  font-size: .68rem;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.85);
+  max-width: 6.5rem;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Device / PDU body with status LEDs + radio rings */
+.spoll-device {
+  position: relative;
+  width: 3.1rem;
+  height: 3.6rem;
+  border-radius: 7px;
+  background: linear-gradient(165deg, #475569 0%, #1e293b 55%, #0f172a 100%);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+}
+.spoll-led {
+  position: absolute;
+  left: .45rem;
+  width: .42rem;
+  height: .42rem;
+  border-radius: 50%;
+  background: #64748b;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.spoll-led-1 { top: .55rem; }
+.spoll-led-2 { top: 1.2rem; }
+.spoll-led-3 { top: 1.85rem; }
+.spoll-anim-running .spoll-led-1 {
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.7);
+  animation: spoll-led-blink 1.4s ease-in-out infinite;
+}
+.spoll-anim-running .spoll-led-2 {
+  background: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.65);
+  animation: spoll-led-blink 1.4s ease-in-out infinite .25s;
+}
+.spoll-anim-running .spoll-led-3 {
+  background: #eab308;
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.55);
+  animation: spoll-led-blink 1.4s ease-in-out infinite .5s;
+}
+.spoll-antenna {
+  position: absolute;
+  right: -.15rem;
+  top: 50%;
+  width: 1.4rem;
+  height: 1.4rem;
+  margin-top: -.7rem;
+  pointer-events: none;
+}
+.spoll-antenna i {
+  position: absolute;
+  inset: 0;
+  border: 2px solid rgba(56, 189, 248, 0.15);
+  border-radius: 50%;
+  border-left-color: transparent;
+  border-bottom-color: transparent;
+  transform: rotate(45deg) scale(0.35);
+  opacity: 0;
+}
+.spoll-anim-running .spoll-antenna i {
+  animation: spoll-ring 1.8s ease-out infinite;
+}
+.spoll-anim-running .spoll-antenna i:nth-child(2) { animation-delay: .45s; }
+.spoll-anim-running .spoll-antenna i:nth-child(3) { animation-delay: .9s; }
+/* Packet lane */
+.spoll-lane {
+  position: relative;
+  flex: 1;
+  height: 3.2rem;
+  min-width: 5.5rem;
+  max-width: 10rem;
+  overflow: hidden;
+}
+.spoll-lane::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(56, 189, 248, 0.35) 0 7px,
+    transparent 7px 14px
+  );
+  opacity: .55;
+}
+.spoll-anim-running .spoll-lane::before {
+  animation: spoll-dash 0.7s linear infinite;
+}
+.spoll-pkt {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  padding: .12rem .35rem;
+  border-radius: 4px;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .03em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #0f172a;
+  background: linear-gradient(180deg, #e0f2fe 0%, #7dd3fc 100%);
+  box-shadow: 0 2px 8px rgba(14, 165, 233, 0.35);
+  opacity: 0;
+  white-space: nowrap;
+}
+.spoll-anim-running .spoll-pkt {
+  animation: spoll-fly 2.4s ease-in-out infinite;
+}
+.spoll-pkt-2 {
+  background: linear-gradient(180deg, #fef9c3 0%, #fde047 100%);
+  animation-delay: .45s !important;
+}
+.spoll-pkt-3 {
+  background: linear-gradient(180deg, #d1fae5 0%, #6ee7b7 100%);
+  animation-delay: .9s !important;
+}
+.spoll-pkt-4 {
+  background: linear-gradient(180deg, #ffedd5 0%, #fdba74 100%);
+  animation-delay: 1.35s !important;
+}
+.spoll-pkt-5 {
+  background: linear-gradient(180deg, #ede9fe 0%, #c4b5fd 100%);
+  animation-delay: 1.8s !important;
+}
+/* ColdAisle sink */
+.spoll-app {
+  position: relative;
+  width: 3.1rem;
+  height: 3.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.spoll-app-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(52, 211, 153, 0.45);
+  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.35);
+}
+.spoll-anim-running .spoll-app-ring {
+  animation: spoll-app-pulse 1.6s ease-out infinite;
+}
+.spoll-app-core {
+  position: relative;
+  z-index: 1;
+  width: 2.35rem;
+  height: 2.35rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .78rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  color: #ecfdf5;
+  background: linear-gradient(160deg, #34d399 0%, #047857 100%);
+  box-shadow: 0 4px 14px rgba(4, 120, 87, 0.45);
+  border: 1px solid rgba(167, 243, 208, 0.35);
+}
+.spoll-status {
+  margin: .15rem 0 0;
+  font-size: .95rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  text-align: center;
+  min-height: 1.4rem;
+}
+.spoll-detail {
+  margin: 0;
+  font-size: .8rem;
+  text-align: center;
+  max-width: 24rem;
+  line-height: 1.4;
+}
+.spoll-state-ok .spoll-status { color: #6ee7b7; }
+.spoll-state-err .spoll-status { color: #fca5a5; }
+.spoll-state-timeout .spoll-status { color: #fcd34d; }
+.spoll-state-ok .spoll-led-1,
+.spoll-state-ok .spoll-led-2,
+.spoll-state-ok .spoll-led-3 {
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.65);
+  animation: none;
+}
+.spoll-state-err .spoll-led-1,
+.spoll-state-timeout .spoll-led-1 {
+  background: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.65);
+  animation: none;
+}
+.spoll-state-err .spoll-led-2,
+.spoll-state-err .spoll-led-3,
+.spoll-state-timeout .spoll-led-2,
+.spoll-state-timeout .spoll-led-3 {
+  background: #64748b;
+  animation: none;
+  box-shadow: none;
+}
+@keyframes spoll-fly {
+  0% {
+    left: 0;
+    opacity: 0;
+    transform: translateY(-50%) scale(0.85);
+  }
+  10% { opacity: 1; }
+  50% {
+    transform: translateY(calc(-50% - 5px)) scale(1);
+  }
+  88% { opacity: 1; }
+  100% {
+    left: calc(100% - 2.4rem);
+    opacity: 0;
+    transform: translateY(-50%) scale(0.9);
+  }
+}
+@keyframes spoll-dash {
+  to { background-position: 14px 0; }
+}
+@keyframes spoll-ring {
+  0% {
+    transform: rotate(45deg) scale(0.3);
+    opacity: 0.7;
+  }
+  100% {
+    transform: rotate(45deg) scale(1.15);
+    opacity: 0;
+  }
+}
+@keyframes spoll-led-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@keyframes spoll-app-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.45); transform: scale(1); }
+  70% { box-shadow: 0 0 0 10px rgba(52, 211, 153, 0); transform: scale(1.06); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); transform: scale(1); }
+}
+
 /* Searchable timezone combobox (Settings, Sites, setup, …) */
 .tz-combobox {
   position: relative;
