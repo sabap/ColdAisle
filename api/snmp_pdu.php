@@ -120,13 +120,33 @@ try {
                 $discoverOpts['family'] = 'apc';
             }
             $result = SnmpDiscover::discover($creds, $discoverOpts);
-            $templateName = SnmpDiscover::templateName($prereqs['vendor'], $prereqs['model']);
+
+            // Prefer inventory model; fall back to SNMP-discovered model for template naming
+            $discoveredModel = $result['model_no'] ?? null;
+            if (!is_string($discoveredModel) || trim($discoveredModel) === '') {
+                $discoveredModel = null;
+            } else {
+                $discoveredModel = trim($discoveredModel);
+            }
+            $modelForTpl = trim((string)($prereqs['model'] ?? ''));
+            if ($modelForTpl === '' && $discoveredModel !== null) {
+                $modelForTpl = $discoveredModel;
+            }
+            if ($modelForTpl === '') {
+                $modelForTpl = 'unknown';
+            }
+            $templateName = SnmpDiscover::templateName($prereqs['vendor'], $modelForTpl);
             $existing = SnmpDiscover::findSiteTemplateByName($templateName);
 
             $serialApplied = false;
             $serial = $result['serial_no'] ?? null;
             if (is_string($serial) && $serial !== '') {
                 $serialApplied = SnmpDiscover::applySerialToPduIfEmpty($id, $serial);
+            }
+            $modelApplied = false;
+            $modelNo = $discoveredModel;
+            if (is_string($modelNo) && $modelNo !== '') {
+                $modelApplied = SnmpDiscover::applyModelToPduIfEmpty($id, $modelNo);
             }
             $macApplied = false;
             $mac = $result['mac_address'] ?? null;
@@ -138,6 +158,15 @@ try {
                 $msg .= ' Serial number saved on PDU: ' . $serial . '.';
             } elseif (is_string($serial) && $serial !== '' && !empty($pdu['serial_no'])) {
                 $msg .= ' Serial from device: ' . $serial . ' (PDU field already set).';
+            } elseif (is_string($serial) && $serial !== '') {
+                $msg .= ' Serial from device: ' . $serial . '.';
+            }
+            if ($modelApplied) {
+                $msg .= ' Model saved on PDU: ' . $modelNo . '.';
+            } elseif (is_string($modelNo) && $modelNo !== '' && !empty($pdu['model'])) {
+                $msg .= ' Model from device: ' . $modelNo . ' (PDU field already set).';
+            } elseif (is_string($modelNo) && $modelNo !== '') {
+                $msg .= ' Model from device: ' . $modelNo . '.';
             }
             if ($macApplied) {
                 $msg .= ' MAC address saved on PDU: ' . $mac . '.';
@@ -158,12 +187,15 @@ try {
                 'serial_no' => $serial,
                 'serial_oid' => $result['serial_oid'] ?? null,
                 'serial_applied' => $serialApplied,
+                'model_no' => $modelNo,
+                'model_oid' => $result['model_oid'] ?? null,
+                'model_applied' => $modelApplied,
                 'mac_address' => $mac,
                 'mac_oid' => $result['mac_oid'] ?? null,
                 'mac_applied' => $macApplied,
                 'template_name' => $templateName,
                 'vendor' => $prereqs['vendor'],
-                'model' => $prereqs['model'],
+                'model' => $modelForTpl,
                 'existing_template' => $existing
                     ? snmp_pdu_template_public($existing)
                     : null,
@@ -185,9 +217,18 @@ try {
             }
             $overwrite = !empty($data['overwrite']);
 
+            // Model for template name: inventory → request body → unknown
+            $modelForTpl = trim((string)($prereqs['model'] ?? ''));
+            if ($modelForTpl === '' && !empty($data['model_no'])) {
+                $modelForTpl = trim((string)$data['model_no']);
+            }
+            if ($modelForTpl === '') {
+                $modelForTpl = 'unknown';
+            }
+
             $saved = SnmpDiscover::saveSiteTemplate(
                 $prereqs['vendor'],
-                $prereqs['model'],
+                $modelForTpl,
                 $oidMap,
                 $overwrite,
                 'discovered',
@@ -208,10 +249,14 @@ try {
             // Link template to PDU only (no snmp_targets row — Poll now / auto-poll use the template)
             SnmpDiscover::assignTemplateToPdu($id, (int)$saved['template_id']);
 
-            // Optional serial from discover UI / map
+            // Optional serial / model from discover UI
             $serialApplied = false;
             if (!empty($data['serial_no'])) {
                 $serialApplied = SnmpDiscover::applySerialToPduIfEmpty($id, (string)$data['serial_no']);
+            }
+            $modelApplied = false;
+            if (!empty($data['model_no'])) {
+                $modelApplied = SnmpDiscover::applyModelToPduIfEmpty($id, (string)$data['model_no']);
             }
 
             $tpl = SnmpDiscover::getSiteTemplate((int)$saved['template_id']);
@@ -225,6 +270,7 @@ try {
                     'template_id' => $saved['template_id'],
                     'name' => $saved['name'],
                     'serial_applied' => $serialApplied,
+                    'model_applied' => $modelApplied,
                 ]
             );
 
@@ -235,12 +281,16 @@ try {
             if ($serialApplied) {
                 $message .= ' Serial number saved on PDU.';
             }
+            if ($modelApplied) {
+                $message .= ' Model saved on PDU.';
+            }
 
             App::json([
                 'ok' => true,
                 'created' => !empty($saved['created']),
                 'overwritten' => !empty($saved['overwritten']),
                 'serial_applied' => $serialApplied,
+                'model_applied' => $modelApplied,
                 'template' => snmp_pdu_template_public($tpl),
                 'message' => $message,
             ]);

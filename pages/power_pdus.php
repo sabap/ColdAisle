@@ -1601,6 +1601,46 @@ if ($pduId) {
             d.textContent = s == null ? '' : String(s);
             return d.innerHTML;
         }
+        /** Update overview + edit form when Discover auto-fills identity fields. */
+        function fillPduIdentityFields(opts) {
+            opts = opts || {};
+            if (opts.serial_no) {
+                var serDd = document.getElementById('pduOverviewSerial');
+                if (serDd) serDd.textContent = opts.serial_no;
+                document.querySelectorAll('input[name="serial_no"]').forEach(function (inp) {
+                    if (!(inp.value || '').trim()) inp.value = opts.serial_no;
+                });
+            }
+            if (opts.model) {
+                var vmDd = document.getElementById('pduOverviewVendorModel');
+                if (vmDd) {
+                    var cur = (vmDd.textContent || '').replace(/—/g, '').trim();
+                    // Keep existing vendor prefix if present; otherwise show model only
+                    if (!cur || cur === '') {
+                        vmDd.textContent = opts.model;
+                    } else if (cur.indexOf(opts.model) < 0) {
+                        // Replace trailing model token if vendor already shown
+                        var parts = cur.split(/\s+/);
+                        if (parts.length >= 2) {
+                            parts[parts.length - 1] = opts.model;
+                            vmDd.textContent = parts.join(' ');
+                        } else {
+                            vmDd.textContent = cur + ' ' + opts.model;
+                        }
+                    }
+                }
+                document.querySelectorAll('input[name="model"]').forEach(function (inp) {
+                    if (!(inp.value || '').trim()) inp.value = opts.model;
+                });
+            }
+            if (opts.mac_address) {
+                var macDd = document.getElementById('pduOverviewMac');
+                if (macDd) macDd.textContent = opts.mac_address;
+                document.querySelectorAll('input[name="mac_address"]').forEach(function (inp) {
+                    if (!(inp.value || '').trim()) inp.value = opts.mac_address;
+                });
+            }
+        }
         function renderDiscover(data) {
             lastDiscover = data;
             document.getElementById('pduSnmpDiscHost').textContent = data.host || '—';
@@ -1616,11 +1656,19 @@ if ($pduId) {
             document.getElementById('pduSnmpDiscMessage').textContent = data.message || '';
             if (data.serial_applied && data.serial_no) {
                 toast('Serial number saved on PDU: ' + data.serial_no, 'success');
+                fillPduIdentityFields({ serial_no: data.serial_no });
             } else if (data.serial_no) {
                 toast('Device serial: ' + data.serial_no, 'info');
             }
+            if (data.model_applied && data.model_no) {
+                toast('Model saved on PDU: ' + data.model_no, 'success');
+                fillPduIdentityFields({ model: data.model_no });
+            } else if (data.model_no) {
+                toast('Device model: ' + data.model_no, 'info');
+            }
             if (data.mac_applied && data.mac_address) {
                 toast('MAC address saved on PDU: ' + data.mac_address, 'success');
+                fillPduIdentityFields({ mac_address: data.mac_address });
             } else if (data.mac_address) {
                 toast('Device MAC: ' + data.mac_address, 'info');
             }
@@ -1718,7 +1766,8 @@ if ($pduId) {
                 pdu_id: pduId,
                 oid_map: map,
                 overwrite: !!overwrite,
-                serial_no: (lastDiscover && lastDiscover.serial_no) ? lastDiscover.serial_no : null
+                serial_no: (lastDiscover && lastDiscover.serial_no) ? lastDiscover.serial_no : null,
+                model_no: (lastDiscover && lastDiscover.model_no) ? lastDiscover.model_no : null
             }).then(function (data) {
                 toast(data.message || 'Template saved', 'success');
                 setTimeout(function () { window.location.reload(); }, 600);
@@ -1974,20 +2023,20 @@ if ($pduId) {
             <dl class="pdu-summary-grid">
                 <div>
                     <dt>Vendor / model</dt>
-                    <dd><?php
+                    <dd id="pduOverviewVendorModel"><?php
                         $vm = trim(($p['manufacturer'] ?? '') . ' ' . ($p['model'] ?? ''));
                         echo $vm !== '' ? App::e($vm) : '<span class="text-muted">—</span>';
                     ?></dd>
                 </div>
                 <div>
                     <dt>Serial number</dt>
-                    <dd><?= !empty($p['serial_no'])
+                    <dd id="pduOverviewSerial"><?= !empty($p['serial_no'])
                         ? App::e((string)$p['serial_no'])
                         : '<span class="text-muted">—</span>' ?></dd>
                 </div>
                 <div>
                     <dt>MAC address</dt>
-                    <dd><?= !empty($p['mac_address'])
+                    <dd id="pduOverviewMac"><?= !empty($p['mac_address'])
                         ? App::e((string)$p['mac_address'])
                         : '<span class="text-muted">—</span>' ?></dd>
                 </div>
