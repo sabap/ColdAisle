@@ -102,6 +102,154 @@ function ups_health_status(array $row): string
 }
 
 /**
+ * Aggregate UPS inventory for Power / NOC / main dashboard.
+ *
+ * @return array{
+ *   units:int, snmp_on:int, polled:int, online:int, on_battery:int, bypass:int,
+ *   health_ok:int, health_warn:int, health_crit:int, health_unknown:int,
+ *   avg_load_pct:?float, max_load_pct:?float, min_battery_pct:?float, avg_battery_pct:?float,
+ *   rated_kva:float, rated_kw:float, last_poll_at:?string, list:list<array<string,mixed>>
+ * }
+ */
+function ups_dashboard_snapshot(int $listLimit = 12): array
+{
+    $out = [
+        'units' => 0,
+        'snmp_on' => 0,
+        'polled' => 0,
+        'online' => 0,
+        'on_battery' => 0,
+        'bypass' => 0,
+        'health_ok' => 0,
+        'health_warn' => 0,
+        'health_crit' => 0,
+        'health_unknown' => 0,
+        'avg_load_pct' => null,
+        'max_load_pct' => null,
+        'min_battery_pct' => null,
+        'avg_battery_pct' => null,
+        'rated_kva' => 0.0,
+        'rated_kw' => 0.0,
+        'last_poll_at' => null,
+        'list' => [],
+    ];
+    try {
+        $rows = Database::fetchAll(
+            'SELECT u.ups_id, u.name, u.ups_scope, u.manufacturer, u.model, u.status,
+                    u.primary_ip, u.rated_kva, u.rated_kw,
+                    u.last_output_status, u.last_load_pct, u.last_battery_pct, u.last_runtime_min,
+                    u.snmp_enabled, u.snmp_last_poll_at, u.snmp_site_template_id, u.last_poll_json,
+                    z.name AS zone_name
+             FROM ups_units u
+             LEFT JOIN power_zones z ON z.zone_id = u.zone_id
+             WHERE u.is_active = 1
+             ORDER BY u.name'
+        );
+    } catch (Throwable $e) {
+        return $out;
+    }
+    $out['units'] = count($rows);
+    $loadSum = 0.0;
+    $loadN = 0;
+    $battSum = 0.0;
+    $battN = 0;
+    $maxLoad = null;
+    $minBatt = null;
+    $lastPoll = null;
+    foreach ($rows as $row) {
+        $health = ups_health_status($row);
+        $hk = 'health_' . $health;
+        if (isset($out[$hk])) {
+            $out[$hk]++;
+        } else {
+            $out['health_unknown']++;
+        }
+        if (!empty($row['snmp_enabled'])) {
+            $out['snmp_on']++;
+        }
+        if (!empty($row['snmp_last_poll_at'])) {
+            $out['polled']++;
+            $ts = (string)$row['snmp_last_poll_at'];
+            if ($lastPoll === null || strcmp($ts, $lastPoll) > 0) {
+                $lastPoll = $ts;
+            }
+        }
+        $st = strtolower(trim((string)($row['last_output_status'] ?? '')));
+        if (preg_match('/on line|online|eco|econversion/i', $st)) {
+            $out['online']++;
+        } elseif (preg_match('/battery/i', $st)) {
+            $out['on_battery']++;
+        } elseif (preg_match('/bypass/i', $st)) {
+            $out['bypass']++;
+        }
+        if ($row['rated_kva'] !== null && $row['rated_kva'] !== '') {
+            $out['rated_kva'] += (float)$row['rated_kva'];
+        }
+        if ($row['rated_kw'] !== null && $row['rated_kw'] !== '') {
+            $out['rated_kw'] += (float)$row['rated_kw'];
+        }
+        if ($row['last_load_pct'] !== null && $row['last_load_pct'] !== '') {
+            $lv = (float)$row['last_load_pct'];
+            $loadSum += $lv;
+            $loadN++;
+            if ($maxLoad === null || $lv > $maxLoad) {
+                $maxLoad = $lv;
+            }
+        }
+        if ($row['last_battery_pct'] !== null && $row['last_battery_pct'] !== '') {
+            $bv = (float)$row['last_battery_pct'];
+            $battSum += $bv;
+            $battN++;
+            if ($minBatt === null || $bv < $minBatt) {
+                $minBatt = $bv;
+            }
+        }
+    }
+    if ($loadN > 0) {
+        $out['avg_load_pct'] = round($loadSum / $loadN, 1);
+        $out['max_load_pct'] = $maxLoad !== null ? round($maxLoad, 1) : null;
+    }
+    if ($battN > 0) {
+        $out['avg_battery_pct'] = round($battSum / $battN, 1);
+        $out['min_battery_pct'] = $minBatt !== null ? round($minBatt, 1) : null;
+    }
+    $out['rated_kva'] = round($out['rated_kva'], 1);
+    $out['rated_kw'] = round($out['rated_kw'], 1);
+    $out['last_poll_at'] = $lastPoll;
+
+    $limit = max(0, $listLimit);
+    $i = 0;
+    foreach ($rows as $row) {
+        if ($limit === 0 || $i >= $limit) {
+            break;
+        }
+        $out['list'][] = [
+            'ups_id' => (int)$row['ups_id'],
+            'name' => (string)$row['name'],
+            'scope' => (string)($row['ups_scope'] ?? 'in_row'),
+            'model' => trim((string)(($row['manufacturer'] ?? '') . ' ' . ($row['model'] ?? ''))),
+            'status' => (string)($row['status'] ?? ''),
+            'output_status' => (string)($row['last_output_status'] ?? ''),
+            'load_pct' => $row['last_load_pct'] !== null && $row['last_load_pct'] !== ''
+                ? (float)$row['last_load_pct'] : null,
+            'battery_pct' => $row['last_battery_pct'] !== null && $row['last_battery_pct'] !== ''
+                ? (float)$row['last_battery_pct'] : null,
+            'runtime_min' => $row['last_runtime_min'] !== null && $row['last_runtime_min'] !== ''
+                ? (float)$row['last_runtime_min'] : null,
+            'rated_kva' => $row['rated_kva'] !== null && $row['rated_kva'] !== ''
+                ? (float)$row['rated_kva'] : null,
+            'zone_name' => $row['zone_name'] ?? null,
+            'primary_ip' => $row['primary_ip'] ?? null,
+            'snmp' => !empty($row['snmp_enabled']),
+            'last_poll' => $row['snmp_last_poll_at'] ?? null,
+            'health' => ups_health_status($row),
+        ];
+        $i++;
+    }
+    return $out;
+}
+
+/**
  * Default APC PowerNet UPS OID map (Symmetra / Smart-UPS family).
  * Keys used by poll + threshold rules.
  *

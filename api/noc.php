@@ -47,6 +47,7 @@ $metrics = [
     'cabinets' => 0,
     'devices' => 0,
     'pdus' => 0,
+    'ups_units' => 0,
     'cooling_units' => 0,
     'env_sensors' => 0,
     'open_disposals' => 0,
@@ -90,6 +91,12 @@ try {
 try {
     $metrics['cooling_units'] = (int)Database::fetchValue(
         'SELECT COUNT(*) FROM cooling_units WHERE is_active = 1'
+    );
+} catch (Throwable $e) {
+}
+try {
+    $metrics['ups_units'] = (int)Database::fetchValue(
+        'SELECT COUNT(*) FROM ups_units WHERE is_active = 1'
     );
 } catch (Throwable $e) {
 }
@@ -232,6 +239,38 @@ try {
 } catch (Throwable $e) {
 }
 
+// UPS inventory snapshot (load / battery / health for wall)
+$ups = [
+    'units' => $metrics['ups_units'],
+    'online' => 0,
+    'on_battery' => 0,
+    'bypass' => 0,
+    'snmp_on' => 0,
+    'polled' => 0,
+    'health_ok' => 0,
+    'health_warn' => 0,
+    'health_crit' => 0,
+    'avg_load_pct' => null,
+    'max_load_pct' => null,
+    'min_battery_pct' => null,
+    'avg_battery_pct' => null,
+    'rated_kva' => 0.0,
+    'last_poll_at' => null,
+    'list' => [],
+];
+try {
+    if (is_file(dirname(__DIR__) . '/includes/ups_helpers.php')) {
+        require_once dirname(__DIR__) . '/includes/ups_helpers.php';
+    }
+    if (function_exists('ups_dashboard_snapshot')) {
+        $snap = ups_dashboard_snapshot(12);
+        $ups = array_merge($ups, $snap);
+        $metrics['ups_units'] = (int)($snap['units'] ?? $metrics['ups_units']);
+    }
+} catch (Throwable $e) {
+    App::log('NOC ups: ' . $e->getMessage(), 'warning');
+}
+
 // Hottest env sensors (for cooling panel)
 $hotSensors = [];
 try {
@@ -366,6 +405,7 @@ $out = [
     'power' => $power,
     'power_history' => $powerHistory,
     'zones' => $zones,
+    'ups' => $ups,
     'cooling' => $cooling,
     'hot_sensors' => $hotSensors,
     'cabinet_health' => $cabinetHealth,
