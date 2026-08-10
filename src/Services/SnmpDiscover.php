@@ -2147,7 +2147,13 @@ class SnmpDiscover
             $map['amps'] = $amps;
         }
         if ($watts !== null) {
-            $map['watts'] = $watts;
+            // APC rPDU2 device status power is hundredths of kW — encode scale in the key
+            $wOid = ltrim($watts, '.');
+            if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.4\.3\.1\.5(?:\.|$)/', $wOid)) {
+                $map['watts_hundredths_kw'] = $watts;
+            } else {
+                $map['watts'] = $watts;
+            }
         }
         return $map;
     }
