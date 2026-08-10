@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Facility load rollup (no double-count):** site/zone totals and 24h facility charts honor a configurable mode — **Sum all PDUs**, **Prefer row/room meters** (recommended when cabinets feed from row PDUs), or **Manual** per-PDU “Include in site load”. Power Dashboard explains the active mode and warns when rack+row would double-count under Sum all
+
 ### Bug fixes
 
 ---

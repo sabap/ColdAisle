@@ -79,9 +79,20 @@ try {
     $metrics['u_pct'] = $metrics['u_total'] > 0
         ? round(100.0 * $metrics['u_used'] / $metrics['u_total'], 1)
         : 0.0;
-    $metrics['power_kw'] = (float)Database::fetchValue(
-        'SELECT ISNULL(SUM(last_poll_watts),0) / 1000.0 FROM pdus WHERE is_active = 1 AND last_poll_watts IS NOT NULL'
-    );
+    // Facility kW respects site load rollup (prefer row/room vs sum-all)
+    $metrics['power_kw'] = 0.0;
+    try {
+        require_once dirname(__DIR__) . '/includes/power_helpers.php';
+        $allPduRows = Database::fetchAll(
+            'SELECT pdu_id, pdu_scope, zone_id, include_in_site_load, last_poll_watts, last_poll_amps, last_poll_at, name
+             FROM pdus WHERE is_active = 1'
+        );
+        $metrics['power_kw'] = power_site_load_totals($allPduRows)['kw'];
+    } catch (Throwable $e) {
+        $metrics['power_kw'] = (float)Database::fetchValue(
+            'SELECT ISNULL(SUM(last_poll_watts),0) / 1000.0 FROM pdus WHERE is_active = 1 AND last_poll_watts IS NOT NULL'
+        );
+    }
     $metrics['open_disposals'] = (int)Database::fetchValue(
         "SELECT COUNT(*) FROM disposals WHERE status IN ('pending','approved','in_progress')"
     );
@@ -138,28 +149,48 @@ $power = [
     'pdu_amps' => null,
     'last_poll_at' => null,
     'top_pdus' => [],
+    'site_load_mode' => function_exists('power_site_load_mode') ? power_site_load_mode() : 'all',
 ];
 try {
-    $power['last_poll_at'] = Database::fetchValue(
-        'SELECT MAX(last_poll_at) FROM pdus WHERE is_active = 1'
-    );
-    $power['pdu_polled'] = (int)Database::fetchValue(
-        'SELECT COUNT(*) FROM pdus WHERE is_active = 1 AND last_poll_watts IS NOT NULL'
-    );
-    $ampsSum = Database::fetchValue(
-        'SELECT ISNULL(SUM(last_poll_amps),0) FROM pdus WHERE is_active = 1 AND last_poll_amps IS NOT NULL'
-    );
-    $power['pdu_amps'] = $ampsSum !== null ? round((float)$ampsSum, 1) : null;
-    // Top loaded PDUs for the wall (by watts)
-    $topPduRows = Database::fetchAll(
-        'SELECT TOP 8 p.pdu_id, p.name, p.last_poll_watts, p.last_poll_amps, p.last_poll_at,
-                z.name AS zone_name
+    require_once dirname(__DIR__) . '/includes/power_helpers.php';
+    $allPduRows = Database::fetchAll(
+        'SELECT p.pdu_id, p.name, p.pdu_scope, p.zone_id, p.include_in_site_load,
+                p.last_poll_watts, p.last_poll_amps, p.last_poll_at, z.name AS zone_name
          FROM pdus p
          LEFT JOIN power_zones z ON z.zone_id = p.zone_id
-         WHERE p.is_active = 1 AND p.last_poll_watts IS NOT NULL AND p.last_poll_watts > 0
-         ORDER BY p.last_poll_watts DESC'
+         WHERE p.is_active = 1'
     );
-    foreach ($topPduRows as $tp) {
+    $siteIds = array_fill_keys(power_site_load_pdu_ids($allPduRows), true);
+    $ampsSum = 0.0;
+    $anyAmps = false;
+    $polled = 0;
+    $lastAt = null;
+    $ranked = [];
+    foreach ($allPduRows as $tp) {
+        $pid = (int)$tp['pdu_id'];
+        if (empty($siteIds[$pid])) {
+            continue;
+        }
+        if ($tp['last_poll_watts'] !== null && $tp['last_poll_watts'] !== '') {
+            $polled++;
+            $ranked[] = $tp;
+        }
+        if ($tp['last_poll_amps'] !== null && $tp['last_poll_amps'] !== '') {
+            $ampsSum += (float)$tp['last_poll_amps'];
+            $anyAmps = true;
+        }
+        $at = (string)($tp['last_poll_at'] ?? '');
+        if ($at !== '' && ($lastAt === null || strcmp($at, $lastAt) > 0)) {
+            $lastAt = $at;
+        }
+    }
+    $power['last_poll_at'] = $lastAt;
+    $power['pdu_polled'] = $polled;
+    $power['pdu_amps'] = $anyAmps ? round($ampsSum, 1) : null;
+    usort($ranked, static function ($a, $b) {
+        return ((float)($b['last_poll_watts'] ?? 0)) <=> ((float)($a['last_poll_watts'] ?? 0));
+    });
+    foreach (array_slice($ranked, 0, 8) as $tp) {
         $w = (float)$tp['last_poll_watts'];
         $power['top_pdus'][] = [
             'name' => (string)$tp['name'],

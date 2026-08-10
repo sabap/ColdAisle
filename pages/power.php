@@ -8,11 +8,29 @@ require_once dirname(__DIR__) . '/includes/ups_helpers.php';
 App::boot();
 $user = App::requirePermission('view_power');
 
+// Handle facility rollup mode save
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'set_site_load_mode') {
+    if (!AuthManager::canEditPower($user)) {
+        App::flash('error', 'You do not have permission to change site load mode.');
+        App::redirect('pages/power.php');
+    }
+    if (!App::validateCsrf($_POST['_csrf'] ?? '')) {
+        App::flash('error', 'Invalid session token.');
+        App::redirect('pages/power.php');
+    }
+    $mode = strtolower(trim((string)($_POST['power_site_load_mode'] ?? 'all')));
+    if (!in_array($mode, ['all', 'prefer_upstream', 'manual'], true)) {
+        $mode = 'all';
+    }
+    SettingsService::set('power_site_load_mode', $mode, 'power');
+    App::flash('success', 'Site load mode updated: ' . (power_site_load_mode_labels()[$mode] ?? $mode));
+    App::redirect('pages/power.php');
+}
+
 $zones = Database::fetchAll(
     'SELECT z.*, dc.name AS dc_name,
             (SELECT COUNT(*) FROM pdus p WHERE p.zone_id = z.zone_id AND p.is_active = 1) AS pdu_count,
             (SELECT COUNT(*) FROM power_panels pp WHERE pp.zone_id = z.zone_id) AS panel_count,
-            (SELECT ISNULL(SUM(p.last_poll_watts), 0) FROM pdus p WHERE p.zone_id = z.zone_id AND p.is_active = 1) AS poll_watts,
             (SELECT COUNT(*) FROM ups_units u WHERE u.zone_id = z.zone_id AND u.is_active = 1) AS ups_count,
             (SELECT AVG(CAST(u.last_load_pct AS FLOAT)) FROM ups_units u
              WHERE u.zone_id = z.zone_id AND u.is_active = 1 AND u.last_load_pct IS NOT NULL) AS ups_avg_load,
@@ -34,6 +52,15 @@ $pdus = power_natural_sort_rows(Database::fetchAll(
      ORDER BY p.name'
 ), 'name');
 
+// Zone polled load respects facility rollup (avoid double-count rack under row)
+foreach ($zones as &$zrow) {
+    $zt = power_zone_load_totals($pdus, (int)$zrow['zone_id']);
+    $zrow['poll_watts'] = $zt['watts'];
+    $zrow['poll_pdu_count'] = $zt['count'];
+    $zrow['poll_reporting'] = $zt['reporting'];
+}
+unset($zrow);
+
 $panelCount = (int) Database::fetchValue('SELECT COUNT(*) FROM power_panels');
 $snmpOn = count(array_filter($pdus, static fn($p) => !empty($p['snmp_enabled'])));
 $upsSnap = ups_dashboard_snapshot(24);
@@ -46,8 +73,15 @@ if ((int)($upsSnap['health_crit'] ?? 0) > 0 || (int)($upsSnap['on_battery'] ?? 0
 } elseif ($upsCount > 0 && (int)($upsSnap['health_ok'] ?? 0) > 0) {
     $upsHealthCls = 'success';
 }
-$withPoll = array_filter($pdus, static fn($p) => $p['last_poll_watts'] !== null);
-$totalKw = array_sum(array_map(static fn($p) => (float)($p['last_poll_watts'] ?? 0), $pdus)) / 1000.0;
+$siteLoad = power_site_load_totals($pdus);
+$siteLoadMode = $siteLoad['mode'];
+$siteLoadIds = array_fill_keys($siteLoad['ids'], true);
+$withPoll = array_filter($pdus, static function ($p) use ($siteLoadIds) {
+    $pid = (int)($p['pdu_id'] ?? 0);
+    return $pid > 0 && !empty($siteLoadIds[$pid]) && $p['last_poll_watts'] !== null;
+});
+$totalKw = $siteLoad['kw'];
+$rawAllKw = array_sum(array_map(static fn($p) => (float)($p['last_poll_watts'] ?? 0), $pdus)) / 1000.0;
 $capacityKw = 0.0;
 $capacityKnown = false;
 foreach ($zones as $z) {
@@ -90,6 +124,9 @@ foreach ($pdus as $p) {
         $scopeCounts['rack']++;
     }
 }
+$hasRackAndUpstream = ($scopeCounts['rack'] > 0)
+    && (($scopeCounts['row'] + $scopeCounts['room']) > 0);
+$canEditSiteLoad = AuthManager::canEditPower($user);
 
 $unassignedPdus = count(array_filter($pdus, static fn($p) => empty($p['zone_id'])));
 $stalePdus = count(array_filter($pdus, static function ($p) {
@@ -118,11 +155,62 @@ layout_header('Power Dashboard', $user, 'power');
     </div>
 </div>
 
+<?php if ($hasRackAndUpstream && $siteLoadMode === 'all'): ?>
+<div class="alert alert-warning" style="margin-bottom:1rem">
+    <strong>Possible double-count:</strong>
+    You have both rack PDUs and row/room PDUs.
+    Site load currently <em>sums all PDUs</em> (<?= number_format($rawAllKw, 1) ?> kW raw).
+    If cabinets are fed by row PDUs, switch to
+    <strong>Prefer row / room meters</strong> below so facility totals use distribution meters only.
+</div>
+<?php endif; ?>
+
+<div class="card mb-2">
+    <div class="card-body" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-start;justify-content:space-between">
+        <div style="flex:1;min-width:16rem">
+            <strong>Site load calculation</strong>
+            <p class="text-muted mb-0" style="font-size:.85rem;margin-top:.35rem">
+                <?= App::e(power_site_load_mode_description($siteLoadMode)) ?>
+            </p>
+            <p class="text-muted mb-0" style="font-size:.8rem;margin-top:.35rem">
+                Active mode:
+                <strong><?= App::e(power_site_load_mode_labels()[$siteLoadMode] ?? $siteLoadMode) ?></strong>
+                · counting <?= (int)$siteLoad['count'] ?> of <?= count($pdus) ?> PDUs
+                <?php if ($siteLoadMode !== 'all' && abs($rawAllKw - $totalKw) > 0.05): ?>
+                    · raw sum of all PDUs would be <?= number_format($rawAllKw, 1) ?> kW
+                <?php endif; ?>
+            </p>
+        </div>
+        <?php if ($canEditSiteLoad): ?>
+        <form method="post" class="flex gap-1" style="align-items:flex-end;flex-wrap:wrap">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="action" value="set_site_load_mode">
+            <div class="form-row" style="margin:0;min-width:14rem">
+                <label style="font-size:.8rem">Facility rollup</label>
+                <select class="form-control" name="power_site_load_mode">
+                    <?php foreach (power_site_load_mode_labels() as $val => $lab): ?>
+                        <option value="<?= App::e($val) ?>" <?= $siteLoadMode === $val ? 'selected' : '' ?>>
+                            <?= App::e($lab) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-secondary btn-sm">Save</button>
+        </form>
+        <?php endif; ?>
+    </div>
+</div>
+
 <div class="metrics power-metrics">
     <div class="metric-card warning">
         <div class="label">Polled load</div>
         <div class="value"><?= number_format($totalKw, 1) ?> <span class="metric-unit">kW</span></div>
-        <div class="sub"><?= count($withPoll) ?> of <?= count($pdus) ?> PDUs reporting</div>
+        <div class="sub">
+            <?= (int)$siteLoad['reporting'] ?> of <?= (int)$siteLoad['count'] ?> facility meters reporting
+            <?php if ((int)$siteLoad['count'] !== count($pdus)): ?>
+                · <?= count($pdus) ?> PDUs total
+            <?php endif; ?>
+        </div>
     </div>
     <div class="metric-card <?= $capacityPct !== null && $capacityPct >= 75 ? 'warning' : 'success' ?>">
         <div class="label">Zone capacity</div>
@@ -200,7 +288,10 @@ layout_header('Power Dashboard', $user, 'power');
     <div class="card power-history-wide" data-power-history data-scope="site" data-hours="24">
         <div class="card-header flex-between">
             <h2 style="margin:0">Overall load — 24h</h2>
-            <span class="text-muted" style="font-size:.8rem">Sum of polled PDUs · red = phase outages</span>
+            <span class="text-muted" style="font-size:.8rem">
+                <?= App::e(power_site_load_mode_labels()[$siteLoadMode] ?? 'Facility rollup') ?>
+                · red = phase outages
+            </span>
         </div>
         <div class="card-body power-history-body">
             <div class="power-outage-summary" data-outage-summary hidden></div>

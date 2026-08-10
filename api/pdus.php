@@ -264,6 +264,7 @@ try {
             'row_id' => pdu_null($d['row_id'] ?? null) !== null ? (int)$d['row_id'] : null,
             'zone_id' => pdu_null($d['zone_id'] ?? null) !== null ? (int)$d['zone_id'] : null,
             'pdu_scope' => $scope,
+            'include_in_site_load' => !array_key_exists('include_in_site_load', $d) || !empty($d['include_in_site_load']) ? 1 : 0,
             'mount_style' => $mount,
             'position_u' => $mount === 'u_mounted' && pdu_null($d['position_u'] ?? null) !== null
                 ? (int)$d['position_u'] : null,
@@ -404,11 +405,15 @@ try {
             'input_type', 'snmp_enabled', 'snmp_version', 'snmp_port', 'snmp_community',
             'snmp_security_name', 'snmp_auth_protocol', 'snmp_auth_passphrase',
             'snmp_priv_protocol', 'snmp_priv_passphrase', 'snmp_context', 'snmp_v3_sec_level', 'notes',
+            'include_in_site_load',
         ];
         foreach ($map as $k) {
             if (array_key_exists($k, $d)) {
                 $fields[$k] = $d[$k] === '' ? null : $d[$k];
             }
+        }
+        if (array_key_exists('include_in_site_load', $fields)) {
+            $fields['include_in_site_load'] = !empty($fields['include_in_site_load']) ? 1 : 0;
         }
         // Electrical fields (phases / voltages)
         $elecKeys = ['phases', 'phase_wiring', 'input_voltage', 'input_voltage_ln',

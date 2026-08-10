@@ -112,6 +112,23 @@ $formModal = !empty($formModal);
                 <option value="<?= $val ?>" <?= ($edit['pdu_scope'] ?? 'rack') === $val ? 'selected' : '' ?>><?= $lab ?></option>
             <?php endforeach; ?>
         </select>
+        <p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">
+            Row/room = distribution meters (feeds cabinets). Used when site load mode is “Prefer row / room meters”.
+        </p>
+    </div>
+    <div class="form-row">
+        <label class="checkbox-label" style="display:flex;align-items:flex-start;gap:.5rem;font-weight:500">
+            <input type="checkbox" name="include_in_site_load" value="1"
+                <?= !isset($edit['include_in_site_load']) || !empty($edit['include_in_site_load']) ? 'checked' : '' ?>
+                style="margin-top:.2rem">
+            <span>
+                Include in site / facility load
+                <span class="text-muted" style="display:block;font-size:.75rem;font-weight:400;margin-top:.15rem">
+                    Uncheck to force-exclude from Power Dashboard totals and 24h facility charts
+                    (e.g. rack PDUs already metered by an upstream row PDU). Required for “Manual” site load mode.
+                </span>
+            </span>
+        </label>
     </div>
     <div class="form-row power-rack-fields"><label>Cabinet</label>
         <select class="form-control" name="cabinet_id">

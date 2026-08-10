@@ -13,6 +13,190 @@ function power_natural_strcmp(string $a, string $b): int
 }
 
 /**
+ * How facility / site / zone load totals are built from polled PDUs.
+ *
+ * - all: sum every active PDU (legacy; can double-count rack under row meters)
+ * - prefer_upstream: per zone, prefer row/room PDUs when any exist; else rack
+ * - manual: only PDUs with include_in_site_load = 1
+ */
+function power_site_load_mode(): string
+{
+    $m = 'all';
+    if (class_exists('SettingsService')) {
+        try {
+            $m = strtolower(trim((string)SettingsService::get('power_site_load_mode', 'all')));
+        } catch (Throwable $e) {
+            $m = 'all';
+        }
+    }
+    return in_array($m, ['all', 'prefer_upstream', 'manual'], true) ? $m : 'all';
+}
+
+/** @return array<string,string> mode => short label */
+function power_site_load_mode_labels(): array
+{
+    return [
+        'all' => 'Sum all PDUs',
+        'prefer_upstream' => 'Prefer row / room meters',
+        'manual' => 'Manual (checkbox per PDU)',
+    ];
+}
+
+function power_site_load_mode_description(string $mode = ''): string
+{
+    $mode = $mode !== '' ? $mode : power_site_load_mode();
+    return match ($mode) {
+        'prefer_upstream' => 'In each zone, use row/room PDU load when those exist; rack PDUs only fill zones that have no distribution meter. Avoids double-counting cabinets fed by row PDUs.',
+        'manual' => 'Only PDUs with “Include in site load” checked contribute to facility and zone totals. Use for custom meter hierarchies.',
+        default => 'Sum every active PDU’s polled load. Simple sites; can double-count if rack PDUs sit downstream of row/room meters.',
+    };
+}
+
+/**
+ * Which PDU IDs count toward site/zone facility load under the current rollup mode.
+ *
+ * @param list<array<string,mixed>> $pdus rows need pdu_id; ideally pdu_scope, zone_id, include_in_site_load
+ * @return list<int>
+ */
+function power_site_load_pdu_ids(array $pdus): array
+{
+    $mode = power_site_load_mode();
+    $ids = [];
+
+    // Force-exclude always honored (include_in_site_load = 0)
+    $eligible = [];
+    foreach ($pdus as $p) {
+        $pid = (int)($p['pdu_id'] ?? 0);
+        if ($pid < 1) {
+            continue;
+        }
+        $inc = $p['include_in_site_load'] ?? 1;
+        if ($inc === null || $inc === '') {
+            $inc = 1;
+        }
+        if (!(int)$inc) {
+            continue;
+        }
+        $eligible[] = $p;
+    }
+
+    if ($mode === 'manual') {
+        foreach ($eligible as $p) {
+            $ids[] = (int)$p['pdu_id'];
+        }
+        return array_values(array_unique($ids));
+    }
+
+    if ($mode === 'all') {
+        foreach ($eligible as $p) {
+            $ids[] = (int)$p['pdu_id'];
+        }
+        return array_values(array_unique($ids));
+    }
+
+    // prefer_upstream: per zone (null zone = key 0)
+    $byZone = [];
+    foreach ($eligible as $p) {
+        $z = $p['zone_id'] ?? null;
+        $zk = ($z === null || $z === '') ? 0 : (int)$z;
+        $byZone[$zk][] = $p;
+    }
+    foreach ($byZone as $group) {
+        $hasUpstream = false;
+        foreach ($group as $p) {
+            $s = strtolower((string)($p['pdu_scope'] ?? 'rack'));
+            if ($s === 'row' || $s === 'room') {
+                $hasUpstream = true;
+                break;
+            }
+        }
+        foreach ($group as $p) {
+            $s = strtolower((string)($p['pdu_scope'] ?? 'rack'));
+            if ($hasUpstream) {
+                if ($s === 'row' || $s === 'room') {
+                    $ids[] = (int)$p['pdu_id'];
+                }
+            } else {
+                $ids[] = (int)$p['pdu_id'];
+            }
+        }
+    }
+    return array_values(array_unique($ids));
+}
+
+/**
+ * @param list<array<string,mixed>> $pdus
+ * @return array{watts:float,kw:float,count:int,reporting:int,mode:string,ids:list<int>}
+ */
+function power_site_load_totals(array $pdus): array
+{
+    $ids = power_site_load_pdu_ids($pdus);
+    $idSet = array_fill_keys($ids, true);
+    $sum = 0.0;
+    $reporting = 0;
+    foreach ($pdus as $p) {
+        $pid = (int)($p['pdu_id'] ?? 0);
+        if ($pid < 1 || empty($idSet[$pid])) {
+            continue;
+        }
+        if ($p['last_poll_watts'] !== null && $p['last_poll_watts'] !== '') {
+            $sum += (float)$p['last_poll_watts'];
+            $reporting++;
+        }
+    }
+    return [
+        'watts' => $sum,
+        'kw' => $sum / 1000.0,
+        'count' => count($ids),
+        'reporting' => $reporting,
+        'mode' => power_site_load_mode(),
+        'ids' => $ids,
+    ];
+}
+
+/**
+ * Zone subtotal using the same rollup rules (only PDUs in that zone).
+ *
+ * @param list<array<string,mixed>> $allPdus
+ * @return array{watts:float,kw:float,count:int,reporting:int}
+ */
+function power_zone_load_totals(array $allPdus, int $zoneId): array
+{
+    $inZone = array_values(array_filter(
+        $allPdus,
+        static fn($p) => (int)($p['zone_id'] ?? 0) === $zoneId
+    ));
+    // Apply rollup only within this zone's PDUs
+    $mode = power_site_load_mode();
+    $ids = [];
+    if ($mode === 'manual' || $mode === 'all') {
+        $ids = power_site_load_pdu_ids($inZone);
+    } else {
+        // prefer_upstream for this zone alone
+        $ids = power_site_load_pdu_ids($inZone);
+    }
+    $idSet = array_fill_keys($ids, true);
+    $sum = 0.0;
+    $reporting = 0;
+    foreach ($inZone as $p) {
+        $pid = (int)($p['pdu_id'] ?? 0);
+        if ($pid < 1 || empty($idSet[$pid])) {
+            continue;
+        }
+        if ($p['last_poll_watts'] !== null && $p['last_poll_watts'] !== '') {
+            $sum += (float)$p['last_poll_watts'];
+            $reporting++;
+        }
+    }
+    return [
+        'watts' => $sum,
+        'kw' => $sum / 1000.0,
+        'count' => count($ids),
+        'reporting' => $reporting,
+    ];
+}
+
+/**
  * Sort list rows by a string column using natural order (digits as numbers).
  *
  * @param list<array<string,mixed>> $rows
