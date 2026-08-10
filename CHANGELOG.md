@@ -13,6 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+### Enhancements
+
+### Bug fixes
+
+---
+
+## [0.3.74] - 2026-08-10
+
+### New features
+
 - **UPS inventory (Power → UPS):** in-row and in-rack units (Schneider Symmetra 40K–oriented). Floor plan placement, dashboard/NOC 3D with soft health glow, SNMPv3 Discover/Poll via PowerNet UPS ruleset (`ups` family), scheduled poll, load/battery/runtime status.
 - **Discover ruleset `ups`:** APC/Schneider PowerNet UPS OID walks (318.1.1.1) separate from rPDU/EMS.
 
@@ -20,10 +30,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 - Floor plan palette: UPS presets + unplaced list; metrics panel links to UPS list.
 
-### Bug fixes
-
 ---
-
 ## [0.3.73] - 2026-08-10
 
 ### New features
