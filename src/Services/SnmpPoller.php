@@ -854,6 +854,30 @@ class SnmpPoller
         }
         Database::update('ups_units', $patch, 'ups_id = :id', [':id' => (int)$unit['ups_id']]);
 
+        // History sample for Power / zone charts
+        if (class_exists('UpsHistoryService')) {
+            $estW = null;
+            if ($loadPct !== null) {
+                if ($unit['rated_kw'] !== null && $unit['rated_kw'] !== '') {
+                    $estW = (float)$unit['rated_kw'] * 1000.0 * ((float)$loadPct / 100.0);
+                } elseif ($unit['rated_kva'] !== null && $unit['rated_kva'] !== '') {
+                    $estW = (float)$unit['rated_kva'] * 1000.0 * 0.9 * ((float)$loadPct / 100.0);
+                }
+            }
+            try {
+                UpsHistoryService::recordSample(
+                    (int)$unit['ups_id'],
+                    $loadPct !== null ? (float)$loadPct : null,
+                    $battPct !== null ? (float)$battPct : null,
+                    $runtimeMin !== null ? (float)$runtimeMin : null,
+                    $statusLabel,
+                    $estW
+                );
+            } catch (Throwable $e) {
+                App::log('UpsHistory record: ' . $e->getMessage(), 'warning');
+            }
+        }
+
         if (class_exists('SnmpThresholdService')) {
             try {
                 SnmpThresholdService::evaluateEntity(

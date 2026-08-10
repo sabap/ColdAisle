@@ -15,6 +15,9 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **UPS history charts:** samples stored on each poll (`ups_readings`); Power dashboard overall PDU load + site UPS load/battery graphs; zone detail and zone list show UPS load 24h charts.
+- **Zones + UPS:** zone cards/table include UPS count and avg load; zone detail lists UPS with health and dual PDU/UPS history panels.
+
 ### Bug fixes
 
 ---

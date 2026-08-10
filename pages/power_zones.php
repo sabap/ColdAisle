@@ -157,7 +157,12 @@ $zones = Database::fetchAll(
             (SELECT COUNT(*) FROM pdus p WHERE p.zone_id = z.zone_id AND p.is_active = 1) AS pdu_count,
             (SELECT COUNT(*) FROM power_panels pp WHERE pp.zone_id = z.zone_id) AS panel_count,
             (SELECT COUNT(*) FROM cabinet_rows cr WHERE cr.zone_id = z.zone_id) AS row_count,
-            (SELECT ISNULL(SUM(p.last_poll_watts), 0) FROM pdus p WHERE p.zone_id = z.zone_id AND p.is_active = 1) AS poll_watts
+            (SELECT ISNULL(SUM(p.last_poll_watts), 0) FROM pdus p WHERE p.zone_id = z.zone_id AND p.is_active = 1) AS poll_watts,
+            (SELECT COUNT(*) FROM ups_units u WHERE u.zone_id = z.zone_id AND u.is_active = 1) AS ups_count,
+            (SELECT AVG(CAST(u.last_load_pct AS FLOAT)) FROM ups_units u
+             WHERE u.zone_id = z.zone_id AND u.is_active = 1 AND u.last_load_pct IS NOT NULL) AS ups_avg_load,
+            (SELECT MIN(u.last_battery_pct) FROM ups_units u
+             WHERE u.zone_id = z.zone_id AND u.is_active = 1 AND u.last_battery_pct IS NOT NULL) AS ups_min_batt
      FROM power_zones z
      INNER JOIN datacenters dc ON dc.datacenter_id = z.datacenter_id
      ORDER BY dc.name, z.name'
@@ -188,6 +193,25 @@ if ($zoneId) {
          ORDER BY p.name',
         [$zoneId]
     );
+    $zoneUps = [];
+    try {
+        require_once dirname(__DIR__) . '/includes/ups_helpers.php';
+        $zoneUps = Database::fetchAll(
+            'SELECT u.ups_id, u.name, u.ups_scope, u.manufacturer, u.model, u.primary_ip,
+                    u.last_output_status, u.last_load_pct, u.last_battery_pct, u.last_runtime_min,
+                    u.rated_kva, u.rated_kw, u.snmp_enabled, u.snmp_last_poll_at, u.last_poll_json
+             FROM ups_units u
+             WHERE u.zone_id = ? AND u.is_active = 1
+             ORDER BY u.name',
+            [$zoneId]
+        );
+        foreach ($zoneUps as &$zu) {
+            $zu['health'] = function_exists('ups_health_status') ? ups_health_status($zu) : 'unknown';
+        }
+        unset($zu);
+    } catch (Throwable $e) {
+        $zoneUps = [];
+    }
     $zoneRows = [];
     try {
         $zoneRows = Database::fetchAll(
@@ -244,9 +268,33 @@ if ($zoneId) {
                 <button type="button" class="btn btn-primary" data-open-modal="modal-edit-zone">Edit zone</button>
             <?php endif; ?>
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_pdus.php?zone_id=' . $zoneId)) ?>">Zone PDUs</a>
+            <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_ups.php')) ?>">UPS</a>
         </div>
     </div>
 
+    <?php
+    $zoneUpsCount = count($zoneUps);
+    $zoneUpsAvgLoad = null;
+    $zoneUpsMinBatt = null;
+    if ($zoneUpsCount > 0) {
+        $ls = [];
+        $bs = [];
+        foreach ($zoneUps as $zu) {
+            if ($zu['last_load_pct'] !== null && $zu['last_load_pct'] !== '') {
+                $ls[] = (float)$zu['last_load_pct'];
+            }
+            if ($zu['last_battery_pct'] !== null && $zu['last_battery_pct'] !== '') {
+                $bs[] = (float)$zu['last_battery_pct'];
+            }
+        }
+        if ($ls) {
+            $zoneUpsAvgLoad = round(array_sum($ls) / count($ls), 1);
+        }
+        if ($bs) {
+            $zoneUpsMinBatt = min($bs);
+        }
+    }
+    ?>
     <div class="metrics">
         <div class="metric-card warning">
             <div class="label">Load</div>
@@ -265,6 +313,20 @@ if ($zoneId) {
             <div class="label">PDUs / Panels / Rows</div>
             <div class="value"><?= (int)$zone['pdu_count'] ?> <span class="metric-unit">/ <?= (int)$zone['panel_count'] ?> / <?= count($zoneRows) ?></span></div>
         </div>
+        <div class="metric-card <?= $zoneUpsCount && $zoneUpsAvgLoad !== null && $zoneUpsAvgLoad >= 80 ? 'warning' : '' ?>">
+            <div class="label">UPS</div>
+            <div class="value"><?= (int)$zoneUpsCount ?></div>
+            <div class="sub">
+                <?php if ($zoneUpsCount < 1): ?>
+                    None assigned
+                <?php else: ?>
+                    <?= $zoneUpsAvgLoad !== null ? 'load ' . App::e((string)$zoneUpsAvgLoad) . '%' : '—' ?>
+                    <?php if ($zoneUpsMinBatt !== null): ?>
+                        · batt min <?= App::e((string)$zoneUpsMinBatt) ?>%
+                    <?php endif; ?>
+                <?php endif; ?>
+            </div>
+        </div>
     </div>
 
     <?php if ($pct !== null): ?>
@@ -273,16 +335,28 @@ if ($zoneId) {
         </div>
     <?php endif; ?>
 
-    <!-- Phase 2: zone-scoped 24h history -->
-    <div class="card power-history-wide mb-2" data-power-history data-scope="zone" data-id="<?= (int)$zoneId ?>" data-hours="24">
-        <div class="card-header flex-between">
-            <h2 style="margin:0;font-size:1.05rem">Last 24 hours — this zone</h2>
-            <span class="text-muted" style="font-size:.8rem">Zone PDUs · red markers = phase outages</span>
+    <!-- Zone PDU + UPS history -->
+    <div class="power-dash-grid mb-2" style="grid-template-columns:1fr 1fr;gap:1rem">
+        <div class="card power-history-wide" data-power-history data-scope="zone" data-id="<?= (int)$zoneId ?>" data-hours="24">
+            <div class="card-header flex-between">
+                <h2 style="margin:0;font-size:1.05rem">PDU load — 24h</h2>
+                <span class="text-muted" style="font-size:.8rem">Zone PDUs · red = outages</span>
+            </div>
+            <div class="card-body power-history-body">
+                <div class="power-outage-summary" data-outage-summary hidden></div>
+                <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Output (usage)" data-color="#38bdf8" data-height="200"></div>
+                <div class="power-chart power-chart-lg" data-metric="volts" data-unit="V" data-label="Input voltage (avg L–N)" data-color="#a78bfa" data-height="140" data-hide-empty="1"></div>
+            </div>
         </div>
-        <div class="card-body power-history-body">
-            <div class="power-outage-summary" data-outage-summary hidden></div>
-            <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Output (usage)" data-color="#38bdf8" data-height="200"></div>
-            <div class="power-chart power-chart-lg" data-metric="volts" data-unit="V" data-label="Input voltage (avg L–N)" data-color="#a78bfa" data-height="160"></div>
+        <div class="card power-history-wide" data-power-history data-scope="ups_zone" data-id="<?= (int)$zoneId ?>" data-hours="24">
+            <div class="card-header flex-between">
+                <h2 style="margin:0;font-size:1.05rem">UPS load — 24h</h2>
+                <span class="text-muted" style="font-size:.8rem">UPS on this zone · poll to fill</span>
+            </div>
+            <div class="card-body power-history-body">
+                <div class="power-chart power-chart-lg" data-metric="load_pct" data-unit="%" data-label="UPS load %" data-color="#a78bfa" data-height="160" data-outages="0"></div>
+                <div class="power-chart power-chart-lg" data-metric="battery_pct" data-unit="%" data-label="Battery %" data-color="#34d399" data-height="120" data-outages="0" data-hide-empty="1"></div>
+            </div>
         </div>
     </div>
 
@@ -483,6 +557,75 @@ if ($zoneId) {
         </div>
     </div>
 
+    <div class="card mb-2">
+        <div class="card-header flex-between">
+            <h2>UPS on this zone</h2>
+            <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+                <span class="text-muted" style="font-size:.85rem"><?= count($zoneUps) ?></span>
+                <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/power_ups.php')) ?>">All UPS</a>
+                <?php if ($canEditZone): ?>
+                    <a class="btn btn-sm btn-primary" href="<?= App::e(App::url('pages/power_ups.php?action=new')) ?>">+ UPS</a>
+                <?php endif; ?>
+            </div>
+        </div>
+        <div class="card-body flush">
+            <table class="data">
+                <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Scope</th>
+                    <th>Status</th>
+                    <th>Load</th>
+                    <th>Battery</th>
+                    <th>Runtime</th>
+                    <th>Health</th>
+                    <th class="col-actions"></th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($zoneUps as $zu):
+                    $hp = (string)($zu['health'] ?? 'unknown');
+                    ?>
+                    <tr class="<?= in_array($hp, ['warn', 'crit'], true) ? 'health-row-' . App::e($hp) : '' ?>">
+                        <td>
+                            <a href="<?= App::e(App::url('pages/power_ups.php?id=' . (int)$zu['ups_id'])) ?>">
+                                <strong><?= App::e((string)$zu['name']) ?></strong>
+                            </a>
+                            <?php
+                            $m = trim(($zu['manufacturer'] ?? '') . ' ' . ($zu['model'] ?? ''));
+                            if ($m !== ''): ?>
+                                <div class="text-muted" style="font-size:.75rem"><?= App::e($m) ?></div>
+                            <?php endif; ?>
+                        </td>
+                        <td><span class="badge"><?= App::e((string)($zu['ups_scope'] ?? 'in_row')) ?></span></td>
+                        <td><?= App::e((string)($zu['last_output_status'] ?? '—')) ?></td>
+                        <td><?= $zu['last_load_pct'] !== null ? App::e((string)$zu['last_load_pct']) . '%' : '—' ?></td>
+                        <td><?= $zu['last_battery_pct'] !== null ? App::e((string)$zu['last_battery_pct']) . '%' : '—' ?></td>
+                        <td><?= $zu['last_runtime_min'] !== null ? App::e((string)$zu['last_runtime_min']) . ' min' : '—' ?></td>
+                        <td>
+                            <span class="health-chip health-chip-<?= App::e($hp) ?>">
+                                <span class="health-pulse health-pulse-<?= App::e($hp) ?>" aria-hidden="true"></span>
+                                <span class="health-chip-label"><?= App::e($hp) ?></span>
+                            </span>
+                        </td>
+                        <td class="actions col-actions">
+                            <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/power_ups.php?id=' . (int)$zu['ups_id'])) ?>">Open</a>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                <?php if (!$zoneUps): ?>
+                    <tr>
+                        <td colspan="8" class="text-muted">
+                            No UPS linked to this zone.
+                            Assign a power zone on the UPS edit form (Power → UPS).
+                        </td>
+                    </tr>
+                <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <?php if ($canEditZone): ?>
     <!-- Edit zone modal -->
     <div class="app-modal" id="modal-edit-zone" hidden aria-hidden="true">
@@ -662,7 +805,7 @@ if ($zoneId) {
     })();
     </script>
     <?php endif; ?>
-    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=4"></script>
+    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=6"></script>
     <?php
     layout_footer();
     exit;
@@ -738,7 +881,7 @@ layout_header('Power Zones', $user, 'power_zones');
                                 <strong><?= App::e($z['name']) ?></strong>
                                 <span class="text-muted"><?= App::e($z['dc_name'] ?? '') ?> · Feed <?= App::e((string)($z['feed_type'] ?? '—')) ?></span>
                             </div>
-                            <span class="badge"><?= (int)($z['pdu_count'] ?? 0) ?> PDU</span>
+                            <span class="badge"><?= (int)($z['pdu_count'] ?? 0) ?> PDU · <?= (int)($z['ups_count'] ?? 0) ?> UPS</span>
                         </div>
                         <div class="zone-card-metrics">
                             <div>
@@ -755,6 +898,14 @@ layout_header('Power Zones', $user, 'power_zones');
                                 <span class="zcm-val"><?= $pct ?>%</span>
                             </div>
                             <?php endif; ?>
+                            <div>
+                                <span class="zcm-label">UPS load</span>
+                                <span class="zcm-val">
+                                    <?= $z['ups_avg_load'] !== null && $z['ups_avg_load'] !== ''
+                                        ? number_format((float)$z['ups_avg_load'], 0) . '%'
+                                        : '—' ?>
+                                </span>
+                            </div>
                         </div>
                         <?php if ($pct !== null): ?>
                             <div class="util-bar" style="margin-top:.35rem">
@@ -763,8 +914,10 @@ layout_header('Power Zones', $user, 'power_zones');
                         <?php endif; ?>
                     </a>
                     <div class="zone-card-charts" data-power-history data-scope="zone" data-id="<?= $zid ?>" data-hours="24">
-                        <div class="power-chart power-chart-sm" data-metric="kw" data-unit="kW" data-label="Usage 24h" data-color="#38bdf8" data-height="72"></div>
-                        <div class="power-chart power-chart-sm" data-metric="volts" data-unit="V" data-label="Input V 24h" data-color="#a78bfa" data-height="64"></div>
+                        <div class="power-chart power-chart-sm" data-metric="kw" data-unit="kW" data-label="PDU 24h" data-color="#38bdf8" data-height="72"></div>
+                    </div>
+                    <div class="zone-card-charts" data-power-history data-scope="ups_zone" data-id="<?= $zid ?>" data-hours="24">
+                        <div class="power-chart power-chart-sm" data-metric="load_pct" data-unit="%" data-label="UPS load 24h" data-color="#a78bfa" data-height="64" data-outages="0"></div>
                     </div>
                 </div>
             <?php endforeach; ?>
@@ -788,7 +941,7 @@ layout_header('Power Zones', $user, 'power_zones');
             <thead>
             <tr>
                 <th class="col-swatch"></th><th>Name</th><th>DC</th><th>Feed</th><th>Voltage</th>
-                <th>Load / Cap</th><th>PDUs</th><th>Panels</th><th>Rows</th><th class="col-actions"></th>
+                <th>Load / Cap</th><th>PDUs</th><th>UPS</th><th>Panels</th><th>Rows</th><th class="col-actions"></th>
             </tr>
             </thead>
             <tbody>
@@ -815,6 +968,12 @@ layout_header('Power Zones', $user, 'power_zones');
                         <?php endif; ?>
                     </td>
                     <td><?= (int)$z['pdu_count'] ?></td>
+                    <td>
+                        <?= (int)($z['ups_count'] ?? 0) ?>
+                        <?php if ($z['ups_avg_load'] !== null && $z['ups_avg_load'] !== ''): ?>
+                            <span class="text-muted" style="font-size:.75rem"> · <?= number_format((float)$z['ups_avg_load'], 0) ?>%</span>
+                        <?php endif; ?>
+                    </td>
                     <td><?= (int)$z['panel_count'] ?></td>
                     <td><?= (int)($z['row_count'] ?? 0) ?></td>
                     <td class="actions col-actions">
@@ -824,7 +983,7 @@ layout_header('Power Zones', $user, 'power_zones');
             <?php endforeach; ?>
             <?php if (!$zones): ?>
                 <tr>
-                    <td colspan="10" class="text-muted">
+                    <td colspan="11" class="text-muted">
                         No zones yet.
                         <?php if ($canEditZone): ?> Use <strong>Add zone</strong> to create one.<?php endif; ?>
                     </td>
@@ -919,5 +1078,5 @@ layout_header('Power Zones', $user, 'power_zones');
 })();
 </script>
 <?php endif; ?>
-<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=4"></script>
+<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=6"></script>
 <?php layout_footer(); ?>

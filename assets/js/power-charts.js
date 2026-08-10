@@ -19,6 +19,8 @@
     if (unit === 'kW') return (Math.abs(n) >= 10 ? n.toFixed(1) : n.toFixed(2)) + ' kW';
     if (unit === 'V') return n.toFixed(0) + ' V';
     if (unit === 'A') return n.toFixed(1) + ' A';
+    if (unit === '%' || unit === 'pct') return n.toFixed(0) + '%';
+    if (unit === 'min') return n.toFixed(0) + ' min';
     if (unit === 'state') {
       var labels = { 1: 'low', 2: 'normal', 3: 'near OL', 4: 'overload' };
       var i = Math.round(n);
@@ -105,6 +107,9 @@
     if (unit === 'V') {
       minV = Math.max(0, Math.floor(minV / 10) * 10 - 10);
       maxV = Math.ceil(maxV / 10) * 10 + 10;
+    } else if (unit === '%' || unit === 'pct') {
+      minV = 0;
+      maxV = Math.max(100, Math.ceil(maxV / 10) * 10);
     } else if (unit === 'state') {
       // APC load-state enum ~1–4
       minV = 0;
@@ -306,13 +311,24 @@
       } else if (metric === 'kw' || metric === 'watts') {
         values = s[metric] || s.kw || [];
         hasData = valuesHaveData(values);
+      } else if (metric === 'load_pct' || metric === 'battery_pct' || metric === 'runtime_min') {
+        values = s[metric] || [];
+        hasData = valuesHaveData(values);
+        if (metric === 'load_pct' || metric === 'battery_pct') {
+          unit = c.getAttribute('data-unit') || '%';
+        }
+        if (metric === 'runtime_min') {
+          unit = c.getAttribute('data-unit') || 'min';
+        }
       } else {
         hasData = valuesHaveData(values) || (seriesExtra && multiSeriesHasData(seriesExtra));
       }
 
       // Optional charts: hide when no data (older APCs without phase volts, etc.)
+      // Keep primary kw + UPS load_pct visible with empty state
       var hideIfEmpty = c.getAttribute('data-hide-empty') !== '0';
-      if (hideIfEmpty && !hasData && metric !== 'kw') {
+      var keepEmpty = (metric === 'kw' || metric === 'load_pct');
+      if (hideIfEmpty && !hasData && !keepEmpty) {
         c.style.display = 'none';
         c.setAttribute('hidden', 'hidden');
         c.dataset.ready = '0';
