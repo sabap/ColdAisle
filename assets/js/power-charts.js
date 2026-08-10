@@ -311,6 +311,10 @@
       } else if (metric === 'kw' || metric === 'watts') {
         values = s[metric] || s.kw || [];
         hasData = valuesHaveData(values);
+      } else if (metric === 'amps') {
+        values = s.amps || [];
+        hasData = valuesHaveData(values);
+        unit = c.getAttribute('data-unit') || 'A';
       } else if (metric === 'load_pct' || metric === 'battery_pct' || metric === 'runtime_min') {
         values = s[metric] || [];
         hasData = valuesHaveData(values);
@@ -325,9 +329,9 @@
       }
 
       // Optional charts: hide when no data (older APCs without phase volts, etc.)
-      // Keep primary kw + UPS load_pct visible with empty state
+      // Keep primary kw/amps + UPS load_pct visible with empty state
       var hideIfEmpty = c.getAttribute('data-hide-empty') !== '0';
-      var keepEmpty = (metric === 'kw' || metric === 'load_pct');
+      var keepEmpty = (metric === 'kw' || metric === 'amps' || metric === 'load_pct');
       if (hideIfEmpty && !hasData && !keepEmpty) {
         c.style.display = 'none';
         c.setAttribute('hidden', 'hidden');
