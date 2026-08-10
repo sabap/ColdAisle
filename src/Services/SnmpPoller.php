@@ -662,6 +662,9 @@ class SnmpPoller
     public static function pollUpsUnit(array $unit): array
     {
         require_once __DIR__ . '/SnmpDiscover.php';
+        if (is_file(App::ROOT . '/includes/ups_helpers.php')) {
+            require_once App::ROOT . '/includes/ups_helpers.php';
+        }
         $templateId = (int)($unit['snmp_site_template_id'] ?? 0);
         if ($templateId < 1) {
             throw new RuntimeException('UPS has no site OID template. Run Discover OIDs or assign the APC UPS template.');
@@ -728,6 +731,10 @@ class SnmpPoller
         }
 
         $metrics = is_array($got['metrics'] ?? null) ? $got['metrics'] : [];
+        // Also expose collectOidMap serial when key matched during GET
+        if (!empty($got['serial_no']) && empty($metrics['serial_no'])) {
+            $metrics['serial_no'] = ['raw' => $got['serial_no'], 'numeric' => null];
+        }
         $flat = class_exists('SnmpThresholdService')
             ? SnmpThresholdService::flattenPollMetrics($metrics)
             : [];
@@ -750,6 +757,33 @@ class SnmpPoller
             $statusLabel = (string)$outStatusCode;
         }
 
+        // Human-readable sysUpTime (MIB-II TimeTicks)
+        $sysUptimeLabel = null;
+        foreach (['sysuptime', 'sysUpTime', 'uptime', 'sys_uptime'] as $uk) {
+            if (isset($flat[$uk])) {
+                $sysUptimeLabel = function_exists('ups_format_timeticks')
+                    ? ups_format_timeticks($flat[$uk])
+                    : (string)$flat[$uk];
+                break;
+            }
+            if (isset($metrics[$uk])) {
+                $n = is_array($metrics[$uk])
+                    ? ($metrics[$uk]['numeric'] ?? null)
+                    : (is_numeric($metrics[$uk]) ? $metrics[$uk] : null);
+                if ($n !== null && function_exists('ups_format_timeticks')) {
+                    $sysUptimeLabel = ups_format_timeticks($n);
+                    break;
+                }
+            }
+        }
+        // Annotate metrics for UI display (formatted strings alongside raw)
+        $metricsDisplay = [];
+        foreach ($metrics as $mk => $mv) {
+            $metricsDisplay[(string)$mk] = function_exists('ups_format_metric_display')
+                ? ups_format_metric_display((string)$mk, $mv)
+                : (is_array($mv) ? ($mv['numeric'] ?? $mv['raw'] ?? '') : $mv);
+        }
+
         $now = date('Y-m-d H:i:s');
         $snapshot = [
             'polled_at' => $now,
@@ -758,11 +792,13 @@ class SnmpPoller
             'ok' => (int)$got['ok'],
             'failed' => (int)($got['failed'] ?? 0),
             'metrics' => $metrics,
+            'metrics_display' => $metricsDisplay,
             'derived' => [
                 'load_pct' => $loadPct,
                 'battery_pct' => $battPct,
                 'runtime_min' => $runtimeMin,
                 'output_status_label' => $statusLabel,
+                'sysuptime_label' => $sysUptimeLabel,
             ],
         ];
 
@@ -788,6 +824,18 @@ class SnmpPoller
                     $patch['model'] = mb_substr($mv, 0, 100);
                 }
             }
+        }
+        // Serial from SNMP → inventory field (always update when a clean serial is polled)
+        $serialFromSnmp = null;
+        if (!empty($got['serial_no'])) {
+            $serialFromSnmp = SnmpDiscover::cleanSerialValue($got['serial_no'])
+                ?? (is_scalar($got['serial_no']) ? trim((string)$got['serial_no'], " \t\"'") : null);
+        }
+        if (($serialFromSnmp === null || $serialFromSnmp === '') && function_exists('ups_serial_from_metrics')) {
+            $serialFromSnmp = ups_serial_from_metrics($metrics);
+        }
+        if ($serialFromSnmp !== null && $serialFromSnmp !== '') {
+            $patch['serial_no'] = mb_substr($serialFromSnmp, 0, 100);
         }
         Database::update('ups_units', $patch, 'ups_id = :id', [':id' => (int)$unit['ups_id']]);
 

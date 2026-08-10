@@ -81,6 +81,13 @@ try {
                     $proposed[$k] = $oid; // seed defaults for Symmetra template
                 }
             }
+            // Ensure serial + sysuptime always present for inventory / display
+            if (empty($proposed['serial_no']) && !empty($defaults['serial_no'])) {
+                $proposed['serial_no'] = $defaults['serial_no'];
+            }
+            if (empty($proposed['sysuptime']) && !empty($defaults['sysuptime'])) {
+                $proposed['sysuptime'] = $defaults['sysuptime'];
+            }
             $result['proposed_map'] = $proposed;
             $result['default_ups_map'] = $defaults;
             App::json($result);
@@ -90,6 +97,12 @@ try {
             $map = $data['oid_map'] ?? null;
             if (!is_array($map) || !$map) {
                 $map = ups_default_apc_oid_map();
+            }
+            // Merge essential keys into existing maps from older discovers
+            foreach (ups_default_apc_oid_map() as $k => $oid) {
+                if (empty($map[$k])) {
+                    $map[$k] = $oid;
+                }
             }
             $name = trim((string)($data['template_name'] ?? ''));
             if ($name === '') {
@@ -107,14 +120,19 @@ try {
                 Database::update('snmp_site_oid_templates', $payload, 'template_id = :id', [':id' => $existingId]);
                 $tid = $existingId;
             } else {
-                $payload['created_at'] = date('Y-m-d H:i:s');
-                // vendor column may not exist on older installs
-                try {
-                    $payload['vendor'] = 'APC';
-                    $tid = (int)Database::insert('snmp_site_oid_templates', $payload);
-                } catch (Throwable $e) {
-                    unset($payload['vendor']);
-                    $tid = (int)Database::insert('snmp_site_oid_templates', $payload);
+                // Prefer update existing template when re-discovering
+                if ($existingId > 0) {
+                    Database::update('snmp_site_oid_templates', $payload, 'template_id = :id', [':id' => $existingId]);
+                    $tid = $existingId;
+                } else {
+                    $payload['created_at'] = date('Y-m-d H:i:s');
+                    try {
+                        $payload['vendor'] = 'APC';
+                        $tid = (int)Database::insert('snmp_site_oid_templates', $payload);
+                    } catch (Throwable $e) {
+                        unset($payload['vendor']);
+                        $tid = (int)Database::insert('snmp_site_oid_templates', $payload);
+                    }
                 }
             }
             Database::update('ups_units', [
