@@ -10,20 +10,25 @@ $user = App::requirePermission('view_power');
 
 // Handle facility rollup mode save
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'set_site_load_mode') {
-    if (!AuthManager::canEditPower($user)) {
-        App::flash('error', 'You do not have permission to change site load mode.');
-        App::redirect('pages/power.php');
+    try {
+        if (!AuthManager::canEditPower($user)) {
+            App::flash('error', 'You do not have permission to change site load mode.');
+            App::redirect('pages/power.php');
+        }
+        if (!App::verifyCsrf($_POST['_csrf'] ?? '')) {
+            App::flash('error', 'Invalid session token. Please try again.');
+            App::redirect('pages/power.php');
+        }
+        $mode = strtolower(trim((string)($_POST['power_site_load_mode'] ?? 'all')));
+        if (!in_array($mode, ['all', 'prefer_upstream', 'manual'], true)) {
+            $mode = 'all';
+        }
+        SettingsService::set('power_site_load_mode', $mode, 'power');
+        App::flash('success', 'Site load mode updated: ' . (power_site_load_mode_labels()[$mode] ?? $mode));
+    } catch (Throwable $e) {
+        App::log('set_site_load_mode failed: ' . $e->getMessage(), 'error');
+        App::flash('error', 'Could not save site load mode: ' . $e->getMessage());
     }
-    if (!App::validateCsrf($_POST['_csrf'] ?? '')) {
-        App::flash('error', 'Invalid session token.');
-        App::redirect('pages/power.php');
-    }
-    $mode = strtolower(trim((string)($_POST['power_site_load_mode'] ?? 'all')));
-    if (!in_array($mode, ['all', 'prefer_upstream', 'manual'], true)) {
-        $mode = 'all';
-    }
-    SettingsService::set('power_site_load_mode', $mode, 'power');
-    App::flash('success', 'Site load mode updated: ' . (power_site_load_mode_labels()[$mode] ?? $mode));
     App::redirect('pages/power.php');
 }
 
