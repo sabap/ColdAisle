@@ -329,6 +329,7 @@ class SnmpDiscover
         $leafPdu = [
             // Classic rPDU Ident (AP7862 / AP78xx primary tree)
             '1.3.6.1.4.1.318.1.1.12.1.1.0',   // rPDUIdentName
+            '1.3.6.1.4.1.318.1.1.12.1.5.0',   // rPDU model number
             '1.3.6.1.4.1.318.1.1.12.1.6.0',   // serial
             '1.3.6.1.4.1.318.1.1.12.1.7.0',   // phase rating / model rating
             '1.3.6.1.4.1.318.1.1.12.1.8.0',   // num outlets (varies)
@@ -867,6 +868,9 @@ class SnmpDiscover
 
         // Serial number from walk / leaf GETs (also propose map key)
         $serialHit = self::extractSerialFromCollected($collected);
+        if (!$serialHit && is_string($sysDescr) && $sysDescr !== '') {
+            $serialHit = self::extractSerialFromSysDescr($sysDescr);
+        }
         if ($serialHit) {
             $proposed['serial_no'] = $serialHit['oid'];
             // Surface as a top identity candidate even if filtered as "noise"
@@ -878,6 +882,28 @@ class SnmpDiscover
                 'numeric' => null,
                 'score' => 100,
                 'hint' => 'PDU serial number → serial_no field',
+            ]);
+        }
+
+        // Model number (inventory field) from PowerNet ident leaves / sysDescr MN:
+        $modelHit = self::extractModelFromCollected($collected);
+        if (!$modelHit && is_string($sysDescr) && $sysDescr !== '') {
+            $modelHit = self::extractModelFromSysDescr($sysDescr);
+        }
+        if ($modelHit) {
+            if (empty($proposed['system_model']) && !empty($modelHit['oid'])
+                && preg_match('/^\d/', (string)$modelHit['oid'])
+            ) {
+                $proposed['system_model'] = $modelHit['oid'];
+            }
+            array_unshift($scored, [
+                'oid' => $modelHit['oid'],
+                'name' => $modelHit['name'],
+                'module' => $modelHit['module'],
+                'value' => $modelHit['value'],
+                'numeric' => null,
+                'score' => 99,
+                'hint' => 'PDU model number → model field',
             ]);
         }
 
@@ -1033,6 +1059,8 @@ class SnmpDiscover
             ],
             'serial_no' => isset($serialHit['value']) ? self::utf8Safe((string)$serialHit['value']) : null,
             'serial_oid' => $serialHit['oid'] ?? null,
+            'model_no' => isset($modelHit['value']) ? self::utf8Safe((string)$modelHit['value']) : null,
+            'model_oid' => $modelHit['oid'] ?? null,
             'mac_address' => isset($macHit['value']) ? self::utf8Safe((string)$macHit['value']) : null,
             'mac_oid' => $macHit['oid'] ?? null,
             'walk_count' => count($collected),
@@ -1080,6 +1108,13 @@ class SnmpDiscover
     {
         $best = null;
         $bestScore = -1;
+        // Prefer known PowerNet body serial leaves even when MIB names are unresolved
+        $knownSerialOids = [
+            '1.3.6.1.4.1.318.1.1.15.1.8.0' => 70, // xPDUIdentSerialNumber
+            '1.3.6.1.4.1.318.1.1.12.1.6.0' => 65, // rPDUIdentSerialNumber
+            '1.3.6.1.4.1.318.1.1.26.2.1.8.1' => 60, // rPDU2IdentSerialNumber
+            '1.3.6.1.4.1.318.1.1.26.2.1.9.1' => 55,
+        ];
         foreach ($collected as $oid => $meta) {
             $name = strtolower((string)($meta['name'] ?? ''));
             $mapOid = (string)$oid;
@@ -1103,8 +1138,10 @@ class SnmpDiscover
             $hay = $name . ' ' . strtolower((string)$dispName) . ' ' . $mapOid;
             // Prefer PDU body serial over NMC card serial
             $score = 0;
-            if (preg_match('/identserialnumber|ident.*serial(?!.*nmc)/', $hay)
-                || preg_match('/rpduidentserial|rpdu2identserialnumber/', $hay)
+            if (isset($knownSerialOids[$mapOid])) {
+                $score = $knownSerialOids[$mapOid];
+            } elseif (preg_match('/identserialnumber|ident.*serial(?!.*nmc)/', $hay)
+                || preg_match('/rpduidentserial|rpdu2identserialnumber|xpduidentserial/', $hay)
             ) {
                 $score = 50;
             } elseif (preg_match('/serialnumber|serial_no|serialnum/', $hay)
@@ -1123,9 +1160,10 @@ class SnmpDiscover
             }
             // Known APC OIDs boost
             if (str_starts_with($mapOid, '1.3.6.1.4.1.318.1.1.12.1.6')
+                || str_starts_with($mapOid, '1.3.6.1.4.1.318.1.1.15.1.8')
                 || str_starts_with($mapOid, '1.3.6.1.4.1.318.1.1.26.2.1.9')
             ) {
-                $score += 20;
+                $score += 5;
             }
             if ($score > $bestScore) {
                 $bestScore = $score;
@@ -1138,6 +1176,144 @@ class SnmpDiscover
             }
         }
         return $best;
+    }
+
+    /**
+     * Fallback serial from sysDescr "SN: …" (common on APC NMC banners).
+     *
+     * @return array{oid:string,value:string,name:?string,module:?string}|null
+     */
+    private static function extractSerialFromSysDescr(string $sysDescr): ?array
+    {
+        if (!preg_match('/\bSN:\s*([A-Za-z0-9][A-Za-z0-9\-\/\.]{3,40})/i', $sysDescr, $m)) {
+            return null;
+        }
+        $val = self::cleanSerialValue($m[1]);
+        if ($val === null || $val === '') {
+            return null;
+        }
+        return [
+            'oid' => '1.3.6.1.2.1.1.1.0',
+            'value' => $val,
+            'name' => 'sysDescr (SN:)',
+            'module' => 'SNMPv2-MIB',
+        ];
+    }
+
+    /**
+     * Model / SKU from collected leaves (xPDU / rPDU / rPDU2 / Dell).
+     *
+     * @param array<string,array{raw:mixed,name?:?string,module?:?string}> $collected
+     * @return array{oid:string,value:string,name:?string,module:?string}|null
+     */
+    private static function extractModelFromCollected(array $collected): ?array
+    {
+        $best = null;
+        $bestScore = -1;
+        $knownModelOids = [
+            '1.3.6.1.4.1.318.1.1.15.1.7.0' => 70, // xPDUIdentModelNumber
+            '1.3.6.1.4.1.318.1.1.12.1.5.0' => 65, // rPDUIdentModelNumber
+            '1.3.6.1.4.1.318.1.1.26.2.1.5.1' => 60, // rPDU2 model (index 1)
+            '1.3.6.1.4.1.318.1.1.1.1.1.1.0' => 55, // upsBasicIdentModel
+            '1.3.6.1.4.1.674.10892.5.1.3.6.0' => 50, // Dell system model
+        ];
+        foreach ($collected as $oid => $meta) {
+            $mapOid = (string)$oid;
+            if (preg_match('/^\d+(?:\.\d+)*$/', $mapOid)) {
+                $mapOid = class_exists('MibService')
+                    ? MibService::normalizeNumericOid($mapOid)
+                    : self::normalizeNumericOidLocal($mapOid);
+            }
+            $dispName = $meta['name'] ?? null;
+            $module = $meta['module'] ?? null;
+            if (!$dispName && class_exists('MibService') && preg_match('/^\d+(?:\.\d+)*$/', $mapOid)) {
+                $resolved = MibService::resolveOidName($mapOid);
+                if ($resolved) {
+                    $dispName = $resolved['name'];
+                    $module = $resolved['module'];
+                }
+            }
+            $hay = strtolower((string)$dispName . ' ' . $mapOid);
+            $score = 0;
+            if (isset($knownModelOids[$mapOid])) {
+                $score = $knownModelOids[$mapOid];
+            } elseif (preg_match(
+                '/identmodelnumber|identmodel|xpduidentmodel|rpduidentmodel|rpdu2identmodel|system_model|modelnumber/',
+                $hay
+            ) && !preg_match('/threshold|config|firmware|revision|partnumber/', $hay)
+            ) {
+                $score = 45;
+            } else {
+                continue;
+            }
+            $val = self::cleanModelValue($meta['raw'] ?? null);
+            if ($val === null || $val === '') {
+                continue;
+            }
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $best = [
+                    'oid' => $mapOid,
+                    'value' => $val,
+                    'name' => $dispName,
+                    'module' => $module,
+                ];
+            }
+        }
+        return $best;
+    }
+
+    /**
+     * Fallback model from sysDescr "MN: …" (APC NMC).
+     *
+     * @return array{oid:string,value:string,name:?string,module:?string}|null
+     */
+    private static function extractModelFromSysDescr(string $sysDescr): ?array
+    {
+        if (!preg_match('/\bMN:\s*([A-Za-z0-9][A-Za-z0-9\-\/\.]{1,40})/i', $sysDescr, $m)) {
+            return null;
+        }
+        $val = self::cleanModelValue($m[1]);
+        if ($val === null || $val === '') {
+            return null;
+        }
+        return [
+            'oid' => '1.3.6.1.2.1.1.1.0',
+            'value' => $val,
+            'name' => 'sysDescr (MN:)',
+            'module' => 'SNMPv2-MIB',
+        ];
+    }
+
+    /** @param mixed $raw */
+    public static function cleanModelValue($raw): ?string
+    {
+        if ($raw === null || $raw === false) {
+            return null;
+        }
+        if (is_int($raw) || is_float($raw)) {
+            // Pure numeric models are rare; allow short codes like 0M-5103 via string path
+            $s = (string)$raw;
+        } elseif (is_string($raw)) {
+            $s = trim($raw);
+            if (preg_match('/^(?:STRING|OCTET\s*STRING|Hex-STRING)\s*:\s*(.*)$/i', $s, $m)) {
+                $s = trim($m[1]);
+            }
+            $s = trim($s, " \t\"'");
+        } else {
+            return null;
+        }
+        if ($s === '' || strcasecmp($s, 'null') === 0 || $s === '""') {
+            return null;
+        }
+        if (strlen($s) > 80 || preg_match('/[\r\n]/', $s)) {
+            return null;
+        }
+        // Reject obvious non-model blobs (long sentences)
+        if (str_contains($s, ' ') && strlen($s) > 40) {
+            return null;
+        }
+        return $s;
     }
 
     /** @param mixed $raw */
@@ -1188,6 +1364,32 @@ class SnmpDiscover
                 return false;
             }
             Database::update('pdus', ['serial_no' => $serial], 'pdu_id = :id', [':id' => $pduId]);
+            return true;
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Write model onto PDU when empty (does not overwrite a user-entered model).
+     * @return bool true if the row was updated
+     */
+    public static function applyModelToPduIfEmpty(int $pduId, ?string $model): bool
+    {
+        $model = self::cleanModelValue($model);
+        if ($model === null || $model === '' || $pduId < 1) {
+            return false;
+        }
+        try {
+            $row = Database::fetchOne('SELECT model FROM pdus WHERE pdu_id = ?', [$pduId]);
+            if (!$row) {
+                return false;
+            }
+            $cur = trim((string)($row['model'] ?? ''));
+            if ($cur !== '') {
+                return false;
+            }
+            Database::update('pdus', ['model' => $model], 'pdu_id = :id', [':id' => $pduId]);
             return true;
         } catch (Throwable $e) {
             return false;
@@ -2686,6 +2888,7 @@ class SnmpDiscover
             'sysDescr' => '1.3.6.1.2.1.1.1.0',
             'sysUpTime' => '1.3.6.1.2.1.1.3.0',
             'serial_no' => '1.3.6.1.4.1.318.1.1.12.1.6.0',
+            'system_model' => '1.3.6.1.4.1.318.1.1.12.1.5.0',
             // Ident power (W) — 0 until L–L voltage is set on AP7xxx NMC
             'watts' => '1.3.6.1.4.1.318.1.1.12.1.16.0',
             'va' => '1.3.6.1.4.1.318.1.1.12.1.18.0',
@@ -2845,16 +3048,18 @@ class SnmpDiscover
         array &$scored
     ): array {
         $priority = [
-            'watts_tenths_kw', 'va_tenths_kw', 'pf_x100', 'serial_no',
+            'serial_no', 'system_model',
+            'watts_tenths_kw', 'va_tenths_kw', 'pf_x100',
             'phase1_amps_x10', 'phase2_amps_x10', 'phase3_amps_x10',
             'phase1_watts_tenths_kw', 'phase2_watts_tenths_kw', 'phase3_watts_tenths_kw',
             'phase1_volts_x10', 'phase2_volts_x10', 'phase3_volts_x10',
         ];
         $hints = [
+            'serial_no' => 'xPDU serial',
+            'system_model' => 'xPDU model number',
             'watts_tenths_kw' => 'xPDU total power (tenths kW) → load kW',
             'va_tenths_kw' => 'xPDU total apparent power (tenths kVA)',
             'pf_x100' => 'xPDU total power factor (hundredths)',
-            'serial_no' => 'xPDU serial',
             'phase1_amps_x10' => 'xPDU L1 current (tenths A)',
             'phase2_amps_x10' => 'xPDU L2 current (tenths A)',
             'phase3_amps_x10' => 'xPDU L3 current (tenths A)',
@@ -2905,6 +3110,9 @@ class SnmpDiscover
             }
             if ($key === 'serial_no') {
                 $score = 100;
+            }
+            if ($key === 'system_model') {
+                $score = 99;
             }
             $scored[] = [
                 'oid' => $oid,
@@ -3710,7 +3918,7 @@ class SnmpDiscover
     }
 
     /**
-     * Pre-flight for PDUs: vendor (manufacturer), model, and IP must be set.
+     * Pre-flight for PDUs: vendor and IP required; model optional (Discover fills from SNMP when empty).
      * @param array<string,mixed> $pdu
      * @return array{ok:bool,vendor:string,model:string,host:string,missing:list<string>}
      */
@@ -3723,9 +3931,7 @@ class SnmpDiscover
         if ($vendor === '') {
             $missing[] = 'manufacturer (vendor)';
         }
-        if ($model === '') {
-            $missing[] = 'model';
-        }
+        // Model is optional — Discover will auto-fill from device when blank
         if ($host === '') {
             $missing[] = 'IP address';
         }
