@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Facility output kW step-drop after re-poll / UPS work:** site/zone hold-forward no longer drops a PDU from the sum when a poll sample has null watts (common for AP7862 load-state polls); holds last real watts up to 45 minutes. Chart is still PDU-only (UPS never subtracted).
+
 ---
 
 ## [0.3.90] - 2026-08-10
