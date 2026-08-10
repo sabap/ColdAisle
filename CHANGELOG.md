@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.87] - 2026-08-10
+
+### Bug fixes
+
 - **AP7862 Discover almost empty (walk count ~3):** APC walk roots were EMS/rPDU2-only and skipped classic `rPDU` (`318.1.1.12`) that AOS 3.9 / AP7862 uses; expanded leaf probes (phase/bank amps, Ident watts, rPDU2 power), seed full AP78xx OID map when sparse, fix stock templates, poll banks 4–6 when phases are 0
 
 ---
-
 ## [0.3.86] - 2026-08-10
 
 ### Bug fixes
