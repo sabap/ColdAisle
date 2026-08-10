@@ -449,6 +449,60 @@ Notes from templates: many temps labeled **FAHRENHEIT**; some setpoints/remotes 
 
 ---
 
+### 10. PDU locate — blink LCD / network LED (identify in rack)
+
+| Field | Value |
+|-------|--------|
+| **Status** | **open / parked** — research only; do not implement until requested |
+| **Requested** | 2026-08-10 (user; after SNMPv3 write / locate discussion) |
+| **Source** | chat research (PowerNet MIB 4.4.6 + APC Easy PDU / rPDU manuals + SE community) |
+| **Priority** | low–medium convenience (ops locate aid); after more beneficial power/UPS/cooling work |
+| **Related** | Full outlet remote control (chat suggestions — still out of scope unless requested) |
+
+**Goal:** From ColdAisle PDU detail, trigger **LCD blink** (and optionally **network LED blink**) so techs can find a unit in a dense row — analogous to NMC **Tests → RPDU → LCD Blink** / CLI `lcdBlink`.
+
+**Research already done (do not re-litigate without a live unit)**
+
+| Finding | Detail |
+|---------|--------|
+| Hardware feature exists | Web: **Tests → RPDU → LCD Blink**, **Tests → Network → LED Blink**; CLI: `lcdBlink <1–10 min>`, `ledblink <…>` |
+| Cancel | Press any button on the PDU display (vendor behavior) |
+| PowerNet MIB 4.4.6 | **No documented LCD-blink / locate OID** found in local `storage/tmp/powernet446.mib` (searched Blink, lcdBlink, DisplayBlink, identify, locate) |
+| Dangerous lookalike | `rPDU2DeviceControlCommand` = `1.3.6.1.4.1.318.1.1.26.4.4.1.4.<index>` — **mass outlet on/off/reboot**, **not** display locate. Never use for “Locate”. |
+| ColdAisle today | SNMPv3 path is Discover/Poll (**GET**); no SET/locate UI |
+| SNMPv3 “write” on NMC | Device-side privilege for SETs in general — does **not** imply a public blink OID exists |
+
+**Phase 0 — required before coding (lab on one real APC PDU)**
+
+1. Confirm web LCD blink + CLI `lcdBlink 1` / `ledblink 1` on site firmware.  
+2. With **write** SNMPv3: walk `1.3.6.1.4.1.318.1.1.26` (rPDU2); hunt SET-able display/test leaves; optional capture NMC web traffic on LCD Blink.  
+3. Record per model: `snmp` \| `cli` \| `none` for locate.  
+4. **Do not ship** a hard-coded blink OID until Phase 0 succeeds on site gear.
+
+**Implementation sketch (when unparked)**
+
+| Slice | Work |
+|-------|------|
+| **A — SET foundation** | Safe SNMP SET helper (reuse v3 session); allowlist OIDs only; audit log; clamp duration 1–10 min |
+| **B — UI** | PDU detail **Locate** button + duration; clear “not supported” if probe fails |
+| **C — Capability** | Store `supports_lcd_blink` / mode on PDU or template after probe |
+| **D — Fallback (optional)** | SSH CLI `lcdBlink N` only if SNMP path does not exist and user wants it |
+
+**Out of scope unless asked**
+
+- Full outlet on/off remote control (power-affecting SETs)  
+- Treating `rPDU2DeviceControlCommand` as locate  
+- Auto-blink on every poll or bulk-locate entire zone without UX confirm  
+
+**Acceptance (when built)**
+
+- [ ] From PDU page, authorized user can start LCD (and/or LED) blink for a chosen duration  
+- [ ] Action refuses if credentials lack write / feature unsupported  
+- [ ] Audit trail records who/when/which PDU  
+- [ ] No path can fire mass outlet off/reboot under a “Locate” label  
+
+---
+
 ## Completed (keep for audit; do not re-implement)
 
 ### Global temperature unit (°C / °F)
@@ -522,6 +576,7 @@ These appeared in “what’s next?” / optional lists. **Not user-requested ba
 | Bulk import UI (openDCIM migration) | README | **Open suggestion** |
 | Full outlet remote control (on/off) | Explicitly “not next” | Out of scope unless requested |
 | Long-term time-series DB | Explicitly “not next” | Out of scope unless requested |
+| PDU locate LCD/LED blink | 2026-08-10 research chat | **Promoted → formal #10** (parked; Phase 0 lab first) |
 
 ---
 
