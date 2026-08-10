@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.85] - 2026-08-10
+
+### Bug fixes
+
 - **APC AP7862 load still 0.00 kW on old site maps:** on poll, auto-inject `rPDU2DeviceStatusPower` + phase I/V/P when the map only had Ident watts (often stuck at 0); last-chance SNMP probe of device power; I×V using inventory voltage when phase volts are missing
 
 ---
-
 ## [0.3.84] - 2026-08-10
 
 ### Bug fixes
