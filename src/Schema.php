@@ -627,12 +627,22 @@ class Schema
                     last_input_voltage DECIMAL(10,2) NULL,
                     last_output_voltage DECIMAL(10,2) NULL,
                     last_internal_temp_c DECIMAL(8,2) NULL,
+                    warranty_provider NVARCHAR(150) NULL,
+                    warranty_end DATE NULL,
+                    install_date DATE NULL,
+                    manufacture_date DATE NULL,
                     notes NVARCHAR(MAX) NULL,
                     is_active BIT NOT NULL CONSTRAINT DF_ups_active DEFAULT 1,
                     created_at DATETIME2 NOT NULL CONSTRAINT DF_ups_created DEFAULT SYSUTCDATETIME(),
                     updated_at DATETIME2 NOT NULL CONSTRAINT DF_ups_updated DEFAULT SYSUTCDATETIME()
                 )"
             );
+            // Additive warranty / lifecycle columns for installs created before 0.3.75
+            self::ensureColumn('ups_units', 'warranty_provider', 'NVARCHAR(150) NULL');
+            self::ensureColumn('ups_units', 'warranty_end', 'DATE NULL');
+            self::ensureColumn('ups_units', 'install_date', 'DATE NULL');
+            self::ensureColumn('ups_units', 'manufacture_date', 'DATE NULL');
+            self::ensureColumn('ups_units', 'asset_tag', 'NVARCHAR(100) NULL');
 
             self::ensureTable(
                 'env_sensors',

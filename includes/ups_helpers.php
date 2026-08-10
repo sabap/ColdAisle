@@ -112,6 +112,10 @@ function ups_default_apc_oid_map(): array
     return [
         'model' => '1.3.6.1.4.1.318.1.1.1.1.1.1.0',
         'name' => '1.3.6.1.4.1.318.1.1.1.1.1.2.0',
+        // upsAdvIdentSerialNumber
+        'serial_no' => '1.3.6.1.4.1.318.1.1.1.1.2.3.0',
+        // MIB-II sysUpTime (TimeTicks, hundredths of a second)
+        'sysuptime' => '1.3.6.1.2.1.1.3.0',
         'battery_status' => '1.3.6.1.4.1.318.1.1.1.2.1.1.0',
         'battery_capacity' => '1.3.6.1.4.1.318.1.1.1.2.2.1.0',
         'battery_temp_c' => '1.3.6.1.4.1.318.1.1.1.2.2.2.0',
@@ -125,6 +129,125 @@ function ups_default_apc_oid_map(): array
         'output_load' => '1.3.6.1.4.1.318.1.1.1.4.2.3.0',
         'output_current' => '1.3.6.1.4.1.318.1.1.1.4.2.4.0',
     ];
+}
+
+/**
+ * Format SNMP TimeTicks (hundredths of a second) as "Nd Nh Nm" (or seconds if tiny).
+ */
+function ups_format_timeticks(mixed $ticks): string
+{
+    if ($ticks === null || $ticks === '' || !is_numeric($ticks)) {
+        return '—';
+    }
+    $t = (float)$ticks;
+    // Guard: some agents return already-seconds; treat huge values as TimeTicks
+    $seconds = $t >= 1000 ? ($t / 100.0) : $t;
+    if ($seconds < 0) {
+        $seconds = 0;
+    }
+    $days = (int)floor($seconds / 86400);
+    $seconds -= $days * 86400;
+    $hours = (int)floor($seconds / 3600);
+    $seconds -= $hours * 3600;
+    $mins = (int)floor($seconds / 60);
+    $secs = (int)round($seconds - $mins * 60);
+    if ($days > 0) {
+        return sprintf('%dd %dh %dm', $days, $hours, $mins);
+    }
+    if ($hours > 0) {
+        return sprintf('%dh %dm', $hours, $mins);
+    }
+    if ($mins > 0) {
+        return sprintf('%dm %ds', $mins, $secs);
+    }
+    return $secs . 's';
+}
+
+/**
+ * Display helper for last-poll metric rows (formats uptime / ticks / status enums).
+ * @param mixed $value metric entry (scalar or {numeric,raw})
+ */
+function ups_format_metric_display(string $key, mixed $value): string
+{
+    $k = strtolower($key);
+    $raw = null;
+    $num = null;
+    if (is_array($value)) {
+        $num = isset($value['numeric']) && is_numeric($value['numeric']) ? (float)$value['numeric'] : null;
+        $raw = $value['raw'] ?? $value['numeric'] ?? null;
+    } else {
+        $raw = $value;
+        $num = is_numeric($value) ? (float)$value : null;
+    }
+    if (preg_match('/uptime|sysuptime|timeticks|runtime_ticks/i', $k) && $num !== null) {
+        return ups_format_timeticks($num);
+    }
+    if (preg_match('/output_status|battery_status/i', $k) && $num !== null && function_exists('ups_output_status_label')) {
+        if (preg_match('/output_status/i', $k)) {
+            return ups_output_status_label($num) . ' (' . (int)$num . ')';
+        }
+    }
+    if ($num !== null && is_float($num) && abs($num - round($num)) > 0.0001) {
+        return rtrim(rtrim(sprintf('%.4F', $num), '0'), '.');
+    }
+    if ($raw === null) {
+        return '—';
+    }
+    if (is_scalar($raw)) {
+        $s = trim((string)$raw);
+        $s = preg_replace('/^(STRING|OCTET STRING|Timeticks|Gauge32|INTEGER|Counter32)\s*:\s*/i', '', $s) ?? $s;
+        return trim($s, " \t\"'");
+    }
+    return json_encode($raw) ?: '—';
+}
+
+/**
+ * Pull a cleaned serial string from a poll metrics map.
+ * @param array<string,mixed> $metrics
+ */
+function ups_serial_from_metrics(array $metrics): ?string
+{
+    $keys = [
+        'serial_no', 'serial', 'serialnumber', 'serial_number',
+        'upsadvidentserialnumber', 'upsbasicidentserialnumber', 'service_tag',
+    ];
+    foreach ($metrics as $k => $v) {
+        $lk = strtolower((string)$k);
+        $match = false;
+        foreach ($keys as $want) {
+            if ($lk === $want || str_contains($lk, 'serial')) {
+                $match = true;
+                break;
+            }
+        }
+        if (!$match) {
+            continue;
+        }
+        $raw = is_array($v) ? ($v['raw'] ?? $v['numeric'] ?? null) : $v;
+        if ($raw === null || $raw === '') {
+            continue;
+        }
+        if (class_exists('SnmpDiscover')) {
+            $clean = SnmpDiscover::cleanSerialValue($raw);
+            if ($clean !== null && $clean !== '') {
+                return mb_substr($clean, 0, 100);
+            }
+        }
+        $s = is_scalar($raw) ? trim((string)$raw) : '';
+        $s = preg_replace('/^(STRING|OCTET STRING)\s*:\s*/i', '', $s) ?? $s;
+        $s = trim($s, " \t\"'");
+        if ($s !== '' && !preg_match('/^\d+\.?\d*$/', $s)) {
+            // Prefer non-numeric pure values; still allow alphanumeric serials
+            return mb_substr($s, 0, 100);
+        }
+        if ($s !== '' && preg_match('/[A-Za-z]/', $s)) {
+            return mb_substr($s, 0, 100);
+        }
+        if ($s !== '' && strlen($s) >= 6) {
+            return mb_substr($s, 0, 100);
+        }
+    }
+    return null;
 }
 
 /**
@@ -177,6 +300,10 @@ function ups_fields_from_post(array $post): array
         'rated_kva' => isset($post['rated_kva']) && $post['rated_kva'] !== '' ? (float)$post['rated_kva'] : null,
         'rated_kw' => isset($post['rated_kw']) && $post['rated_kw'] !== '' ? (float)$post['rated_kw'] : null,
         'phases' => !empty($post['phases']) ? max(1, min(3, (int)$post['phases'])) : 3,
+        'warranty_provider' => (($m = trim((string)($post['warranty_provider'] ?? ''))) !== '') ? $m : null,
+        'warranty_end' => (($m = trim((string)($post['warranty_end'] ?? ''))) !== '') ? $m : null,
+        'install_date' => (($m = trim((string)($post['install_date'] ?? ''))) !== '') ? $m : null,
+        'manufacture_date' => (($m = trim((string)($post['manufacture_date'] ?? ''))) !== '') ? $m : null,
         'status' => $status,
         'width_mm' => $w,
         'depth_mm' => $d,

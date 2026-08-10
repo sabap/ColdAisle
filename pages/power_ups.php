@@ -163,14 +163,28 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
                 <div><dt>Manufacturer</dt><dd><?= App::e($u['manufacturer'] ?? '—') ?></dd></div>
                 <div><dt>Model</dt><dd><?= App::e($u['model'] ?? '—') ?></dd></div>
                 <div><dt>Serial</dt><dd><?= App::e($u['serial_no'] ?? '—') ?></dd></div>
+                <div><dt>Asset tag</dt><dd><?= App::e($u['asset_tag'] ?? '—') ?></dd></div>
                 <div><dt>IP</dt><dd><?= App::e($u['primary_ip'] ?? '—') ?></dd></div>
                 <div><dt>Zone</dt><dd><?= App::e($u['zone_name'] ?? '—') ?></dd></div>
+                <div><dt>Warranty company</dt><dd><?= App::e($u['warranty_provider'] ?? '—') ?></dd></div>
+                <div><dt>Warranty expiration</dt><dd><?= App::e($u['warranty_end'] ?? '—') ?></dd></div>
+                <div><dt>Install date</dt><dd><?= App::e($u['install_date'] ?? '—') ?></dd></div>
+                <div><dt>Manufacture date</dt><dd><?= App::e($u['manufacture_date'] ?? '—') ?></dd></div>
                 <div><dt>Floor plan</dt><dd>
                     <?= $u['pos_x'] !== null
                         ? App::e(sprintf('x=%.2f · y=%.2f', (float)$u['pos_x'], (float)$u['pos_y']))
                         : 'Not placed — use Floor plan palette' ?>
                 </dd></div>
                 <div><dt>Last SNMP poll</dt><dd><?= App::e($u['snmp_last_poll_at'] ?? '—') ?></dd></div>
+                <?php
+                $uptimeDisp = null;
+                if (is_array($poll) && !empty($poll['derived']['sysuptime_label'])) {
+                    $uptimeDisp = (string)$poll['derived']['sysuptime_label'];
+                }
+                if ($uptimeDisp):
+                    ?>
+                <div><dt>System uptime</dt><dd><?= App::e($uptimeDisp) ?></dd></div>
+                <?php endif; ?>
             </dl>
         </div>
     </div>
@@ -182,10 +196,10 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
             <table class="data">
                 <thead><tr><th>Key</th><th>Value</th></tr></thead>
                 <tbody>
-                <?php foreach ($poll['metrics'] as $k => $v):
-                    $disp = is_array($v)
-                        ? ($v['numeric'] ?? $v['raw'] ?? json_encode($v))
-                        : $v;
+                <?php
+                $displayMap = is_array($poll['metrics_display'] ?? null) ? $poll['metrics_display'] : [];
+                foreach ($poll['metrics'] as $k => $v):
+                    $disp = $displayMap[(string)$k] ?? ups_format_metric_display((string)$k, $v);
                     ?>
                     <tr><td><code><?= App::e((string)$k) ?></code></td>
                         <td><?= App::e(is_scalar($disp) ? (string)$disp : json_encode($disp)) ?></td></tr>
@@ -302,7 +316,10 @@ if ($action === 'new' || ($action === 'edit' && $upsId > 0)) {
             <div class="form-row"><label>Model</label>
                 <input class="form-control" name="model" value="<?= App::e($u['model'] ?? 'Symmetra 40K') ?>"></div>
             <div class="form-row"><label>Serial</label>
-                <input class="form-control" name="serial_no" value="<?= App::e($u['serial_no'] ?? '') ?>"></div>
+                <input class="form-control" name="serial_no" value="<?= App::e($u['serial_no'] ?? '') ?>"
+                       placeholder="Filled from SNMP poll when available"></div>
+            <div class="form-row"><label>Asset tag</label>
+                <input class="form-control" name="asset_tag" value="<?= App::e($u['asset_tag'] ?? '') ?>"></div>
             <div class="form-row"><label>Primary IP</label>
                 <input class="form-control" name="primary_ip" value="<?= App::e($u['primary_ip'] ?? '') ?>" placeholder="NMC / management IP"></div>
             <div class="form-row"><label>Rated kVA</label>
@@ -311,6 +328,15 @@ if ($action === 'new' || ($action === 'edit' && $upsId > 0)) {
                 <input class="form-control" type="number" step="0.1" name="rated_kw" value="<?= App::e((string)($u['rated_kw'] ?? '40')) ?>"></div>
             <div class="form-row"><label>Phases</label>
                 <input class="form-control" type="number" min="1" max="3" name="phases" value="<?= (int)($u['phases'] ?? 3) ?>"></div>
+            <div class="form-row"><label>Warranty company</label>
+                <input class="form-control" name="warranty_provider" value="<?= App::e($u['warranty_provider'] ?? '') ?>"
+                       placeholder="e.g. Schneider Electric"></div>
+            <div class="form-row"><label>Warranty expiration</label>
+                <input class="form-control" type="date" name="warranty_end" value="<?= App::e($u['warranty_end'] ?? '') ?>"></div>
+            <div class="form-row"><label>Install date</label>
+                <input class="form-control" type="date" name="install_date" value="<?= App::e($u['install_date'] ?? '') ?>"></div>
+            <div class="form-row"><label>Manufacture date</label>
+                <input class="form-control" type="date" name="manufacture_date" value="<?= App::e($u['manufacture_date'] ?? '') ?>"></div>
             <div class="form-row"><label>Room (optional)</label>
                 <select class="form-control" name="room_id">
                     <option value="">—</option>
