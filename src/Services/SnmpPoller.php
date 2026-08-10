@@ -1688,16 +1688,15 @@ class SnmpPoller
             if (!is_array($got['phases'] ?? null)) {
                 $got['phases'] = [];
             }
-            if (!isset($got['phases']['L1']) || !is_array($got['phases']['L1'])) {
-                $got['phases']['L1'] = [
-                    'watts' => null, 'amps' => null, 'volts' => null,
-                    'va' => null, 'pf' => null, 'peak_amps' => null, 'load_state' => null,
-                ];
+            // Device L–L (APC "Line-to-Line Voltage") — not per-phase L–N
+            if (!isset($got['phases']['_ll']) || !is_array($got['phases']['_ll'])) {
+                $got['phases']['_ll'] = [];
             }
-            if (($got['phases']['L1']['volts'] ?? null) === null || (float)$got['phases']['L1']['volts'] <= 0) {
-                $got['phases']['L1']['volts'] = $inputV;
+            $got['phases']['_ll']['L-L'] = $inputV;
+            if (!isset($got['phases']['_device']) || !is_array($got['phases']['_device'])) {
+                $got['phases']['_device'] = [];
             }
-            // Stash for diagnostics
+            $got['phases']['_device']['input_volts'] = $inputV;
             if (!isset($got['metrics']['input_volts'])) {
                 $got['metrics']['input_volts'] = [
                     'numeric' => $inputV,
@@ -2236,12 +2235,10 @@ class SnmpPoller
                 } elseif (preg_match('/^(pf|device_pf|power_factor)\b/', $metricKey) && $num !== null) {
                     $devicePf = $num;
                 } elseif (preg_match('/^(input_volts|line_volts|ll_volts|device_volts)\b/', $metricKey) && $num !== null) {
-                    // rPDUIdentDeviceLinetoLineVoltage — use as L1 volts when phases lack voltage
-                    if (!isset($phaseBag[1])) {
-                        $phaseBag[1] = $emptyPhase();
-                    }
-                    if (($phaseBag[1]['volts'] ?? null) === null) {
-                        $phaseBag[1]['volts'] = $num;
+                    // rPDUIdentDeviceLinetoLineVoltage — device L–L config, not a single phase L–N
+                    // Store under _ll so Phase status does not show 208 V only on L1
+                    if (!isset($ll['L-L']) || abs((float)$ll['L-L']) < 1) {
+                        $ll['L-L'] = $num;
                     }
                 } elseif (preg_match('/^(phase_rated_amps|max_phase_amps|rated_phase_amps)\b/', $metricKey) && $num !== null) {
                     $ratedAmps = $num;

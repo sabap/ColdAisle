@@ -180,7 +180,7 @@ function power_phase_poll_decode($json): ?array
     }
     $device = [];
     if (isset($data['_device']) && is_array($data['_device'])) {
-        foreach (['va', 'pf', 'rated_amps'] as $k) {
+        foreach (['va', 'pf', 'rated_amps', 'input_volts'] as $k) {
             if (isset($data['_device'][$k]) && is_numeric($data['_device'][$k])) {
                 $device[$k] = (float)$data['_device'][$k];
             }
@@ -218,19 +218,123 @@ function power_fmt_metric(?float $n, int $decimals = 2): string
     return rtrim(rtrim(sprintf('%.' . $decimals . 'F', $n), '0'), '.') ?: '0';
 }
 
-/** APC rPDU2 load-state enum (approx). */
-function power_phase_load_state_label(?float $state): string
+/**
+ * APC phase/bank load-state labels.
+ *
+ * Classic rPDU (…12.2.3 / rPDULoadStatusLoadState):
+ *   1=normal, 2=low, 3=near overload, 4=overload
+ * rPDU2 (…26.6 / rPDU2PhaseStatusLoadState):
+ *   1=low, 2=normal, 3=near overload, 4=overload
+ *
+ * @param 'classic'|'rpdu2'|'auto'|null $family
+ */
+function power_phase_load_state_label(?float $state, ?string $family = 'auto'): string
 {
     if ($state === null) {
         return '—';
     }
-    return match ((int)$state) {
-        1 => 'low',
-        2 => 'normal',
+    $s = (int)$state;
+    $fam = strtolower((string)($family ?? 'auto'));
+    if ($fam === 'classic' || $fam === 'rpdu' || $fam === 'rPDU') {
+        return match ($s) {
+            1 => 'normal',
+            2 => 'low',
+            3 => 'near overload',
+            4 => 'overload',
+            default => (string)$s,
+        };
+    }
+    if ($fam === 'rpdu2' || $fam === 'rPDU2') {
+        return match ($s) {
+            1 => 'low',
+            2 => 'normal',
+            3 => 'near overload',
+            4 => 'overload',
+            default => (string)$s,
+        };
+    }
+    // auto: values 3–4 same; 1–2 ambiguous — prefer classic wording when 1 with
+    // zero amps is still "Normal Load" on AP786x NMC (low threshold often 0).
+    return match ($s) {
+        1 => 'normal', // classic default; rPDU2 low is less common for load_state-only UI
+        2 => 'low',    // classic low; rPDU2 normal — see power_phase_load_state_label_for_map()
         3 => 'near overload',
         4 => 'overload',
-        default => (string)(int)$state,
+        default => (string)$s,
     };
+}
+
+/**
+ * Pick load-state family from site OID map (classic 12.x vs rPDU2 26.x).
+ *
+ * @param array<string,mixed> $oidMap
+ */
+function power_phase_load_state_family_from_map(array $oidMap): string
+{
+    $blob = '';
+    foreach ($oidMap as $k => $v) {
+        if (is_string($k) && preg_match('/load_state/', strtolower($k)) && is_string($v)) {
+            $blob .= ' ' . $v;
+        }
+    }
+    if (str_contains($blob, '1.3.6.1.4.1.318.1.1.12.')) {
+        return 'classic';
+    }
+    if (str_contains($blob, '1.3.6.1.4.1.318.1.1.26.')) {
+        return 'rpdu2';
+    }
+    return 'classic';
+}
+
+/**
+ * True when this PDU is current/load-state centric (no real kW from SNMP), e.g. AP7862.
+ * Matches APC NMC "Load Management" which shows amps, not kW.
+ *
+ * @param array<string,mixed> $oidMap
+ * @param array<string,mixed>|null $phaseSnap power_phase_poll_decode() result
+ */
+function power_pdu_is_amps_centric(array $oidMap, ?array $phaseSnap, ?float $lastWatts): bool
+{
+    $hasPhaseWattsKey = false;
+    $hasRpdu2Power = false;
+    $hasAmpsOrState = false;
+    foreach ($oidMap as $k => $oid) {
+        $k = strtolower((string)$k);
+        $o = is_string($oid) ? ltrim($oid, '.') : '';
+        if (preg_match('/^phase[123]_watts/', $k) || str_contains($k, 'watts_hundredths')) {
+            $hasPhaseWattsKey = true;
+        }
+        if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.4\.3\.1\.5/', $o)
+            || preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.6\.3\.1\.7/', $o)
+        ) {
+            $hasRpdu2Power = true;
+        }
+        if (preg_match('/amp|load_state/', $k)) {
+            $hasAmpsOrState = true;
+        }
+    }
+    if ($hasRpdu2Power || $hasPhaseWattsKey) {
+        // Still amps-centric if live power never appears
+        if ($lastWatts !== null && abs($lastWatts) >= 0.5) {
+            return false;
+        }
+        $phaseHasW = false;
+        if (is_array($phaseSnap)) {
+            foreach ($phaseSnap['rows'] ?? [] as $pr) {
+                if (($pr['watts'] ?? null) !== null && abs((float)$pr['watts']) >= 0.5) {
+                    $phaseHasW = true;
+                    break;
+                }
+            }
+        }
+        if ($phaseHasW) {
+            return false;
+        }
+        // rPDU2 map but power leaves unsupported → treat as amps UI when amps/state exist
+        return $hasAmpsOrState;
+    }
+    // Classic Ident watts only / load-state maps
+    return $hasAmpsOrState || ($lastWatts === null || abs((float)$lastWatts) < 0.5);
 }
 
 /** APC power-supply status enum (approx). */
