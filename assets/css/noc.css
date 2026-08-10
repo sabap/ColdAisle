@@ -249,6 +249,24 @@ html, body {
   color: #e2e8f0;
   font-variant-numeric: tabular-nums;
 }
+.noc-dual-charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem 1rem;
+  margin-top: 0.25rem;
+}
+.noc-dual-col { min-width: 0; }
+.noc-dual-cap {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  margin-bottom: 0.2rem;
+  font-weight: 600;
+}
+@media (max-width: 900px) {
+  .noc-dual-charts { grid-template-columns: 1fr; }
+}
 
 /* Zone strip on overview */
 .noc-zone-strip {
