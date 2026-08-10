@@ -132,6 +132,7 @@ function ups_dashboard_snapshot(int $listLimit = 12): array
         'max_load_pct' => null,
         'min_battery_pct' => null,
         'avg_battery_pct' => null,
+        'est_kw' => null,
         'rated_kva' => 0.0,
         'rated_kw' => 0.0,
         'last_poll_at' => null,
@@ -142,6 +143,7 @@ function ups_dashboard_snapshot(int $listLimit = 12): array
             'SELECT u.ups_id, u.name, u.ups_scope, u.manufacturer, u.model, u.status,
                     u.primary_ip, u.rated_kva, u.rated_kw,
                     u.last_output_status, u.last_load_pct, u.last_battery_pct, u.last_runtime_min,
+                    u.last_input_voltage, u.last_output_voltage,
                     u.snmp_enabled, u.snmp_last_poll_at, u.snmp_site_template_id, u.last_poll_json,
                     z.name AS zone_name
              FROM ups_units u
@@ -150,13 +152,30 @@ function ups_dashboard_snapshot(int $listLimit = 12): array
              ORDER BY u.name'
         );
     } catch (Throwable $e) {
-        return $out;
+        // Columns last_input/output_voltage may be missing on very old DBs
+        try {
+            $rows = Database::fetchAll(
+                'SELECT u.ups_id, u.name, u.ups_scope, u.manufacturer, u.model, u.status,
+                        u.primary_ip, u.rated_kva, u.rated_kw,
+                        u.last_output_status, u.last_load_pct, u.last_battery_pct, u.last_runtime_min,
+                        u.snmp_enabled, u.snmp_last_poll_at, u.snmp_site_template_id, u.last_poll_json,
+                        z.name AS zone_name
+                 FROM ups_units u
+                 LEFT JOIN power_zones z ON z.zone_id = u.zone_id
+                 WHERE u.is_active = 1
+                 ORDER BY u.name'
+            );
+        } catch (Throwable $e2) {
+            return $out;
+        }
     }
     $out['units'] = count($rows);
     $loadSum = 0.0;
     $loadN = 0;
     $battSum = 0.0;
     $battN = 0;
+    $estKwSum = 0.0;
+    $estKwN = 0;
     $maxLoad = null;
     $minBatt = null;
     $lastPoll = null;
@@ -199,6 +218,17 @@ function ups_dashboard_snapshot(int $listLimit = 12): array
             if ($maxLoad === null || $lv > $maxLoad) {
                 $maxLoad = $lv;
             }
+            // Est. output kW from rated capacity × load %
+            $rk = null;
+            if ($row['rated_kw'] !== null && $row['rated_kw'] !== '') {
+                $rk = (float)$row['rated_kw'];
+            } elseif ($row['rated_kva'] !== null && $row['rated_kva'] !== '') {
+                $rk = (float)$row['rated_kva'] * 0.9;
+            }
+            if ($rk !== null && $rk > 0) {
+                $estKwSum += $rk * ($lv / 100.0);
+                $estKwN++;
+            }
         }
         if ($row['last_battery_pct'] !== null && $row['last_battery_pct'] !== '') {
             $bv = (float)$row['last_battery_pct'];
@@ -217,6 +247,9 @@ function ups_dashboard_snapshot(int $listLimit = 12): array
         $out['avg_battery_pct'] = round($battSum / $battN, 1);
         $out['min_battery_pct'] = $minBatt !== null ? round($minBatt, 1) : null;
     }
+    if ($estKwN > 0) {
+        $out['est_kw'] = round($estKwSum, 2);
+    }
     $out['rated_kva'] = round($out['rated_kva'], 1);
     $out['rated_kw'] = round($out['rated_kw'], 1);
     $out['last_poll_at'] = $lastPoll;
@@ -227,6 +260,47 @@ function ups_dashboard_snapshot(int $listLimit = 12): array
         if ($limit === 0 || $i >= $limit) {
             break;
         }
+        // Pull last electricals from poll JSON when columns empty
+        $inV = isset($row['last_input_voltage']) && $row['last_input_voltage'] !== null && $row['last_input_voltage'] !== ''
+            ? (float)$row['last_input_voltage'] : null;
+        $outV = isset($row['last_output_voltage']) && $row['last_output_voltage'] !== null && $row['last_output_voltage'] !== ''
+            ? (float)$row['last_output_voltage'] : null;
+        $outA = null;
+        $inHz = null;
+        $outHz = null;
+        if (!empty($row['last_poll_json'])) {
+            $pj = json_decode((string)$row['last_poll_json'], true);
+            $der = is_array($pj) ? ($pj['derived'] ?? []) : [];
+            if (is_array($der)) {
+                if ($inV === null && isset($der['input_voltage']) && is_numeric($der['input_voltage'])) {
+                    $inV = (float)$der['input_voltage'];
+                }
+                if ($outV === null && isset($der['output_voltage']) && is_numeric($der['output_voltage'])) {
+                    $outV = (float)$der['output_voltage'];
+                }
+                if (isset($der['output_current']) && is_numeric($der['output_current'])) {
+                    $outA = (float)$der['output_current'];
+                }
+                if (isset($der['input_freq']) && is_numeric($der['input_freq'])) {
+                    $inHz = (float)$der['input_freq'];
+                }
+                if (isset($der['output_freq']) && is_numeric($der['output_freq'])) {
+                    $outHz = (float)$der['output_freq'];
+                }
+            }
+        }
+        $loadPct = $row['last_load_pct'] !== null && $row['last_load_pct'] !== ''
+            ? (float)$row['last_load_pct'] : null;
+        $estKw = null;
+        if ($loadPct !== null) {
+            if ($row['rated_kw'] !== null && $row['rated_kw'] !== '') {
+                $estKw = round((float)$row['rated_kw'] * ($loadPct / 100.0), 2);
+            } elseif ($row['rated_kva'] !== null && $row['rated_kva'] !== '') {
+                $estKw = round((float)$row['rated_kva'] * 0.9 * ($loadPct / 100.0), 2);
+            } elseif ($outV !== null && $outA !== null && $outV > 0 && $outA > 0) {
+                $estKw = round(($outV * $outA) / 1000.0, 2);
+            }
+        }
         $out['list'][] = [
             'ups_id' => (int)$row['ups_id'],
             'name' => (string)$row['name'],
@@ -234,14 +308,19 @@ function ups_dashboard_snapshot(int $listLimit = 12): array
             'model' => trim((string)(($row['manufacturer'] ?? '') . ' ' . ($row['model'] ?? ''))),
             'status' => (string)($row['status'] ?? ''),
             'output_status' => (string)($row['last_output_status'] ?? ''),
-            'load_pct' => $row['last_load_pct'] !== null && $row['last_load_pct'] !== ''
-                ? (float)$row['last_load_pct'] : null,
+            'load_pct' => $loadPct,
             'battery_pct' => $row['last_battery_pct'] !== null && $row['last_battery_pct'] !== ''
                 ? (float)$row['last_battery_pct'] : null,
             'runtime_min' => $row['last_runtime_min'] !== null && $row['last_runtime_min'] !== ''
                 ? (float)$row['last_runtime_min'] : null,
             'rated_kva' => $row['rated_kva'] !== null && $row['rated_kva'] !== ''
                 ? (float)$row['rated_kva'] : null,
+            'est_kw' => $estKw,
+            'input_voltage' => $inV,
+            'output_voltage' => $outV,
+            'output_current' => $outA,
+            'input_freq' => $inHz,
+            'output_freq' => $outHz,
             'zone_name' => $row['zone_name'] ?? null,
             'primary_ip' => $row['primary_ip'] ?? null,
             'snmp' => !empty($row['snmp_enabled']),

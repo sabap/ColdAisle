@@ -148,6 +148,7 @@
     var env = data.env || {};
     var power = data.power || {};
     var hist = data.power_history || {};
+    var uh = data.ups_history || {};
     var zones = data.zones || [];
     var envCls = (env.crit > 0) ? 'crit' : (env.warn > 0) ? 'warn' : 'ok';
     var html = '<div class="noc-metrics">';
@@ -159,6 +160,7 @@
       utilBar(m.u_pct, 85) +
       '<div class="hint">' + fmtNum(m.u_used, 0) + ' / ' + fmtNum(m.u_total, 0) + ' U</div></div>';
     html += card('accent', 'Site power', fmtNum(power.kw != null ? power.kw : m.power_kw, 1) + '<span class="unit">kW</span>',
+      fmtNum(power.pdu_polled != null ? power.pdu_polled : m.pdus, 0) + ' polled · ' +
       fmtNum(m.pdus, 0) + ' PDU(s)');
     var upsO = data.ups || {};
     var upsCls = (upsO.on_battery > 0 || upsO.health_crit > 0) ? 'crit'
@@ -166,7 +168,8 @@
     html += card(upsCls, 'UPS', fmtNum(upsO.units != null ? upsO.units : m.ups_units, 0),
       (upsO.online != null ? fmtNum(upsO.online, 0) + ' online' : 'Inventory') +
       (upsO.on_battery > 0 ? ' · ' + fmtNum(upsO.on_battery, 0) + ' battery' : '') +
-      (upsO.avg_load_pct != null ? ' · load ' + fmtNum(upsO.avg_load_pct, 0) + '%' : ''));
+      (upsO.avg_load_pct != null ? ' · load ' + fmtNum(upsO.avg_load_pct, 0) + '%' : '') +
+      (upsO.est_kw != null ? ' · ~' + fmtNum(upsO.est_kw, 1) + ' kW' : ''));
     html += card('', 'Cooling units', fmtNum(m.cooling_units, 0), 'Air & pumps');
     html += card(envCls, 'Env status',
       fmtNum(env.ok, 0) + ' <span class="unit">ok</span>',
@@ -176,16 +179,28 @@
     html += card('', 'Sites / DCs', fmtNum(m.sites, 0) + ' / ' + fmtNum(m.datacenters, 0), 'Topology');
     html += card('', 'Env sensors', fmtNum(m.env_sensors, 0), (env.stale || 0) + ' stale (&gt;1h)');
 
-    // Mini power trend + zone strip so Overview feels alive on the wall
+    // Dual mini trends: PDU facility kW + UPS load %
     html += '<div class="noc-card wide">' +
-      '<div class="label">Site power · 24h trend</div>' +
+      '<div class="label">Power poll · 24h</div>' +
+      '<div class="noc-dual-charts">' +
+      '<div class="noc-dual-col">' +
+      '<div class="noc-dual-cap">PDU facility kW</div>' +
       '<div class="noc-chart-wrap noc-chart-mini">' + sparklineSvg(hist.kw || [], '#38bdf8') + '</div>' +
       '<div class="noc-chart-meta">' +
       '<span>Now <strong>' + fmtNum(power.kw != null ? power.kw : m.power_kw, 1) + ' kW</strong></span>' +
       (power.kw_max_24h != null
         ? '<span>Peak <strong>' + fmtNum(power.kw_max_24h, 1) + ' kW</strong></span>'
         : '') +
-      '</div></div>';
+      '</div></div>' +
+      '<div class="noc-dual-col">' +
+      '<div class="noc-dual-cap">UPS load %</div>' +
+      '<div class="noc-chart-wrap noc-chart-mini">' + sparklineSvg(uh.load_pct || [], '#a78bfa') + '</div>' +
+      '<div class="noc-chart-meta">' +
+      '<span>Avg <strong>' + (upsO.avg_load_pct != null ? fmtNum(upsO.avg_load_pct, 0) + '%' : '—') + '</strong></span>' +
+      (upsO.est_kw != null
+        ? '<span>Est <strong>' + fmtNum(upsO.est_kw, 1) + ' kW</strong></span>'
+        : '') +
+      '</div></div></div></div>';
 
     if (zones.length) {
       html += '<div class="noc-card wide"><div class="label">Power zones</div><div class="noc-zone-strip">';
@@ -198,6 +213,7 @@
           '<span class="nm">' + esc(z.name) + '</span>' +
           '<span class="kv">' + fmtNum(z.kw, 1) + ' kW</span>' +
           (util != null ? '<span class="ut">' + fmtNum(util, 0) + '%</span>' : '') +
+          (z.ups_avg_load != null ? '<span class="ut">UPS ' + fmtNum(z.ups_avg_load, 0) + '%</span>' : '') +
           '</div>';
       });
       html += '</div></div>';
@@ -210,53 +226,103 @@
     var m = data.metrics || {};
     var power = data.power || {};
     var hist = data.power_history || {};
+    var uh = data.ups_history || {};
     var ups = data.ups || {};
     var kw = power.kw != null ? power.kw : m.power_kw;
     var upsCls = (ups.on_battery > 0 || ups.health_crit > 0) ? 'crit'
       : (ups.health_warn > 0 ? 'warn' : (ups.units > 0 ? 'ok' : ''));
     var html = '<div class="noc-metrics">';
-    html += card('accent', 'Live load', fmtNum(kw, 1) + '<span class="unit">kW</span>',
-      fmtNum(m.pdus, 0) + ' PDU(s)');
-    html += card('', '24h average', fmtNum(power.kw_avg_24h, 1) + '<span class="unit">kW</span>', 'Site total');
+    html += card('accent', 'PDU load', fmtNum(kw, 1) + '<span class="unit">kW</span>',
+      fmtNum(power.pdu_polled != null ? power.pdu_polled : 0, 0) + ' polled · ' +
+      fmtNum(m.pdus, 0) + ' PDU(s)' +
+      (power.pdu_amps != null ? ' · ' + fmtNum(power.pdu_amps, 0) + ' A sum' : ''));
+    html += card('', '24h average', fmtNum(power.kw_avg_24h, 1) + '<span class="unit">kW</span>', 'PDU site total');
     html += card('', '24h peak', fmtNum(power.kw_max_24h, 1) + '<span class="unit">kW</span>', 'Max bucket');
     html += card('', '24h floor', fmtNum(power.kw_min_24h, 1) + '<span class="unit">kW</span>', 'Min bucket');
     html += card(upsCls, 'UPS units', fmtNum(ups.units != null ? ups.units : m.ups_units, 0),
-      fmtNum(ups.online, 0) + ' online · ' + fmtNum(ups.on_battery, 0) + ' on battery');
+      fmtNum(ups.online, 0) + ' online · ' + fmtNum(ups.on_battery, 0) + ' on battery' +
+      (ups.bypass > 0 ? ' · ' + fmtNum(ups.bypass, 0) + ' bypass' : ''));
     html += card(upsCls, 'UPS load',
       (ups.avg_load_pct != null ? fmtNum(ups.avg_load_pct, 0) + '<span class="unit">%</span>' : '—'),
-      ups.max_load_pct != null ? 'max ' + fmtNum(ups.max_load_pct, 0) + '%' : 'Average of polled units');
+      (ups.max_load_pct != null ? 'max ' + fmtNum(ups.max_load_pct, 0) + '%' : 'Average of polled units') +
+      (ups.polled != null ? ' · ' + fmtNum(ups.polled, 0) + ' polled' : ''));
     html += card(
       (ups.min_battery_pct != null && ups.min_battery_pct < 50) ? 'warn' : '',
       'UPS battery',
       (ups.min_battery_pct != null ? fmtNum(ups.min_battery_pct, 0) + '<span class="unit">%</span>' : '—'),
       ups.avg_battery_pct != null ? 'min · avg ' + fmtNum(ups.avg_battery_pct, 0) + '%' : 'Lowest unit'
     );
-    html += card('', 'UPS rated',
-      fmtNum(ups.rated_kva, 0) + '<span class="unit">kVA</span>',
-      fmtNum(ups.snmp_on, 0) + ' SNMP · ' + fmtNum(ups.polled, 0) + ' polled');
+    html += card('', 'UPS est. output',
+      (ups.est_kw != null ? fmtNum(ups.est_kw, 1) + '<span class="unit">kW</span>' : '—'),
+      fmtNum(ups.rated_kva, 0) + ' kVA rated · ' + fmtNum(ups.snmp_on, 0) + ' SNMP');
+
     html += '<div class="noc-card wide">' +
-      '<div class="label">Site power · last 24 hours</div>' +
+      '<div class="label">PDU facility power · 24h</div>' +
       '<div class="noc-chart-wrap">' + sparklineSvg(hist.kw || [], '#38bdf8') + '</div>' +
       '<div class="noc-chart-meta">' +
-      '<span>Points <strong>' + fmtNum(hist.points, 0) + '</strong></span>' +
+      '<span>Now <strong>' + fmtNum(kw, 1) + ' kW</strong></span>' +
+      (power.kw_max_24h != null ? '<span>Peak <strong>' + fmtNum(power.kw_max_24h, 1) + ' kW</strong></span>' : '') +
       (power.last_poll_at
         ? '<span>Last poll <strong>' + esc(String(power.last_poll_at).replace('T', ' ').slice(0, 19)) + '</strong></span>'
         : '') +
       '</div></div>';
 
+    html += '<div class="noc-card wide">' +
+      '<div class="label">UPS load · 24h</div>' +
+      '<div class="noc-dual-charts">' +
+      '<div class="noc-dual-col">' +
+      '<div class="noc-dual-cap">Load %</div>' +
+      '<div class="noc-chart-wrap noc-chart-mini">' + sparklineSvg(uh.load_pct || [], '#a78bfa') + '</div>' +
+      '</div>' +
+      '<div class="noc-dual-col">' +
+      '<div class="noc-dual-cap">Est. output kW</div>' +
+      '<div class="noc-chart-wrap noc-chart-mini">' + sparklineSvg(uh.kw || [], '#c4b5fd') + '</div>' +
+      '</div></div>' +
+      '<div class="noc-chart-meta">' +
+      '<span>Avg load <strong>' + (ups.avg_load_pct != null ? fmtNum(ups.avg_load_pct, 0) + '%' : '—') + '</strong></span>' +
+      (ups.est_kw != null ? '<span>Est now <strong>' + fmtNum(ups.est_kw, 1) + ' kW</strong></span>' : '') +
+      (ups.last_poll_at
+        ? '<span>UPS poll <strong>' + esc(String(ups.last_poll_at).replace('T', ' ').slice(0, 19)) + '</strong></span>'
+        : '') +
+      '</div></div>';
+
+    var topPdus = power.top_pdus || [];
+    if (topPdus.length) {
+      html += '<div class="noc-card wide" style="margin-top:.5rem">' +
+        '<div class="label">Top PDU loads</div><div class="noc-list">';
+      topPdus.forEach(function (p) {
+        html += '<div class="noc-list-row">' +
+          '<div><strong>' + esc(p.name) + '</strong>' +
+          '<div class="muted">' + esc(p.zone_name || '') +
+          (p.amps != null ? ' · ' + fmtNum(p.amps, 1) + ' A' : '') +
+          '</div></div>' +
+          '<div style="text-align:right"><strong>' + fmtNum(p.kw, 2) + '</strong> kW</div></div>';
+      });
+      html += '</div></div>';
+    }
+
     var list = ups.list || [];
     if (list.length) {
-      html += '<div class="noc-card wide" style="margin-top:.75rem">' +
-        '<div class="label">UPS units</div><div class="noc-list">';
+      html += '<div class="noc-card wide" style="margin-top:.5rem">' +
+        '<div class="label">UPS units · live SNMP</div><div class="noc-list">';
       list.forEach(function (u) {
+        var bits = [];
+        if (u.load_pct != null) bits.push('<strong>' + fmtNum(u.load_pct, 0) + '%</strong> load');
+        if (u.battery_pct != null) bits.push(fmtNum(u.battery_pct, 0) + '% batt');
+        if (u.est_kw != null) bits.push('~' + fmtNum(u.est_kw, 1) + ' kW');
+        if (u.output_voltage != null) bits.push(fmtNum(u.output_voltage, 0) + ' V out');
+        if (u.input_voltage != null) bits.push(fmtNum(u.input_voltage, 0) + ' V in');
+        if (u.output_current != null) bits.push(fmtNum(u.output_current, 1) + ' A');
+        if (u.output_freq != null) bits.push(fmtNum(u.output_freq, 1) + ' Hz');
+        if (u.runtime_min != null) bits.push(fmtNum(u.runtime_min, 0) + ' min');
         html += '<div class="noc-list-row">' +
           '<div><strong>' + esc(u.name) + '</strong>' +
           '<div class="muted">' + esc(u.output_status || u.status || '') +
           (u.model ? ' · ' + esc(u.model) : '') +
+          (u.zone_name ? ' · ' + esc(u.zone_name) : '') +
           '</div></div>' +
-          '<div style="text-align:right">' +
-          (u.load_pct != null ? '<strong>' + fmtNum(u.load_pct, 0) + '%</strong> load' : '—') +
-          (u.battery_pct != null ? ' · ' + fmtNum(u.battery_pct, 0) + '% batt' : '') +
+          '<div style="text-align:right;max-width:55%">' +
+          (bits.length ? bits.join(' · ') : '—') +
           ' ' + badge(u.health) +
           '</div></div>';
       });

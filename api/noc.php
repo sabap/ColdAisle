@@ -134,12 +134,41 @@ try {
 $power = [
     'kw' => $metrics['power_kw'],
     'pdu_count' => $metrics['pdus'],
+    'pdu_polled' => 0,
+    'pdu_amps' => null,
     'last_poll_at' => null,
+    'top_pdus' => [],
 ];
 try {
     $power['last_poll_at'] = Database::fetchValue(
         'SELECT MAX(last_poll_at) FROM pdus WHERE is_active = 1'
     );
+    $power['pdu_polled'] = (int)Database::fetchValue(
+        'SELECT COUNT(*) FROM pdus WHERE is_active = 1 AND last_poll_watts IS NOT NULL'
+    );
+    $ampsSum = Database::fetchValue(
+        'SELECT ISNULL(SUM(last_poll_amps),0) FROM pdus WHERE is_active = 1 AND last_poll_amps IS NOT NULL'
+    );
+    $power['pdu_amps'] = $ampsSum !== null ? round((float)$ampsSum, 1) : null;
+    // Top loaded PDUs for the wall (by watts)
+    $topPduRows = Database::fetchAll(
+        'SELECT TOP 8 p.pdu_id, p.name, p.last_poll_watts, p.last_poll_amps, p.last_poll_at,
+                z.name AS zone_name
+         FROM pdus p
+         LEFT JOIN power_zones z ON z.zone_id = p.zone_id
+         WHERE p.is_active = 1 AND p.last_poll_watts IS NOT NULL AND p.last_poll_watts > 0
+         ORDER BY p.last_poll_watts DESC'
+    );
+    foreach ($topPduRows as $tp) {
+        $w = (float)$tp['last_poll_watts'];
+        $power['top_pdus'][] = [
+            'name' => (string)$tp['name'],
+            'kw' => round($w / 1000.0, 3),
+            'amps' => $tp['last_poll_amps'] !== null ? round((float)$tp['last_poll_amps'], 1) : null,
+            'zone_name' => $tp['zone_name'] ?? null,
+            'last_poll' => $tp['last_poll_at'] ?? null,
+        ];
+    }
 } catch (Throwable $e) {
 }
 
@@ -166,6 +195,36 @@ try {
     }
 } catch (Throwable $e) {
     App::log('NOC power history: ' . $e->getMessage(), 'warning');
+}
+
+// UPS 24h history (load % + est. kW) for NOC power panel
+$upsHistory = ['t' => [], 'load_pct' => [], 'kw' => [], 'points' => 0];
+try {
+    if (class_exists('UpsHistoryService')) {
+        $uh = UpsHistoryService::series('ups_site', null, 24);
+        $t = $uh['series']['t'] ?? [];
+        $lp = $uh['series']['load_pct'] ?? [];
+        $ukw = $uh['series']['kw'] ?? [];
+        $n = count($t);
+        $step = $n > 48 ? (int)ceil($n / 48) : 1;
+        for ($i = 0; $i < $n; $i += $step) {
+            $upsHistory['t'][] = $t[$i];
+            $upsHistory['load_pct'][] = $lp[$i] ?? null;
+            $upsHistory['kw'][] = $ukw[$i] ?? null;
+        }
+        $upsHistory['points'] = count($upsHistory['t']);
+        if (!empty($uh['summary']['load_pct']['avg'])) {
+            // keep live avg from snapshot as primary; history avg as fallback note
+            $upsHistory['load_avg_24h'] = $uh['summary']['load_pct']['avg'] ?? null;
+            $upsHistory['load_max_24h'] = $uh['summary']['load_pct']['max'] ?? null;
+        }
+        if (!empty($uh['summary']['kw'])) {
+            $upsHistory['kw_avg_24h'] = $uh['summary']['kw']['avg'] ?? null;
+            $upsHistory['kw_max_24h'] = $uh['summary']['kw']['max'] ?? null;
+        }
+    }
+} catch (Throwable $e) {
+    App::log('NOC ups history: ' . $e->getMessage(), 'warning');
 }
 
 // Power zones with live load
@@ -410,6 +469,7 @@ $out = [
     'env' => $env,
     'power' => $power,
     'power_history' => $powerHistory,
+    'ups_history' => $upsHistory,
     'zones' => $zones,
     'ups' => $ups,
     'cooling' => $cooling,
