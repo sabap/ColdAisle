@@ -157,7 +157,6 @@ $zones = Database::fetchAll(
             (SELECT COUNT(*) FROM pdus p WHERE p.zone_id = z.zone_id AND p.is_active = 1) AS pdu_count,
             (SELECT COUNT(*) FROM power_panels pp WHERE pp.zone_id = z.zone_id) AS panel_count,
             (SELECT COUNT(*) FROM cabinet_rows cr WHERE cr.zone_id = z.zone_id) AS row_count,
-            (SELECT ISNULL(SUM(p.last_poll_watts), 0) FROM pdus p WHERE p.zone_id = z.zone_id AND p.is_active = 1) AS poll_watts,
             (SELECT COUNT(*) FROM ups_units u WHERE u.zone_id = z.zone_id AND u.is_active = 1) AS ups_count,
             (SELECT AVG(CAST(u.last_load_pct AS FLOAT)) FROM ups_units u
              WHERE u.zone_id = z.zone_id AND u.is_active = 1 AND u.last_load_pct IS NOT NULL) AS ups_avg_load,
@@ -167,6 +166,26 @@ $zones = Database::fetchAll(
      INNER JOIN datacenters dc ON dc.datacenter_id = z.datacenter_id
      ORDER BY dc.name, z.name'
 );
+// Zone load totals honor facility rollup (prefer row/room, manual include, etc.)
+try {
+    $allPdusForRollup = Database::fetchAll(
+        'SELECT pdu_id, zone_id, pdu_scope, include_in_site_load, last_poll_watts
+         FROM pdus WHERE is_active = 1'
+    );
+    foreach ($zones as &$zRoll) {
+        $zt = power_zone_load_totals($allPdusForRollup, (int)$zRoll['zone_id']);
+        $zRoll['poll_watts'] = $zt['watts'];
+    }
+    unset($zRoll);
+} catch (Throwable $e) {
+    // Column missing until ensure — leave poll_watts unset / 0
+    foreach ($zones as &$zRoll) {
+        if (!isset($zRoll['poll_watts'])) {
+            $zRoll['poll_watts'] = 0;
+        }
+    }
+    unset($zRoll);
+}
 
 // Detail view
 if ($zoneId) {
