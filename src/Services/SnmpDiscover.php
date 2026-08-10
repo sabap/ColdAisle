@@ -51,6 +51,19 @@ class SnmpDiscover
     ];
 
     /**
+     * APC InfraStruXure / modular row xPDU (hardware 15) — PD40 / 0M-5103 class.
+     * Do NOT mix into WALK_ROOTS_APC (empty 15.x walks burn timeouts on rack rPDU).
+     */
+    private const WALK_ROOTS_XPDU = [
+        '1.3.6.1.2.1.1',
+        '1.3.6.1.2.1.2.2.1.2',
+        '1.3.6.1.2.1.2.2.1.6',
+        '1.3.6.1.4.1.318.1.1.15.1',       // xPDUIdent (model / serial)
+        '1.3.6.1.4.1.318.1.1.15.3.4',     // xPDUSystemOutput (total + phase table)
+        '1.3.6.1.4.1.318.1.1.15.3.1',     // xPDUMainInput (main voltage table)
+    ];
+
+    /**
      * APC / Schneider UPS (PowerNet 318.1.1.1) — Symmetra, Smart-UPS, etc.
      * Keep narrow: full 318.1.1.1 walks are huge on modular frames.
      */
@@ -352,6 +365,41 @@ class SnmpDiscover
             '1.3.6.1.4.1.3808.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.3808.1.1.1.4.2.5.0',
         ];
+        // InfraStruXure row xPDU (PD40 / 0M-5103 / apc_hw02_xpdu_*) — PowerNet 15.x
+        $leafXpdu = [
+            '1.3.6.1.4.1.318.1.1.15.1.1.0',       // product name
+            '1.3.6.1.4.1.318.1.1.15.1.7.0',       // model number
+            '1.3.6.1.4.1.318.1.1.15.1.8.0',       // serial
+            '1.3.6.1.4.1.318.1.1.15.3.4.1.0',     // output freq (tenths Hz)
+            '1.3.6.1.4.1.318.1.1.15.3.4.2.0',     // neutral current (tenths A)
+            '1.3.6.1.4.1.318.1.1.15.3.4.3.0',     // total power (tenths kW)
+            '1.3.6.1.4.1.318.1.1.15.3.4.4.0',     // total VA (tenths kVA)
+            '1.3.6.1.4.1.318.1.1.15.3.4.5.0',     // total PF (hundredths)
+            '1.3.6.1.4.1.318.1.1.15.3.4.13.0',    // phase table size
+            // System output phase table: col.phaseIndex (1–3)
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.2.1', // L–L V tenths
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.2.2',
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.2.3',
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.3.1', // L–N V tenths
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.3.2',
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.3.3',
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.4.1', // phase current tenths A
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.4.2',
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.4.3',
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.5.1', // phase power tenths kW
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.5.2',
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.5.3',
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.6.1', // phase VA tenths kVA
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.6.2',
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.6.3',
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.7.1', // phase PF hundredths
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.7.2',
+            '1.3.6.1.4.1.318.1.1.15.3.4.14.1.7.3',
+            // Main input L–L (480 V class)
+            '1.3.6.1.4.1.318.1.1.15.3.1.4.1.2.1',
+            '1.3.6.1.4.1.318.1.1.15.3.1.4.1.2.2',
+            '1.3.6.1.4.1.318.1.1.15.3.1.4.1.2.3',
+        ];
         // Dell iDRAC / OMSA — identity + status + common power/thermal leaves
         // (exact leaves vary by iDRAC gen / firmware; empty GETs are cheap with LEAF_TIMEOUT)
         $leafIdrac = [
@@ -379,13 +427,20 @@ class SnmpDiscover
             '1.3.6.1.4.1.674.10892.5.4.1100.50.1.5.1',
         ];
 
-        // EMS vs rPDU leaf order inside APC ruleset (preserve prior tuning)
+        // EMS vs rPDU vs xPDU leaf order inside APC ruleset (preserve prior tuning)
         $looksEms = $apcFocus && (bool)preg_match(
             '/ap9340|environmental|ems|iem|netbotz|temp|humid|sensor/i',
             $sysHay
         );
+        // InfraStruXure / modular row xPDU (PD40G6FK1, 0M-5103, hw02_xpdu firmware)
+        $looksXpdu = $apcFocus && (bool)preg_match(
+            '/xpdu|x.?pdu|0m-?51|pd40|pd50|pd60|pd80|pd100|'
+            . 'infrastruxure|infra.?stru.?xure|hw02_xpdu|aos_.*xpdu|'
+            . 'mn:\s*0m|modular.?pdu|row.?pdu/i',
+            $sysHay
+        );
         // MN:AP7862 / apc_hw02_rpdu_*.bin / "Rack PDU" — model tokens often omit the word "PDU"
-        $looksPdu = $apcFocus && (bool)preg_match(
+        $looksPdu = $apcFocus && !$looksXpdu && (bool)preg_match(
             '/rpdu|rack.?pdu|switched.?rack|metered|\bpdu\b|'
             . '\bap7\d{3}\b|\bap8\d{3}\b|\bap9\d{3}\b|'
             . 'mn:\s*ap[789]\d{3}|hw02_rpdu|hw05_rpdu|aos_.*rpdu/i',
@@ -394,8 +449,12 @@ class SnmpDiscover
         if ($familyHint === 'ems') {
             $looksEms = true;
             $looksPdu = false;
+            $looksXpdu = false;
         } elseif ($familyHint === 'power') {
-            $looksPdu = true;
+            // Keep xPDU detection from sysDescr; only force rack path if not xPDU
+            if (!$looksXpdu) {
+                $looksPdu = true;
+            }
         }
 
         if ($coolingFocus) {
@@ -403,13 +462,16 @@ class SnmpDiscover
         } elseif ($idracFocus) {
             $leafGets = array_merge($leafSys, $leafIdrac);
         } elseif ($apcFocus) {
-            if ($looksEms && !$looksPdu) {
+            if ($looksXpdu) {
+                // Row/modular xPDU only — do not thrash rPDU/rPDU2 leaves first
+                $leafGets = array_merge($leafSys, $leafXpdu, $leafPdu);
+            } elseif ($looksEms && !$looksPdu) {
                 $leafGets = array_merge($leafSys, $leafEms, $leafPdu);
             } elseif ($looksPdu && !$looksEms) {
                 $leafGets = array_merge($leafSys, $leafPdu, $leafEms);
             } else {
-                // Classic APC auto: EMS first (cheap if present), then PDU
-                $leafGets = array_merge($leafSys, $leafEms, $leafPdu);
+                // Classic APC auto: EMS first (cheap if present), then rack PDU, then xPDU probe
+                $leafGets = array_merge($leafSys, $leafEms, $leafPdu, $leafXpdu);
             }
         } else {
             // default ruleset — no vendor enterprise leaf thrash
@@ -421,9 +483,9 @@ class SnmpDiscover
         $leafLiebertHits = 0;
         $emsTempHits = 0;
         $emsHumHits = 0;
-        // AP7862-class needs many classic rPDU leaf GETs (Ident + 6 load indexes)
+        // AP7862 / xPDU need many leaf GETs (phase tables)
         $leafBudget = $coolingFocus ? 4.0 : self::LEAF_PHASE_BUDGET_SEC;
-        if ($apcFocus && $looksPdu) {
+        if ($apcFocus && ($looksPdu || $looksXpdu)) {
             $leafBudget = 9.0;
         }
         $totalBudget = $coolingFocus ? self::COOLING_TOTAL_BUDGET_SEC : 22.0;
@@ -517,7 +579,10 @@ class SnmpDiscover
             && (microtime(true) - $discoverStarted) < $totalBudget
         ) {
             self::setOidOutputFormat('numeric');
-            $roots = self::walkRootsForRuleset($ruleset);
+            // xPDU (row InfraStruXure) uses 318.1.1.15 — not rPDU 12/26
+            $roots = ($apcFocus && !empty($looksXpdu))
+                ? self::WALK_ROOTS_XPDU
+                : self::walkRootsForRuleset($ruleset);
             $walkRootStats = self::collectWalks(
                 $hostPort,
                 $version,
@@ -529,7 +594,7 @@ class SnmpDiscover
                 $totalBudget
             );
             $logStep('walks collected=' . count($collected) . ' errors=' . count($errors)
-                . ' roots=' . $ruleset);
+                . ' roots=' . (($apcFocus && !empty($looksXpdu)) ? 'apc_xpdu' : $ruleset));
         } else {
             $logStep('walks_skipped elapsed=' . round($elapsed, 2));
         }
@@ -680,11 +745,25 @@ class SnmpDiscover
                 }
             }
         }
-        // APC ruleset only: seed classic rPDU / rPDU2 load keys for AP78xx when Discover
-        // only saw a sparse walk (common on old AOS 3.9 + NMC when rPDU2 trees are empty).
+        // APC ruleset only: seed model-specific maps (never mix xPDU ↔ rack rPDU).
         if ($apcFocus) {
-            $proposed = self::injectApcClassicRpduMap($proposed, (string)$sysDescr, $collected);
-            $proposed = self::injectApcOutletBases($proposed, $hostPort, $version, $creds, $sysDescr, $collected);
+            $sysS = (string)$sysDescr;
+            $looksXpduNow = (bool)preg_match(
+                '/xpdu|0m-?51|pd40|pd50|pd60|infrastruxure|hw02_xpdu|aos_.*xpdu|mn:\s*0m/i',
+                $sysS
+            );
+            foreach ($collected as $oid => $_) {
+                if (str_starts_with((string)$oid, '1.3.6.1.4.1.318.1.1.15.')) {
+                    $looksXpduNow = true;
+                    break;
+                }
+            }
+            if ($looksXpduNow) {
+                $proposed = self::injectApcXpduMap($proposed, $sysS, $collected);
+            } else {
+                $proposed = self::injectApcClassicRpduMap($proposed, $sysS, $collected);
+                $proposed = self::injectApcOutletBases($proposed, $hostPort, $version, $creds, $sysS, $collected);
+            }
         }
 
         // Serial number from walk / leaf GETs (also propose map key)
@@ -1788,14 +1867,23 @@ class SnmpDiscover
                 $score += 6;
             }
             // Current / amps (live status only — config already filtered)
-            if (preg_match('/statuscurrent|phasestatuscurrent|loadstatusload|(?<![a-z])current(?![a-z])|\bamps?\b/', $s)
+            if (preg_match('/statuscurrent|phasestatuscurrent|loadstatusload|outputphasecurrent|(?<![a-z])current(?![a-z])|\bamps?\b/', $s)
                 && !preg_match('/peak|threshold|config/', $s)
             ) {
                 $score += 12;
             }
             // Voltage
-            if (preg_match('/statusvoltage|phasestatusvoltage|phasetophase|(?<![a-z])voltage(?![a-z])/', $s)) {
+            if (preg_match('/statusvoltage|phasestatusvoltage|phasetophase|voltagelto|voltageltol|(?<![a-z])voltage(?![a-z])/', $s)) {
                 $score += 8;
+            }
+            // InfraStruXure xPDU system output (row PDUs PD40 / 0M-5103)
+            if (preg_match('/xpdusystemoutput|xpdumaininput|xpduident/', $s)
+                || str_starts_with($oid, '1.3.6.1.4.1.318.1.1.15.')
+            ) {
+                $score += 14;
+            }
+            if (preg_match('/systemoutputtotalpower|systemoutputpower(?!factor)|systemoutputphasecurrent/', $s)) {
+                $score += 12;
             }
             // Live temperature / humidity status (env managers) — not config thresh
             if (preg_match('/(status|current).*(temp|temperature)|(temp|temperature).*(status|current)|probetemperature|probestatustemp/', $s)
@@ -2432,6 +2520,15 @@ class SnmpDiscover
     private static function injectApcClassicRpduMap(array $proposed, string $sysDescr, array $collected): array
     {
         $hay = strtolower($sysDescr);
+        // Never seed rack rPDU OIDs onto InfraStruXure xPDU (PD40 / 0M-5103)
+        if (preg_match('/xpdu|0m-?51|pd40|infrastruxure|hw02_xpdu|aos_.*xpdu/i', $hay)) {
+            return $proposed;
+        }
+        foreach ($collected as $oid => $_) {
+            if (str_starts_with((string)$oid, '1.3.6.1.4.1.318.1.1.15.')) {
+                return $proposed;
+            }
+        }
         $looksRackPdu = (bool)preg_match(
             '/rpdu|rack.?pdu|switched.?rack|metered|\bpdu\b|'
             . '\bap7\d{3}\b|\bap8\d{3}\b|\bap9\d{3}\b|'
@@ -2526,6 +2623,84 @@ class SnmpDiscover
             }
         }
 
+        return $proposed;
+    }
+
+    /**
+     * Seed PowerNet xPDU (15.x) map for InfraStruXure row PDUs (PD40G6FK1 / 0M-5103).
+     * Scales: power/VA tenths of kW/kVA; current/volts tenths; PF hundredths.
+     *
+     * @param array<string,string> $proposed
+     * @param array<string,mixed> $collected
+     * @return array<string,string>
+     */
+    private static function injectApcXpduMap(array $proposed, string $sysDescr, array $collected): array
+    {
+        $hay = strtolower($sysDescr);
+        $looks = (bool)preg_match(
+            '/xpdu|0m-?51|pd40|pd50|pd60|infrastruxure|hw02_xpdu|aos_.*xpdu|mn:\s*0m|row.?pdu/i',
+            $hay
+        );
+        if (!$looks) {
+            foreach ($collected as $oid => $_) {
+                if (str_starts_with((string)$oid, '1.3.6.1.4.1.318.1.1.15.')) {
+                    $looks = true;
+                    break;
+                }
+            }
+        }
+        if (!$looks) {
+            return $proposed;
+        }
+
+        // Strip any rack rPDU/rPDU2 keys that Discover noise may have attached
+        foreach (array_keys($proposed) as $k) {
+            $oid = is_string($proposed[$k] ?? null) ? ltrim((string)$proposed[$k], '.') : '';
+            if ($oid !== '' && (
+                str_starts_with($oid, '1.3.6.1.4.1.318.1.1.12.')
+                || str_starts_with($oid, '1.3.6.1.4.1.318.1.1.26.')
+            )) {
+                unset($proposed[$k]);
+            }
+        }
+
+        $defaults = [
+            'sysDescr' => '1.3.6.1.2.1.1.1.0',
+            'sysUpTime' => '1.3.6.1.2.1.1.3.0',
+            'serial_no' => '1.3.6.1.4.1.318.1.1.15.1.8.0',
+            'system_model' => '1.3.6.1.4.1.318.1.1.15.1.7.0',
+            // Total output — tenths of kW / kVA → W / VA via *_tenths_kw scale
+            'watts_tenths_kw' => '1.3.6.1.4.1.318.1.1.15.3.4.3.0',
+            'va_tenths_kw' => '1.3.6.1.4.1.318.1.1.15.3.4.4.0',
+            'pf_x100' => '1.3.6.1.4.1.318.1.1.15.3.4.5.0',
+            'output_freq_x10' => '1.3.6.1.4.1.318.1.1.15.3.4.1.0',
+            'neutral_amps_x10' => '1.3.6.1.4.1.318.1.1.15.3.4.2.0',
+            // Phase L–N volts (tenths V), current (tenths A), power (tenths kW)
+            'phase1_volts_x10' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.3.1',
+            'phase2_volts_x10' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.3.2',
+            'phase3_volts_x10' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.3.3',
+            'phase1_amps_x10' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.4.1',
+            'phase2_amps_x10' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.4.2',
+            'phase3_amps_x10' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.4.3',
+            'phase1_watts_tenths_kw' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.5.1',
+            'phase2_watts_tenths_kw' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.5.2',
+            'phase3_watts_tenths_kw' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.5.3',
+            'phase1_va_tenths_kw' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.6.1',
+            'phase2_va_tenths_kw' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.6.2',
+            'phase3_va_tenths_kw' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.6.3',
+            'phase1_pf_x100' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.7.1',
+            'phase2_pf_x100' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.7.2',
+            'phase3_pf_x100' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.7.3',
+            // L–L output (tenths V) — shown on NMC as L1-2 / L2-3 / L3-1
+            'phase_l12_volts_x10' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.2.1',
+            'phase_l23_volts_x10' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.2.2',
+            'phase_l31_volts_x10' => '1.3.6.1.4.1.318.1.1.15.3.4.14.1.2.3',
+        ];
+        foreach ($defaults as $key => $oid) {
+            if (!isset($proposed[$key]) || $proposed[$key] === '' || $proposed[$key] === null) {
+                $proposed[$key] = $oid;
+            }
+        }
         return $proposed;
     }
 
