@@ -15,6 +15,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+### Bug fixes
+
+---
+
+## [0.3.100] - 2026-08-10
+
+### Enhancements
+
 - **SNMP Poll progress modal:** Poll now opens an animated device→ColdAisle GET-packet overlay (status tips while working); timeout/error stay on the modal with Close / click-outside; no more full-page blank HTTP 500 on poll timeout
 
 ### Bug fixes
@@ -22,7 +30,6 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **PDU Poll now blank 500:** form POST replaced with AJAX (`api/snmp_pdu.php`); client 55s abort + server try/catch JSON errors; same overlay on devices, UPS, and cooling Poll now
 
 ---
-
 ## [0.3.99] - 2026-08-10
 
 ### Bug fixes
