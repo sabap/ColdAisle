@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.3.102] - 2026-08-10
+
+### Enhancements
+
+- Maintenance release.
+
+---
 ## [0.3.101] - 2026-08-10
 
 ### Enhancements
