@@ -81,12 +81,15 @@ try {
                     $proposed[$k] = $oid; // seed defaults for Symmetra template
                 }
             }
-            // Ensure serial + sysuptime always present for inventory / display
+            // Ensure serial + sysuptime + manufacture_date always present for inventory / display
             if (empty($proposed['serial_no']) && !empty($defaults['serial_no'])) {
                 $proposed['serial_no'] = $defaults['serial_no'];
             }
             if (empty($proposed['sysuptime']) && !empty($defaults['sysuptime'])) {
                 $proposed['sysuptime'] = $defaults['sysuptime'];
+            }
+            if (empty($proposed['manufacture_date']) && !empty($defaults['manufacture_date'])) {
+                $proposed['manufacture_date'] = $defaults['manufacture_date'];
             }
             $result['proposed_map'] = $proposed;
             $result['default_ups_map'] = $defaults;

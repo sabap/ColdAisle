@@ -114,6 +114,8 @@ function ups_default_apc_oid_map(): array
         'name' => '1.3.6.1.4.1.318.1.1.1.1.1.2.0',
         // upsAdvIdentSerialNumber
         'serial_no' => '1.3.6.1.4.1.318.1.1.1.1.2.3.0',
+        // upsAdvIdentDateOfManufacture (mm/dd/yy or mm/dd/yyyy)
+        'manufacture_date' => '1.3.6.1.4.1.318.1.1.1.1.2.2.0',
         // MIB-II sysUpTime (TimeTicks, hundredths of a second)
         'sysuptime' => '1.3.6.1.2.1.1.3.0',
         'battery_status' => '1.3.6.1.4.1.318.1.1.1.2.1.1.0',
@@ -199,6 +201,92 @@ function ups_format_metric_display(string $key, mixed $value): string
         return trim($s, " \t\"'");
     }
     return json_encode($raw) ?: '—';
+}
+
+/**
+ * Parse APC / PowerNet manufacture date strings into Y-m-d.
+ * Accepts mm/dd/yy, mm/dd/yyyy, mm-dd-yyyy, yyyy-mm-dd, etc.
+ */
+function ups_parse_manufacture_date(mixed $raw): ?string
+{
+    if ($raw === null || $raw === '') {
+        return null;
+    }
+    if (is_array($raw)) {
+        $raw = $raw['raw'] ?? $raw['numeric'] ?? null;
+        if ($raw === null || $raw === '') {
+            return null;
+        }
+    }
+    if (!is_scalar($raw)) {
+        return null;
+    }
+    $s = trim((string)$raw);
+    $s = preg_replace('/^(STRING|OCTET STRING)\s*:\s*/i', '', $s) ?? $s;
+    $s = trim($s, " \t\"'");
+    if ($s === '' || strcasecmp($s, 'unknown') === 0 || $s === '0') {
+        return null;
+    }
+    // Already ISO
+    if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $s, $m)) {
+        if (checkdate((int)$m[2], (int)$m[3], (int)$m[1])) {
+            return sprintf('%04d-%02d-%02d', (int)$m[1], (int)$m[2], (int)$m[3]);
+        }
+        return null;
+    }
+    // mm/dd/yy or mm/dd/yyyy (APC PowerNet typical)
+    if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/', $s, $m)) {
+        $mo = (int)$m[1];
+        $day = (int)$m[2];
+        $yr = (int)$m[3];
+        if ($yr < 100) {
+            // APC two-digit year: 00–69 → 2000+, 70–99 → 1900+
+            $yr += ($yr >= 70) ? 1900 : 2000;
+        }
+        if (checkdate($mo, $day, $yr)) {
+            return sprintf('%04d-%02d-%02d', $yr, $mo, $day);
+        }
+    }
+    // dd-MMM-yyyy style fallbacks
+    $ts = strtotime($s);
+    if ($ts !== false) {
+        $y = (int)date('Y', $ts);
+        if ($y >= 1980 && $y <= 2100) {
+            return date('Y-m-d', $ts);
+        }
+    }
+    return null;
+}
+
+/**
+ * Pull manufacture date from poll metrics (key manufacture_date / mfg / …).
+ * @param array<string,mixed> $metrics
+ */
+function ups_manufacture_date_from_metrics(array $metrics): ?string
+{
+    $keys = [
+        'manufacture_date', 'manufacturedate', 'mfg_date', 'mfgdate',
+        'date_of_manufacture', 'dateofmanufacture', 'upsadvidentdateofmanufacture',
+    ];
+    foreach ($metrics as $k => $v) {
+        $lk = strtolower(preg_replace('/[^a-z0-9]/', '', (string)$k) ?? '');
+        $match = false;
+        foreach ($keys as $want) {
+            $w = strtolower(preg_replace('/[^a-z0-9]/', '', $want) ?? '');
+            if ($lk === $w || str_contains($lk, 'manufacture') || str_contains($lk, 'mfgdate')) {
+                $match = true;
+                break;
+            }
+        }
+        if (!$match) {
+            continue;
+        }
+        $parsed = ups_parse_manufacture_date($v);
+        if ($parsed !== null) {
+            return $parsed;
+        }
+    }
+    return null;
 }
 
 /**

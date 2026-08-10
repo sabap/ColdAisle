@@ -125,10 +125,7 @@ try {
             if ($roomId < 1) {
                 App::json(['error' => 'room_id required'], 400);
             }
-            $facing = strtoupper(trim((string)($data['front_facing'] ?? 'N')));
-            if (!in_array($facing, ['N', 'S', 'E', 'W'], true)) {
-                $facing = 'N';
-            }
+            $facing = floorplan_normalize_facing($data['front_facing'] ?? 'north');
             $scope = strtolower(trim((string)($data['ups_scope'] ?? 'in_row')));
             if (!in_array($scope, ['in_row', 'in_rack'], true)) {
                 $scope = 'in_row';
@@ -172,10 +169,9 @@ try {
             if (!$existing) {
                 App::json(['error' => 'UPS not found'], 404);
             }
-            $facing = strtoupper(trim((string)($data['front_facing'] ?? $existing['front_facing'] ?? 'N')));
-            if (!in_array($facing, ['N', 'S', 'E', 'W'], true)) {
-                $facing = 'N';
-            }
+            $facing = floorplan_normalize_facing(
+                $data['front_facing'] ?? ($existing['front_facing'] ?? 'north')
+            );
             $scope = (string)($existing['ups_scope'] ?? 'in_row');
             $geo = floorplan_ups_geometry_from_data(
                 array_merge($existing, $data),
@@ -205,10 +201,9 @@ try {
             if (!$existing) {
                 App::json(['error' => 'UPS not found'], 404);
             }
-            $facing = strtoupper(trim((string)($data['front_facing'] ?? $existing['front_facing'] ?? 'N')));
-            if (!in_array($facing, ['N', 'S', 'E', 'W'], true)) {
-                $facing = 'N';
-            }
+            $facing = floorplan_normalize_facing(
+                $data['front_facing'] ?? ($existing['front_facing'] ?? 'north')
+            );
             $geo = floorplan_ups_geometry_from_data(
                 array_merge($existing, $data),
                 $facing,
@@ -813,6 +808,10 @@ function floorplan_fetch_room(int $roomId): ?array
 function floorplan_normalize_facing($facing): string
 {
     $f = strtolower(trim((string)$facing));
+    $short = ['n' => 'north', 's' => 'south', 'e' => 'east', 'w' => 'west'];
+    if (isset($short[$f])) {
+        $f = $short[$f];
+    }
     return in_array($f, ['north', 'south', 'east', 'west'], true) ? $f : 'north';
 }
 

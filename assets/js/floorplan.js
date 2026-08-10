@@ -93,6 +93,8 @@
     const unlockedPduIds = new Set();
     /** Cooling unit IDs unlocked for drag/move. */
     const unlockedCoolingIds = new Set();
+    /** UPS IDs unlocked for drag/move. */
+    const unlockedUpsIds = new Set();
     const DRAG_THRESHOLD_PX = 6; // ignore tiny pointer jitter when unlocked
     let pan = null; // { lastX, lastY, pointerId } — drag empty floor to scroll view
     let nudgeAmount = 1;
@@ -345,7 +347,9 @@
      * Local cabinet front is the top edge of the unrotated rect (-Y).
      */
     function facingToRotation(facing) {
-      const f = String(facing || 'north').toLowerCase();
+      let f = String(facing || 'north').toLowerCase();
+      const short = { n: 'north', s: 'south', e: 'east', w: 'west' };
+      if (short[f]) f = short[f];
       const face = { north: 0, east: 90, south: 180, west: 270 };
       const northOff = { top: 0, right: 90, bottom: 180, left: 270 };
       const base = face[f] != null ? face[f] : 0;
@@ -850,6 +854,11 @@
         ctx.fillStyle = hSt === 'crit' ? '#fca5a5' : '#e9d5ff';
         ctx.fillText(String(u.last_load_pct) + '% load', 0, 22);
       }
+      if (selected && !isUpsPositionLocked(u)) {
+        ctx.fillStyle = '#22c55e';
+        ctx.font = 'bold 11px Segoe UI';
+        ctx.fillText('🔓', r.w / 2 - 8, -r.d / 2 + 12);
+      }
       ctx.restore();
     }
 
@@ -942,13 +951,39 @@
       else unlockedCoolingIds.add(id);
     }
 
+    function isUpsPositionLocked(uOrId) {
+      if (uOrId == null) return true;
+      const id = typeof uOrId === 'object' ? Number(uOrId.ups_id) : Number(uOrId);
+      if (!id) return true;
+      return !unlockedUpsIds.has(id);
+    }
+
+    function setUpsPositionLocked(uOrId, locked) {
+      const id = typeof uOrId === 'object' ? Number(uOrId.ups_id) : Number(uOrId);
+      if (!id) return;
+      if (locked) unlockedUpsIds.delete(id);
+      else unlockedUpsIds.add(id);
+    }
+
     function selectCooling(u) {
       selectedIds.clear();
       selectedId = null;
       selectedPduId = null;
+      selectedUpsId = null;
       selectedCoolingId = u ? Number(u.cooling_unit_id) : null;
       renderProps();
       draw();
+    }
+
+    function selectUps(u) {
+      selectedIds.clear();
+      selectedId = null;
+      selectedPduId = null;
+      selectedCoolingId = null;
+      selectedUpsId = u ? Number(u.ups_id) : null;
+      renderProps();
+      draw();
+      updateCanvasCursor();
     }
 
     function isPduPositionLocked(pOrId) {
@@ -968,6 +1003,7 @@
     function selectPdu(p) {
       selectedIds.clear();
       selectedCoolingId = null;
+      selectedUpsId = null;
       selectedId = null;
       selectedPduId = p ? Number(p.pdu_id) : null;
       renderProps();
@@ -994,6 +1030,7 @@
       const additive = !!opts.additive;
       selectedPduId = null; // exclusive with PDU selection
       selectedCoolingId = null;
+      selectedUpsId = null;
       if (!c) {
         if (!additive) {
           selectedIds.clear();
@@ -1403,6 +1440,10 @@
     }
 
     function renderProps() {
+      if (selectedUpsId) {
+        renderUpsProps();
+        return;
+      }
       if (selectedCoolingId) {
         renderCoolingProps();
         return;
@@ -2053,6 +2094,284 @@
         renderProps();
         draw();
         ColdAisle.toast('Cooling unit removed from plan (still in Cooling → Air & pumps)', 'success');
+      } catch (e) {
+        ColdAisle.toast(e.message || 'Unplace failed', 'error');
+      }
+    }
+
+    function renderUpsProps() {
+      const u = floorUps.find(function (x) { return Number(x.ups_id) === Number(selectedUpsId); });
+      if (!u) {
+        selectedUpsId = null;
+        renderProps();
+        return;
+      }
+      const facing = (u.front_facing || rotationToFacing(u.rotation_deg) || 'north').toLowerCase();
+      const locked = isUpsPositionLocked(u);
+      const posRo = locked ? ' readonly' : '';
+      const posStyle = locked ? ' style="opacity:.75;background:var(--surface-2)"' : '';
+      const base = (window.ColdAisle && window.ColdAisle.baseUrl ? window.ColdAisle.baseUrl.replace(/\/$/, '') : '');
+      const upsUrl = base + '/pages/power_ups.php?id=' + encodeURIComponent(u.ups_id);
+      const loadLine = u.last_load_pct != null ? String(u.last_load_pct) + '% load' : '—';
+      const battLine = u.last_battery_pct != null ? String(u.last_battery_pct) + '% batt' : '';
+
+      propsEl.innerHTML =
+        '<h3 style="margin-top:0">Floor UPS' +
+        (locked
+          ? ' <span class="badge" style="background:#475569;color:#e2e8f0">🔒 Locked</span>'
+          : ' <span class="badge" style="background:#16a34a;color:#fff">🔓 Unlocked</span>') +
+        '</h3>' +
+        '<p class="text-muted" style="font-size:.8rem;margin-top:0">' +
+        'Scope <strong>' + esc(u.ups_scope || 'in_row') + '</strong>' +
+        (u.primary_ip ? ' · IP <strong>' + esc(u.primary_ip) + '</strong>' : '') +
+        ' · ' + esc(loadLine) + (battLine ? ' · ' + esc(battLine) : '') +
+        (u.last_output_status ? ' · ' + esc(u.last_output_status) : '') +
+        '</p>' +
+        '<div class="form-row" style="margin-bottom:.65rem">' +
+        '<button type="button" class="btn ' + (locked ? 'btn-primary' : 'btn-secondary') + ' btn-sm" id="fu_lock" style="width:100%">' +
+        (locked ? '🔓 Unlock position' : '🔒 Lock position') +
+        '</button></div>' +
+        '<div class="form-row"><label>Name</label>' +
+        '<input class="form-control" id="fu_name" value="' + esc(u.name || '') + '"></div>' +
+        '<div class="form-row"><label>Front faces</label>' +
+        '<select class="form-control" id="fu_facing"' + (locked ? ' disabled' : '') + '>' + facingOptionsHtml(facing) + '</select></div>' +
+        '<div class="form-row"><label>Width (' + sizeLabel() + ')</label>' +
+        '<input class="form-control" type="number" step="0.1" id="fu_w" value="' + fmtSize(u.width_mm || 600) + '"' + posRo + posStyle + '></div>' +
+        '<div class="form-row"><label>Depth (' + sizeLabel() + ')</label>' +
+        '<input class="form-control" type="number" step="0.1" id="fu_d" value="' + fmtSize(u.depth_mm || 1100) + '"' + posRo + posStyle + '></div>' +
+        '<div class="form-row"><label>Height (' + sizeLabel() + ')</label>' +
+        '<input class="form-control" type="number" step="0.1" id="fu_h" value="' + fmtSize(u.height_mm || 2000) + '">' +
+        '<p class="text-muted" style="font-size:.72rem;margin:.25rem 0 0">Used in 3D view.</p></div>' +
+        '<div class="form-row"><label>Pos X (' + lengthLabel() + ')</label>' +
+        '<input class="form-control" type="number" step="0.0001" id="fu_x" data-user-edited="0" value="' + fmtLen(u.pos_x) + '"' + posRo + posStyle + '></div>' +
+        '<div class="form-row"><label>Pos Y (' + lengthLabel() + ')</label>' +
+        '<input class="form-control" type="number" step="0.0001" id="fu_y" data-user-edited="0" value="' + fmtLen(u.pos_y) + '"' + posRo + posStyle + '></div>' +
+        '<div class="form-row"><label>Color</label>' +
+        '<input class="form-control" type="color" id="fu_color" value="' + esc(u.color_hex || '#7c3aed') + '"></div>' +
+        '<div class="form-actions" style="flex-wrap:wrap;gap:.35rem">' +
+        '<button type="button" class="btn btn-primary btn-sm" id="fu_save">Save</button>' +
+        '<button type="button" class="btn btn-secondary btn-sm" id="fu_snap"' + (locked ? ' disabled' : '') + '>Snap to Grid</button>' +
+        '<button type="button" class="btn btn-secondary btn-sm" id="fu_rot_ccw"' + (locked ? ' disabled' : '') + '>↺ 90°</button>' +
+        '<button type="button" class="btn btn-secondary btn-sm" id="fu_rot_cw"' + (locked ? ' disabled' : '') + '>↻ 90°</button>' +
+        '<button type="button" class="btn btn-warning btn-sm" id="fu_unplace" title="Remove from plan but keep the UPS inventory record">Unplace</button>' +
+        '<a class="btn btn-secondary btn-sm" href="' + upsUrl + '">Open UPS</a>' +
+        '</div>' +
+        '<p class="text-muted" style="font-size:.75rem;margin:.65rem 0 0">' +
+        'Unlock to drag on the plan, then <strong>Save</strong> (auto-locks). ' +
+        'Unplace clears floor position only — SNMP config and inventory stay on the UPS. ' +
+        'To permanently remove a ghost unit, use <strong>Delete UPS</strong> on the UPS page.' +
+        '</p>';
+
+      propsEl.querySelector('#fu_lock').onclick = function () {
+        const nowLocked = !isUpsPositionLocked(u);
+        setUpsPositionLocked(u, nowLocked);
+        ColdAisle.toast(nowLocked ? 'UPS position locked' : 'UPS unlocked — move then Save', nowLocked ? 'info' : 'success');
+        renderProps();
+        draw();
+        updateCanvasCursor();
+      };
+      propsEl.querySelector('#fu_save').onclick = function () { saveFloorUps(u); };
+      propsEl.querySelector('#fu_snap').onclick = function () {
+        if (isUpsPositionLocked(u)) return;
+        const sn = snapCabinetPosition(Number(u.pos_x) || 0, Number(u.pos_y) || 0, u, true);
+        u.pos_x = sn.x;
+        u.pos_y = sn.y;
+        const xEl = propsEl.querySelector('#fu_x');
+        const yEl = propsEl.querySelector('#fu_y');
+        if (xEl) { xEl.value = fmtLen(u.pos_x); xEl.dataset.userEdited = '0'; }
+        if (yEl) { yEl.value = fmtLen(u.pos_y); yEl.dataset.userEdited = '0'; }
+        saveFloorUps(u, true);
+      };
+      propsEl.querySelector('#fu_rot_cw').onclick = function () { rotateFloorUps(u, 90); };
+      propsEl.querySelector('#fu_rot_ccw').onclick = function () { rotateFloorUps(u, -90); };
+      propsEl.querySelector('#fu_unplace').onclick = function () { unplaceFloorUps(u); };
+      const facEl = propsEl.querySelector('#fu_facing');
+      if (facEl) {
+        facEl.onchange = function () {
+          if (isUpsPositionLocked(u)) return;
+          u.front_facing = facEl.value;
+          u.rotation_deg = facingToRotation(u.front_facing);
+          draw();
+        };
+      }
+      ['#fu_x', '#fu_y'].forEach(function (sel) {
+        const el = propsEl.querySelector(sel);
+        if (!el) return;
+        el.addEventListener('input', function () {
+          if (isUpsPositionLocked(u)) return;
+          el.dataset.userEdited = '1';
+        });
+        el.addEventListener('change', function () {
+          if (isUpsPositionLocked(u)) return;
+          el.dataset.userEdited = '1';
+          u.pos_x = displayToM(propsEl.querySelector('#fu_x').value);
+          u.pos_y = displayToM(propsEl.querySelector('#fu_y').value);
+          draw();
+        });
+      });
+    }
+
+    async function saveFloorUps(u, silent) {
+      if (!u) return;
+      const locked = isUpsPositionLocked(u);
+      const nameEl = propsEl.querySelector('#fu_name');
+      const payload = {
+        ups_id: Number(u.ups_id),
+        name: nameEl ? nameEl.value.trim() : u.name,
+        color_hex: propsEl.querySelector('#fu_color') ? propsEl.querySelector('#fu_color').value : u.color_hex,
+      };
+      const hEl = propsEl.querySelector('#fu_h');
+      if (hEl) {
+        payload.height_mm = Math.max(100, Math.round(displayToMm(hEl.value)));
+      } else if (u.height_mm) {
+        payload.height_mm = Number(u.height_mm);
+      }
+      const savedPosX = Number(u.pos_x) || 0;
+      const savedPosY = Number(u.pos_y) || 0;
+      const savedRot = upsRotation(u);
+      const savedFacing = (u.front_facing || rotationToFacing(savedRot) || 'north').toLowerCase();
+      const savedW = Number(u.width_mm) || 600;
+      const savedD = Number(u.depth_mm) || 1100;
+
+      if (!locked) {
+        const wEl = propsEl.querySelector('#fu_w');
+        const dEl = propsEl.querySelector('#fu_d');
+        const xEl = propsEl.querySelector('#fu_x');
+        const yEl = propsEl.querySelector('#fu_y');
+        const facEl = propsEl.querySelector('#fu_facing');
+        if (wEl) payload.width_mm = Math.round(displayToMm(wEl.value));
+        if (dEl) payload.depth_mm = Math.round(displayToMm(dEl.value));
+        let posX = savedPosX;
+        let posY = savedPosY;
+        if (xEl && yEl && (xEl.dataset.userEdited === '1' || yEl.dataset.userEdited === '1')) {
+          posX = displayToM(xEl.value);
+          posY = displayToM(yEl.value);
+        }
+        const fac = facEl ? facEl.value : savedFacing;
+        const draft = Object.assign({}, u, {
+          width_mm: payload.width_mm != null ? payload.width_mm : u.width_mm,
+          depth_mm: payload.depth_mm != null ? payload.depth_mm : u.depth_mm,
+          front_facing: fac,
+          rotation_deg: facingToRotation(fac),
+        });
+        const cl = clampCabinetPosition(posX, posY, draft);
+        payload.pos_x = cl.x;
+        payload.pos_y = cl.y;
+        payload.front_facing = fac;
+        payload.rotation_deg = facingToRotation(fac);
+        u.pos_x = payload.pos_x;
+        u.pos_y = payload.pos_y;
+        u.front_facing = fac;
+        u.rotation_deg = payload.rotation_deg;
+        if (payload.width_mm != null) u.width_mm = payload.width_mm;
+        if (payload.depth_mm != null) u.depth_mm = payload.depth_mm;
+      } else {
+        payload.width_mm = savedW;
+        payload.depth_mm = savedD;
+        payload.pos_x = savedPosX;
+        payload.pos_y = savedPosY;
+        payload.front_facing = savedFacing;
+        payload.rotation_deg = savedRot;
+      }
+      if (payload.height_mm != null) u.height_mm = payload.height_mm;
+      try {
+        const res = await ColdAisle.api('api/floorplan.php?action=update_floor_ups', {
+          method: 'POST',
+          body: payload,
+        });
+        const updated = (res && res.ups_unit) || payload;
+        Object.assign(u, updated);
+        if (locked) {
+          u.pos_x = savedPosX;
+          u.pos_y = savedPosY;
+          u.rotation_deg = savedRot;
+          u.front_facing = savedFacing;
+        } else {
+          u.pos_x = payload.pos_x != null ? payload.pos_x : u.pos_x;
+          u.pos_y = payload.pos_y != null ? payload.pos_y : u.pos_y;
+        }
+        setUpsPositionLocked(u, true);
+        if (propsEl.querySelector('#fu_x')) {
+          propsEl.querySelector('#fu_x').value = fmtLen(u.pos_x);
+          propsEl.querySelector('#fu_x').dataset.userEdited = '0';
+        }
+        if (propsEl.querySelector('#fu_y')) {
+          propsEl.querySelector('#fu_y').value = fmtLen(u.pos_y);
+          propsEl.querySelector('#fu_y').dataset.userEdited = '0';
+        }
+        if (!silent) {
+          ColdAisle.toast(
+            locked ? 'UPS saved (position unchanged, locked)' : 'UPS saved (position locked)',
+            'success'
+          );
+        } else {
+          ColdAisle.toast('Snapped to grid and saved', 'success');
+        }
+        renderProps();
+        draw();
+        refresh3d();
+      } catch (e) {
+        ColdAisle.toast(e.message || 'Save failed', 'error');
+      }
+    }
+
+    async function rotateFloorUps(u, delta) {
+      if (!u || isUpsPositionLocked(u)) {
+        ColdAisle.toast('Unlock UPS position first', 'error');
+        return;
+      }
+      let deg = (upsRotation(u) + delta) % 360;
+      if (deg < 0) deg += 360;
+      u.rotation_deg = deg;
+      u.front_facing = rotationToFacing(deg);
+      if (snapToGrid) {
+        const sn = snapCabinetPosition(Number(u.pos_x) || 0, Number(u.pos_y) || 0, u, true);
+        u.pos_x = sn.x;
+        u.pos_y = sn.y;
+      }
+      draw();
+      try {
+        await ColdAisle.api('api/floorplan.php?action=update_floor_ups', {
+          method: 'POST',
+          body: {
+            ups_id: Number(u.ups_id),
+            front_facing: u.front_facing,
+            rotation_deg: u.rotation_deg,
+            pos_x: u.pos_x,
+            pos_y: u.pos_y,
+            width_mm: u.width_mm,
+            depth_mm: u.depth_mm,
+          },
+        });
+        ColdAisle.toast('Facing → ' + String(u.front_facing).toUpperCase(), 'success');
+        renderProps();
+      } catch (e) {
+        ColdAisle.toast(e.message || 'Rotate failed', 'error');
+      }
+    }
+
+    async function unplaceFloorUps(u) {
+      if (!u || !confirm('Remove this UPS from the floor plan? The inventory record is kept (Power → UPS).')) return;
+      try {
+        await ColdAisle.api('api/floorplan.php?action=unplace_ups', {
+          method: 'POST',
+          body: { ups_id: Number(u.ups_id) },
+        });
+        floorUps = floorUps.filter(function (x) { return Number(x.ups_id) !== Number(u.ups_id); });
+        unlockedUpsIds.delete(Number(u.ups_id));
+        const copy = Object.assign({}, u);
+        copy.pos_x = null;
+        copy.pos_y = null;
+        unplacedUps.push(copy);
+        unplacedUps.sort(function (a, b) {
+          return String(a.name || '').localeCompare(String(b.name || ''));
+        });
+        selectedUpsId = null;
+        renderUpsPalette();
+        renderProps();
+        draw();
+        refresh3d();
+        ColdAisle.toast('UPS removed from plan (still in Power → UPS)', 'success');
       } catch (e) {
         ColdAisle.toast(e.message || 'Unplace failed', 'error');
       }
@@ -2798,6 +3117,7 @@
         unlockedIds.clear(); // all placed racks load locked
         unlockedPduIds.clear();
         unlockedCoolingIds.clear();
+        unlockedUpsIds.clear();
         selectedIds.clear();
         selectedId = null;
         selectedPduId = null;
@@ -2844,6 +3164,24 @@
           if (!u.depth_mm) u.depth_mm = 900;
           if (!u.height_mm) u.height_mm = 2000;
           if (!u.color_hex) u.color_hex = '#0ea5e9';
+        });
+        floorUps.forEach(function (u) {
+          // Normalize legacy N/S/E/W single-letter facing to full words
+          if (u.front_facing) {
+            const ff = String(u.front_facing).toLowerCase();
+            const short = { n: 'north', s: 'south', e: 'east', w: 'west' };
+            u.front_facing = short[ff] || ff;
+          }
+          if (!u.front_facing && u.rotation_deg != null) {
+            u.front_facing = rotationToFacing(u.rotation_deg);
+          }
+          if (u.front_facing) {
+            u.rotation_deg = facingToRotation(u.front_facing);
+          }
+          if (!u.width_mm) u.width_mm = 600;
+          if (!u.depth_mm) u.depth_mm = 1100;
+          if (!u.height_mm) u.height_mm = 2000;
+          if (!u.color_hex) u.color_hex = '#7c3aed';
         });
         selectedId = null;
         pendingTemplate = null;
@@ -3312,13 +3650,11 @@
             return Number(x.ups_id) !== Number(u.ups_id);
           });
           renderUpsPalette();
-          selectedUpsId = Number(u.ups_id);
-          selectedCoolingId = null;
-          selectedPduId = null;
-          selectedId = null;
-          draw();
+          // New place: unlock so user can adjust immediately, then Save
+          setUpsPositionLocked(u, false);
+          selectUps(u);
           refresh3d();
-          ColdAisle.toast('UPS placed: ' + (u.name || ''), 'success');
+          ColdAisle.toast('UPS placed: ' + (u.name || '') + ' — adjust position then Save', 'success');
         }
       } catch (err) {
         ColdAisle.toast((err && err.message) || 'Failed to place UPS', 'error');
@@ -3578,15 +3914,30 @@
       }
 
       if (hit && hit.type === 'ups') {
-        selectedUpsId = Number(hit.obj.ups_id);
-        selectedCoolingId = null;
-        selectedPduId = null;
-        selectedId = null;
-        draw();
-        return;
-      }
-
-      if (hit && hit.type === 'cooling') {
+        const uu = hit.obj;
+        selectUps(uu);
+        pan = null;
+        if (!isUpsPositionLocked(uu) && !e.shiftKey) {
+          const r = upsRect(uu);
+          drag = {
+            kind: 'ups',
+            id: Number(uu.ups_id),
+            ox: pt.x - r.x,
+            oy: pt.y - r.y,
+            startX: pt.x,
+            startY: pt.y,
+            active: false,
+            startWorld: {
+              x: Number(uu.pos_x) || 0,
+              y: Number(uu.pos_y) || 0,
+            },
+          };
+          try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+        } else {
+          drag = null;
+        }
+        updateCanvasCursor(true);
+      } else if (hit && hit.type === 'cooling') {
         const cu = hit.obj;
         selectCooling(cu);
         pan = null;
@@ -3708,6 +4059,31 @@
       }
 
       if (!drag) return;
+      if (drag.kind === 'ups') {
+        const u = floorUps.find(function (x) { return Number(x.ups_id) === drag.id; });
+        if (!u || isUpsPositionLocked(u)) {
+          drag = null;
+          return;
+        }
+        const ptU = canvasPoint(e);
+        if (!drag.active) {
+          const dx = ptU.x - drag.startX;
+          const dy = ptU.y - drag.startY;
+          if ((dx * dx + dy * dy) < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) return;
+          drag.active = true;
+        }
+        let x = (ptU.x - drag.ox - ORIGIN) / scale();
+        let y = (ptU.y - drag.oy - ORIGIN) / scale();
+        const sn = snapCabinetPosition(x, y, u, false);
+        u.pos_x = sn.x;
+        u.pos_y = sn.y;
+        const xEl = propsEl.querySelector('#fu_x');
+        const yEl = propsEl.querySelector('#fu_y');
+        if (xEl) xEl.value = fmtLen(u.pos_x);
+        if (yEl) yEl.value = fmtLen(u.pos_y);
+        draw();
+        return;
+      }
       if (drag.kind === 'cooling') {
         const u = floorCooling.find(function (x) { return Number(x.cooling_unit_id) === drag.id; });
         if (!u || isCoolingPositionLocked(u)) {
@@ -3807,6 +4183,17 @@
       const kind = drag.kind || 'cabinet';
       const dragId = drag.id;
       drag = null;
+      if (kind === 'ups') {
+        const u = floorUps.find(function (x) { return Number(x.ups_id) === Number(dragId); });
+        if (!u || !wasActive || isUpsPositionLocked(u)) {
+          updateCanvasCursor();
+          return;
+        }
+        draw();
+        updateCanvasCursor();
+        ColdAisle.toast('UPS position updated — click Save to keep & lock', 'info');
+        return;
+      }
       if (kind === 'cooling') {
         const u = floorCooling.find(function (x) { return Number(x.cooling_unit_id) === Number(dragId); });
         if (!u || !wasActive || isCoolingPositionLocked(u)) {
