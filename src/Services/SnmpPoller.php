@@ -739,18 +739,42 @@ class SnmpPoller
         $flat = class_exists('SnmpThresholdService')
             ? SnmpThresholdService::flattenPollMetrics($metrics)
             : [];
+        // collectOidMap lowercases keys; Discover / stock templates use mixed aliases
+        $pickFlat = static function (array $flat, array $keys): ?float {
+            foreach ($keys as $k) {
+                $k = strtolower((string)$k);
+                if (isset($flat[$k]) && is_numeric($flat[$k])) {
+                    return (float)$flat[$k];
+                }
+            }
+            return null;
+        };
 
-        $loadPct = $flat['output_load'] ?? null;
-        $battPct = $flat['battery_capacity'] ?? null;
-        $outStatusCode = $flat['output_status'] ?? null;
+        // Stock JSON uses load_pct; default APC map uses output_load — accept both
+        $loadPct = $pickFlat($flat, [
+            'output_load', 'load_pct', 'output_load_pct', 'load', 'ups_load', 'outputload',
+        ]);
+        $battPct = $pickFlat($flat, [
+            'battery_capacity', 'battery_pct', 'battery_charge', 'batt_pct', 'capacity',
+        ]);
+        $outStatusCode = $pickFlat($flat, ['output_status', 'ups_output_status', 'upsbasicoutputstatus']);
         $runtimeMin = null;
-        if (isset($flat['runtime_ticks'])) {
-            // TimeTicks: hundredths of a second
-            $runtimeMin = round(((float)$flat['runtime_ticks']) / 100.0 / 60.0, 1);
+        $runtimeTicks = $pickFlat($flat, ['runtime_ticks', 'runtime', 'battery_runtime', 'upsadvbatteryruntime']);
+        if ($runtimeTicks !== null) {
+            // TimeTicks: hundredths of a second (APC); if already minutes-like, keep small values
+            if ($runtimeTicks >= 1000) {
+                $runtimeMin = round($runtimeTicks / 100.0 / 60.0, 1);
+            } else {
+                $runtimeMin = round($runtimeTicks, 1);
+            }
         }
-        $inV = $flat['input_voltage'] ?? null;
-        $outV = $flat['output_voltage'] ?? null;
-        $tempC = $flat['battery_temp_c'] ?? null;
+        $inV = $pickFlat($flat, ['input_voltage', 'input_volts', 'in_voltage', 'upsadvinputlinevoltage']);
+        $outV = $pickFlat($flat, ['output_voltage', 'output_volts', 'out_voltage', 'upsadvoutputvoltage']);
+        $inHz = $pickFlat($flat, ['input_freq', 'input_frequency', 'in_freq', 'upsadvinputfrequency']);
+        $outHz = $pickFlat($flat, ['output_freq', 'output_frequency', 'out_freq', 'upsadvoutputfrequency']);
+        $outA = $pickFlat($flat, ['output_current', 'output_amps', 'out_current', 'upsadvoutputcurrent']);
+        $wattsSnmp = $pickFlat($flat, ['watts', 'output_watts', 'active_power', 'upsadvoutputactivepower']);
+        $tempC = $pickFlat($flat, ['battery_temp_c', 'battery_temperature', 'internal_temp_c', 'upsadvbatterytemperature']);
         $statusLabel = null;
         if (function_exists('ups_output_status_label') && $outStatusCode !== null) {
             $statusLabel = ups_output_status_label($outStatusCode);
@@ -800,6 +824,11 @@ class SnmpPoller
                 'runtime_min' => $runtimeMin,
                 'output_status_label' => $statusLabel,
                 'sysuptime_label' => $sysUptimeLabel,
+                'input_voltage' => $inV,
+                'output_voltage' => $outV,
+                'input_freq' => $inHz,
+                'output_freq' => $outHz,
+                'output_current' => $outA,
             ],
         ];
 
@@ -815,6 +844,16 @@ class SnmpPoller
             'last_internal_temp_c' => $tempC,
             'updated_at' => $now,
         ];
+        // Optional electrical columns (Schema::ensure may add these)
+        if ($inHz !== null) {
+            $patch['last_input_freq'] = $inHz;
+        }
+        if ($outHz !== null) {
+            $patch['last_output_freq'] = $outHz;
+        }
+        if ($outA !== null) {
+            $patch['last_output_current'] = $outA;
+        }
         // Fill empty model from SNMP
         if (!empty($flat['model']) || !empty($metrics['model']['raw'])) {
             $modelRaw = $metrics['model']['raw'] ?? $flat['model'] ?? null;
@@ -853,17 +892,27 @@ class SnmpPoller
         if ($mfgDate !== null && $mfgDate !== '') {
             $patch['manufacture_date'] = $mfgDate;
         }
-        Database::update('ups_units', $patch, 'ups_id = :id', [':id' => (int)$unit['ups_id']]);
+        try {
+            Database::update('ups_units', $patch, 'ups_id = :id', [':id' => (int)$unit['ups_id']]);
+        } catch (Throwable $e) {
+            // Columns last_*_freq / last_output_current may not exist yet
+            unset($patch['last_input_freq'], $patch['last_output_freq'], $patch['last_output_current']);
+            Database::update('ups_units', $patch, 'ups_id = :id', [':id' => (int)$unit['ups_id']]);
+        }
 
-        // History sample for Power / zone charts
+        // History sample for Power / zone / UPS detail charts
         if (class_exists('UpsHistoryService')) {
-            $estW = null;
-            if ($loadPct !== null) {
+            $estW = $wattsSnmp;
+            if ($estW === null && $loadPct !== null) {
                 if ($unit['rated_kw'] !== null && $unit['rated_kw'] !== '') {
                     $estW = (float)$unit['rated_kw'] * 1000.0 * ((float)$loadPct / 100.0);
                 } elseif ($unit['rated_kva'] !== null && $unit['rated_kva'] !== '') {
                     $estW = (float)$unit['rated_kva'] * 1000.0 * 0.9 * ((float)$loadPct / 100.0);
                 }
+            }
+            // Fallback: V×I when load % / rated unknown
+            if ($estW === null && $outV !== null && $outA !== null && $outV > 0 && $outA > 0) {
+                $estW = round($outV * $outA, 1);
             }
             try {
                 UpsHistoryService::recordSample(
@@ -872,7 +921,14 @@ class SnmpPoller
                     $battPct !== null ? (float)$battPct : null,
                     $runtimeMin !== null ? (float)$runtimeMin : null,
                     $statusLabel,
-                    $estW
+                    $estW,
+                    [
+                        'input_voltage' => $inV,
+                        'output_voltage' => $outV,
+                        'input_freq' => $inHz,
+                        'output_freq' => $outHz,
+                        'output_current' => $outA,
+                    ]
                 );
             } catch (Throwable $e) {
                 App::log('UpsHistory record: ' . $e->getMessage(), 'warning');

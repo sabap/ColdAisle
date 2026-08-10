@@ -11,6 +11,11 @@ class UpsHistoryService
 
     /**
      * Persist a sample after poll.
+     *
+     * @param array{
+     *   input_voltage?:?float,output_voltage?:?float,
+     *   input_freq?:?float,output_freq?:?float,output_current?:?float
+     * } $electrical
      */
     public static function recordSample(
         int $upsId,
@@ -18,27 +23,54 @@ class UpsHistoryService
         ?float $batteryPct,
         ?float $runtimeMin = null,
         ?string $outputStatus = null,
-        ?float $estimatedWatts = null
+        ?float $estimatedWatts = null,
+        array $electrical = []
     ): void {
         if ($upsId < 1) {
             return;
         }
-        if ($loadPct === null && $batteryPct === null && $runtimeMin === null && $estimatedWatts === null) {
+        $inV = isset($electrical['input_voltage']) && is_numeric($electrical['input_voltage'])
+            ? (float)$electrical['input_voltage'] : null;
+        $outV = isset($electrical['output_voltage']) && is_numeric($electrical['output_voltage'])
+            ? (float)$electrical['output_voltage'] : null;
+        $inHz = isset($electrical['input_freq']) && is_numeric($electrical['input_freq'])
+            ? (float)$electrical['input_freq'] : null;
+        $outHz = isset($electrical['output_freq']) && is_numeric($electrical['output_freq'])
+            ? (float)$electrical['output_freq'] : null;
+        $outA = isset($electrical['output_current']) && is_numeric($electrical['output_current'])
+            ? (float)$electrical['output_current'] : null;
+
+        if ($loadPct === null && $batteryPct === null && $runtimeMin === null && $estimatedWatts === null
+            && $inV === null && $outV === null && $inHz === null && $outHz === null && $outA === null
+        ) {
             return;
         }
+        $row = [
+            'ups_id' => $upsId,
+            'load_pct' => $loadPct,
+            'battery_pct' => $batteryPct,
+            'runtime_min' => $runtimeMin,
+            'output_status' => $outputStatus !== null && $outputStatus !== ''
+                ? mb_substr($outputStatus, 0, 80) : null,
+            'estimated_watts' => $estimatedWatts,
+            'polled_at' => date('Y-m-d H:i:s'),
+        ];
+        // Extended electrical columns (Schema::ensure may add these)
+        $extra = [
+            'input_voltage' => $inV,
+            'output_voltage' => $outV,
+            'input_freq' => $inHz,
+            'output_freq' => $outHz,
+            'output_current' => $outA,
+        ];
         try {
-            Database::insert('ups_readings', [
-                'ups_id' => $upsId,
-                'load_pct' => $loadPct,
-                'battery_pct' => $batteryPct,
-                'runtime_min' => $runtimeMin,
-                'output_status' => $outputStatus !== null && $outputStatus !== ''
-                    ? mb_substr($outputStatus, 0, 80) : null,
-                'estimated_watts' => $estimatedWatts,
-                'polled_at' => date('Y-m-d H:i:s'),
-            ]);
+            Database::insert('ups_readings', array_merge($row, $extra));
         } catch (Throwable $e) {
-            App::log('UpsHistory sample failed: ' . $e->getMessage(), 'warning');
+            try {
+                Database::insert('ups_readings', $row);
+            } catch (Throwable $e2) {
+                App::log('UpsHistory sample failed: ' . $e2->getMessage(), 'warning');
+            }
         }
         if (random_int(1, 100) === 1) {
             self::pruneOld();
@@ -60,9 +92,7 @@ class UpsHistoryService
     /**
      * @return array{
      *   ok:bool,scope:string,scope_id:?int,hours:int,bucket_minutes:int,
-     *   series:array{t:list<string>,load_pct:list<?float>,battery_pct:list<?float>,
-     *     runtime_min:list<?float>,kw:list<?float>,watts:list<?float>},
-     *   outages:list, meta:array<string,mixed>
+     *   series:array<string,mixed>, outages:list, meta:array<string,mixed>
      * }
      */
     public static function series(
@@ -120,7 +150,6 @@ class UpsHistoryService
         $fromSql = date('Y-m-d H:i:s', $fromTs);
         $toSql = date('Y-m-d H:i:s', $toTs);
 
-        // Active UPS set for scope
         $upsSql = 'SELECT ups_id, rated_kw, rated_kva, zone_id FROM ups_units WHERE is_active = 1';
         $upsParams = [];
         if ($scope === 'ups_zone' && $scopeId && $scopeId > 0) {
@@ -153,7 +182,6 @@ class UpsHistoryService
             ];
         }
 
-        // Build time buckets
         $bucketSec = $bucketMin * 60;
         $startBucket = (int)(floor($fromTs / $bucketSec) * $bucketSec);
         $tLabels = [];
@@ -175,17 +203,17 @@ class UpsHistoryService
             ];
         }
 
-        // Hold-forward: for each UPS, load readings, then for each bucket take last value
-        $inList = implode(',', array_fill(0, count($upsIds), '?'));
-        $params = array_merge($upsIds, [$fromSql, $toSql]);
-        // Lookback one bucket for hold
         $lookbackSql = date('Y-m-d H:i:s', $fromTs - $bucketSec * 2);
+        $inList = implode(',', array_fill(0, count($upsIds), '?'));
         $paramsLook = array_merge($upsIds, [$lookbackSql, $toSql]);
 
         $readings = [];
+        $selectFull = 'ups_id, load_pct, battery_pct, runtime_min, estimated_watts,
+                input_voltage, output_voltage, input_freq, output_freq, output_current, polled_at';
+        $selectBase = 'ups_id, load_pct, battery_pct, runtime_min, estimated_watts, polled_at';
         try {
             $readings = Database::fetchAll(
-                "SELECT ups_id, load_pct, battery_pct, runtime_min, estimated_watts, polled_at
+                "SELECT {$selectFull}
                  FROM ups_readings
                  WHERE ups_id IN ($inList)
                    AND polled_at >= ? AND polled_at <= ?
@@ -193,11 +221,22 @@ class UpsHistoryService
                 $paramsLook
             );
         } catch (Throwable $e) {
-            App::log('UpsHistory series: ' . $e->getMessage(), 'warning');
-            $readings = [];
+            try {
+                $readings = Database::fetchAll(
+                    "SELECT {$selectBase}
+                     FROM ups_readings
+                     WHERE ups_id IN ($inList)
+                       AND polled_at >= ? AND polled_at <= ?
+                     ORDER BY ups_id, polled_at",
+                    $paramsLook
+                );
+            } catch (Throwable $e2) {
+                App::log('UpsHistory series: ' . $e2->getMessage(), 'warning');
+                $readings = [];
+            }
         }
 
-        /** @var array<int, list<array{ts:int,load:?float,batt:?float,rt:?float,w:?float}>> $byUps */
+        /** @var array<int, list<array<string,mixed>>> $byUps */
         $byUps = [];
         foreach ($upsIds as $id) {
             $byUps[$id] = [];
@@ -211,24 +250,30 @@ class UpsHistoryService
             if ($ts === false) {
                 continue;
             }
+            $num = static function ($v): ?float {
+                return $v !== null && $v !== '' && is_numeric($v) ? (float)$v : null;
+            };
             $byUps[$uid][] = [
                 'ts' => $ts,
-                'load' => $r['load_pct'] !== null && $r['load_pct'] !== '' ? (float)$r['load_pct'] : null,
-                'batt' => $r['battery_pct'] !== null && $r['battery_pct'] !== '' ? (float)$r['battery_pct'] : null,
-                'rt' => $r['runtime_min'] !== null && $r['runtime_min'] !== '' ? (float)$r['runtime_min'] : null,
-                'w' => $r['estimated_watts'] !== null && $r['estimated_watts'] !== ''
-                    ? (float)$r['estimated_watts'] : null,
+                'load' => $num($r['load_pct'] ?? null),
+                'batt' => $num($r['battery_pct'] ?? null),
+                'rt' => $num($r['runtime_min'] ?? null),
+                'w' => $num($r['estimated_watts'] ?? null),
+                'in_v' => $num($r['input_voltage'] ?? null),
+                'out_v' => $num($r['output_voltage'] ?? null),
+                'in_hz' => $num($r['input_freq'] ?? null),
+                'out_hz' => $num($r['output_freq'] ?? null),
+                'out_a' => $num($r['output_current'] ?? null),
             ];
         }
 
-        // rated watts fallback for estimate
         $ratedW = [];
         foreach ($upsRows as $ur) {
             $uid = (int)$ur['ups_id'];
             if ($ur['rated_kw'] !== null && $ur['rated_kw'] !== '') {
                 $ratedW[$uid] = (float)$ur['rated_kw'] * 1000.0;
             } elseif ($ur['rated_kva'] !== null && $ur['rated_kva'] !== '') {
-                $ratedW[$uid] = (float)$ur['rated_kva'] * 1000.0 * 0.9; // rough PF
+                $ratedW[$uid] = (float)$ur['rated_kva'] * 1000.0 * 0.9;
             }
         }
 
@@ -237,17 +282,19 @@ class UpsHistoryService
         $rtSeries = [];
         $wattsSeries = [];
         $kwSeries = [];
+        $inVSeries = [];
+        $outVSeries = [];
+        $inHzSeries = [];
+        $outHzSeries = [];
+        $outASeries = [];
         $sampleCount = 0;
 
         foreach ($bucketKeys as $bTs) {
-            $loadSum = 0.0;
-            $loadN = 0;
-            $battSum = 0.0;
-            $battN = 0;
-            $rtSum = 0.0;
-            $rtN = 0;
-            $wSum = 0.0;
-            $wN = 0;
+            $acc = [
+                'load' => [0.0, 0], 'batt' => [0.0, 0], 'rt' => [0.0, 0], 'w' => [0.0, 0],
+                'in_v' => [0.0, 0], 'out_v' => [0.0, 0], 'in_hz' => [0.0, 0],
+                'out_hz' => [0.0, 0], 'out_a' => [0.0, 0],
+            ];
             foreach ($upsIds as $uid) {
                 $pts = $byUps[$uid] ?? [];
                 $last = null;
@@ -261,42 +308,48 @@ class UpsHistoryService
                 if ($last === null) {
                     continue;
                 }
-                // Only count if sample is not too stale (2 buckets)
                 if ($last['ts'] < $bTs - $bucketSec * 2) {
                     continue;
                 }
                 $sampleCount++;
-                if ($last['load'] !== null) {
-                    $loadSum += $last['load'];
-                    $loadN++;
-                }
-                if ($last['batt'] !== null) {
-                    $battSum += $last['batt'];
-                    $battN++;
-                }
-                if ($last['rt'] !== null) {
-                    $rtSum += $last['rt'];
-                    $rtN++;
+                foreach (['load', 'batt', 'rt', 'in_v', 'out_v', 'in_hz', 'out_hz', 'out_a'] as $k) {
+                    if ($last[$k] !== null) {
+                        $acc[$k][0] += $last[$k];
+                        $acc[$k][1]++;
+                    }
                 }
                 $w = $last['w'];
                 if ($w === null && $last['load'] !== null && isset($ratedW[$uid])) {
                     $w = $ratedW[$uid] * ($last['load'] / 100.0);
                 }
+                if ($w === null && $last['out_v'] !== null && $last['out_a'] !== null
+                    && $last['out_v'] > 0 && $last['out_a'] > 0
+                ) {
+                    $w = $last['out_v'] * $last['out_a'];
+                }
                 if ($w !== null) {
-                    $wSum += $w;
-                    $wN++;
+                    $acc['w'][0] += $w;
+                    $acc['w'][1]++;
                 }
             }
-            $loadSeries[] = $loadN > 0 ? round($loadSum / $loadN, 2) : null;
-            $battSeries[] = $battN > 0 ? round($battSum / $battN, 2) : null;
-            $rtSeries[] = $rtN > 0 ? round($rtSum / $rtN, 1) : null;
-            if ($wN > 0) {
-                $wattsSeries[] = round($wSum, 1);
-                $kwSeries[] = round($wSum / 1000.0, 3);
+            $avg = static function (array $pair, int $dec): ?float {
+                return $pair[1] > 0 ? round($pair[0] / $pair[1], $dec) : null;
+            };
+            $loadSeries[] = $avg($acc['load'], 2);
+            $battSeries[] = $avg($acc['batt'], 2);
+            $rtSeries[] = $avg($acc['rt'], 1);
+            if ($acc['w'][1] > 0) {
+                $wattsSeries[] = round($acc['w'][0], 1);
+                $kwSeries[] = round($acc['w'][0] / 1000.0, 3);
             } else {
                 $wattsSeries[] = null;
                 $kwSeries[] = null;
             }
+            $inVSeries[] = $avg($acc['in_v'], 1);
+            $outVSeries[] = $avg($acc['out_v'], 1);
+            $inHzSeries[] = $avg($acc['in_hz'], 2);
+            $outHzSeries[] = $avg($acc['out_hz'], 2);
+            $outASeries[] = $avg($acc['out_a'], 2);
         }
 
         return [
@@ -312,6 +365,14 @@ class UpsHistoryService
                 'runtime_min' => $rtSeries,
                 'watts' => $wattsSeries,
                 'kw' => $kwSeries,
+                'input_voltage' => $inVSeries,
+                'output_voltage' => $outVSeries,
+                'input_freq' => $inHzSeries,
+                'output_freq' => $outHzSeries,
+                'output_current' => $outASeries,
+                // Aliases used by chart data-metric
+                'volts' => $outVSeries,
+                'amps' => $outASeries,
             ],
             'outages' => [],
             'meta' => [
@@ -329,7 +390,7 @@ class UpsHistoryService
     }
 
     /**
-     * @return array{t:list,load_pct:list,battery_pct:list,runtime_min:list,kw:list,watts:list}
+     * @return array<string,list>
      */
     private static function emptySeries(): array
     {
@@ -340,23 +401,32 @@ class UpsHistoryService
             'runtime_min' => [],
             'kw' => [],
             'watts' => [],
+            'input_voltage' => [],
+            'output_voltage' => [],
+            'input_freq' => [],
+            'output_freq' => [],
+            'output_current' => [],
+            'volts' => [],
+            'amps' => [],
         ];
     }
 
     /**
-     * @param list<?float> $arr
-     * @return array{avg:?float,min:?float,max:?float}
+     * @param list<?float> $series
+     * @return array{min:?float,max:?float,avg:?float,last:?float}
      */
-    private static function summaryStats(array $arr): array
+    private static function summaryStats(array $series): array
     {
-        $nums = array_values(array_filter($arr, static fn($v) => $v !== null && is_numeric($v)));
+        $nums = array_values(array_filter($series, static fn($v) => $v !== null && is_numeric($v)));
         if (!$nums) {
-            return ['avg' => null, 'min' => null, 'max' => null];
+            return ['min' => null, 'max' => null, 'avg' => null, 'last' => null];
         }
+        $nums = array_map('floatval', $nums);
         return [
-            'avg' => round(array_sum($nums) / count($nums), 2),
-            'min' => round(min($nums), 2),
-            'max' => round(max($nums), 2),
+            'min' => min($nums),
+            'max' => max($nums),
+            'avg' => round(array_sum($nums) / count($nums), 3),
+            'last' => $nums[count($nums) - 1],
         ];
     }
 }

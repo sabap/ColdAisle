@@ -636,6 +636,11 @@ CREATE TABLE ups_readings (
     runtime_min DECIMAL(10,2) NULL,
     output_status NVARCHAR(80) NULL,
     estimated_watts DECIMAL(12,2) NULL,
+    input_voltage DECIMAL(10,2) NULL,
+    output_voltage DECIMAL(10,2) NULL,
+    input_freq DECIMAL(10,3) NULL,
+    output_freq DECIMAL(10,3) NULL,
+    output_current DECIMAL(12,3) NULL,
     polled_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );
 GO

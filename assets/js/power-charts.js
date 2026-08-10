@@ -19,6 +19,7 @@
     if (unit === 'kW') return (Math.abs(n) >= 10 ? n.toFixed(1) : n.toFixed(2)) + ' kW';
     if (unit === 'V') return n.toFixed(0) + ' V';
     if (unit === 'A') return n.toFixed(1) + ' A';
+    if (unit === 'Hz') return n.toFixed(1) + ' Hz';
     if (unit === '%' || unit === 'pct') return n.toFixed(0) + '%';
     if (unit === 'min') return n.toFixed(0) + ' min';
     if (unit === 'state') {
@@ -137,6 +138,9 @@
     if (unit === 'V') {
       minV = Math.max(0, Math.floor(minV / 10) * 10 - 10);
       maxV = Math.ceil(maxV / 10) * 10 + 10;
+    } else if (unit === 'Hz') {
+      minV = Math.max(0, Math.floor(minV) - 2);
+      maxV = Math.ceil(maxV) + 2;
     } else if (unit === '%' || unit === 'pct') {
       minV = 0;
       maxV = Math.max(100, Math.ceil(maxV / 10) * 10);
@@ -206,6 +210,7 @@
         + '" x2="' + (padL + plotW) + '" y2="' + gy.toFixed(1) + '"/>';
       var lab = unit === 'kW' ? gv.toFixed(gv >= 10 ? 0 : 1)
         : unit === 'V' ? String(Math.round(gv))
+        : unit === 'Hz' ? gv.toFixed(1)
         : gv.toFixed(1);
       yLabels += '<text class="pc-axis" x="' + (padL - 6) + '" y="' + (gy + 3).toFixed(1)
         + '" text-anchor="end">' + lab + '</text>';
@@ -342,10 +347,18 @@
       } else if (metric === 'kw' || metric === 'watts') {
         values = s[metric] || s.kw || [];
         hasData = valuesHaveData(values);
-      } else if (metric === 'amps') {
-        values = s.amps || [];
+      } else if (metric === 'amps' || metric === 'output_current') {
+        values = s[metric] || s.amps || s.output_current || [];
         hasData = valuesHaveData(values);
         unit = c.getAttribute('data-unit') || 'A';
+      } else if (metric === 'input_voltage' || metric === 'output_voltage') {
+        values = s[metric] || [];
+        hasData = valuesHaveData(values);
+        unit = c.getAttribute('data-unit') || 'V';
+      } else if (metric === 'input_freq' || metric === 'output_freq') {
+        values = s[metric] || [];
+        hasData = valuesHaveData(values);
+        unit = c.getAttribute('data-unit') || 'Hz';
       } else if (metric === 'load_pct' || metric === 'battery_pct' || metric === 'runtime_min') {
         values = s[metric] || [];
         hasData = valuesHaveData(values);
@@ -356,6 +369,7 @@
           unit = c.getAttribute('data-unit') || 'min';
         }
       } else {
+        values = s[metric] || values;
         hasData = valuesHaveData(values) || (seriesExtra && multiSeriesHasData(seriesExtra));
       }
 

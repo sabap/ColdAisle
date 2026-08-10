@@ -398,6 +398,68 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
             <div class="value"><?= $u['rated_kva'] !== null ? App::e((string)$u['rated_kva']) . ' kVA' : '—' ?></div>
             <div class="sub"><?= $u['rated_kw'] !== null ? App::e((string)$u['rated_kw']) . ' kW' : '' ?></div></div>
     </div>
+    <?php
+    $upsInV = $u['last_input_voltage'] ?? null;
+    $upsOutV = $u['last_output_voltage'] ?? null;
+    $upsInHz = $u['last_input_freq'] ?? null;
+    $upsOutHz = $u['last_output_freq'] ?? null;
+    $upsOutA = $u['last_output_current'] ?? null;
+    if (is_array($poll) && !empty($poll['derived'])) {
+        $d = $poll['derived'];
+        if ($upsInV === null && isset($d['input_voltage'])) {
+            $upsInV = $d['input_voltage'];
+        }
+        if ($upsOutV === null && isset($d['output_voltage'])) {
+            $upsOutV = $d['output_voltage'];
+        }
+        if ($upsInHz === null && isset($d['input_freq'])) {
+            $upsInHz = $d['input_freq'];
+        }
+        if ($upsOutHz === null && isset($d['output_freq'])) {
+            $upsOutHz = $d['output_freq'];
+        }
+        if ($upsOutA === null && isset($d['output_current'])) {
+            $upsOutA = $d['output_current'];
+        }
+    }
+    ?>
+    <div class="metrics">
+        <div class="metric-card"><div class="label">Input V</div>
+            <div class="value"><?= $upsInV !== null ? App::e(rtrim(rtrim(sprintf('%.1F', (float)$upsInV), '0'), '.')) : '—' ?>
+                <span class="metric-unit">V</span></div></div>
+        <div class="metric-card"><div class="label">Output V</div>
+            <div class="value"><?= $upsOutV !== null ? App::e(rtrim(rtrim(sprintf('%.1F', (float)$upsOutV), '0'), '.')) : '—' ?>
+                <span class="metric-unit">V</span></div></div>
+        <div class="metric-card"><div class="label">Output current</div>
+            <div class="value"><?= $upsOutA !== null ? App::e(rtrim(rtrim(sprintf('%.2F', (float)$upsOutA), '0'), '.')) : '—' ?>
+                <span class="metric-unit">A</span></div></div>
+        <div class="metric-card"><div class="label">Freq (in / out)</div>
+            <div class="value" style="font-size:1.1rem">
+                <?= $upsInHz !== null ? App::e(rtrim(rtrim(sprintf('%.1F', (float)$upsInHz), '0'), '.')) : '—' ?>
+                <span class="text-muted">/</span>
+                <?= $upsOutHz !== null ? App::e(rtrim(rtrim(sprintf('%.1F', (float)$upsOutHz), '0'), '.')) : '—' ?>
+                <span class="metric-unit">Hz</span>
+            </div></div>
+    </div>
+
+    <!-- 24h UPS electrical history -->
+    <div class="card power-history-wide mb-2" data-power-history data-scope="ups" data-id="<?= (int)$upsId ?>" data-hours="24">
+        <div class="card-header flex-between">
+            <h2 style="margin:0;font-size:1.05rem">Last 24 hours</h2>
+            <span class="text-muted" style="font-size:.8rem">From SNMP samples · needs Poll / scheduled poll</span>
+        </div>
+        <div class="card-body power-history-body">
+            <div class="power-chart power-chart-lg" data-metric="load_pct" data-unit="%" data-label="Output load" data-color="#a78bfa" data-height="160" data-outages="0"></div>
+            <div class="power-chart" data-metric="output_voltage" data-unit="V" data-label="Output voltage" data-color="#38bdf8" data-height="120" data-hide-empty="1" data-outages="0"></div>
+            <div class="power-chart" data-metric="input_voltage" data-unit="V" data-label="Input voltage" data-color="#818cf8" data-height="120" data-hide-empty="1" data-outages="0"></div>
+            <div class="power-chart" data-metric="output_current" data-unit="A" data-label="Output current" data-color="#34d399" data-height="120" data-hide-empty="1" data-outages="0"></div>
+            <div class="power-chart" data-metric="output_freq" data-unit="Hz" data-label="Output frequency" data-color="#fbbf24" data-height="100" data-hide-empty="1" data-outages="0"></div>
+            <div class="power-chart" data-metric="input_freq" data-unit="Hz" data-label="Input frequency" data-color="#fb923c" data-height="100" data-hide-empty="1" data-outages="0"></div>
+            <div class="power-chart" data-metric="battery_pct" data-unit="%" data-label="Battery" data-color="#34d399" data-height="100" data-hide-empty="1" data-outages="0"></div>
+            <div class="power-chart" data-metric="kw" data-unit="kW" data-label="Est. output power" data-color="#c4b5fd" data-height="100" data-hide-empty="1" data-outages="0"></div>
+        </div>
+    </div>
+    <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=9"></script>
 
     <div class="card">
         <div class="card-header"><h2>Identity &amp; placement</h2></div>

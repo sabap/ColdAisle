@@ -659,6 +659,9 @@ class Schema
             self::ensureColumn('ups_units', 'manufacture_date', 'DATE NULL');
             self::ensureColumn('ups_units', 'asset_tag', 'NVARCHAR(100) NULL');
             self::ensureColumn('ups_units', 'ups_template_id', 'INT NULL');
+            self::ensureColumn('ups_units', 'last_input_freq', 'DECIMAL(10,3) NULL');
+            self::ensureColumn('ups_units', 'last_output_freq', 'DECIMAL(10,3) NULL');
+            self::ensureColumn('ups_units', 'last_output_current', 'DECIMAL(12,3) NULL');
 
             // UPS poll history for dashboard / zone charts
             self::ensureTable(
@@ -671,9 +674,19 @@ class Schema
                     runtime_min DECIMAL(10,2) NULL,
                     output_status NVARCHAR(80) NULL,
                     estimated_watts DECIMAL(12,2) NULL,
+                    input_voltage DECIMAL(10,2) NULL,
+                    output_voltage DECIMAL(10,2) NULL,
+                    input_freq DECIMAL(10,3) NULL,
+                    output_freq DECIMAL(10,3) NULL,
+                    output_current DECIMAL(12,3) NULL,
                     polled_at DATETIME2 NOT NULL CONSTRAINT DF_ups_rd_at DEFAULT SYSUTCDATETIME()
                 )"
             );
+            self::ensureColumn('ups_readings', 'input_voltage', 'DECIMAL(10,2) NULL');
+            self::ensureColumn('ups_readings', 'output_voltage', 'DECIMAL(10,2) NULL');
+            self::ensureColumn('ups_readings', 'input_freq', 'DECIMAL(10,3) NULL');
+            self::ensureColumn('ups_readings', 'output_freq', 'DECIMAL(10,3) NULL');
+            self::ensureColumn('ups_readings', 'output_current', 'DECIMAL(12,3) NULL');
             try {
                 $hasUpsRd = Database::fetchValue(
                     "SELECT 1 FROM sys.tables WHERE name = 'ups_readings' AND SCHEMA_NAME(schema_id) = 'dbo'"
