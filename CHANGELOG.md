@@ -15,6 +15,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+### Bug fixes
+
+---
+
+## [0.3.93] - 2026-08-10
+
+### Enhancements
+
 - **UPS detail electrical charts:** 24h graphs for output load %, input/output voltage, input/output frequency, output current, battery, est. kW
 
 ### Bug fixes
@@ -22,7 +30,6 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **UPS Load % / Est. output empty on Power dashboard & zones:** poller only read `output_load` and ignored `load_pct` (stock Discover key); accept both aliases and store full electrical sample for history
 
 ---
-
 ## [0.3.92] - 2026-08-10
 
 ### Enhancements
