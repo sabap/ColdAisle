@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.88] - 2026-08-10
+
+### Bug fixes
+
 - **AP7862 still 0 kW with full template:** stop injecting rPDU2 outlet/phase OIDs on classic-only cards (AOS 3.9); map `input_volts` (Ident L–L …12.1.15); I×V uses NMC voltage + PF; Poll now shows **load diagnostics + raw metric values** so operators can paste results without giving production access
 
 ---
-
 ## [0.3.87] - 2026-08-10
 
 ### Bug fixes
