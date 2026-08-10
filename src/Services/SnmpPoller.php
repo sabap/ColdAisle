@@ -1651,8 +1651,10 @@ class SnmpPoller
         if ($out) {
             return $out;
         }
-        // Legacy rPDULoadStatusLoad — tenths of Amps, index 1..N (phases then banks)
-        foreach ([1, 2, 3] as $n) {
+        // Legacy rPDULoadStatusLoad — tenths of Amps; phases then banks (index 1..6)
+        $legacySum = 0.0;
+        $legacyAny = false;
+        foreach ([1, 2, 3, 4, 5, 6] as $n) {
             $oid = '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.' . $n;
             try {
                 $raw = self::get($session, $oid);
@@ -1660,12 +1662,21 @@ class SnmpPoller
                 if ($num !== null && $num >= 0) {
                     $a = round($num / 10.0, 3);
                     if ($a >= 0.01) {
-                        $out['L' . $n] = $a;
+                        if ($n <= 3) {
+                            $out['L' . $n] = $a;
+                        } else {
+                            // Bank current — fold into L1 estimate when phases empty
+                            $legacySum += $a;
+                            $legacyAny = true;
+                        }
                     }
                 }
             } catch (Throwable $e) {
                 // continue
             }
+        }
+        if (!$out && $legacyAny && $legacySum >= 0.01) {
+            $out['L1'] = round($legacySum, 3);
         }
         return $out;
     }

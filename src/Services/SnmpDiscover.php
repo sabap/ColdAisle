@@ -29,17 +29,24 @@ class SnmpDiscover
     /**
      * APC PowerNet (enterprise 318) — narrow only.
      * Never walk all of 318.1.1.10 (EMS config tables hang IIS FastCGI).
+     * Classic rPDU (12.x) is required for AP78xx/AP7862-class cards that predate rPDU2.
      */
     private const WALK_ROOTS_APC = [
         '1.3.6.1.2.1.1',
         '1.3.6.1.2.1.2.2.1.2',
         '1.3.6.1.2.1.2.2.1.6',
+        // Classic rPDU (AP78xx / AP7862 / many metered Zero-U) — Ident + load status
+        '1.3.6.1.4.1.318.1.1.12.1',       // rPDUIdent (serial, power W, phases, voltage)
+        '1.3.6.1.4.1.318.1.1.12.2.3',     // rPDULoadStatus (phase/bank amps + load state)
+        // rPDU2 device + phase (AP88xx / newer firmware; empty on pure classic cards)
+        '1.3.6.1.4.1.318.1.1.26.4.3',     // rPDU2DeviceStatus (incl. DeviceStatusPower)
+        '1.3.6.1.4.1.318.1.1.26.6.3',     // rPDU2PhaseStatus
+        '1.3.6.1.4.1.318.1.1.26.9.4',     // rPDU2 outlet metered status (narrow)
+        // EMS / environmental (AP9340 etc.)
         '1.3.6.1.4.1.318.1.1.10.3.13',    // emsProbeStatus* live temp/humidity
         '1.3.6.1.4.1.318.1.1.10.3.5',     // alternate EMS probe status
         '1.3.6.1.4.1.318.1.1.10.2.3',     // IEM status probes
         '1.3.6.1.4.1.318.1.1.10.3.1',     // emsIdent (serial)
-        '1.3.6.1.4.1.318.1.1.26.6',       // rPDU2 phase status (narrow)
-        '1.3.6.1.4.1.318.1.1.26.9.4',     // rPDU2 outlet metered status (narrow)
         '1.3.6.1.4.1.99999',              // ColdAisle lab
     ];
 
@@ -302,17 +309,46 @@ class SnmpDiscover
             '1.3.6.1.4.1.318.1.1.10.3.1.2.0',
         ];
         $leafPdu = [
-            '1.3.6.1.4.1.318.1.1.1.4.2.3.0',
-            '1.3.6.1.4.1.318.1.1.1.4.2.8.0',
-            '1.3.6.1.4.1.318.1.1.12.1.6.0',
-            '1.3.6.1.4.1.318.1.1.26.2.1.9.0',
-            '1.3.6.1.4.1.318.1.1.26.2.1.9.1',
+            // Classic rPDU Ident (AP7862 / AP78xx primary tree)
+            '1.3.6.1.4.1.318.1.1.12.1.1.0',   // rPDUIdentName
+            '1.3.6.1.4.1.318.1.1.12.1.6.0',   // serial
+            '1.3.6.1.4.1.318.1.1.12.1.7.0',   // phase rating / model rating
+            '1.3.6.1.4.1.318.1.1.12.1.8.0',   // num outlets (varies)
+            '1.3.6.1.4.1.318.1.1.12.1.15.0',  // L–L voltage (when present)
+            '1.3.6.1.4.1.318.1.1.12.1.16.0',  // rPDUIdentDevicePowerWatts
+            '1.3.6.1.4.1.318.1.1.12.1.17.0',  // power factor
+            '1.3.6.1.4.1.318.1.1.12.1.18.0',  // power VA
+            // Classic rPDULoadStatus — tenths of A + load state (phases 1–3, banks 4–6)
             '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.1',
-            '1.3.6.1.4.1.318.1.1.26.6.3.1.7.1',
+            '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.2',
+            '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.3',
+            '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.4',
+            '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.5',
+            '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.6',
+            '1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.1',
+            '1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.2',
+            '1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.3',
+            '1.3.6.1.4.1.318.1.1.12.2.1.1.0',  // max phase load rating
+            '1.3.6.1.4.1.318.1.1.12.2.1.2.0',  // num phases
+            // rPDU2 device + phase (newer / dual-tree cards)
+            '1.3.6.1.4.1.318.1.1.26.4.3.1.5.1', // DeviceStatusPower (hundredths kW)
+            '1.3.6.1.4.1.318.1.1.26.4.3.1.5.2',
+            '1.3.6.1.4.1.318.1.1.26.6.3.1.5.1', // phase current tenths A
+            '1.3.6.1.4.1.318.1.1.26.6.3.1.5.2',
+            '1.3.6.1.4.1.318.1.1.26.6.3.1.5.3',
+            '1.3.6.1.4.1.318.1.1.26.6.3.1.6.1', // phase volts
+            '1.3.6.1.4.1.318.1.1.26.6.3.1.6.2',
+            '1.3.6.1.4.1.318.1.1.26.6.3.1.6.3',
+            '1.3.6.1.4.1.318.1.1.26.6.3.1.7.1', // phase power
+            '1.3.6.1.4.1.318.1.1.26.6.3.1.7.2',
+            '1.3.6.1.4.1.318.1.1.26.6.3.1.7.3',
             '1.3.6.1.4.1.318.1.1.26.9.4.3.1.6.1',
             '1.3.6.1.4.1.318.1.1.26.9.4.3.1.7.1',
             '1.3.6.1.4.1.318.1.1.26.9.4.3.1.5.1',
             '1.3.6.1.4.1.318.1.1.26.9.4.3.1.3.1',
+            // UPS leaves only when not clearly a rack PDU (kept last; cheap misses)
+            '1.3.6.1.4.1.318.1.1.1.4.2.3.0',
+            '1.3.6.1.4.1.318.1.1.1.4.2.8.0',
             '1.3.6.1.4.1.3808.1.1.1.4.2.3.0',
             '1.3.6.1.4.1.3808.1.1.1.4.2.5.0',
         ];
@@ -348,7 +384,13 @@ class SnmpDiscover
             '/ap9340|environmental|ems|iem|netbotz|temp|humid|sensor/i',
             $sysHay
         );
-        $looksPdu = $apcFocus && (bool)preg_match('/rpdu|pdu|rack.?pdu|switched.?rack|metered/i', $sysHay);
+        // MN:AP7862 / apc_hw02_rpdu_*.bin / "Rack PDU" — model tokens often omit the word "PDU"
+        $looksPdu = $apcFocus && (bool)preg_match(
+            '/rpdu|rack.?pdu|switched.?rack|metered|\bpdu\b|'
+            . '\bap7\d{3}\b|\bap8\d{3}\b|\bap9\d{3}\b|'
+            . 'mn:\s*ap[789]\d{3}|hw02_rpdu|hw05_rpdu|aos_.*rpdu/i',
+            $sysHay
+        );
         if ($familyHint === 'ems') {
             $looksEms = true;
             $looksPdu = false;
@@ -379,7 +421,11 @@ class SnmpDiscover
         $leafLiebertHits = 0;
         $emsTempHits = 0;
         $emsHumHits = 0;
+        // AP7862-class needs many classic rPDU leaf GETs (Ident + 6 load indexes)
         $leafBudget = $coolingFocus ? 4.0 : self::LEAF_PHASE_BUDGET_SEC;
+        if ($apcFocus && $looksPdu) {
+            $leafBudget = 9.0;
+        }
         $totalBudget = $coolingFocus ? self::COOLING_TOTAL_BUDGET_SEC : 22.0;
         foreach ($leafGets as $oid) {
             if (isset($collected[$oid])) {
@@ -634,9 +680,10 @@ class SnmpDiscover
                 }
             }
         }
-        // APC ruleset only: probe known rPDU2 outlet table bases (preserves PowerNet tuning).
-        // Never run this on iDRAC/Liebert/default — wastes budget and can confuse maps.
+        // APC ruleset only: seed classic rPDU / rPDU2 load keys for AP78xx when Discover
+        // only saw a sparse walk (common on old AOS 3.9 + NMC when rPDU2 trees are empty).
         if ($apcFocus) {
+            $proposed = self::injectApcClassicRpduMap($proposed, (string)$sysDescr, $collected);
             $proposed = self::injectApcOutletBases($proposed, $hostPort, $version, $creds, $sysDescr, $collected);
         }
 
@@ -2372,6 +2419,82 @@ class SnmpDiscover
             'outlet_amps_x10' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.6',
             'outlet_watts_hundredths_kw' => '1.3.6.1.4.1.318.1.1.26.9.4.3.1.7',
         ];
+    }
+
+    /**
+     * Stock classic rPDU + rPDU2 load map for AP78xx/AP7862 when Discover is sparse.
+     * Does not overwrite keys already proposed from live candidates.
+     *
+     * @param array<string,string> $proposed
+     * @param array<string,mixed> $collected
+     * @return array<string,string>
+     */
+    private static function injectApcClassicRpduMap(array $proposed, string $sysDescr, array $collected): array
+    {
+        $hay = strtolower($sysDescr);
+        $looksRackPdu = (bool)preg_match(
+            '/rpdu|rack.?pdu|switched.?rack|metered|\bpdu\b|'
+            . '\bap7\d{3}\b|\bap8\d{3}\b|\bap9\d{3}\b|'
+            . 'mn:\s*ap[789]\d{3}|hw02_rpdu|hw05_rpdu|aos_.*rpdu/i',
+            $hay
+        );
+        if (!$looksRackPdu) {
+            foreach ($collected as $oid => $_) {
+                $o = (string)$oid;
+                if (str_starts_with($o, '1.3.6.1.4.1.318.1.1.12.')
+                    || str_starts_with($o, '1.3.6.1.4.1.318.1.1.26.')
+                ) {
+                    $looksRackPdu = true;
+                    break;
+                }
+            }
+        }
+        if (!$looksRackPdu) {
+            return $proposed;
+        }
+
+        // Prefer rPDU2 total power when available; Ident watts often stays 0 on AP7xxx
+        $defaults = [
+            'sysDescr' => '1.3.6.1.2.1.1.1.0',
+            'sysUpTime' => '1.3.6.1.2.1.1.3.0',
+            'serial_no' => '1.3.6.1.4.1.318.1.1.12.1.6.0',
+            'watts_hundredths_kw' => '1.3.6.1.4.1.318.1.1.26.4.3.1.5.1',
+            'watts' => '1.3.6.1.4.1.318.1.1.12.1.16.0',
+            'va' => '1.3.6.1.4.1.318.1.1.12.1.18.0',
+            'phase_rated_amps' => '1.3.6.1.4.1.318.1.1.12.2.1.1.0',
+            // Classic load status (tenths A) — primary on AP7862 AOS 3.9
+            'phase1_amps_x10' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.1',
+            'phase2_amps_x10' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.2',
+            'phase3_amps_x10' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.3',
+            'phase1_load_state' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.1',
+            'phase2_load_state' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.2',
+            'phase3_load_state' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.3',
+            // rPDU2 phase (answered when firmware supports dual tree)
+            'phase1_volts' => '1.3.6.1.4.1.318.1.1.26.6.3.1.6.1',
+            'phase2_volts' => '1.3.6.1.4.1.318.1.1.26.6.3.1.6.2',
+            'phase3_volts' => '1.3.6.1.4.1.318.1.1.26.6.3.1.6.3',
+            'phase1_watts_hundredths_kw' => '1.3.6.1.4.1.318.1.1.26.6.3.1.7.1',
+            'phase2_watts_hundredths_kw' => '1.3.6.1.4.1.318.1.1.26.6.3.1.7.2',
+            'phase3_watts_hundredths_kw' => '1.3.6.1.4.1.318.1.1.26.6.3.1.7.3',
+        ];
+
+        // If Discover already captured a live phase amps OID under a wrong key, keep phases.
+        foreach ($defaults as $key => $oid) {
+            if (!isset($proposed[$key]) || $proposed[$key] === '' || $proposed[$key] === null) {
+                $proposed[$key] = $oid;
+            }
+        }
+
+        // Never leave plain "watts" pointing at load-status current (tenths A)
+        if (isset($proposed['watts']) && is_string($proposed['watts'])) {
+            $w = ltrim($proposed['watts'], '.');
+            if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.12\.2\.3\.1\.1\.2(?:\.|$)/', $w)) {
+                $proposed['phase1_amps_x10'] = $proposed['watts'];
+                $proposed['watts'] = '1.3.6.1.4.1.318.1.1.12.1.16.0';
+            }
+        }
+
+        return $proposed;
     }
 
     /**
