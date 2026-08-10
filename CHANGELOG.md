@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.97] - 2026-08-10
+
+### Bug fixes
+
 - **APC xPDU Discover empty candidates:** PD40 / 0M-5103 (PowerNet 15.x) now uses longer GET timeouts (~1.5s, matching Poll), scores unnamed 15.x leaves, and probes map OIDs into the Candidates table when snmpwalk returns little; skip misleading MIB-index warning when xPDU map is seeded
 
 ---
-
 ## [0.3.96] - 2026-08-10
 
 ### Enhancements
