@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.72] - 2026-08-10
+
+### Bug fixes
+
 - **Settings → Diagnostics:** Testing mode switch no longer overlaps the “Testing mode” title/description.
 
 ---
-
 ## [0.3.71] - 2026-08-07
 
 ### Enhancements
