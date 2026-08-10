@@ -227,6 +227,7 @@ class SnmpPoller
             $oidMap = ['sysDescr' => '1.3.6.1.2.1.1.1.0'];
         }
         $oidMap = self::ensureApcOutletMapKeys($oidMap);
+        $oidMap = self::ensureApcRpdu2PowerMapKeys($oidMap);
 
         $session = self::openSession(
             $t['host'],
@@ -1125,6 +1126,9 @@ class SnmpPoller
         // Older Discover maps often omit outlet_* keys (walk budget). If the map
         // already uses APC rPDU2 trees, attach known outlet table bases.
         $oidMap = self::ensureApcOutletMapKeys($oidMap);
+        // Same for total/phase power: Ident DevicePowerWatts often stays 0 on AP78xx
+        // without L–L calibration — inject rPDU2DeviceStatusPower + phase I/V.
+        $oidMap = self::ensureApcRpdu2PowerMapKeys($oidMap);
 
         $creds = SnmpDiscover::credsFromPdu($pdu);
         if ($creds['host'] === '') {
@@ -1155,6 +1159,34 @@ class SnmpPoller
             $mac = self::probeManagementMac($session);
             if ($mac !== null) {
                 $got['mac_address'] = $mac;
+            }
+        }
+        // Last-chance device power probe when map GETs left load at ~0 (wrong Ident OID)
+        if (($got['watts'] === null || abs((float)$got['watts']) < 0.5)) {
+            $probed = self::probeApcRpdu2DevicePower($session);
+            if ($probed !== null && $probed >= 0.5) {
+                $got['watts'] = $probed;
+            }
+        }
+        // Σ(I × nominal V) when phase volts missing but amps present (older AP786x)
+        if (($got['watts'] === null || abs((float)$got['watts']) < 0.5) && is_array($got['phases'] ?? null)) {
+            $nominal = self::pduNominalVoltsLn($pdu);
+            if ($nominal !== null && $nominal > 0) {
+                $est = 0.0;
+                $any = false;
+                foreach (['L1', 'L2', 'L3'] as $lab) {
+                    $a = $got['phases'][$lab]['amps'] ?? null;
+                    $v = $got['phases'][$lab]['volts'] ?? null;
+                    if ($a === null || (float)$a <= 0) {
+                        continue;
+                    }
+                    $useV = ($v !== null && (float)$v > 0) ? (float)$v : $nominal;
+                    $est += (float)$a * $useV;
+                    $any = true;
+                }
+                if ($any && $est >= 0.5) {
+                    $got['watts'] = round($est, 1);
+                }
             }
         }
         self::closeSession($session);
@@ -1340,6 +1372,138 @@ class SnmpPoller
             }
         }
         return $oidMap;
+    }
+
+    /**
+     * Ensure APC maps include rPDU2 total power + basic phase I/V/P.
+     * Discover often saved only rPDUIdentDevicePowerWatts (plain watts → 0 on many
+     * AP7862/AP78xx without L–L calibration). Injecting these does not overwrite
+     * existing keys; poller prefers non-zero among device total keys.
+     *
+     * @param array<string,mixed> $oidMap
+     * @return array<string,mixed>
+     */
+    private static function ensureApcRpdu2PowerMapKeys(array $oidMap): array
+    {
+        $blob = '';
+        foreach ($oidMap as $v) {
+            if (is_string($v)) {
+                $blob .= ' ' . $v;
+            }
+        }
+        $isApc = str_contains($blob, '1.3.6.1.4.1.318.1.1.26')
+            || str_contains($blob, '1.3.6.1.4.1.318.1.1.12')
+            || str_contains($blob, '1.3.6.1.4.1.318.1.1.1');
+        if (!$isApc) {
+            return $oidMap;
+        }
+
+        $hasRpdu2Power = false;
+        foreach ($oidMap as $oid) {
+            if (!is_string($oid)) {
+                continue;
+            }
+            $o = ltrim($oid, '.');
+            if (preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.4\.3\.1\.5(?:\.|$)/', $o)
+                || preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\.6\.3\.1\.7(?:\.|$)/', $o)
+            ) {
+                $hasRpdu2Power = true;
+                break;
+            }
+        }
+
+        // Prefer inserting device power first so non-zero wins before Ident=0 later
+        $inject = [];
+        if (!$hasRpdu2Power) {
+            $inject['watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.4.3.1.5.1';
+        }
+        // Phase 1–3 current (tenths A) + voltage + power when no phase_* yet
+        $hasPhase = false;
+        foreach ($oidMap as $k => $_) {
+            if (is_string($k) && preg_match('/^phase[123]_/', $k)) {
+                $hasPhase = true;
+                break;
+            }
+        }
+        if (!$hasPhase) {
+            // rPDU2 first; legacy rPDU load status is a second chance if rPDU2 fails (-1)
+            $inject['phase1_amps_x10'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.5.1';
+            $inject['phase2_amps_x10'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.5.2';
+            $inject['phase3_amps_x10'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.5.3';
+            $inject['phase1_volts'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.6.1';
+            $inject['phase2_volts'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.6.2';
+            $inject['phase3_volts'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.6.3';
+            $inject['phase1_watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.7.1';
+            $inject['phase2_watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.7.2';
+            $inject['phase3_watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.7.3';
+        }
+
+        // Prepend inject keys so watts_hundredths_kw is evaluated before plain watts=0
+        $out = [];
+        foreach ($inject as $k => $oid) {
+            if (!isset($oidMap[$k])) {
+                $out[$k] = $oid;
+            }
+        }
+        foreach ($oidMap as $k => $v) {
+            $out[$k] = $v;
+        }
+        return $out;
+    }
+
+    /**
+     * Direct GET of rPDU2DeviceStatusPower (.1 then .2) → watts (scaled).
+     *
+     * @param array<string,mixed> $session
+     */
+    private static function probeApcRpdu2DevicePower(array $session): ?float
+    {
+        foreach (['1', '2'] as $idx) {
+            $oid = '1.3.6.1.4.1.318.1.1.26.4.3.1.5.' . $idx;
+            try {
+                $raw = self::get($session, $oid);
+                $num = self::toNumber($raw);
+                if ($num === null || $num < 0) {
+                    continue;
+                }
+                // hundredths of kW → W
+                $w = round($num * 10.0, 3);
+                if ($w >= 0.5) {
+                    return $w;
+                }
+            } catch (Throwable $e) {
+                // try next index
+            }
+        }
+        return null;
+    }
+
+    /**
+     * L–N (or single-phase) nominal volts from PDU inventory for I×V estimates.
+     *
+     * @param array<string,mixed> $pdu
+     */
+    private static function pduNominalVoltsLn(array $pdu): ?float
+    {
+        if (isset($pdu['input_voltage_ln']) && is_numeric($pdu['input_voltage_ln'])) {
+            $v = (float)$pdu['input_voltage_ln'];
+            return $v > 0 ? $v : null;
+        }
+        foreach (['input_voltage', 'rated_volts'] as $col) {
+            if (!isset($pdu[$col]) || !is_numeric($pdu[$col])) {
+                continue;
+            }
+            $ll = (float)$pdu[$col];
+            if ($ll <= 0) {
+                continue;
+            }
+            // 208/240/400/415 L–L → approximate L–N
+            if ($ll >= 180) {
+                return round($ll / 1.732, 1);
+            }
+            return $ll;
+        }
+        return null;
     }
 
     /**
