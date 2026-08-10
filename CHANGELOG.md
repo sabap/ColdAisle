@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.89] - 2026-08-10
+
+### Bug fixes
+
 - **AP7862 poll diag:** walk classic load-status indexes 1–12 (phases + banks) and include tenths-of-A map in Poll now output when total load stays 0
 
 ---
-
 ## [0.3.88] - 2026-08-10
 
 ### Bug fixes
