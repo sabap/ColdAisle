@@ -2286,9 +2286,9 @@ class SnmpPoller
                     ) {
                         $deviceAmps = $num;
                     }
-                } elseif (preg_match('/^(va|device_va|total_va)\b/', $metricKey) && $num !== null) {
+                } elseif (preg_match('/^(va|device_va|total_va)(?:_|$)/', $metricKey) && $num !== null) {
                     $deviceVa = $num;
-                } elseif (preg_match('/^(pf|device_pf|power_factor)\b/', $metricKey) && $num !== null) {
+                } elseif (preg_match('/^(pf|device_pf|power_factor)(?:_|$)/', $metricKey) && $num !== null) {
                     $devicePf = $num;
                 } elseif (preg_match('/^(input_volts|line_volts|ll_volts|device_volts)\b/', $metricKey) && $num !== null) {
                     // rPDUIdentDeviceLinetoLineVoltage — device L–L config, not a single phase L–N
@@ -2616,6 +2616,20 @@ class SnmpPoller
         if (str_contains($k, 'x100') || str_contains($k, '_x100')) {
             return round($num / 100.0, 4);
         }
+        // Tenths of volts (xPDU L–N / L–L) — key must say volt
+        $isVoltish = (bool)preg_match('/volt/', $k);
+        if ($isVoltish && (
+            str_contains($k, 'volts_x10') || str_contains($k, 'voltsx10')
+            || (str_contains($k, 'x10') && !str_contains($k, 'x100'))
+        )) {
+            return round($num / 10.0, 3);
+        }
+        // Tenths of Hz (xPDU frequency)
+        if (preg_match('/freq|hz/', $k) && (
+            str_contains($k, 'x10') || str_contains($k, 'tenths')
+        ) && !str_contains($k, 'x100')) {
+            return round($num / 10.0, 3);
+        }
         // Tenths of amps (and only amps/current — never watts)
         $isAmpish = (bool)preg_match('/amp|current/', $k);
         $isWattish = (bool)preg_match('/watt|power|va\b/', $k) && !str_contains($k, 'factor');
@@ -2705,7 +2719,7 @@ class SnmpPoller
         return (bool)preg_match(
             '/^(watts?|total_watts?|device_watts?|load_watts?)(?:_hundredths_kw|_tenths_kw|_dkw|_0_01kw|_centikw)?$/',
             $key
-        );
+        ) || (bool)preg_match('/^watts_tenths_kw$/', $key);
     }
 
     private static function isDeviceTotalAmpsKey(string $key): bool

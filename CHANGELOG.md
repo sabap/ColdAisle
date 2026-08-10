@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **APC InfraStruXure row xPDU (PD40G6FK1 / 0M-5103):** Discover walks PowerNet `318.1.1.15` (system output + phases), seeds a dedicated map (tenths kW/A/V scales), stock template **APC InfraStruXure xPDU** — isolated from rack rPDU 12/26 paths so AP7862 polling is unchanged
+
 ### Bug fixes
 
 ---
