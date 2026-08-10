@@ -18,6 +18,19 @@ class PowerHistoryService
     /** Retention for raw samples (days). Older rows pruned opportunistically. */
     public const RETENTION_DAYS = 400;
 
+    private static function loadPowerHelpers(): void
+    {
+        static $done = false;
+        if ($done) {
+            return;
+        }
+        $path = dirname(__DIR__, 2) . '/includes/power_helpers.php';
+        if (is_file($path)) {
+            require_once $path;
+        }
+        $done = true;
+    }
+
     /** Phase LN below this (V) counts as hard dead/outage. */
     public const VOLTS_DEAD = 50.0;
     /** Fraction of nominal LN below which phase is "low voltage" outage. */
@@ -339,7 +352,9 @@ class PowerHistoryService
         // 45 min covers staggered site polls + Discover/UPS work without comb-to-zero cliffs.
         $holdSec = max(45 * 60, $bucketMin * 60 * 6);
 
-        $pduSql = 'SELECT pdu_id FROM pdus WHERE is_active = 1';
+        self::loadPowerHelpers();
+        // Respect facility rollup mode (prefer row/room meters, manual include, etc.)
+        $pduSql = 'SELECT pdu_id, pdu_scope, zone_id, include_in_site_load FROM pdus WHERE is_active = 1';
         $pduParams = [];
         if ($scope === 'zone' && $zoneId && $zoneId > 0) {
             $pduSql .= ' AND zone_id = ?';
@@ -347,60 +362,62 @@ class PowerHistoryService
         }
         $pduIds = [];
         try {
-            foreach (Database::fetchAll($pduSql, $pduParams) as $pr) {
-                $pduIds[] = (int)$pr['pdu_id'];
-            }
-        } catch (Throwable $e) {
-            $pduIds = [];
-        }
-
-        // Pull samples with a lookback so hold works at the left edge of the window
-        $lookbackSql = date('Y-m-d H:i:s', $fromTs - $holdSec);
-        $samples = [];
-        try {
-            if ($scope === 'zone' && $zoneId && $zoneId > 0) {
-                $samples = Database::fetchAll(
-                    'SELECT r.pdu_id, r.polled_at, r.watts, r.amps, r.volts, r.volts_ll
-                     FROM pdu_readings r
-                     INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.is_active = 1 AND p.zone_id = ?
-                     WHERE r.polled_at >= ? AND r.polled_at < ?
-                     ORDER BY r.polled_at',
-                    [$zoneId, $lookbackSql, $toSql]
-                );
+            $pduRows = Database::fetchAll($pduSql, $pduParams);
+            if (function_exists('power_site_load_pdu_ids')) {
+                $pduIds = power_site_load_pdu_ids($pduRows);
             } else {
-                $samples = Database::fetchAll(
-                    'SELECT r.pdu_id, r.polled_at, r.watts, r.amps, r.volts, r.volts_ll
-                     FROM pdu_readings r
-                     INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.is_active = 1
-                     WHERE r.polled_at >= ? AND r.polled_at < ?
-                     ORDER BY r.polled_at',
-                    [$lookbackSql, $toSql]
-                );
+                foreach ($pduRows as $pr) {
+                    $pduIds[] = (int)$pr['pdu_id'];
+                }
             }
         } catch (Throwable $e) {
+            // Column may not exist yet — fall back to all active PDUs
             try {
+                $pduSql2 = 'SELECT pdu_id FROM pdus WHERE is_active = 1';
+                $pduParams2 = [];
                 if ($scope === 'zone' && $zoneId && $zoneId > 0) {
-                    $samples = Database::fetchAll(
-                        'SELECT r.pdu_id, r.polled_at, r.watts, r.amps, r.volts
-                         FROM pdu_readings r
-                         INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.is_active = 1 AND p.zone_id = ?
-                         WHERE r.polled_at >= ? AND r.polled_at < ?
-                         ORDER BY r.polled_at',
-                        [$zoneId, $lookbackSql, $toSql]
-                    );
-                } else {
-                    $samples = Database::fetchAll(
-                        'SELECT r.pdu_id, r.polled_at, r.watts, r.amps, r.volts
-                         FROM pdu_readings r
-                         INNER JOIN pdus p ON p.pdu_id = r.pdu_id AND p.is_active = 1
-                         WHERE r.polled_at >= ? AND r.polled_at < ?
-                         ORDER BY r.polled_at',
-                        [$lookbackSql, $toSql]
-                    );
+                    $pduSql2 .= ' AND zone_id = ?';
+                    $pduParams2[] = $zoneId;
+                }
+                foreach (Database::fetchAll($pduSql2, $pduParams2) as $pr) {
+                    $pduIds[] = (int)$pr['pdu_id'];
                 }
             } catch (Throwable $e2) {
-                App::log('PowerHistory site/zone hold series: ' . $e2->getMessage(), 'warning');
-                $samples = [];
+                $pduIds = [];
+            }
+        }
+
+        // Pull samples with a lookback so hold works at the left edge of the window.
+        // Filter to rollup PDU set (empty set → empty series, not "all PDUs").
+        $lookbackSql = date('Y-m-d H:i:s', $fromTs - $holdSec);
+        $samples = [];
+        if (!$pduIds) {
+            $samples = [];
+        } else {
+            $idList = implode(',', array_map('intval', $pduIds));
+            try {
+                $samples = Database::fetchAll(
+                    "SELECT r.pdu_id, r.polled_at, r.watts, r.amps, r.volts, r.volts_ll
+                     FROM pdu_readings r
+                     WHERE r.pdu_id IN ({$idList})
+                       AND r.polled_at >= ? AND r.polled_at < ?
+                     ORDER BY r.polled_at",
+                    [$lookbackSql, $toSql]
+                );
+            } catch (Throwable $e) {
+                try {
+                    $samples = Database::fetchAll(
+                        "SELECT r.pdu_id, r.polled_at, r.watts, r.amps, r.volts
+                         FROM pdu_readings r
+                         WHERE r.pdu_id IN ({$idList})
+                           AND r.polled_at >= ? AND r.polled_at < ?
+                         ORDER BY r.polled_at",
+                        [$lookbackSql, $toSql]
+                    );
+                } catch (Throwable $e2) {
+                    App::log('PowerHistory site/zone hold series: ' . $e2->getMessage(), 'warning');
+                    $samples = [];
+                }
             }
         }
 

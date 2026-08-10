@@ -314,6 +314,8 @@ class Schema
                 'icmp_last_ok' => 'BIT NULL',
                 'icmp_last_rtt_ms' => 'DECIMAL(10,2) NULL',
                 'icmp_last_error' => 'NVARCHAR(255) NULL',
+                // Facility / site load rollup (avoid double-counting rack under row PDUs)
+                'include_in_site_load' => 'BIT NOT NULL CONSTRAINT DF_pdus_site_load DEFAULT 1',
             ];
             foreach ($pduCols as $col => $def) {
                 self::ensureColumn('pdus', $col, $def);
@@ -851,6 +853,7 @@ class Schema
                 'output_mode', 'snmp_site_template_id', 'snmp_auto_poll', 'pdu_template_id',
                 'last_poll_phases', 'room_id', 'pos_x', 'pos_y',
                 'icmp_monitor', 'icmp_fail_count', 'icmp_last_at', 'icmp_last_ok',
+                'include_in_site_load',
             ],
             'pdu_outlets' => ['rated_amps', 'device_power_supply_id'],
             'power_alert_state' => ['alert_key', 'pdu_id', 'severity'],

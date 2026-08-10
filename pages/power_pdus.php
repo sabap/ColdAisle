@@ -325,6 +325,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'snmp_v3_profile_id' => $profileId,
                 'snmp_site_template_id' => $siteTplId > 0 ? $siteTplId : null,
                 'snmp_auto_poll' => $snmpAutoPoll,
+                'include_in_site_load' => !empty($_POST['include_in_site_load']) ? 1 : 0,
                 'notes' => trim($_POST['notes'] ?? '') !== '' ? trim($_POST['notes']) : null,
             ], $elec);
 
