@@ -160,6 +160,13 @@
       '<div class="hint">' + fmtNum(m.u_used, 0) + ' / ' + fmtNum(m.u_total, 0) + ' U</div></div>';
     html += card('accent', 'Site power', fmtNum(power.kw != null ? power.kw : m.power_kw, 1) + '<span class="unit">kW</span>',
       fmtNum(m.pdus, 0) + ' PDU(s)');
+    var upsO = data.ups || {};
+    var upsCls = (upsO.on_battery > 0 || upsO.health_crit > 0) ? 'crit'
+      : (upsO.health_warn > 0 ? 'warn' : (upsO.units > 0 ? 'ok' : ''));
+    html += card(upsCls, 'UPS', fmtNum(upsO.units != null ? upsO.units : m.ups_units, 0),
+      (upsO.online != null ? fmtNum(upsO.online, 0) + ' online' : 'Inventory') +
+      (upsO.on_battery > 0 ? ' · ' + fmtNum(upsO.on_battery, 0) + ' battery' : '') +
+      (upsO.avg_load_pct != null ? ' · load ' + fmtNum(upsO.avg_load_pct, 0) + '%' : ''));
     html += card('', 'Cooling units', fmtNum(m.cooling_units, 0), 'Air & pumps');
     html += card(envCls, 'Env status',
       fmtNum(env.ok, 0) + ' <span class="unit">ok</span>',
@@ -203,13 +210,30 @@
     var m = data.metrics || {};
     var power = data.power || {};
     var hist = data.power_history || {};
+    var ups = data.ups || {};
     var kw = power.kw != null ? power.kw : m.power_kw;
+    var upsCls = (ups.on_battery > 0 || ups.health_crit > 0) ? 'crit'
+      : (ups.health_warn > 0 ? 'warn' : (ups.units > 0 ? 'ok' : ''));
     var html = '<div class="noc-metrics">';
     html += card('accent', 'Live load', fmtNum(kw, 1) + '<span class="unit">kW</span>',
       fmtNum(m.pdus, 0) + ' PDU(s)');
     html += card('', '24h average', fmtNum(power.kw_avg_24h, 1) + '<span class="unit">kW</span>', 'Site total');
     html += card('', '24h peak', fmtNum(power.kw_max_24h, 1) + '<span class="unit">kW</span>', 'Max bucket');
     html += card('', '24h floor', fmtNum(power.kw_min_24h, 1) + '<span class="unit">kW</span>', 'Min bucket');
+    html += card(upsCls, 'UPS units', fmtNum(ups.units != null ? ups.units : m.ups_units, 0),
+      fmtNum(ups.online, 0) + ' online · ' + fmtNum(ups.on_battery, 0) + ' on battery');
+    html += card(upsCls, 'UPS load',
+      (ups.avg_load_pct != null ? fmtNum(ups.avg_load_pct, 0) + '<span class="unit">%</span>' : '—'),
+      ups.max_load_pct != null ? 'max ' + fmtNum(ups.max_load_pct, 0) + '%' : 'Average of polled units');
+    html += card(
+      (ups.min_battery_pct != null && ups.min_battery_pct < 50) ? 'warn' : '',
+      'UPS battery',
+      (ups.min_battery_pct != null ? fmtNum(ups.min_battery_pct, 0) + '<span class="unit">%</span>' : '—'),
+      ups.avg_battery_pct != null ? 'min · avg ' + fmtNum(ups.avg_battery_pct, 0) + '%' : 'Lowest unit'
+    );
+    html += card('', 'UPS rated',
+      fmtNum(ups.rated_kva, 0) + '<span class="unit">kVA</span>',
+      fmtNum(ups.snmp_on, 0) + ' SNMP · ' + fmtNum(ups.polled, 0) + ' polled');
     html += '<div class="noc-card wide">' +
       '<div class="label">Site power · last 24 hours</div>' +
       '<div class="noc-chart-wrap">' + sparklineSvg(hist.kw || [], '#38bdf8') + '</div>' +
@@ -219,6 +243,25 @@
         ? '<span>Last poll <strong>' + esc(String(power.last_poll_at).replace('T', ' ').slice(0, 19)) + '</strong></span>'
         : '') +
       '</div></div>';
+
+    var list = ups.list || [];
+    if (list.length) {
+      html += '<div class="noc-card wide" style="margin-top:.75rem">' +
+        '<div class="label">UPS units</div><div class="noc-list">';
+      list.forEach(function (u) {
+        html += '<div class="noc-list-row">' +
+          '<div><strong>' + esc(u.name) + '</strong>' +
+          '<div class="muted">' + esc(u.output_status || u.status || '') +
+          (u.model ? ' · ' + esc(u.model) : '') +
+          '</div></div>' +
+          '<div style="text-align:right">' +
+          (u.load_pct != null ? '<strong>' + fmtNum(u.load_pct, 0) + '%</strong> load' : '—') +
+          (u.battery_pct != null ? ' · ' + fmtNum(u.battery_pct, 0) + '% batt' : '') +
+          ' ' + badge(u.health) +
+          '</div></div>';
+      });
+      html += '</div></div>';
+    }
     html += '</div>';
     return html;
   }

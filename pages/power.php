@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
 require_once dirname(__DIR__) . '/includes/power_helpers.php';
+require_once dirname(__DIR__) . '/includes/ups_helpers.php';
 App::boot();
 $user = App::requirePermission('view_power');
 
@@ -30,11 +31,15 @@ $pdus = Database::fetchAll(
 
 $panelCount = (int) Database::fetchValue('SELECT COUNT(*) FROM power_panels');
 $snmpOn = count(array_filter($pdus, static fn($p) => !empty($p['snmp_enabled'])));
-$upsCount = 0;
-try {
-    $upsCount = (int)Database::fetchValue('SELECT COUNT(*) FROM ups_units WHERE is_active = 1');
-} catch (Throwable $e) {
-    $upsCount = 0;
+$upsSnap = ups_dashboard_snapshot(24);
+$upsCount = (int)($upsSnap['units'] ?? 0);
+$upsHealthCls = '';
+if ((int)($upsSnap['health_crit'] ?? 0) > 0 || (int)($upsSnap['on_battery'] ?? 0) > 0) {
+    $upsHealthCls = 'danger';
+} elseif ((int)($upsSnap['health_warn'] ?? 0) > 0) {
+    $upsHealthCls = 'warning';
+} elseif ($upsCount > 0 && (int)($upsSnap['health_ok'] ?? 0) > 0) {
+    $upsHealthCls = 'success';
 }
 $withPoll = array_filter($pdus, static fn($p) => $p['last_poll_watts'] !== null);
 $totalKw = array_sum(array_map(static fn($p) => (float)($p['last_poll_watts'] ?? 0), $pdus)) / 1000.0;
@@ -98,7 +103,7 @@ layout_header('Power Dashboard', $user, 'power');
 <div class="flex-between mb-2">
     <div>
         <p class="text-muted mb-0" style="font-size:.92rem">
-            High-level power metrics across zones and PDUs. Manage details on the sub-pages.
+            High-level power metrics across zones, PDUs, and UPS. Manage details on the sub-pages.
         </p>
     </div>
     <div class="flex gap-1">
@@ -143,6 +148,23 @@ layout_header('Power Dashboard', $user, 'power');
             <?= (int)$scopeCounts['rack'] ?> rack ·
             <?= (int)$scopeCounts['row'] ?> row ·
             <?= (int)$scopeCounts['room'] ?> room
+        </div>
+    </div>
+    <div class="metric-card <?= App::e($upsHealthCls) ?>">
+        <div class="label">UPS</div>
+        <div class="value"><?= (int)$upsCount ?></div>
+        <div class="sub">
+            <?php if ($upsCount < 1): ?>
+                None in inventory
+            <?php else: ?>
+                <?= (int)($upsSnap['online'] ?? 0) ?> online
+                <?php if ((int)($upsSnap['on_battery'] ?? 0) > 0): ?>
+                    · <?= (int)$upsSnap['on_battery'] ?> on battery
+                <?php endif; ?>
+                <?php if ($upsSnap['avg_load_pct'] !== null): ?>
+                    · avg load <?= App::e((string)$upsSnap['avg_load_pct']) ?>%
+                <?php endif; ?>
+            <?php endif; ?>
         </div>
     </div>
     <div class="metric-card <?= $stalePdus ? 'danger' : '' ?>">
@@ -284,6 +306,12 @@ layout_header('Power Dashboard', $user, 'power');
                     <li>
                         <span><?= count($pdus) - $snmpOn ?></span> PDUs without SNMP
                     </li>
+                    <li class="<?= (int)($upsSnap['on_battery'] ?? 0) > 0 || (int)($upsSnap['health_crit'] ?? 0) > 0 ? 'attn-danger' : '' ?>">
+                        <span><?= (int)($upsSnap['on_battery'] ?? 0) ?></span> UPS on battery
+                        <?php if ((int)($upsSnap['health_crit'] ?? 0) > 0): ?>
+                            · <?= (int)$upsSnap['health_crit'] ?> critical
+                        <?php endif; ?>
+                    </li>
                     <li>
                         <span><?= count(array_filter($zones, static fn($z) => $z['max_kw'] === null || $z['max_kw'] === '')) ?></span> zones missing capacity
                     </li>
@@ -298,10 +326,117 @@ layout_header('Power Dashboard', $user, 'power');
             <div class="card-body power-quick-actions">
                 <a class="btn btn-secondary btn-block" href="<?= App::e(App::url('pages/power_zones.php#add-zone')) ?>">+ Add zone</a>
                 <a class="btn btn-secondary btn-block" href="<?= App::e(App::url('pages/power_pdus.php#add-pdu')) ?>">+ Add PDU</a>
+                <a class="btn btn-secondary btn-block" href="<?= App::e(App::url('pages/power_ups.php?action=new')) ?>">+ Add UPS</a>
                 <a class="btn btn-ghost btn-block" href="<?= App::e(App::url('pages/snmp.php')) ?>">SNMP polling</a>
                 <a class="btn btn-ghost btn-block" href="<?= App::e(App::url('pages/cabinets.php')) ?>">Cabinet rack views</a>
             </div>
         </div>
+    </div>
+</div>
+
+<div class="card mb-2">
+    <div class="card-header flex-between">
+        <h2 style="margin:0">UPS inventory</h2>
+        <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/power_ups.php')) ?>">All UPS</a>
+    </div>
+    <div class="card-body flush">
+        <?php if ($upsCount < 1): ?>
+            <div class="empty-state" style="padding:1.5rem">
+                <h3>No UPS units</h3>
+                <p>Add Schneider Symmetra / APC Smart-UPS units for floor plan, 3D, and SNMPv3 poll.</p>
+                <a class="btn btn-primary btn-sm" href="<?= App::e(App::url('pages/power_ups.php?action=new')) ?>">Add UPS</a>
+            </div>
+        <?php else: ?>
+            <div class="metrics" style="padding:1rem 1rem 0;margin:0">
+                <div class="metric-card <?= (int)($upsSnap['on_battery'] ?? 0) > 0 ? 'danger' : 'success' ?>">
+                    <div class="label">Output</div>
+                    <div class="value" style="font-size:1.25rem"><?= (int)($upsSnap['online'] ?? 0) ?> <span class="metric-unit">online</span></div>
+                    <div class="sub">
+                        <?= (int)($upsSnap['on_battery'] ?? 0) ?> battery
+                        · <?= (int)($upsSnap['bypass'] ?? 0) ?> bypass
+                    </div>
+                </div>
+                <div class="metric-card <?= ($upsSnap['max_load_pct'] !== null && (float)$upsSnap['max_load_pct'] >= 80) ? 'warning' : '' ?>">
+                    <div class="label">Load</div>
+                    <div class="value" style="font-size:1.25rem">
+                        <?= $upsSnap['avg_load_pct'] !== null ? App::e((string)$upsSnap['avg_load_pct']) . '%' : '—' ?>
+                    </div>
+                    <div class="sub">
+                        avg
+                        <?php if ($upsSnap['max_load_pct'] !== null): ?>
+                            · max <?= App::e((string)$upsSnap['max_load_pct']) ?>%
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <div class="metric-card <?= ($upsSnap['min_battery_pct'] !== null && (float)$upsSnap['min_battery_pct'] < 50) ? 'warning' : 'success' ?>">
+                    <div class="label">Battery</div>
+                    <div class="value" style="font-size:1.25rem">
+                        <?= $upsSnap['min_battery_pct'] !== null ? App::e((string)$upsSnap['min_battery_pct']) . '%' : '—' ?>
+                    </div>
+                    <div class="sub">
+                        min
+                        <?php if ($upsSnap['avg_battery_pct'] !== null): ?>
+                            · avg <?= App::e((string)$upsSnap['avg_battery_pct']) ?>%
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <div class="metric-card accent">
+                    <div class="label">Rated</div>
+                    <div class="value" style="font-size:1.25rem">
+                        <?= number_format((float)($upsSnap['rated_kva'] ?? 0), 0) ?>
+                        <span class="metric-unit">kVA</span>
+                    </div>
+                    <div class="sub">
+                        <?= (int)($upsSnap['snmp_on'] ?? 0) ?> SNMP ·
+                        <?= (int)($upsSnap['polled'] ?? 0) ?> polled
+                    </div>
+                </div>
+            </div>
+            <table class="data">
+                <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Scope</th>
+                    <th>Status</th>
+                    <th>Load</th>
+                    <th>Battery</th>
+                    <th>Runtime</th>
+                    <th>Health</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach (($upsSnap['list'] ?? []) as $uu):
+                    $hp = (string)($uu['health'] ?? 'unknown');
+                    ?>
+                    <tr class="<?= in_array($hp, ['warn', 'crit'], true) ? 'health-row-' . App::e($hp) : '' ?>">
+                        <td>
+                            <a href="<?= App::e(App::url('pages/power_ups.php?id=' . (int)$uu['ups_id'])) ?>">
+                                <strong><?= App::e((string)$uu['name']) ?></strong>
+                            </a>
+                            <?php if (!empty($uu['model'])): ?>
+                                <div class="text-muted" style="font-size:.75rem"><?= App::e((string)$uu['model']) ?></div>
+                            <?php endif; ?>
+                        </td>
+                        <td><span class="badge"><?= App::e(ups_scopes()[$uu['scope'] ?? ''] ?? (string)($uu['scope'] ?? '')) ?></span></td>
+                        <td><?= App::e((string)($uu['output_status'] ?: '—')) ?></td>
+                        <td><?= $uu['load_pct'] !== null ? App::e((string)$uu['load_pct']) . '%' : '—' ?></td>
+                        <td><?= $uu['battery_pct'] !== null ? App::e((string)$uu['battery_pct']) . '%' : '—' ?></td>
+                        <td><?= $uu['runtime_min'] !== null ? App::e((string)$uu['runtime_min']) . ' min' : '—' ?></td>
+                        <td>
+                            <span class="health-chip health-chip-<?= App::e($hp) ?>">
+                                <span class="health-pulse health-pulse-<?= App::e($hp) ?>" aria-hidden="true"></span>
+                                <span class="health-chip-label"><?= App::e($hp) ?></span>
+                            </span>
+                        </td>
+                        <td class="actions">
+                            <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/power_ups.php?id=' . (int)$uu['ups_id'])) ?>">View</a>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
     </div>
 </div>
 

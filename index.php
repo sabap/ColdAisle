@@ -38,6 +38,26 @@ $powerKw = (float) Database::fetchValue(
     'SELECT ISNULL(SUM(last_poll_watts),0) / 1000.0 FROM pdus WHERE is_active = 1 AND last_poll_watts IS NOT NULL'
 );
 
+$upsDash = [
+    'units' => 0,
+    'online' => 0,
+    'on_battery' => 0,
+    'health_crit' => 0,
+    'health_warn' => 0,
+    'avg_load_pct' => null,
+    'min_battery_pct' => null,
+];
+try {
+    require_once __DIR__ . '/includes/ups_helpers.php';
+    if (function_exists('ups_dashboard_snapshot')) {
+        $upsDash = array_merge($upsDash, ups_dashboard_snapshot(0));
+        // listLimit 0 still returns aggregates; keep list empty for main dash
+        $upsDash['list'] = [];
+    }
+} catch (Throwable $e) {
+    // table may not exist yet
+}
+
 $recentDevices = Database::fetchAll(
     'SELECT TOP 8 d.device_id, d.label, d.device_type, d.status, d.position_u, c.name AS cabinet_name
      FROM devices d
@@ -219,6 +239,35 @@ layout_header('Dashboard', $user, 'dashboard');
         <div class="label">Power (polled)</div>
         <div class="value"><?= number_format($powerKw, 1) ?></div>
         <div class="sub">kW across <?= $metrics['pdus'] ?> PDUs</div>
+    </div>
+    <?php
+    $upsUnits = (int)($upsDash['units'] ?? 0);
+    $upsCardCls = '';
+    if ((int)($upsDash['health_crit'] ?? 0) > 0 || (int)($upsDash['on_battery'] ?? 0) > 0) {
+        $upsCardCls = 'danger';
+    } elseif ((int)($upsDash['health_warn'] ?? 0) > 0) {
+        $upsCardCls = 'warning';
+    } elseif ($upsUnits > 0) {
+        $upsCardCls = 'success';
+    }
+    ?>
+    <div class="metric-card <?= App::e($upsCardCls) ?>">
+        <div class="label">UPS</div>
+        <div class="value"><?= $upsUnits ?></div>
+        <div class="sub">
+            <?php if ($upsUnits < 1): ?>
+                <a href="<?= App::e(App::url('pages/power_ups.php')) ?>">Add UPS inventory</a>
+            <?php else: ?>
+                <a href="<?= App::e(App::url('pages/power.php')) ?>">
+                    <?= (int)($upsDash['online'] ?? 0) ?> online
+                    <?php if ((int)($upsDash['on_battery'] ?? 0) > 0): ?>
+                        · <?= (int)$upsDash['on_battery'] ?> on battery
+                    <?php elseif ($upsDash['avg_load_pct'] !== null): ?>
+                        · load <?= App::e((string)$upsDash['avg_load_pct']) ?>%
+                    <?php endif; ?>
+                </a>
+            <?php endif; ?>
+        </div>
     </div>
     <div class="metric-card <?= $metrics['disposals'] ? 'danger' : '' ?>">
         <div class="label">Disposals</div>

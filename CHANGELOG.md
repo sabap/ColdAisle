@@ -15,6 +15,10 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **UPS on Power dashboard:** metric tile, attention line (on battery / critical), full UPS inventory card (load/battery/runtime/health table).
+- **NOC UPS:** overview tile + Power panel cards (units, load, battery, rated kVA) and per-unit list with health badges.
+- **Main Dashboard UPS:** summary metric card linking to Power (online / on battery / load).
+
 ### Bug fixes
 
 ---

@@ -8,6 +8,13 @@ App::json([
         'cabinets' => (int) Database::fetchValue('SELECT COUNT(*) FROM cabinets WHERE is_active = 1'),
         'devices' => (int) Database::fetchValue("SELECT COUNT(*) FROM devices WHERE is_active = 1 AND status <> 'disposed'"),
         'pdus' => (int) Database::fetchValue('SELECT COUNT(*) FROM pdus WHERE is_active = 1'),
+        'ups_units' => (int) (function () {
+            try {
+                return (int)Database::fetchValue('SELECT COUNT(*) FROM ups_units WHERE is_active = 1');
+            } catch (Throwable $e) {
+                return 0;
+            }
+        })(),
         'open_disposals' => (int) Database::fetchValue("SELECT COUNT(*) FROM disposals WHERE status IN ('pending','approved','in_progress')"),
         'u_used' => (int) Database::fetchValue('SELECT ISNULL(SUM(u_height),0) FROM devices WHERE is_active = 1 AND position_u IS NOT NULL AND parent_device_id IS NULL'),
         'u_total' => (int) Database::fetchValue('SELECT ISNULL(SUM(u_height),0) FROM cabinets WHERE is_active = 1'),
