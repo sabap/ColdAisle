@@ -840,6 +840,42 @@ CREATE TABLE alert_subscriptions (
 );
 GO
 
+-- Custom SNMP metric thresholds (Settings → Alerts)
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'snmp_thresholds')
+CREATE TABLE snmp_thresholds (
+    threshold_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL,
+    entity_type NVARCHAR(20) NOT NULL CONSTRAINT DF_snmp_thr_etype DEFAULT 'device',
+    entity_id INT NULL,
+    metric_key NVARCHAR(100) NOT NULL,
+    oid NVARCHAR(255) NULL,
+    warn_low DECIMAL(18,6) NULL,
+    warn_high DECIMAL(18,6) NULL,
+    crit_low DECIMAL(18,6) NULL,
+    crit_high DECIMAL(18,6) NULL,
+    unit NVARCHAR(20) NULL,
+    scale_divisor DECIMAL(18,6) NOT NULL CONSTRAINT DF_snmp_thr_scale DEFAULT 1,
+    cooldown_min INT NOT NULL CONSTRAINT DF_snmp_thr_cd DEFAULT 60,
+    is_active BIT NOT NULL CONSTRAINT DF_snmp_thr_active DEFAULT 1,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_snmp_thr_created DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_snmp_thr_updated DEFAULT SYSUTCDATETIME()
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'snmp_threshold_state')
+CREATE TABLE snmp_threshold_state (
+    threshold_id INT NOT NULL,
+    entity_type NVARCHAR(20) NOT NULL,
+    entity_id INT NOT NULL,
+    last_alert_level NVARCHAR(20) NULL,
+    last_alert_at DATETIME2 NULL,
+    last_value DECIMAL(18,6) NULL,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_snmp_thr_st_created DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_snmp_thr_st_updated DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT PK_snmp_threshold_state PRIMARY KEY (threshold_id, entity_type, entity_id)
+);
+GO
+
 -- Active power alert keys (cooldown / clear tracking after SNMP poll)
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'power_alert_state')
 CREATE TABLE power_alert_state (
