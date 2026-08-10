@@ -2453,35 +2453,67 @@ class SnmpDiscover
             return $proposed;
         }
 
-        // Prefer rPDU2 total power when available; Ident watts often stays 0 on AP7xxx
+        // Did this agent answer any rPDU2 leaf? (AOS 3.9 AP7862 usually does not)
+        $hasRpdu2 = false;
+        foreach ($collected as $oid => $_) {
+            if (str_starts_with((string)$oid, '1.3.6.1.4.1.318.1.1.26.')) {
+                $hasRpdu2 = true;
+                break;
+            }
+        }
+
+        // Classic rPDU is authoritative on AP7862. rPDU2 keys only when the agent has them —
+        // otherwise Poll wastes GETs on noSuchName and never improves load.
         $defaults = [
             'sysDescr' => '1.3.6.1.2.1.1.1.0',
             'sysUpTime' => '1.3.6.1.2.1.1.3.0',
             'serial_no' => '1.3.6.1.4.1.318.1.1.12.1.6.0',
-            'watts_hundredths_kw' => '1.3.6.1.4.1.318.1.1.26.4.3.1.5.1',
+            // Ident power (W) — 0 until L–L voltage is set on AP7xxx NMC
             'watts' => '1.3.6.1.4.1.318.1.1.12.1.16.0',
             'va' => '1.3.6.1.4.1.318.1.1.12.1.18.0',
+            'pf_x1000' => '1.3.6.1.4.1.318.1.1.12.1.17.0',
+            // Input / L–L voltage used for power calc on AP7xxx (volts AC)
+            'input_volts' => '1.3.6.1.4.1.318.1.1.12.1.15.0',
             'phase_rated_amps' => '1.3.6.1.4.1.318.1.1.12.2.1.1.0',
-            // Classic load status (tenths A) — primary on AP7862 AOS 3.9
+            // Classic load status (tenths A) — primary load on AP7862 AOS 3.9
             'phase1_amps_x10' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.1',
             'phase2_amps_x10' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.2',
             'phase3_amps_x10' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.2.3',
             'phase1_load_state' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.1',
             'phase2_load_state' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.2',
             'phase3_load_state' => '1.3.6.1.4.1.318.1.1.12.2.3.1.1.3.3',
-            // rPDU2 phase (answered when firmware supports dual tree)
-            'phase1_volts' => '1.3.6.1.4.1.318.1.1.26.6.3.1.6.1',
-            'phase2_volts' => '1.3.6.1.4.1.318.1.1.26.6.3.1.6.2',
-            'phase3_volts' => '1.3.6.1.4.1.318.1.1.26.6.3.1.6.3',
-            'phase1_watts_hundredths_kw' => '1.3.6.1.4.1.318.1.1.26.6.3.1.7.1',
-            'phase2_watts_hundredths_kw' => '1.3.6.1.4.1.318.1.1.26.6.3.1.7.2',
-            'phase3_watts_hundredths_kw' => '1.3.6.1.4.1.318.1.1.26.6.3.1.7.3',
         ];
+        if ($hasRpdu2) {
+            $defaults['watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.4.3.1.5.1';
+            $defaults['phase1_volts'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.6.1';
+            $defaults['phase2_volts'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.6.2';
+            $defaults['phase3_volts'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.6.3';
+            $defaults['phase1_watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.7.1';
+            $defaults['phase2_watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.7.2';
+            $defaults['phase3_watts_hundredths_kw'] = '1.3.6.1.4.1.318.1.1.26.6.3.1.7.3';
+        }
 
-        // If Discover already captured a live phase amps OID under a wrong key, keep phases.
         foreach ($defaults as $key => $oid) {
             if (!isset($proposed[$key]) || $proposed[$key] === '' || $proposed[$key] === null) {
                 $proposed[$key] = $oid;
+            }
+        }
+        // Drop injected rPDU2 keys when agent never answered 26.x (stale overwrite maps)
+        if (!$hasRpdu2) {
+            foreach (array_keys($proposed) as $k) {
+                $oid = is_string($proposed[$k] ?? null) ? ltrim((string)$proposed[$k], '.') : '';
+                if ($oid !== '' && str_starts_with($oid, '1.3.6.1.4.1.318.1.1.26.')) {
+                    // Keep only if user explicitly added and we saw no 26 — still drop on seed refresh
+                    if (preg_match('/^(watts_hundredths_kw|phase[123]_(volts|watts))/', (string)$k)) {
+                        unset($proposed[$k]);
+                    }
+                }
+            }
+            // Re-apply classic defaults for keys we removed
+            foreach ($defaults as $key => $oid) {
+                if (!isset($proposed[$key])) {
+                    $proposed[$key] = $oid;
+                }
             }
         }
 
