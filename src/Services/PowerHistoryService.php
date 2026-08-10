@@ -255,8 +255,10 @@ class PowerHistoryService
     ): array {
         $fromSql = date('Y-m-d H:i:s', $fromTs);
         $toSql = date('Y-m-d H:i:s', $toTs);
-        // Hold last reading up to max(3 buckets, 15 minutes) so 5‑min interval PDUs fill gaps
-        $holdSec = max(15 * 60, $bucketMin * 60 * 3);
+        // Hold last *power* reading longer than a single poll gap. Null-watts samples
+        // (load-state-only / sanitized Ident=0) must not drop a PDU from facility sum.
+        // 45 min covers staggered site polls + Discover/UPS work without comb-to-zero cliffs.
+        $holdSec = max(45 * 60, $bucketMin * 60 * 6);
 
         $pduSql = 'SELECT pdu_id FROM pdus WHERE is_active = 1';
         $pduParams = [];
@@ -389,11 +391,15 @@ class PowerHistoryService
                 $nVa = 0;
                 $nVv = 0;
                 $lastBefore = null; // last sample with ts < bEnd
+                $lastWattsBefore = null; // last sample with non-null watts before bucket end
 
                 foreach ($list as $sample) {
                     [$ts, $w, $a, $v] = $sample;
                     if ($ts < $bEnd) {
                         $lastBefore = $sample;
+                        if ($w !== null) {
+                            $lastWattsBefore = $sample;
+                        }
                     }
                     if ($ts >= $b && $ts < $bEnd) {
                         $nIn++;
@@ -417,8 +423,29 @@ class PowerHistoryService
                     $bucketW = $nVw > 0 ? $wSum / $nVw : null;
                     $bucketA = $nVa > 0 ? $aSum / $nVa : null;
                     $bucketV = $nVv > 0 ? $vSum / $nVv : null;
+                    // Critical: poll samples often have watts=NULL (sanitized zero / load-state-only
+                    // AP7862) but still land in the bucket. That must not drop the PDU from the
+                    // facility sum — hold the last real watts within the hold window.
+                    // Explicit watts=0 in the bucket (nVw>0, average ~0) still counts as 0.
+                    if ($bucketW === null && $lastWattsBefore !== null) {
+                        [$lts, $lw, $la, $lv] = $lastWattsBefore;
+                        if ($lw !== null && ($bEnd - 1 - $lts) <= $holdSec) {
+                            $bucketW = $lw;
+                            $anyHeld = true;
+                            if ($bucketA === null && $la !== null) {
+                                $bucketA = $la;
+                            }
+                            if ($bucketV === null && $lv !== null) {
+                                $bucketV = $lv;
+                            }
+                        }
+                    }
                 } elseif ($lastBefore !== null) {
                     [$lts, $lw, $la, $lv] = $lastBefore;
+                    // Prefer last sample that actually had watts when holding across empty buckets
+                    if ($lastWattsBefore !== null) {
+                        [$lts, $lw, $la, $lv] = $lastWattsBefore;
+                    }
                     if (($bEnd - 1 - $lts) <= $holdSec) {
                         $anyHeld = true;
                         $bucketW = $lw;
