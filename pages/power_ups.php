@@ -78,13 +78,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             App::flash('success', 'UPS created.');
             App::redirect('pages/power_ups.php?id=' . (int)$id);
         }
-        if ($act === 'deactivate_ups') {
+        if ($act === 'deactivate_ups' || $act === 'delete_ups') {
             $uid = (int)($_POST['ups_id'] ?? 0);
+            if ($uid < 1) {
+                throw new RuntimeException('UPS id required.');
+            }
+            $prev = Database::fetchOne(
+                'SELECT name FROM ups_units WHERE ups_id = ? AND is_active = 1',
+                [$uid]
+            );
+            if (!$prev) {
+                throw new RuntimeException('UPS not found.');
+            }
             Database::update('ups_units', [
                 'is_active' => 0,
+                'pos_x' => null,
+                'pos_y' => null,
+                'pos_z' => null,
+                'snmp_auto_poll' => 0,
                 'updated_at' => date('Y-m-d H:i:s'),
             ], 'ups_id = :id', [':id' => $uid]);
-            App::flash('success', 'UPS deactivated.');
+            AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'delete', 'ups', $uid, [
+                'name' => $prev['name'] ?? null,
+            ]);
+            App::flash('success', 'UPS removed from inventory (soft-deleted).');
             App::redirect('pages/power_ups.php');
         }
     } catch (Throwable $e) {
@@ -130,6 +147,13 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_ups.php')) ?>">← UPSs</a>
             <?php if ($canEdit): ?>
                 <a class="btn btn-primary" href="?id=<?= (int)$upsId ?>&action=edit">Edit</a>
+                <form method="post" style="display:inline;margin:0"
+                      onsubmit="return confirm('Remove this UPS from inventory? It will leave the floor plan and list. This soft-deletes the record (can be restored from DB if needed).');">
+                    <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                    <input type="hidden" name="action" value="delete_ups">
+                    <input type="hidden" name="ups_id" value="<?= (int)$upsId ?>">
+                    <button type="submit" class="btn btn-danger">Delete UPS</button>
+                </form>
             <?php endif; ?>
             <?php if ($canSnmp): ?>
                 <button type="button" class="btn btn-secondary" id="btnUpsDiscover">Discover OIDs</button>

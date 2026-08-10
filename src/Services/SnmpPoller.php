@@ -837,6 +837,21 @@ class SnmpPoller
         if ($serialFromSnmp !== null && $serialFromSnmp !== '') {
             $patch['serial_no'] = mb_substr($serialFromSnmp, 0, 100);
         }
+        // Manufacture date from PowerNet upsAdvIdentDateOfManufacture when present
+        $mfgDate = null;
+        if (function_exists('ups_manufacture_date_from_metrics')) {
+            $mfgDate = ups_manufacture_date_from_metrics($metrics);
+        }
+        if ($mfgDate === null && function_exists('ups_parse_manufacture_date')) {
+            if (!empty($flat['manufacture_date'])) {
+                $mfgDate = ups_parse_manufacture_date($flat['manufacture_date']);
+            } elseif (!empty($metrics['manufacture_date'])) {
+                $mfgDate = ups_parse_manufacture_date($metrics['manufacture_date']);
+            }
+        }
+        if ($mfgDate !== null && $mfgDate !== '') {
+            $patch['manufacture_date'] = $mfgDate;
+        }
         Database::update('ups_units', $patch, 'ups_id = :id', [':id' => (int)$unit['ups_id']]);
 
         if (class_exists('SnmpThresholdService')) {
