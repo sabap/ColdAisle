@@ -236,6 +236,47 @@ try {
             ]);
         }
 
+        // Diagnostics testing mode (Settings → Diagnostics)
+        if (in_array($action, [
+            'simulate_connectivity_outage',
+            'simulate_on_battery',
+            'simulate_recovery',
+        ], true)) {
+            if (!class_exists('IcmpMonitorService') || !IcmpMonitorService::testingModeEnabled()) {
+                App::json([
+                    'error' => 'Testing mode is off. Enable it under Settings → Diagnostics (Global Admin).',
+                ], 403);
+            }
+            $sim = match ($action) {
+                'simulate_connectivity_outage' => ups_simulate_connectivity_outage($unit),
+                'simulate_on_battery' => ups_simulate_on_battery($unit),
+                default => ups_simulate_recovery($unit),
+            };
+            AuditService::log(
+                (int)$user['user_id'],
+                $user['username'] ?? '',
+                $action,
+                'ups',
+                $upsId,
+                ['testing' => true]
+            );
+            $fresh = Database::fetchOne('SELECT * FROM ups_units WHERE ups_id = ?', [$upsId]);
+            App::json([
+                'ok' => true,
+                'message' => $sim['message'],
+                'testing_mode' => true,
+                'health' => $sim['health'] ?? ups_health_status($fresh ?: $unit),
+                'unit' => [
+                    'last_output_status' => $fresh['last_output_status'] ?? null,
+                    'last_load_pct' => $fresh['last_load_pct'] ?? null,
+                    'last_battery_pct' => $fresh['last_battery_pct'] ?? null,
+                    'last_runtime_min' => $fresh['last_runtime_min'] ?? null,
+                    'snmp_last_poll_at' => $fresh['snmp_last_poll_at'] ?? null,
+                    'health' => ups_health_status($fresh ?: $unit),
+                ],
+            ]);
+        }
+
         App::json(['error' => 'Unknown action'], 400);
     }
 

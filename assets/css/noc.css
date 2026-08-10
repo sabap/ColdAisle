@@ -408,23 +408,25 @@ html, body {
 }
 .noc-error.show { display: block; }
 
-/* Persistent glass toast — sits above footer, spans panels, survives tab rotation */
+/* Persistent glass toast — overlaid on left 3D view (survives tab rotation) */
 .noc-alerts-glass {
-  position: fixed;
-  right: 1.15rem;
-  bottom: 2.6rem;
-  z-index: 40;
-  width: min(380px, calc(100vw - 2rem));
-  max-height: min(42vh, 320px);
+  position: absolute;
+  left: 0.65rem;
+  right: auto;
+  bottom: 0.65rem;
+  top: auto;
+  z-index: 6;
+  width: min(340px, calc(100% - 1.3rem));
+  max-height: min(48%, 300px);
   display: flex;
   flex-direction: column;
   border-radius: 14px;
   border: 1px solid rgba(148, 163, 184, 0.28);
-  background: rgba(15, 23, 42, 0.55);
+  background: rgba(15, 23, 42, 0.62);
   backdrop-filter: blur(14px) saturate(1.2);
   -webkit-backdrop-filter: blur(14px) saturate(1.2);
   box-shadow:
-    0 12px 40px rgba(0, 0, 0, 0.45),
+    0 12px 40px rgba(0, 0, 0, 0.5),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
   overflow: hidden;
   pointer-events: none;

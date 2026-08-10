@@ -15,6 +15,9 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **NOC alerts glass:** recent-alerts toast sits over the left 3D view (bottom-left of the 3D panel) instead of the right edge.
+- **UPS testing mode:** when Settings → Diagnostics testing mode is on, UPS detail offers **Simulate connectivity outage**, **Simulate on battery**, and **Simulate recovery** ([TEST] alerts).
+
 ### Bug fixes
 
 ---

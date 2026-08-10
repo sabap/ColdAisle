@@ -36,7 +36,7 @@ $apiUrl = App::url('api/noc.php');
 if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
-$cssUrl = App::url('assets/css/noc.css') . '?v=4';
+$cssUrl = App::url('assets/css/noc.css') . '?v=5';
 $jsUrl = App::url('assets/js/noc.js') . '?v=9';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
 $dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=13';
@@ -84,6 +84,14 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
     <div class="noc-3d-wrap">
       <div class="noc-3d-label">Data center · 3D</div>
       <div class="noc-3d" id="noc3d" aria-label="3D floor overview"></div>
+      <!-- Glass alerts overlay the 3D view (left column) -->
+      <aside class="noc-alerts-glass" id="nocAlertsGlass" aria-live="polite" aria-label="Recent alerts" hidden>
+        <div class="noc-alerts-glass-head">
+          <span class="noc-alerts-glass-title">Recent alerts</span>
+          <span class="noc-alerts-glass-count" id="nocAlertsCount"></span>
+        </div>
+        <div class="noc-alerts-glass-list" id="nocAlertsList"></div>
+      </aside>
     </div>
 
     <div class="noc-panel-wrap">
@@ -101,15 +109,6 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
         <section class="noc-panel" id="panel-cooling" data-panel="cooling"></section>
       </div>
     </div>
-
-    <!-- Persistent glass alerts — outside rotating panels -->
-    <aside class="noc-alerts-glass" id="nocAlertsGlass" aria-live="polite" aria-label="Recent alerts" hidden>
-      <div class="noc-alerts-glass-head">
-        <span class="noc-alerts-glass-title">Recent alerts</span>
-        <span class="noc-alerts-glass-count" id="nocAlertsCount"></span>
-      </div>
-      <div class="noc-alerts-glass-list" id="nocAlertsList"></div>
-    </aside>
 
     <footer class="noc-footer">
       <span><span class="noc-status-dot wait" id="nocDot"></span>

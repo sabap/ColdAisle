@@ -71,6 +71,10 @@ function ups_health_status(array $row): string
             }
         }
     }
+    // Connectivity / unreachable (testing mode or real) → crit
+    if (preg_match('/unreachable|no response|timeout|connectivity|offline|comm(unication)?\s*fail/i', $st)) {
+        return 'crit';
+    }
     // Battery / bypass / offline → crit
     if (preg_match('/battery|bypass|off|emergency|unknown/i', $st)) {
         if (preg_match('/on line|online|eco|econversion/i', $st)) {
@@ -799,4 +803,216 @@ function ups_finalize_snmp(array $row, ?array $prev): array
         }
     }
     return $row;
+}
+
+/**
+ * Merge testing-mode flags into last_poll_json snapshot.
+ * @param array<string,mixed> $unit
+ * @param array<string,mixed> $sim
+ * @return string
+ */
+function ups_merge_poll_json_sim(array $unit, array $sim): string
+{
+    $poll = [];
+    if (!empty($unit['last_poll_json'])) {
+        $decoded = json_decode((string)$unit['last_poll_json'], true);
+        if (is_array($decoded)) {
+            $poll = $decoded;
+        }
+    }
+    $poll['testing'] = array_merge(
+        is_array($poll['testing'] ?? null) ? $poll['testing'] : [],
+        $sim,
+        ['at' => date('c')]
+    );
+    return json_encode($poll, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '{}';
+}
+
+/**
+ * Testing mode: simulate management/connectivity loss (health crit + [TEST] alert).
+ * @param array<string,mixed> $unit
+ * @return array{ok:bool,message:string,health:string,last_output_status:?string}
+ */
+function ups_simulate_connectivity_outage(array $unit): array
+{
+    if (!class_exists('IcmpMonitorService') || !IcmpMonitorService::testingModeEnabled()) {
+        throw new RuntimeException('Testing mode is off. Enable it under Settings → Diagnostics (Global Admin).');
+    }
+    $id = (int)($unit['ups_id'] ?? 0);
+    if ($id < 1) {
+        throw new RuntimeException('Invalid UPS id.');
+    }
+    $label = (string)($unit['name'] ?? ('UPS #' . $id));
+    $prevStatus = (string)($unit['last_output_status'] ?? '');
+    $status = 'Unreachable';
+    $now = date('Y-m-d H:i:s');
+    $json = ups_merge_poll_json_sim($unit, [
+        'mode' => 'connectivity_outage',
+        'prev_output_status' => $prevStatus !== '' ? $prevStatus : null,
+    ]);
+    Database::update('ups_units', [
+        'last_output_status' => $status,
+        'last_poll_json' => $json,
+        'updated_at' => $now,
+    ], 'ups_id = :id', [':id' => $id]);
+
+    if (class_exists('AlertService')) {
+        try {
+            AlertService::emit([
+                'category' => AlertService::CAT_POWER,
+                'severity' => AlertService::SEV_CRITICAL,
+                'title' => '[TEST] UPS unreachable: ' . $label,
+                'message' => "Simulated connectivity outage (testing mode).\n"
+                    . 'UPS: ' . $label . "\n"
+                    . 'IP: ' . (string)($unit['primary_ip'] ?? '—') . "\n"
+                    . 'Previous status: ' . ($prevStatus !== '' ? $prevStatus : '—') . "\n"
+                    . 'Time: ' . date('c'),
+                'entity_type' => 'ups',
+                'entity_id' => $id,
+            ]);
+        } catch (Throwable $e) {
+            // continue
+        }
+    }
+    $fresh = Database::fetchOne('SELECT * FROM ups_units WHERE ups_id = ?', [$id]) ?: $unit;
+    return [
+        'ok' => true,
+        'message' => 'Simulated connectivity outage for ' . $label . ' — [TEST] alert fired.',
+        'health' => ups_health_status($fresh),
+        'last_output_status' => $status,
+    ];
+}
+
+/**
+ * Testing mode: simulate transfer from line-in to battery (on battery + [TEST] alert).
+ * @param array<string,mixed> $unit
+ * @return array{ok:bool,message:string,health:string,last_output_status:?string}
+ */
+function ups_simulate_on_battery(array $unit): array
+{
+    if (!class_exists('IcmpMonitorService') || !IcmpMonitorService::testingModeEnabled()) {
+        throw new RuntimeException('Testing mode is off. Enable it under Settings → Diagnostics (Global Admin).');
+    }
+    $id = (int)($unit['ups_id'] ?? 0);
+    if ($id < 1) {
+        throw new RuntimeException('Invalid UPS id.');
+    }
+    $label = (string)($unit['name'] ?? ('UPS #' . $id));
+    $prevStatus = (string)($unit['last_output_status'] ?? '');
+    if ($prevStatus === '' || preg_match('/unreachable/i', $prevStatus)) {
+        $prevStatus = 'On line';
+    }
+    $status = 'On battery';
+    $now = date('Y-m-d H:i:s');
+    $batt = $unit['last_battery_pct'] !== null && $unit['last_battery_pct'] !== ''
+        ? (float)$unit['last_battery_pct'] : 95.0;
+    // Nudge battery slightly lower for a realistic sim reading
+    if ($batt > 10) {
+        $batt = max(10.0, round($batt - 5.0, 1));
+    }
+    $runtime = $unit['last_runtime_min'] !== null && $unit['last_runtime_min'] !== ''
+        ? (float)$unit['last_runtime_min'] : 30.0;
+    $json = ups_merge_poll_json_sim($unit, [
+        'mode' => 'on_battery',
+        'prev_output_status' => $prevStatus,
+    ]);
+    Database::update('ups_units', [
+        'last_output_status' => $status,
+        'last_battery_pct' => $batt,
+        'last_runtime_min' => $runtime,
+        'last_poll_json' => $json,
+        'snmp_last_poll_at' => $now,
+        'updated_at' => $now,
+    ], 'ups_id = :id', [':id' => $id]);
+
+    if (class_exists('AlertService')) {
+        try {
+            AlertService::emit([
+                'category' => AlertService::CAT_POWER,
+                'severity' => AlertService::SEV_CRITICAL,
+                'title' => '[TEST] UPS On battery: ' . $label,
+                'message' => "Simulated transfer from line-in to battery (testing mode).\n"
+                    . 'UPS: ' . $label . "\n"
+                    . 'Previous: ' . $prevStatus . " → On battery\n"
+                    . 'Battery: ' . $batt . "%\n"
+                    . 'Runtime: ' . $runtime . " min\n"
+                    . 'Time: ' . date('c'),
+                'entity_type' => 'ups',
+                'entity_id' => $id,
+            ]);
+        } catch (Throwable $e) {
+            // continue
+        }
+    }
+    $fresh = Database::fetchOne('SELECT * FROM ups_units WHERE ups_id = ?', [$id]) ?: $unit;
+    return [
+        'ok' => true,
+        'message' => 'Simulated On battery for ' . $label . ' — [TEST] alert fired.',
+        'health' => ups_health_status($fresh),
+        'last_output_status' => $status,
+    ];
+}
+
+/**
+ * Testing mode: clear simulated outage/battery → On line + recovery alert.
+ * @param array<string,mixed> $unit
+ * @return array{ok:bool,message:string,health:string,last_output_status:?string}
+ */
+function ups_simulate_recovery(array $unit): array
+{
+    if (!class_exists('IcmpMonitorService') || !IcmpMonitorService::testingModeEnabled()) {
+        throw new RuntimeException('Testing mode is off. Enable it under Settings → Diagnostics (Global Admin).');
+    }
+    $id = (int)($unit['ups_id'] ?? 0);
+    if ($id < 1) {
+        throw new RuntimeException('Invalid UPS id.');
+    }
+    $label = (string)($unit['name'] ?? ('UPS #' . $id));
+    $prevFromSim = null;
+    if (!empty($unit['last_poll_json'])) {
+        $decoded = json_decode((string)$unit['last_poll_json'], true);
+        if (is_array($decoded) && !empty($decoded['testing']['prev_output_status'])) {
+            $prevFromSim = (string)$decoded['testing']['prev_output_status'];
+        }
+    }
+    $status = 'On line';
+    if ($prevFromSim && preg_match('/on line|online|eco|econversion/i', $prevFromSim)) {
+        $status = $prevFromSim;
+    }
+    $now = date('Y-m-d H:i:s');
+    $json = ups_merge_poll_json_sim($unit, [
+        'mode' => 'recovery',
+        'prev_output_status' => (string)($unit['last_output_status'] ?? ''),
+    ]);
+    Database::update('ups_units', [
+        'last_output_status' => $status,
+        'last_poll_json' => $json,
+        'snmp_last_poll_at' => $now,
+        'updated_at' => $now,
+    ], 'ups_id = :id', [':id' => $id]);
+
+    if (class_exists('AlertService')) {
+        try {
+            AlertService::emit([
+                'category' => AlertService::CAT_POWER,
+                'severity' => AlertService::SEV_INFO,
+                'title' => '[TEST] UPS recovered: ' . $label,
+                'message' => "Simulated recovery (testing mode).\n"
+                    . 'UPS: ' . $label . "\n"
+                    . 'Status: ' . $status . "\n"
+                    . 'Time: ' . date('c'),
+                'entity_type' => 'ups',
+                'entity_id' => $id,
+            ]);
+        } catch (Throwable $e) {
+            // continue
+        }
+    }
+    $fresh = Database::fetchOne('SELECT * FROM ups_units WHERE ups_id = ?', [$id]) ?: $unit;
+    return [
+        'ok' => true,
+        'message' => 'Simulated recovery for ' . $label . ' — status ' . $status . '.',
+        'health' => ups_health_status($fresh),
+        'last_output_status' => $status,
+    ];
 }
