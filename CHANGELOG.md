@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.3.77] - 2026-08-10
+
+### Enhancements
+
+- **UPS delete / floor plan / manufacture date (complete ship):** same notes as 0.3.76, with the implementation commit included in this tag for Settings → Updates.
+
+---
 ## [0.3.76] - 2026-08-10
 
 ### Enhancements
