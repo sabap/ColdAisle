@@ -462,10 +462,36 @@ if ($includeScene) {
     } catch (Throwable $e) {
         $cooling3d = [];
     }
+    $ups3d = [];
+    try {
+        if (is_file(dirname(__DIR__) . '/includes/ups_helpers.php')) {
+            require_once dirname(__DIR__) . '/includes/ups_helpers.php';
+        }
+        $ups3d = Database::fetchAll(
+            'SELECT u.ups_id, u.name, u.ups_scope, u.pos_x, u.pos_y, u.pos_z, u.rotation_deg, u.front_facing,
+                    u.width_mm, u.depth_mm, u.height_mm, u.color_hex, u.status,
+                    u.last_output_status, u.last_load_pct, u.last_battery_pct, u.last_runtime_min,
+                    r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth
+             FROM ups_units u
+             LEFT JOIN rooms r ON r.room_id = u.room_id
+             WHERE u.is_active = 1
+               AND u.pos_x IS NOT NULL AND u.pos_y IS NOT NULL
+             ORDER BY u.name'
+        );
+        if (function_exists('ups_health_status')) {
+            foreach ($ups3d as &$uu) {
+                $uu['health_status'] = ups_health_status($uu);
+            }
+            unset($uu);
+        }
+    } catch (Throwable $e) {
+        $ups3d = [];
+    }
     $out['scene'] = [
         'cabinets' => $cabinets3d,
         'pdus' => $pdus3d,
         'cooling' => $cooling3d,
+        'ups' => $ups3d,
         'rooms' => $rooms,
         'env_sensors' => $envSensors3d,
         'logo_url' => App::url('assets/img/logo.svg'),

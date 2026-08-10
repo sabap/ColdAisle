@@ -30,6 +30,12 @@ $pdus = Database::fetchAll(
 
 $panelCount = (int) Database::fetchValue('SELECT COUNT(*) FROM power_panels');
 $snmpOn = count(array_filter($pdus, static fn($p) => !empty($p['snmp_enabled'])));
+$upsCount = 0;
+try {
+    $upsCount = (int)Database::fetchValue('SELECT COUNT(*) FROM ups_units WHERE is_active = 1');
+} catch (Throwable $e) {
+    $upsCount = 0;
+}
 $withPoll = array_filter($pdus, static fn($p) => $p['last_poll_watts'] !== null);
 $totalKw = array_sum(array_map(static fn($p) => (float)($p['last_poll_watts'] ?? 0), $pdus)) / 1000.0;
 $capacityKw = 0.0;
@@ -98,6 +104,7 @@ layout_header('Power Dashboard', $user, 'power');
     <div class="flex gap-1">
         <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_zones.php')) ?>">Manage Zones</a>
         <a class="btn btn-primary" href="<?= App::e(App::url('pages/power_pdus.php')) ?>">Manage PDUs</a>
+        <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_ups.php')) ?>">UPS<?= $upsCount ? ' (' . (int)$upsCount . ')' : '' ?></a>
     </div>
 </div>
 

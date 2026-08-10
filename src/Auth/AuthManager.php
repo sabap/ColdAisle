@@ -62,6 +62,7 @@ class AuthManager
         'power_zones' => 'view_power',
         'power_pdus' => 'view_power',
         'power_pdu_templates' => 'view_power',
+        'power_ups' => 'view_power',
         'cooling' => 'view_cooling',
         'cooling_units' => 'view_cooling',
         'env_sensors' => 'view_cooling',

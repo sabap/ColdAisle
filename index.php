@@ -107,6 +107,29 @@ try {
     $cooling3d = [];
 }
 
+// Floor-placed UPS (Symmetra in-row frames)
+$ups3d = [];
+try {
+    require_once __DIR__ . '/includes/ups_helpers.php';
+    $ups3d = Database::fetchAll(
+        'SELECT u.ups_id, u.name, u.ups_scope, u.pos_x, u.pos_y, u.pos_z, u.rotation_deg, u.front_facing,
+                u.width_mm, u.depth_mm, u.height_mm, u.color_hex, u.status,
+                u.last_output_status, u.last_load_pct, u.last_battery_pct, u.last_runtime_min,
+                r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth
+         FROM ups_units u
+         LEFT JOIN rooms r ON r.room_id = u.room_id
+         WHERE u.is_active = 1
+           AND u.pos_x IS NOT NULL AND u.pos_y IS NOT NULL
+         ORDER BY u.name'
+    );
+    foreach ($ups3d as &$uu) {
+        $uu['health_status'] = ups_health_status($uu);
+    }
+    unset($uu);
+} catch (Throwable $e) {
+    $ups3d = [];
+}
+
 // Env heat spheres (cabinet + placement → soft ~3 ft influence)
 $envSensors3d = [];
 $envHeatDiag = ['placeable' => 0, 'with_value' => 0, 'no_cabinet' => 0, 'cabinet_unplaced' => 0];
@@ -252,6 +275,7 @@ layout_header('Dashboard', $user, 'dashboard');
              data-cabinets='<?= App::e(json_encode($cabinets3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-pdus='<?= App::e(json_encode($pdus3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-cooling='<?= App::e(json_encode($cooling3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
+             data-ups='<?= App::e(json_encode($ups3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-rooms='<?= App::e(json_encode($rooms, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-env-sensors='<?= App::e(json_encode($envSensors3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-logo-url='<?= App::e(App::url('assets/img/logo.svg')) ?>'></div>
@@ -332,7 +356,7 @@ layout_header('Dashboard', $user, 'dashboard');
     if (!el) return;
     el.classList.add('dash-3d-loading');
     var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=12') ?>;
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=13') ?>;
     loadScript(threeUrl)
       .then(function () { return loadScript(app3d); })
       .then(function () {
@@ -340,6 +364,7 @@ layout_header('Dashboard', $user, 'dashboard');
         var cabinets = JSON.parse(el.dataset.cabinets || '[]');
         var pdus = JSON.parse(el.dataset.pdus || '[]');
         var cooling = JSON.parse(el.dataset.cooling || '[]');
+        var ups = JSON.parse(el.dataset.ups || '[]');
         var rooms = JSON.parse(el.dataset.rooms || '[]');
         var envSensors = JSON.parse(el.dataset.envSensors || '[]');
         var logoUrl = el.dataset.logoUrl || '';
@@ -350,6 +375,7 @@ layout_header('Dashboard', $user, 'dashboard');
           cabinets: cabinets,
           pdus: pdus,
           cooling: cooling,
+          ups: ups,
           rooms: rooms,
           envSensors: envSensors,
           logoUrl: logoUrl,

@@ -20,6 +20,7 @@
   const DRAG_MIME_PDU = 'application/x-coldaisle-pdu';
   const DRAG_TEXT_PREFIX_PDU = 'COLDAISLE_PDU:';
   const DRAG_MIME_COOLING = 'application/x-coldaisle-cooling';
+  const DRAG_MIME_UPS = 'application/x-coldaisle-ups';
   const DRAG_TEXT_PREFIX_COOLING = 'COLDAISLE_COOL:';
 
   /** Thin footprint presets for row/room power (not cabinet SKUs). */
@@ -36,6 +37,11 @@
     { key: 'in_row', name: 'In-row cooler', unit_type: 'in_row', cooling_medium: 'chilled_water', width_mm: 300, depth_mm: 1200, height_mm: 2000, color_hex: '#38bdf8', unit_role: 'primary' },
     { key: 'cw_pump', name: 'Chilled-water pump', unit_type: 'chilled_water_pump', cooling_medium: 'chilled_water', width_mm: 600, depth_mm: 600, height_mm: 1200, color_hex: '#0369a1', unit_role: 'shared' },
     { key: 'ac_pump', name: 'AC / condenser pump', unit_type: 'ac_pump', cooling_medium: 'dx', width_mm: 600, depth_mm: 600, height_mm: 1200, color_hex: '#0c4a6e', unit_role: 'shared' },
+  ];
+
+  const UPS_TEMPLATES = [
+    { key: 'symmetra_inrow', name: 'Symmetra / in-row UPS', ups_scope: 'in_row', width_mm: 600, depth_mm: 1100, height_mm: 2000, color_hex: '#7c3aed', manufacturer: 'Schneider Electric', model: 'Symmetra 40K', rated_kva: 40, rated_kw: 40 },
+    { key: 'in_rack_ups', name: 'In-rack UPS', ups_scope: 'in_rack', width_mm: 600, depth_mm: 1000, height_mm: 1800, color_hex: '#6d28d9', manufacturer: 'APC', model: 'Smart-UPS', rated_kva: 5, rated_kw: 4.5 },
   ];
 
   function initPlanner(root) {
@@ -57,12 +63,15 @@
     let unplacedPdus = []; // available to place
     let floorCooling = []; // placed cooling units
     let unplacedCooling = []; // available to place
+    let floorUps = []; // placed UPS
+    let unplacedUps = [];
     let envSensors3d = []; // heat spheres for 3D view
     let roomRows = []; // cabinet_rows for current room
     let powerZones = []; // zones for DC (row → zone)
     let selectedId = null; // primary cabinet selection (props panel focus)
     let selectedPduId = null; // selected floor PDU (exclusive with cabinets)
     let selectedCoolingId = null; // selected cooling unit
+    let selectedUpsId = null;
     const selectedIds = new Set(); // multi-select cabinets (SHIFT+click)
     let drag = null;
     let show3d = false;
@@ -71,6 +80,7 @@
     let pendingTemplate = null; // cabinet template
     let pendingPdu = null; // { kind: 'preset'|'existing', ... }
     let pendingCooling = null; // { kind: 'preset'|'existing', ... }
+    let pendingUps = null;
     let zoom = 1;
     let showGrid = true;
     let snapToGrid = true;
@@ -588,11 +598,12 @@
         drawCompass();
       }
 
-      if (pendingTemplate || pendingPdu || pendingCooling) {
-        ctx.fillStyle = pendingCooling ? '#0ea5e9' : (pendingPdu ? '#f59e0b' : '#3b82f6');
+      if (pendingTemplate || pendingPdu || pendingCooling || pendingUps) {
+        ctx.fillStyle = pendingUps ? '#a78bfa' : (pendingCooling ? '#0ea5e9' : (pendingPdu ? '#f59e0b' : '#3b82f6'));
         ctx.font = '11px Segoe UI';
         let msg = 'Click on the floor to place the selected template…';
-        if (pendingCooling) msg = 'Click on the floor to place: ' + (pendingCooling.name || 'Cooling');
+        if (pendingUps) msg = 'Click on the floor to place: ' + (pendingUps.name || 'UPS');
+        else if (pendingCooling) msg = 'Click on the floor to place: ' + (pendingCooling.name || 'Cooling');
         else if (pendingPdu) msg = 'Click on the floor to place: ' + (pendingPdu.name || 'PDU');
         ctx.fillText(msg, ORIGIN, canvas.height - 10);
       }
@@ -600,6 +611,11 @@
       // Cooling under PDUs / cabinets
       floorCooling.forEach(function (u) {
         drawFloorCooling(u);
+      });
+
+      // UPS frames (in-row) under cabinets
+      floorUps.forEach(function (u) {
+        drawFloorUps(u);
       });
 
       // Row/room PDUs under cabinets so racks paint on top when overlapping
@@ -777,6 +793,66 @@
       return Number(u.rotation_deg) || 0;
     }
 
+    function upsRect(u) {
+      return cabRect({
+        width_mm: u.width_mm || 600,
+        depth_mm: u.depth_mm || 1100,
+        pos_x: u.pos_x,
+        pos_y: u.pos_y,
+      });
+    }
+
+    function upsRotation(u) {
+      if (u.front_facing) return facingToRotation(u.front_facing);
+      return Number(u.rotation_deg) || 0;
+    }
+
+    function drawFloorUps(u) {
+      const r = upsRect(u);
+      const selected = Number(selectedUpsId) === Number(u.ups_id);
+      const rot = upsRotation(u);
+      const hSt = (u.health_status || u.health && u.health.status || '').toLowerCase();
+      const body = u.color_hex || '#7c3aed';
+      const border = selected
+        ? '#c4b5fd'
+        : (hSt === 'crit' ? '#ef4444' : hSt === 'warn' ? '#eab308' : '#a78bfa');
+
+      ctx.save();
+      ctx.translate(r.x + r.w / 2, r.y + r.d / 2);
+      ctx.rotate((rot * Math.PI) / 180);
+
+      if (hSt === 'crit' || hSt === 'warn') {
+        ctx.shadowColor = hSt === 'crit' ? '#ef4444' : '#eab308';
+        ctx.shadowBlur = Math.max(8, 12 * zoom);
+      }
+      ctx.fillStyle = body;
+      ctx.globalAlpha = 0.88;
+      ctx.fillRect(-r.w / 2, -r.d / 2, r.w, r.d);
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = border;
+      ctx.lineWidth = selected ? 3 : ((hSt === 'crit' || hSt === 'warn') ? 2.5 : 1.5);
+      ctx.strokeRect(-r.w / 2, -r.d / 2, r.w, r.d);
+
+      // Front accent
+      ctx.fillStyle = '#a78bfa';
+      ctx.fillRect(-r.w / 2, -r.d / 2, r.w, Math.max(4, 5 * zoom));
+
+      ctx.fillStyle = '#ede9fe';
+      ctx.font = 'bold ' + Math.max(9, Math.round(10 * Math.min(zoom, 1.4))) + 'px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('UPS', 0, -6);
+      ctx.font = '9px Segoe UI';
+      ctx.fillStyle = '#c4b5fd';
+      ctx.fillText(String(u.name || '').slice(0, 12), 0, 10);
+      if (u.last_load_pct != null) {
+        ctx.fillStyle = hSt === 'crit' ? '#fca5a5' : '#e9d5ff';
+        ctx.fillText(String(u.last_load_pct) + '% load', 0, 22);
+      }
+      ctx.restore();
+    }
+
     function drawFloorCooling(u) {
       const r = coolingRect(u);
       const selected = Number(selectedCoolingId) === Number(u.cooling_unit_id);
@@ -841,6 +917,12 @@
         const r = coolingRect(floorCooling[i]);
         if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.d) {
           return { type: 'cooling', obj: floorCooling[i] };
+        }
+      }
+      for (let i = floorUps.length - 1; i >= 0; i--) {
+        const r = upsRect(floorUps[i]);
+        if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.d) {
+          return { type: 'ups', obj: floorUps[i] };
         }
       }
       return null;
@@ -2690,10 +2772,13 @@
         unplacedPdus = [];
         floorCooling = [];
         unplacedCooling = [];
+        floorUps = [];
+        unplacedUps = [];
         envSensors3d = [];
         propsEl.innerHTML = '<p class="text-muted">Create a room first under Data Centers.</p>';
         renderUnplacedPduPalette();
         renderUnplacedCoolingPalette();
+        renderUpsPalette();
         draw();
         return;
       }
@@ -2705,6 +2790,8 @@
         unplacedPdus = data.unplaced_pdus || [];
         floorCooling = data.placed_cooling || [];
         unplacedCooling = data.unplaced_cooling || [];
+        floorUps = data.placed_ups || [];
+        unplacedUps = data.unplaced_ups || [];
         envSensors3d = data.env_sensors || [];
         roomRows = data.rows || [];
         powerZones = data.zones || [];
@@ -2715,6 +2802,7 @@
         selectedId = null;
         selectedPduId = null;
         selectedCoolingId = null;
+        selectedUpsId = null;
         northEdge = String((room && room.north_edge) || 'top').toLowerCase();
         if (data.units === 'imperial' || data.units === 'metric') {
           units = data.units;
@@ -2767,6 +2855,7 @@
         renderUnplacedPduPalette();
         renderCoolingPresetPalette();
         renderUnplacedCoolingPalette();
+        renderUpsPalette();
         renderProps();
         resizeCanvas();
         refresh3d();
@@ -3061,9 +3150,180 @@
         pendingTemplate = null;
         pendingPdu = null;
         pendingCooling = coolingPayloadFromItem(item);
+        pendingUps = null;
         draw();
         ColdAisle.toast('Click on the floor plan to place: ' + (pendingCooling.name || 'Cooling'), 'info');
       });
+    }
+
+    function renderUpsPalette() {
+      const presets = root.querySelector('#upsPresetList');
+      if (presets) {
+        presets.innerHTML = '';
+        UPS_TEMPLATES.forEach(function (t) {
+          const el = document.createElement('div');
+          el.className = 'palette-item ups-preset';
+          el.draggable = true;
+          el.dataset.upsKind = 'preset';
+          el.dataset.name = t.name;
+          el.dataset.scope = t.ups_scope || 'in_row';
+          el.dataset.width = String(t.width_mm || 600);
+          el.dataset.depth = String(t.depth_mm || 1100);
+          el.dataset.height = String(t.height_mm || 2000);
+          el.dataset.color = t.color_hex || '#7c3aed';
+          el.dataset.model = t.model || '';
+          el.dataset.mfr = t.manufacturer || 'Schneider Electric';
+          el.dataset.kva = String(t.rated_kva || 40);
+          el.dataset.kw = String(t.rated_kw || 40);
+          el.innerHTML =
+            '<div class="palette-title">⚡ ' + esc(t.name) + '</div>' +
+            '<small class="text-muted">' + esc(t.ups_scope || 'in_row') +
+            (t.rated_kva ? ' · ' + t.rated_kva + ' kVA' : '') + '</small>';
+          presets.appendChild(el);
+          bindUpsPaletteItem(el);
+        });
+      }
+      const list = root.querySelector('#upsUnplacedList');
+      if (!list) return;
+      list.innerHTML = '';
+      if (!unplacedUps.length) {
+        list.innerHTML = '<p class="text-muted" style="font-size:.75rem;margin:0">No unplaced UPS for this room.</p>';
+        return;
+      }
+      unplacedUps.forEach(function (u) {
+        const el = document.createElement('div');
+        el.className = 'palette-item ups-unplaced';
+        el.draggable = true;
+        el.dataset.upsKind = 'existing';
+        el.dataset.upsId = String(u.ups_id);
+        el.dataset.name = u.name || ('UPS ' + u.ups_id);
+        el.dataset.scope = u.ups_scope || 'in_row';
+        el.dataset.width = String(u.width_mm || 600);
+        el.dataset.depth = String(u.depth_mm || 1100);
+        el.dataset.height = String(u.height_mm || 2000);
+        el.dataset.color = u.color_hex || '#7c3aed';
+        el.innerHTML =
+          '<div class="palette-title">⚡ ' + esc(u.name || ('UPS #' + u.ups_id)) + '</div>' +
+          '<small class="text-muted">' + esc(u.ups_scope || 'in_row') + '</small>';
+        list.appendChild(el);
+        bindUpsPaletteItem(el);
+      });
+    }
+
+    function upsPayloadFromItem(item) {
+      const kind = item.dataset.upsKind || 'preset';
+      return {
+        kind: kind,
+        ups_id: kind === 'existing' ? parseInt(item.dataset.upsId || '0', 10) : null,
+        name: item.dataset.name || 'UPS',
+        ups_scope: item.dataset.scope || 'in_row',
+        width_mm: parseInt(item.dataset.width || '600', 10),
+        depth_mm: parseInt(item.dataset.depth || '1100', 10),
+        height_mm: parseInt(item.dataset.height || '2000', 10),
+        color_hex: item.dataset.color || '#7c3aed',
+        manufacturer: item.dataset.mfr || 'Schneider Electric',
+        model: item.dataset.model || 'Symmetra 40K',
+        rated_kva: parseFloat(item.dataset.kva || '40'),
+        rated_kw: parseFloat(item.dataset.kw || '40'),
+        front_facing: 'north',
+      };
+    }
+
+    function bindUpsPaletteItem(item) {
+      item.setAttribute('draggable', 'true');
+      item.addEventListener('dragstart', function (e) {
+        const payload = upsPayloadFromItem(item);
+        const json = JSON.stringify(payload);
+        try { e.dataTransfer.setData(DRAG_MIME_UPS, json); } catch (err) { /* ignore */ }
+        e.dataTransfer.setData('text/plain', 'ups:' + json);
+        e.dataTransfer.effectAllowed = 'copy';
+        item.classList.add('dragging');
+      });
+      item.addEventListener('dragend', function () { item.classList.remove('dragging'); });
+      item.addEventListener('click', function () {
+        clearPaletteSelection();
+        item.classList.add('selected');
+        pendingTemplate = null;
+        pendingPdu = null;
+        pendingCooling = null;
+        pendingUps = upsPayloadFromItem(item);
+        draw();
+        ColdAisle.toast('Click on the floor plan to place: ' + (pendingUps.name || 'UPS'), 'info');
+      });
+    }
+
+    async function placeUpsAt(posX, posY, payload) {
+      if (!room || !roomId()) {
+        ColdAisle.toast('Select a room first', 'error');
+        return;
+      }
+      const defs = payload || {};
+      const facing = defs.front_facing || 'north';
+      const draft = {
+        width_mm: defs.width_mm || 600,
+        depth_mm: defs.depth_mm || 1100,
+        height_mm: defs.height_mm || 2000,
+        front_facing: facing,
+        rotation_deg: facingToRotation(facing),
+      };
+      const sn = snapCabinetPosition(posX, posY, draft, false);
+      try {
+        let res;
+        if (defs.kind === 'existing' && defs.ups_id) {
+          res = await ColdAisle.api('api/floorplan.php?action=place_ups', {
+            method: 'POST',
+            body: {
+              ups_id: Number(defs.ups_id),
+              room_id: roomId(),
+              pos_x: sn.x,
+              pos_y: sn.y,
+              width_mm: draft.width_mm,
+              depth_mm: draft.depth_mm,
+              height_mm: draft.height_mm,
+              front_facing: facing,
+              color_hex: defs.color_hex || '#7c3aed',
+            },
+          });
+        } else {
+          res = await ColdAisle.api('api/floorplan.php?action=create_floor_ups', {
+            method: 'POST',
+            body: {
+              room_id: roomId(),
+              name: defs.name || ('UPS ' + (floorUps.length + 1)),
+              ups_scope: defs.ups_scope || 'in_row',
+              manufacturer: defs.manufacturer || 'Schneider Electric',
+              model: defs.model || 'Symmetra 40K',
+              rated_kva: defs.rated_kva || 40,
+              rated_kw: defs.rated_kw || 40,
+              pos_x: sn.x,
+              pos_y: sn.y,
+              width_mm: draft.width_mm,
+              depth_mm: draft.depth_mm,
+              height_mm: draft.height_mm,
+              front_facing: facing,
+              color_hex: defs.color_hex || '#7c3aed',
+            },
+          });
+        }
+        const u = (res && res.ups_unit) || null;
+        if (u) {
+          floorUps.push(u);
+          unplacedUps = unplacedUps.filter(function (x) {
+            return Number(x.ups_id) !== Number(u.ups_id);
+          });
+          renderUpsPalette();
+          selectedUpsId = Number(u.ups_id);
+          selectedCoolingId = null;
+          selectedPduId = null;
+          selectedId = null;
+          draw();
+          refresh3d();
+          ColdAisle.toast('UPS placed: ' + (u.name || ''), 'success');
+        }
+      } catch (err) {
+        ColdAisle.toast((err && err.message) || 'Failed to place UPS', 'error');
+      }
+      pendingUps = null;
     }
 
     async function placeCoolingAt(posX, posY, payload) {
@@ -3254,6 +3514,7 @@
         cabinets: cabinets,
         pdus: floorPdus,
         cooling: floorCooling,
+        ups: floorUps,
         envSensors: envSensors3d,
         heatOverlay: true,
         rooms: room ? [room] : [],
@@ -3284,9 +3545,17 @@
 
       if (!isLeft) return;
 
-      if ((pendingTemplate || pendingPdu || pendingCooling) && !hit) {
+      if ((pendingTemplate || pendingPdu || pendingCooling || pendingUps) && !hit) {
         const w = worldFromCanvas(pt.x, pt.y);
-        if (pendingCooling) {
+        if (pendingUps) {
+          const upsTmpl = pendingUps;
+          pendingUps = null;
+          pendingCooling = null;
+          pendingPdu = null;
+          pendingTemplate = null;
+          clearPaletteSelection();
+          placeUpsAt(w.x, w.y, upsTmpl);
+        } else if (pendingCooling) {
           const coolTmpl = pendingCooling;
           pendingCooling = null;
           pendingPdu = null;
@@ -3305,6 +3574,15 @@
           clearPaletteSelection();
           createCabinetAt(w.x, w.y, tmpl);
         }
+        return;
+      }
+
+      if (hit && hit.type === 'ups') {
+        selectedUpsId = Number(hit.obj.ups_id);
+        selectedCoolingId = null;
+        selectedPduId = null;
+        selectedId = null;
+        draw();
         return;
       }
 
@@ -3600,6 +3878,7 @@
     renderUnplacedPduPalette();
     renderCoolingPresetPalette();
     renderUnplacedCoolingPalette();
+    renderUpsPalette();
 
     canvas.addEventListener('dragover', function (e) {
       e.preventDefault();

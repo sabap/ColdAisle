@@ -103,6 +103,16 @@ layout_header('Floor Planner', $user, 'floorplan');
             <div id="coolingUnplacedList" class="palette-list palette-list-compact">
                 <p class="text-muted" style="font-size:.75rem;margin:0">Load a room to see unplaced units.</p>
             </div>
+
+            <h3 style="margin-top:1rem;font-size:.95rem">UPS</h3>
+            <p class="text-muted" style="font-size:.72rem;margin:.25rem 0 .5rem">
+                In-row Symmetra / UPS frames for floor + 3D. In-rack is inventory-only by default.
+            </p>
+            <div id="upsPresetList" class="palette-list palette-list-compact"></div>
+            <h4 style="margin:.85rem 0 .35rem;font-size:.82rem;color:var(--muted)">Unplaced UPS</h4>
+            <div id="upsUnplacedList" class="palette-list palette-list-compact">
+                <p class="text-muted" style="font-size:.75rem;margin:0">Load a room to see unplaced UPS units.</p>
+            </div>
         </div>
         <div class="planner-stage">
             <div class="planner-canvas-wrap" id="plannerCanvasWrap">
@@ -121,7 +131,7 @@ layout_header('Floor Planner', $user, 'floorplan');
   window.ColdAisle.lengthUnits = <?= json_encode($units) ?>;
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=12"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=13"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=22"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=23"></script>
 <?php layout_footer(); ?>

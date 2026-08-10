@@ -44,6 +44,22 @@ class SnmpDiscover
     ];
 
     /**
+     * APC / Schneider UPS (PowerNet 318.1.1.1) — Symmetra, Smart-UPS, etc.
+     * Keep narrow: full 318.1.1.1 walks are huge on modular frames.
+     */
+    private const WALK_ROOTS_UPS = [
+        '1.3.6.1.2.1.1',
+        '1.3.6.1.2.1.2.2.1.2',
+        '1.3.6.1.2.1.2.2.1.6',
+        '1.3.6.1.4.1.318.1.1.1.1',       // upsBasicIdent
+        '1.3.6.1.4.1.318.1.1.1.2.2',     // upsAdvBattery
+        '1.3.6.1.4.1.318.1.1.1.3.2',     // upsAdvInput
+        '1.3.6.1.4.1.318.1.1.1.4',       // upsBasic/Adv Output
+        '1.3.6.1.4.1.318.1.1.1.7.2',     // upsAdvConfig (narrow)
+        '1.3.6.1.4.1.318.1.1.1.12',      // phase tables (3φ Symmetra)
+    ];
+
+    /**
      * Emerson / Liebert / Vertiv thermal (enterprise 476).
      * Empty condition roots each burn a full timeout on slow Unity cards.
      */
@@ -127,7 +143,7 @@ class SnmpDiscover
     public static function discover(array $creds, array $options = []): array
     {
         $familyHint = strtolower(trim((string)($options['family'] ?? 'auto')));
-        $allowedFamily = ['auto', 'cooling', 'power', 'ems', 'idrac', 'apc', 'liebert', 'default', 'server_bmc'];
+        $allowedFamily = ['auto', 'cooling', 'power', 'ems', 'ups', 'idrac', 'apc', 'liebert', 'default', 'server_bmc'];
         if (!in_array($familyHint, $allowedFamily, true)) {
             $familyHint = 'auto';
         }
@@ -2711,7 +2727,7 @@ class SnmpDiscover
     }
 
     /**
-     * Pick Discover ruleset: apc | liebert | idrac | default.
+     * Pick Discover ruleset: apc | ups | liebert | idrac | default.
      * Priority: forced ruleset → family hint → inventory manufacturer → sysDescr → default.
      */
     public static function resolveRulesetId(
@@ -2721,7 +2737,7 @@ class SnmpDiscover
         ?string $sysDescr
     ): string {
         $forced = strtolower(trim($forcedRuleset));
-        if (in_array($forced, ['apc', 'liebert', 'idrac', 'default'], true)) {
+        if (in_array($forced, ['apc', 'ups', 'liebert', 'idrac', 'default'], true)) {
             return $forced;
         }
 
@@ -2731,6 +2747,9 @@ class SnmpDiscover
         }
         if (in_array($family, ['idrac', 'server_bmc'], true)) {
             return 'idrac';
+        }
+        if (in_array($family, ['ups'], true)) {
+            return 'ups';
         }
         if (in_array($family, ['power', 'ems', 'apc'], true)) {
             // Power/EMS Discover stays on the tuned APC PowerNet path
@@ -2746,6 +2765,13 @@ class SnmpDiscover
         }
         if (self::isLiebertManufacturer($manufacturer)) {
             return 'liebert';
+        }
+        // Model / name often includes Symmetra / UPS — prefer UPS ruleset over generic APC PDU walk
+        $mfr = strtolower($manufacturer);
+        if (preg_match('/\b(symmetra|smart-?ups|galaxy|easy.?ups)\b/', $mfr)
+            || preg_match('/\bups\b/', $mfr)
+        ) {
+            return 'ups';
         }
         if (self::isApcManufacturer($manufacturer)) {
             return 'apc';
@@ -2767,6 +2793,12 @@ class SnmpDiscover
                 return 'liebert';
             }
             if (preg_match(
+                '/\b(symmetra|smart-?ups|galaxy|ups network management|powernet.*ups)\b/',
+                $sys
+            )) {
+                return 'ups';
+            }
+            if (preg_match(
                 '/\b(apc|powernet|schneider|rpdu|ap8\d{3}|ap9\d{3}|netbotz|american power)\b/',
                 $sys
             )) {
@@ -2784,6 +2816,7 @@ class SnmpDiscover
     {
         return match ($ruleset) {
             'apc' => self::WALK_ROOTS_APC,
+            'ups' => self::WALK_ROOTS_UPS,
             'liebert' => self::WALK_ROOTS_LIEBERT,
             'idrac' => self::WALK_ROOTS_IDRAC,
             default => self::WALK_ROOTS_DEFAULT,

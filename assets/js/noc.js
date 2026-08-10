@@ -448,6 +448,7 @@
     var cabinets = scene.cabinets || [];
     var pdus = scene.pdus || [];
     var cooling = scene.cooling || scene.cooling_units || [];
+    var ups = scene.ups || scene.ups_units || [];
     var rooms = scene.rooms || [];
     var envSensors = scene.env_sensors || scene.envSensors || [];
     var logoUrl = scene.logo_url || cfg.logoUrl || '';
@@ -465,6 +466,7 @@
         cabinets: cabinets,
         pdus: pdus,
         cooling: cooling,
+        ups: ups,
         rooms: rooms,
         envSensors: envSensors,
         logoUrl: logoUrl,
