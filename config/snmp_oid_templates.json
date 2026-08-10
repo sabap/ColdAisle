@@ -42,14 +42,22 @@
       "id": "apc_ups_powernet",
       "vendor": "APC / Schneider",
       "label": "APC UPS (PowerNet typical)",
-      "notes": "Common Smart-UPS / NMC OIDs. upsAdvOutputLoad is % of capacity (not watts). Active power OID varies by firmware — confirm with snmpwalk. Link PDU only if values match expected units.",
+      "notes": "Smart-UPS / Symmetra PowerNet. Prefer output_load (not load_pct alone) so poller maps load %. Input/output V, Hz, current for detail charts. Active power OID varies by firmware.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
         "sysUpTime": "1.3.6.1.2.1.1.3.0",
-        "load_pct": "1.3.6.1.4.1.318.1.1.1.4.2.3.0",
-        "watts": "1.3.6.1.4.1.318.1.1.1.4.2.8.0",
+        "serial_no": "1.3.6.1.4.1.318.1.1.1.1.2.3.0",
+        "battery_capacity": "1.3.6.1.4.1.318.1.1.1.2.2.1.0",
+        "runtime_ticks": "1.3.6.1.4.1.318.1.1.1.2.2.3.0",
+        "input_voltage": "1.3.6.1.4.1.318.1.1.1.3.2.1.0",
+        "input_freq": "1.3.6.1.4.1.318.1.1.1.3.2.4.0",
+        "output_status": "1.3.6.1.4.1.318.1.1.1.4.1.1.0",
         "output_voltage": "1.3.6.1.4.1.318.1.1.1.4.2.1.0",
-        "battery_capacity": "1.3.6.1.4.1.318.1.1.1.2.2.1.0"
+        "output_freq": "1.3.6.1.4.1.318.1.1.1.4.2.2.0",
+        "output_load": "1.3.6.1.4.1.318.1.1.1.4.2.3.0",
+        "load_pct": "1.3.6.1.4.1.318.1.1.1.4.2.3.0",
+        "output_current": "1.3.6.1.4.1.318.1.1.1.4.2.4.0",
+        "watts": "1.3.6.1.4.1.318.1.1.1.4.2.8.0"
       }
     },
     {
