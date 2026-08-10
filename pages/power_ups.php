@@ -640,9 +640,13 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
             if (window.ColdAisle && ColdAisle.toast) ColdAisle.toast(m, t || 'info');
             else alert(m);
         }
-        function api(body) {
-            return ColdAisle.api('api/snmp_ups.php', { method: 'POST', body: body });
+        function api(body, timeoutMs) {
+            var opts = { method: 'POST', body: body };
+            if (timeoutMs) opts.timeoutMs = timeoutMs;
+            return ColdAisle.api('api/snmp_ups.php', opts);
         }
+        var upsLabel = <?= json_encode((string)($u['name'] ?? $u['label'] ?? ''), JSON_UNESCAPED_SLASHES) ?>;
+        var upsHost = <?= json_encode(trim((string)($u['primary_ip'] ?? '')), JSON_UNESCAPED_SLASHES) ?>;
         var log = document.getElementById('upsSnmpLog');
         var btnD = document.getElementById('btnUpsDiscover');
         var btnP = document.getElementById('btnUpsPoll');
@@ -701,15 +705,36 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
                 .finally(function () { btnD.disabled = false; });
         });
         if (btnP) btnP.addEventListener('click', function () {
+            if (btnP.disabled) return;
             btnP.disabled = true;
-            api({ action: 'poll', ups_id: upsId })
-                .then(function (data) {
+            if (typeof ColdAisle.runSnmpPoll !== 'function') {
+                api({ action: 'poll', ups_id: upsId }, 55000)
+                    .then(function (data) {
+                        toast(data.message || 'Poll complete', 'success');
+                        if (log) log.textContent = data.message || '';
+                        setTimeout(function () { location.reload(); }, 800);
+                    })
+                    .catch(function (e) { toast(e.message || 'Poll failed', 'error'); })
+                    .finally(function () { btnP.disabled = false; });
+                return;
+            }
+            ColdAisle.runSnmpPoll({
+                title: 'SNMP poll — UPS',
+                name: upsLabel,
+                host: upsHost,
+                timeoutMs: 55000,
+                request: function (ctx) {
+                    return api({ action: 'poll', ups_id: upsId }, (ctx && ctx.timeoutMs) || 55000);
+                },
+                onSuccess: function (data) {
                     toast(data.message || 'Poll complete', 'success');
                     if (log) log.textContent = data.message || '';
-                    setTimeout(function () { location.reload(); }, 800);
-                })
-                .catch(function (e) { toast(e.message || 'Poll failed', 'error'); })
-                .finally(function () { btnP.disabled = false; });
+                    setTimeout(function () { location.reload(); }, 900);
+                },
+                onError: function () {
+                    btnP.disabled = false;
+                }
+            });
         });
         if (auto) auto.addEventListener('change', function () {
             var on = !!auto.checked;

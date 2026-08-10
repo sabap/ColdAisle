@@ -297,7 +297,24 @@ try {
         }
 
         if ($action === 'poll_now') {
-            $result = SnmpPoller::pollPduById($id);
+            // Bound wall time so IIS/PHP hard-kill is less likely → blank HTTP 500
+            if (function_exists('set_time_limit')) {
+                @set_time_limit(55);
+            }
+            try {
+                $result = SnmpPoller::pollPduById($id);
+            } catch (Throwable $e) {
+                $msg = $e->getMessage();
+                $isTimeout = (bool)preg_match('/timed?\s*out|maximum execution|execution time/i', $msg);
+                App::log('PDU poll_now failed pdu_id=' . $id . ': ' . $msg, 'error');
+                App::json([
+                    'ok' => false,
+                    'error' => $isTimeout
+                        ? 'SNMP poll timed out talking to the device. Check IP, community/v3 credentials, and UDP/161.'
+                        : $msg,
+                    'timeout' => $isTimeout,
+                ], $isTimeout ? 504 : 500);
+            }
             $fresh = Database::fetchOne(
                 'SELECT last_poll_at, last_poll_watts, last_poll_amps, last_poll_phases, last_poll_outlets, snmp_site_template_id
                  FROM pdus WHERE pdu_id = ?',
@@ -314,6 +331,28 @@ try {
             }
             if ($fresh && $fresh['last_poll_amps'] !== null) {
                 $bits[] = rtrim(rtrim(sprintf('%.2F', (float)$fresh['last_poll_amps']), '0'), '.') . ' A';
+            }
+            // Compact raw load metrics for paste-back / diagnostics
+            if (!empty($result['load_diag']['raw']) && is_array($result['load_diag']['raw'])) {
+                $snip = [];
+                foreach ($result['load_diag']['raw'] as $row) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+                    $k = (string)($row['key'] ?? '');
+                    if (!preg_match('/watt|amp|volt|pf|load|input/i', $k)) {
+                        continue;
+                    }
+                    $snip[] = $k . '=' . ($row['numeric'] !== null && $row['numeric'] !== ''
+                        ? $row['numeric']
+                        : (string)($row['raw'] ?? '?'));
+                    if (count($snip) >= 12) {
+                        break;
+                    }
+                }
+                if ($snip) {
+                    $bits[] = 'Raw: ' . implode(', ', $snip);
+                }
             }
             $phaseJson = $fresh['last_poll_phases'] ?? null;
             $phaseData = is_string($phaseJson) ? json_decode($phaseJson, true) : null;
