@@ -35,6 +35,17 @@ try {
 } catch (Throwable $e) {
     $snmpProfiles = [];
 }
+$siteOidTemplates = [];
+try {
+    $siteOidTemplates = Database::fetchAll(
+        'SELECT template_id, name, vendor, model, oid_map, notes
+         FROM snmp_site_oid_templates
+         WHERE is_active = 1
+         ORDER BY name'
+    );
+} catch (Throwable $e) {
+    $siteOidTemplates = [];
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? '')) {
     if (!$canEdit) {
@@ -213,6 +224,122 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
         </div>
     </div>
 
+    <?php
+    $siteTplId = (int)($u['snmp_site_template_id'] ?? 0);
+    $siteTpl = null;
+    if ($siteTplId > 0) {
+        foreach ($siteOidTemplates as $st) {
+            if ((int)($st['template_id'] ?? 0) === $siteTplId) {
+                $siteTpl = $st;
+                break;
+            }
+        }
+        if (!$siteTpl) {
+            try {
+                $siteTpl = Database::fetchOne(
+                    'SELECT template_id, name, vendor, model, notes FROM snmp_site_oid_templates WHERE template_id = ?',
+                    [$siteTplId]
+                );
+            } catch (Throwable $e) {
+                $siteTpl = null;
+            }
+        }
+    }
+    $siteTplKeyCount = 0;
+    if ($siteTpl && !empty($siteTpl['oid_map'])) {
+        $m = is_array($siteTpl['oid_map'])
+            ? $siteTpl['oid_map']
+            : (json_decode((string)$siteTpl['oid_map'], true) ?: []);
+        $siteTplKeyCount = is_array($m) ? count($m) : 0;
+    }
+    ?>
+    <div class="card mb-2" id="upsSnmpCard">
+        <div class="card-header flex-between">
+            <h2 class="mt-0 mb-0" style="font-size:1.05rem">SNMP / OID template</h2>
+            <a class="btn btn-ghost btn-sm" href="<?= App::e(App::url('pages/snmp.php')) ?>">Manage site templates</a>
+        </div>
+        <div class="card-body">
+            <dl class="rack-prop-list" style="margin-bottom:1rem">
+                <div>
+                    <dt>Assigned template</dt>
+                    <dd id="upsTplName">
+                        <?php if ($siteTpl): ?>
+                            <strong><?= App::e((string)($siteTpl['name'] ?? ('Template #' . $siteTplId))) ?></strong>
+                            <?php if ($siteTplKeyCount > 0): ?>
+                                <span class="text-muted"> · <?= (int)$siteTplKeyCount ?> OIDs</span>
+                            <?php endif; ?>
+                            <?php if (!empty($siteTpl['vendor']) || !empty($siteTpl['model'])): ?>
+                                <span class="text-muted"> · <?= App::e(trim(($siteTpl['vendor'] ?? '') . ' ' . ($siteTpl['model'] ?? ''))) ?></span>
+                            <?php endif; ?>
+                        <?php else: ?>
+                            <span class="text-muted">None — assign an existing template, run Discover OIDs, or use the default APC map</span>
+                        <?php endif; ?>
+                    </dd>
+                </div>
+                <div><dt>SNMP</dt>
+                    <dd><?= !empty($u['snmp_enabled']) ? 'Enabled' : 'Disabled' ?>
+                        · v<?= App::e((string)($u['snmp_version'] ?? '—')) ?>
+                        <?php if (!empty($u['primary_ip'])): ?>
+                            · <?= App::e((string)$u['primary_ip']) ?>:<?= (int)($u['snmp_port'] ?? 161) ?>
+                        <?php endif; ?>
+                    </dd>
+                </div>
+            </dl>
+            <?php if ($canSnmp): ?>
+            <div class="form-grid" style="margin:0">
+                <div class="form-row full">
+                    <label for="upsAssignTpl">Assign site OID template</label>
+                    <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+                        <select class="form-control" id="upsAssignTpl" style="flex:1;min-width:14rem">
+                            <option value="">— None (clear) —</option>
+                            <?php foreach ($siteOidTemplates as $st):
+                                $stId = (int)$st['template_id'];
+                                $stLabel = (string)($st['name'] ?? ('Template #' . $stId));
+                                $keyCount = 0;
+                                if (!empty($st['oid_map'])) {
+                                    $mm = is_array($st['oid_map'])
+                                        ? $st['oid_map']
+                                        : (json_decode((string)$st['oid_map'], true) ?: []);
+                                    $keyCount = is_array($mm) ? count($mm) : 0;
+                                }
+                                $hint = '';
+                                $notes = strtolower((string)($st['notes'] ?? '') . ' ' . $stLabel);
+                                if (str_contains($notes, 'ups') || str_contains($notes, 'powernet') || str_contains($notes, '318')) {
+                                    $hint = ' [UPS]';
+                                }
+                                ?>
+                                <option value="<?= $stId ?>" <?= $siteTplId === $stId ? 'selected' : '' ?>>
+                                    <?= App::e($stLabel) ?><?= $hint ?>
+                                    <?php if ($keyCount > 0): ?> · <?= $keyCount ?> OIDs<?php endif; ?>
+                                    <?php if (!empty($st['vendor']) || !empty($st['model'])): ?>
+                                        (<?= App::e(trim(($st['vendor'] ?? '') . ' ' . ($st['model'] ?? ''))) ?>)
+                                    <?php endif; ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <button type="button" class="btn btn-primary btn-sm" id="btnUpsAssignTpl">Apply</button>
+                    </div>
+                    <p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">
+                        Poll now and scheduled poll use this site OID map. Prefer a template created by
+                        <strong>Discover OIDs</strong> on another UPS, or create the default APC PowerNet map below.
+                        Edit maps under <a href="<?= App::e(App::url('pages/snmp.php')) ?>">SNMP</a>.
+                    </p>
+                </div>
+                <div class="form-row full" style="display:flex;gap:.5rem;flex-wrap:wrap">
+                    <button type="button" class="btn btn-secondary btn-sm" id="btnUpsDefaultTpl"
+                        title="Create or reuse the standard APC/Symmetra PowerNet OID map and assign it">
+                        Use default APC UPS map
+                    </button>
+                </div>
+            </div>
+            <?php elseif (!$siteTpl): ?>
+                <p class="text-muted mb-0" style="font-size:.85rem">
+                    You need edit power or SNMP permission to assign a template.
+                </p>
+            <?php endif; ?>
+        </div>
+    </div>
+
     <?php if (is_array($poll) && !empty($poll['metrics'])): ?>
     <div class="card">
         <div class="card-header"><h2>Last poll metrics</h2></div>
@@ -250,6 +377,36 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
         var btnD = document.getElementById('btnUpsDiscover');
         var btnP = document.getElementById('btnUpsPoll');
         var auto = document.getElementById('upsAutoPoll');
+        var btnAssign = document.getElementById('btnUpsAssignTpl');
+        var selTpl = document.getElementById('upsAssignTpl');
+        var btnDefault = document.getElementById('btnUpsDefaultTpl');
+        if (btnAssign && selTpl) {
+            btnAssign.addEventListener('click', function () {
+                var tid = parseInt(selTpl.value || '0', 10) || 0;
+                btnAssign.disabled = true;
+                api({ action: 'assign_template', ups_id: upsId, template_id: tid })
+                    .then(function (data) {
+                        toast(data.message || 'Template updated', 'success');
+                        if (auto) auto.disabled = !(tid > 0);
+                        setTimeout(function () { location.reload(); }, 600);
+                    })
+                    .catch(function (e) { toast(e.message || 'Assign failed', 'error'); })
+                    .finally(function () { btnAssign.disabled = false; });
+            });
+        }
+        if (btnDefault) {
+            btnDefault.addEventListener('click', function () {
+                btnDefault.disabled = true;
+                api({ action: 'create_default_template', ups_id: upsId })
+                    .then(function (data) {
+                        toast(data.message || 'Default template assigned', 'success');
+                        if (auto) auto.disabled = false;
+                        setTimeout(function () { location.reload(); }, 600);
+                    })
+                    .catch(function (e) { toast(e.message || 'Failed', 'error'); })
+                    .finally(function () { btnDefault.disabled = false; });
+            });
+        }
         if (btnD) btnD.addEventListener('click', function () {
             btnD.disabled = true;
             api({ action: 'discover', ups_id: upsId })
@@ -420,6 +577,45 @@ if ($action === 'new' || ($action === 'edit' && $upsId > 0)) {
                         </option>
                     <?php endforeach; ?>
                 </select>
+            </div>
+            <?php
+            $editTplId = (int)($u['snmp_site_template_id'] ?? 0);
+            ?>
+            <div class="form-row full">
+                <label>OID map (site template)</label>
+                <select class="form-control" name="snmp_site_template_id" id="ups_snmp_site_template_id">
+                    <option value="">— None (Discover later or assign on detail page) —</option>
+                    <?php foreach ($siteOidTemplates as $st):
+                        $stId = (int)$st['template_id'];
+                        $stLabel = (string)($st['name'] ?? ('Template #' . $stId));
+                        $keyCount = 0;
+                        if (!empty($st['oid_map'])) {
+                            $mm = is_array($st['oid_map'])
+                                ? $st['oid_map']
+                                : (json_decode((string)$st['oid_map'], true) ?: []);
+                            $keyCount = is_array($mm) ? count($mm) : 0;
+                        }
+                        $notes = strtolower((string)($st['notes'] ?? '') . ' ' . $stLabel);
+                        $hint = (str_contains($notes, 'ups') || str_contains($notes, 'powernet') || str_contains($notes, '318'))
+                            ? ' [UPS]' : '';
+                        ?>
+                        <option value="<?= $stId ?>" <?= $editTplId === $stId ? 'selected' : '' ?>>
+                            <?= App::e($stLabel) ?><?= $hint ?>
+                            <?php if ($keyCount > 0): ?> · <?= $keyCount ?> OIDs<?php endif; ?>
+                            <?php if (!empty($st['vendor']) || !empty($st['model'])): ?>
+                                (<?= App::e(trim(($st['vendor'] ?? '') . ' ' . ($st['model'] ?? ''))) ?>)
+                            <?php endif; ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                    Required for <strong>Poll now</strong> and scheduled poll. Create via Discover OIDs on a UPS,
+                    <strong>Use default APC UPS map</strong> on the detail page, or manage under
+                    <a href="<?= App::e(App::url('pages/snmp.php')) ?>">SNMP</a>.
+                    <?php if (!$siteOidTemplates): ?>
+                        <br><strong>No site templates yet</strong> — open a UPS and Discover OIDs, or use the default APC map.
+                    <?php endif; ?>
+                </p>
             </div>
             <div class="form-row full"><label>Notes</label>
                 <textarea class="form-control" name="notes" rows="2"><?= App::e($u['notes'] ?? '') ?></textarea></div>

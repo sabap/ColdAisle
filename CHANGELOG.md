@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **UPS OID template assignment:** detail page shows assigned site template with Apply dropdown; Edit UPS has OID map selector; **Use default APC UPS map** creates/assigns PowerNet defaults without re-Discover; share one template across multiple UPS units.
+
 ### Bug fixes
 
 ---
