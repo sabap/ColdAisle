@@ -2924,15 +2924,190 @@ if (is_file(dirname(__DIR__) . '/src/Services/IcmpMonitorService.php')) {
     require_once dirname(__DIR__) . '/src/Services/IcmpMonitorService.php';
 }
 $testingModePduList = class_exists('IcmpMonitorService') && IcmpMonitorService::testingModeEnabled();
-$countRack = count(array_filter($pdus, static fn($x) => ($x['pdu_scope'] ?? 'rack') === 'rack'));
-$countRow = count(array_filter($pdus, static fn($x) => ($x['pdu_scope'] ?? '') === 'row'));
-$countRoom = count(array_filter($pdus, static fn($x) => ($x['pdu_scope'] ?? '') === 'room'));
-$totalKw = 0.0;
+$pdusRow = [];
+$pdusCabinet = []; // rack / cabinet PDUs
+$pdusRoom = [];
 foreach ($pdus as $pp) {
-    if ($pp['last_poll_watts'] !== null) {
-        $totalKw += (float)$pp['last_poll_watts'] / 1000.0;
+    $sc = strtolower((string)($pp['pdu_scope'] ?? 'rack'));
+    if ($sc === 'row') {
+        $pdusRow[] = $pp;
+    } elseif ($sc === 'room') {
+        $pdusRoom[] = $pp;
+    } else {
+        $pdusCabinet[] = $pp;
     }
 }
+$countRack = count($pdusCabinet);
+$countRow = count($pdusRow);
+$countRoom = count($pdusRoom);
+// Facility-aware total when rollup helpers exist; else raw sum
+if (function_exists('power_site_load_totals')) {
+    $listLoad = power_site_load_totals($pdus);
+    $totalKw = $listLoad['kw'];
+    $loadSub = power_site_load_mode_labels()[$listLoad['mode'] ?? 'all'] ?? 'facility rollup';
+} else {
+    $totalKw = 0.0;
+    foreach ($pdus as $pp) {
+        if ($pp['last_poll_watts'] !== null) {
+            $totalKw += (float)$pp['last_poll_watts'] / 1000.0;
+        }
+    }
+    $loadSub = 'sum of last SNMP polls';
+}
+
+/**
+ * Render one PDU list table body rows (shared by Row / Cabinet / Room sections).
+ *
+ * @param list<array<string,mixed>> $list
+ */
+$renderPduListRows = static function (array $list) use ($canEditPdu): void {
+    if (!$list) {
+        echo '<tr><td colspan="14" class="text-muted">None in this group.</td></tr>';
+        return;
+    }
+    foreach ($list as $p) {
+        $inV = $p['input_voltage'] ?? $p['rated_volts'] ?? null;
+        $outV = $p['output_voltage'] ?? null;
+        $voltLabel = '—';
+        if ($inV !== null || $outV !== null) {
+            if (!empty($p['input_voltage_ln'])) {
+                $voltLabel = $inV . '/' . $p['input_voltage_ln'] . 'V';
+            } else {
+                $voltLabel = $inV !== null ? $inV . 'V' : '—';
+            }
+            $voltLabel .= ' → ' . ($outV !== null ? $outV . 'V' : '—');
+        }
+        $loc = [];
+        if (!empty($p['cabinet_name'])) {
+            $loc[] = $p['cabinet_name'];
+        }
+        if (!empty($p['row_name'])) {
+            $loc[] = 'Row ' . $p['row_name'];
+        }
+        $ip = trim((string)($p['ip_address'] ?? ''));
+        $om = power_normalize_output_mode($p['output_mode'] ?? 'outlets');
+        $outShort = $om === 'breakers'
+            ? ((int)($p['num_breaker_slots'] ?? 0) . ' brk')
+            : ((int)($p['num_outlets'] ?? 0) . ' out');
+        $icmpListPdu = class_exists('IcmpMonitorService')
+            ? IcmpMonitorService::statusFromRow('pdu', $p)
+            : ['status' => 'off', 'label' => '—'];
+        $hpPdu = (string)($icmpListPdu['status'] ?? 'off');
+        if ($hpPdu === 'up') {
+            $hpPdu = 'ok';
+        }
+        if ($hpPdu === 'degraded') {
+            $hpPdu = 'warn';
+        }
+        $rowHpPdu = in_array($hpPdu, ['down', 'crit', 'warn'], true) ? $hpPdu : '';
+        ?>
+        <tr data-pdu-id="<?= (int)$p['pdu_id'] ?>"
+            class="<?= $rowHpPdu !== '' ? 'health-row-' . App::e($rowHpPdu) : '' ?>">
+            <td class="col-check">
+                <input type="checkbox" class="pdu-row-check" value="<?= (int)$p['pdu_id'] ?>"
+                       data-pdu-name="<?= App::e((string)$p['name']) ?>"
+                       aria-label="Select <?= App::e((string)$p['name']) ?>">
+            </td>
+            <td class="pdu-col-name"><a href="?id=<?= (int)$p['pdu_id'] ?>"><strong><?= App::e($p['name']) ?></strong></a></td>
+            <td class="pdu-col-ip mono"><?= $ip !== '' ? App::e($ip) : '<span class="text-muted">—</span>' ?></td>
+            <td><span class="badge"><?= App::e($p['pdu_scope'] ?? 'rack') ?></span></td>
+            <td>
+                <span class="badge <?= $om === 'breakers' ? 'badge-warning' : '' ?>" title="<?= App::e($om === 'breakers' ? 'Breakers' : 'Outlets') ?>">
+                    <?= App::e($outShort) ?>
+                </span>
+            </td>
+            <td><span class="badge badge-info"><?= App::e(power_wiring_label($p['phase_wiring'] ?? null, (int)($p['phases'] ?? 1))) ?></span></td>
+            <td class="pdu-col-volts"><?= App::e($voltLabel) ?></td>
+            <td class="pdu-col-loc">
+                <?php if (!empty($p['cabinet_id'])): ?>
+                    <a href="<?= App::e(App::url('pages/cabinets.php?id=' . (int)$p['cabinet_id'])) ?>">
+                        <?= App::e(implode(' · ', $loc) ?: '—') ?>
+                    </a>
+                <?php else: ?>
+                    <?= App::e(implode(' · ', $loc) ?: '—') ?>
+                <?php endif; ?>
+            </td>
+            <td class="pdu-col-zone">
+                <?php if (!empty($p['zone_id'])): ?>
+                    <a href="<?= App::e(App::url('pages/power_zones.php?id=' . (int)$p['zone_id'])) ?>">
+                        <?= App::e($p['zone_name'] ?? '—') ?>
+                    </a>
+                <?php else: ?>
+                    <span class="text-muted">—</span>
+                <?php endif; ?>
+            </td>
+            <td><?= $p['rated_amps'] !== null ? App::e((string)$p['rated_amps']) : '—' ?></td>
+            <td><?= $p['last_poll_watts'] !== null ? number_format((float)$p['last_poll_watts'] / 1000, 2) . ' kW' : '—' ?></td>
+            <td>
+                <span class="health-chip health-chip-<?= App::e($hpPdu) ?>"
+                      title="<?= App::e((string)($icmpListPdu['label'] ?? '')) ?>">
+                    <span class="health-pulse health-pulse-<?= App::e($hpPdu) ?>" aria-hidden="true"></span>
+                    <span class="health-chip-label"><?= App::e((string)($icmpListPdu['label'] ?? '—')) ?></span>
+                </span>
+            </td>
+            <td><?= !empty($p['snmp_enabled']) ? '<span class="badge badge-success">v' . App::e((string)$p['snmp_version']) . '</span>' : '—' ?></td>
+            <td class="actions col-actions">
+                <a class="btn btn-sm btn-secondary" href="?id=<?= (int)$p['pdu_id'] ?>">Open</a>
+            </td>
+        </tr>
+        <?php
+    }
+};
+
+/**
+ * @param list<array<string,mixed>> $list
+ */
+$renderPduListCard = static function (
+    string $title,
+    string $hint,
+    array $list,
+    string $tableId,
+    callable $renderRows
+): void {
+    ?>
+    <div class="card mb-2">
+        <div class="card-header flex-between">
+            <div>
+                <h2 style="margin:0"><?= App::e($title) ?></h2>
+                <?php if ($hint !== ''): ?>
+                    <p class="text-muted mb-0" style="font-size:.8rem;margin-top:.25rem"><?= App::e($hint) ?></p>
+                <?php endif; ?>
+            </div>
+            <span class="text-muted" style="font-size:.85rem"><?= count($list) ?> active</span>
+        </div>
+        <div class="card-body flush">
+            <div class="table-wrap pdu-list-wrap">
+            <table class="data pdu-list-table" id="<?= App::e($tableId) ?>">
+                <thead>
+                <tr>
+                    <th class="col-check" style="width:2.2rem">
+                        <input type="checkbox" class="pdu-select-all" data-table="<?= App::e($tableId) ?>"
+                               title="Select all in this list" aria-label="Select all <?= App::e($title) ?>">
+                    </th>
+                    <th>Name</th>
+                    <th>IP</th>
+                    <th>Scope</th>
+                    <th>Output</th>
+                    <th>Phases</th>
+                    <th>In → Out</th>
+                    <th>Location</th>
+                    <th>Zone</th>
+                    <th>Amps</th>
+                    <th>Load</th>
+                    <th>Health</th>
+                    <th>SNMP</th>
+                    <th class="col-actions"></th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php $renderRows($list); ?>
+                </tbody>
+            </table>
+            </div>
+        </div>
+    </div>
+    <?php
+};
 $snmpProfiles = [];
 try {
     $snmpProfiles = Database::fetchAll(
@@ -2987,12 +3162,12 @@ layout_header('PDU Management', $user, 'power_pdus');
     <div class="metric-card">
         <div class="label">PDUs</div>
         <div class="value"><?= count($pdus) ?></div>
-        <div class="sub"><?= $countRack ?> rack · <?= $countRow ?> row · <?= $countRoom ?> room</div>
+        <div class="sub"><?= $countRow ?> row · <?= $countRack ?> cabinet · <?= $countRoom ?> room</div>
     </div>
     <div class="metric-card warning">
         <div class="label">Polled load</div>
         <div class="value"><?= number_format($totalKw, 2) ?> <span class="metric-unit">kW</span></div>
-        <div class="sub">sum of last SNMP polls</div>
+        <div class="sub"><?= App::e($loadSub) ?></div>
     </div>
     <div class="metric-card accent">
         <div class="label">SNMP on</div>
@@ -3008,11 +3183,11 @@ $labelDefaultPrinter = LabelLayoutService::DEFAULT_PRINTER;
 $labelDefaultMedia = LabelLayoutService::DEFAULT_MEDIA;
 $labelBase = App::url('pages/pdu_label.php');
 ?>
-<div class="card">
+<div class="card mb-2">
     <div class="card-header flex-between">
-        <h2>All PDUs</h2>
+        <h2 style="margin:0">PDU lists</h2>
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
-            <span class="text-muted" style="font-size:.85rem"><?= count($pdus) ?> active</span>
+            <span class="text-muted" style="font-size:.85rem"><?= count($pdus) ?> total</span>
             <?php if ($canBatchIcmpPdu): ?>
                 <button type="button" class="btn btn-sm btn-secondary" id="pduIcmpOnBtn" disabled
                         title="Enable ICMP monitor on selected PDUs">Monitor ICMP</button>
@@ -3034,131 +3209,37 @@ $labelBase = App::url('pages/pdu_label.php');
             <?php endif; ?>
         </div>
     </div>
-    <div class="card-body flush">
-        <div class="table-wrap pdu-list-wrap">
-        <table class="data pdu-list-table" id="pduListTable">
-            <thead>
-            <tr>
-                <th class="col-check" style="width:2.2rem">
-                    <input type="checkbox" id="pduSelectAll" title="Select all on this list" aria-label="Select all PDUs">
-                </th>
-                <th>Name</th>
-                <th>IP</th>
-                <th>Scope</th>
-                <th>Output</th>
-                <th>Phases</th>
-                <th>In → Out</th>
-                <th>Location</th>
-                <th>Zone</th>
-                <th>Amps</th>
-                <th>Load</th>
-                <th>Health</th>
-                <th>SNMP</th>
-                <th class="col-actions"></th>
-            </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($pdus as $p):
-                $inV = $p['input_voltage'] ?? $p['rated_volts'] ?? null;
-                $outV = $p['output_voltage'] ?? null;
-                $voltLabel = '—';
-                if ($inV !== null || $outV !== null) {
-                    if (!empty($p['input_voltage_ln'])) {
-                        $voltLabel = $inV . '/' . $p['input_voltage_ln'] . 'V';
-                    } else {
-                        $voltLabel = $inV !== null ? $inV . 'V' : '—';
-                    }
-                    $voltLabel .= ' → ' . ($outV !== null ? $outV . 'V' : '—');
-                }
-                $loc = [];
-                if (!empty($p['cabinet_name'])) {
-                    $loc[] = $p['cabinet_name'];
-                }
-                if (!empty($p['row_name'])) {
-                    $loc[] = 'Row ' . $p['row_name'];
-                }
-                $ip = trim((string)($p['ip_address'] ?? ''));
-                $om = power_normalize_output_mode($p['output_mode'] ?? 'outlets');
-                $outShort = $om === 'breakers'
-                    ? ((int)($p['num_breaker_slots'] ?? 0) . ' brk')
-                    : ((int)($p['num_outlets'] ?? 0) . ' out');
-                $icmpListPdu = class_exists('IcmpMonitorService')
-                    ? IcmpMonitorService::statusFromRow('pdu', $p)
-                    : ['status' => 'off', 'label' => '—'];
-                $hpPdu = (string)($icmpListPdu['status'] ?? 'off');
-                if ($hpPdu === 'up') {
-                    $hpPdu = 'ok';
-                }
-                if ($hpPdu === 'degraded') {
-                    $hpPdu = 'warn';
-                }
-                $rowHpPdu = in_array($hpPdu, ['down', 'crit', 'warn'], true) ? $hpPdu : '';
-                ?>
-                <tr data-pdu-id="<?= (int)$p['pdu_id'] ?>"
-                    class="<?= $rowHpPdu !== '' ? 'health-row-' . App::e($rowHpPdu) : '' ?>">
-                    <td class="col-check">
-                        <input type="checkbox" class="pdu-row-check" value="<?= (int)$p['pdu_id'] ?>"
-                               data-pdu-name="<?= App::e((string)$p['name']) ?>"
-                               aria-label="Select <?= App::e((string)$p['name']) ?>">
-                    </td>
-                    <td class="pdu-col-name"><a href="?id=<?= (int)$p['pdu_id'] ?>"><strong><?= App::e($p['name']) ?></strong></a></td>
-                    <td class="pdu-col-ip mono"><?= $ip !== '' ? App::e($ip) : '<span class="text-muted">—</span>' ?></td>
-                    <td><span class="badge"><?= App::e($p['pdu_scope'] ?? 'rack') ?></span></td>
-                    <td>
-                        <span class="badge <?= $om === 'breakers' ? 'badge-warning' : '' ?>" title="<?= App::e($om === 'breakers' ? 'Breakers' : 'Outlets') ?>">
-                            <?= App::e($outShort) ?>
-                        </span>
-                    </td>
-                    <td><span class="badge badge-info"><?= App::e(power_wiring_label($p['phase_wiring'] ?? null, (int)($p['phases'] ?? 1))) ?></span></td>
-                    <td class="pdu-col-volts"><?= App::e($voltLabel) ?></td>
-                    <td class="pdu-col-loc">
-                        <?php if (!empty($p['cabinet_id'])): ?>
-                            <a href="<?= App::e(App::url('pages/cabinets.php?id=' . (int)$p['cabinet_id'])) ?>">
-                                <?= App::e(implode(' · ', $loc) ?: '—') ?>
-                            </a>
-                        <?php else: ?>
-                            <?= App::e(implode(' · ', $loc) ?: '—') ?>
-                        <?php endif; ?>
-                    </td>
-                    <td class="pdu-col-zone">
-                        <?php if (!empty($p['zone_id'])): ?>
-                            <a href="<?= App::e(App::url('pages/power_zones.php?id=' . (int)$p['zone_id'])) ?>">
-                                <?= App::e($p['zone_name'] ?? '—') ?>
-                            </a>
-                        <?php else: ?>
-                            <span class="text-muted">—</span>
-                        <?php endif; ?>
-                    </td>
-                    <td><?= $p['rated_amps'] !== null ? App::e((string)$p['rated_amps']) : '—' ?></td>
-                    <td><?= $p['last_poll_watts'] !== null ? number_format((float)$p['last_poll_watts'] / 1000, 2) . ' kW' : '—' ?></td>
-                    <td>
-                        <span class="health-chip health-chip-<?= App::e($hpPdu) ?>"
-                              title="<?= App::e((string)($icmpListPdu['label'] ?? '')) ?>">
-                            <span class="health-pulse health-pulse-<?= App::e($hpPdu) ?>" aria-hidden="true"></span>
-                            <span class="health-chip-label"><?= App::e((string)($icmpListPdu['label'] ?? '—')) ?></span>
-                        </span>
-                    </td>
-                    <td><?= !empty($p['snmp_enabled']) ? '<span class="badge badge-success">v' . App::e((string)$p['snmp_version']) . '</span>' : '—' ?></td>
-                    <td class="actions col-actions">
-                        <a class="btn btn-sm btn-secondary" href="?id=<?= (int)$p['pdu_id'] ?>">Open</a>
-                    </td>
-                </tr>
-            <?php endforeach; ?>
-            <?php if (!$pdus): ?>
-                <tr>
-                    <td colspan="14" class="text-muted">
-                        No PDUs yet.
-                        <?php if ($canEditPdu): ?>
-                            Use <strong>Add PDU</strong> to create one.
-                        <?php endif; ?>
-                    </td>
-                </tr>
-            <?php endif; ?>
-            </tbody>
-        </table>
-        </div>
-    </div>
 </div>
+
+<?php
+// Row PDUs first (distribution), then cabinet, then room if any
+$renderPduListCard(
+    'Row PDUs',
+    'Distribution / row meters — typically feed multiple cabinets. Prefer these for facility load.',
+    $pdusRow,
+    'pduListTableRow',
+    $renderPduListRows
+);
+$renderPduListCard(
+    'Cabinet PDUs',
+    'Rack-mounted PDUs in cabinets. Still polled for per-cabinet detail; may be excluded from facility totals when row meters exist.',
+    $pdusCabinet,
+    'pduListTableCabinet',
+    $renderPduListRows
+);
+if ($countRoom > 0) {
+    $renderPduListCard(
+        'Room PDUs',
+        'Room-level distribution meters.',
+        $pdusRoom,
+        'pduListTableRoom',
+        $renderPduListRows
+    );
+}
+if (!$pdus && $canEditPdu):
+    ?>
+    <p class="text-muted" style="margin-top:-.5rem">No PDUs yet — use <strong>Add PDU</strong> and set Scope to Row or Rack (cabinet).</p>
+<?php endif; ?>
 <style>
 /* Compact All PDUs table — keep IP visible without forcing page horizontal scroll */
 .pdu-list-wrap {
@@ -3360,7 +3441,7 @@ window.ColdAislePduLabel = {
 
     // --- Multi-select + label modal ---
     var cfg = window.ColdAislePduLabel;
-    var selectAll = document.getElementById('pduSelectAll');
+    var selectAllBoxes = Array.prototype.slice.call(document.querySelectorAll('.pdu-select-all'));
     var batchBtn = document.getElementById('pduLabelBatchBtn');
     var selCountEl = document.getElementById('pduLabelSelCount');
     var printerEl = document.getElementById('pduLabelPrinter');
@@ -3375,6 +3456,11 @@ window.ColdAislePduLabel = {
 
     function rowChecks() {
         return Array.prototype.slice.call(document.querySelectorAll('.pdu-row-check'));
+    }
+    function checksInTable(tableId) {
+        var table = tableId ? document.getElementById(tableId) : null;
+        if (!table) return rowChecks();
+        return Array.prototype.slice.call(table.querySelectorAll('.pdu-row-check'));
     }
 
     function selectedIds() {
@@ -3411,11 +3497,13 @@ window.ColdAislePduLabel = {
             var tr = c.closest('tr');
             if (tr) tr.classList.toggle('pdu-row-selected', c.checked);
         });
-        if (selectAll) {
-            var all = rowChecks();
-            selectAll.checked = all.length > 0 && all.every(function (c) { return c.checked; });
-            selectAll.indeterminate = n > 0 && n < all.length;
-        }
+        selectAllBoxes.forEach(function (sa) {
+            var tid = sa.getAttribute('data-table') || '';
+            var all = checksInTable(tid);
+            var cn = all.filter(function (c) { return c.checked; }).length;
+            sa.checked = all.length > 0 && cn === all.length;
+            sa.indeterminate = cn > 0 && cn < all.length;
+        });
     }
 
     function pduIcmpBatch(action, enabled, confirmMsg) {
@@ -3455,12 +3543,13 @@ window.ColdAislePduLabel = {
         pduIcmpBatch('simulate_recovery_batch', null, 'Simulate recovery on {n} PDU(s)?');
     });
 
-    if (selectAll) {
-        selectAll.addEventListener('change', function () {
-            rowChecks().forEach(function (c) { c.checked = selectAll.checked; });
+    selectAllBoxes.forEach(function (sa) {
+        sa.addEventListener('change', function () {
+            var tid = sa.getAttribute('data-table') || '';
+            checksInTable(tid).forEach(function (c) { c.checked = sa.checked; });
             syncSelectionUi();
         });
-    }
+    });
     rowChecks().forEach(function (c) {
         c.addEventListener('change', syncSelectionUi);
     });
