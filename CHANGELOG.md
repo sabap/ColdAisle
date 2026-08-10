@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **NOC Power wall:** live PDU load (kW, polled count, amps, top PDUs), UPS load % / est. kW / battery, dual 24h sparklines (facility kW + UPS load/est. kW), per-UPS electrical row (V in/out, A, Hz, load, runtime)
-
 ### Bug fixes
 
 ---
 
+## [0.3.94] - 2026-08-10
+
+### Enhancements
+
+- **NOC Power wall:** live PDU load (kW, polled count, amps, top PDUs), UPS load % / est. kW / battery, dual 24h sparklines (facility kW + UPS load/est. kW), per-UPS electrical row (V in/out, A, Hz, load, runtime)
+
+---
 ## [0.3.93] - 2026-08-10
 
 ### Enhancements
