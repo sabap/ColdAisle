@@ -312,6 +312,68 @@
     return html;
   }
 
+  var knownAlertIds = Object.create(null);
+  var alertsBootstrapped = false;
+
+  function formatAlertWhen(iso) {
+    if (!iso) return '';
+    try {
+      var d = new Date(String(iso).indexOf('T') >= 0 ? iso : String(iso).replace(' ', 'T') + 'Z');
+      if (isNaN(d.getTime())) {
+        d = new Date(iso);
+      }
+      if (isNaN(d.getTime())) return String(iso).slice(0, 19);
+      return d.toLocaleString(undefined, {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+      });
+    } catch (e) {
+      return String(iso).slice(0, 19);
+    }
+  }
+
+  /** Glass toast stack — outside rotating panels; survives tab changes. */
+  function renderRecentAlerts(data) {
+    var host = $('nocAlertsGlass');
+    var list = $('nocAlertsList');
+    var countEl = $('nocAlertsCount');
+    if (!host || !list) return;
+    var items = Array.isArray(data.recent_alerts) ? data.recent_alerts : [];
+    // Prefer warn/crit first for wall visibility, keep chronological within
+    var sorted = items.slice().sort(function (a, b) {
+      return (Number(b.id) || 0) - (Number(a.id) || 0);
+    });
+    // Cap display
+    sorted = sorted.slice(0, 8);
+
+    if (!sorted.length) {
+      host.hidden = true;
+      list.innerHTML = '';
+      if (countEl) countEl.textContent = '';
+      return;
+    }
+
+    host.hidden = false;
+    if (countEl) countEl.textContent = String(sorted.length);
+
+    var html = '';
+    sorted.forEach(function (a) {
+      var id = Number(a.id) || 0;
+      var isNew = alertsBootstrapped && id > 0 && !knownAlertIds[id];
+      var sev = (a.severity || 'info').toLowerCase();
+      if (sev !== 'crit' && sev !== 'warn' && sev !== 'ok') sev = 'info';
+      html += '<div class="noc-alert-chip sev-' + sev + (isNew ? ' is-new' : '') + '" data-id="' + id + '">' +
+        '<span class="noc-alert-pulse" aria-hidden="true"></span>' +
+        '<div class="noc-alert-body">' +
+        '<div class="noc-alert-title">' + esc(a.title || 'Alert') + '</div>' +
+        (a.message ? '<p class="noc-alert-msg">' + esc(a.message) + '</p>' : '') +
+        '<p class="noc-alert-when">' + esc(formatAlertWhen(a.created_at)) + '</p>' +
+        '</div></div>';
+      if (id > 0) knownAlertIds[id] = true;
+    });
+    list.innerHTML = html;
+    alertsBootstrapped = true;
+  }
+
   function renderAll(data) {
     lastData = data;
     var o = $('panel-overview');
@@ -322,6 +384,7 @@
     if (p) p.innerHTML = renderPower(data);
     if (z) z.innerHTML = renderZones(data);
     if (c) c.innerHTML = renderCooling(data);
+    renderRecentAlerts(data);
 
     var upd = $('nocUpdated');
     if (upd) {

@@ -154,6 +154,42 @@ class Schema
                     updated_at DATETIME2 NOT NULL CONSTRAINT DF_alert_sub_updated DEFAULT SYSUTCDATETIME()
                 )"
             );
+            // Custom SNMP metric thresholds (Settings → Alerts)
+            self::ensureTable(
+                'snmp_thresholds',
+                "CREATE TABLE snmp_thresholds (
+                    threshold_id INT IDENTITY(1,1) PRIMARY KEY,
+                    name NVARCHAR(150) NOT NULL,
+                    entity_type NVARCHAR(20) NOT NULL CONSTRAINT DF_snmp_thr_etype DEFAULT 'device',
+                    entity_id INT NULL,
+                    metric_key NVARCHAR(100) NOT NULL,
+                    oid NVARCHAR(255) NULL,
+                    warn_low DECIMAL(18,6) NULL,
+                    warn_high DECIMAL(18,6) NULL,
+                    crit_low DECIMAL(18,6) NULL,
+                    crit_high DECIMAL(18,6) NULL,
+                    unit NVARCHAR(20) NULL,
+                    scale_divisor DECIMAL(18,6) NOT NULL CONSTRAINT DF_snmp_thr_scale DEFAULT 1,
+                    cooldown_min INT NOT NULL CONSTRAINT DF_snmp_thr_cd DEFAULT 60,
+                    is_active BIT NOT NULL CONSTRAINT DF_snmp_thr_active DEFAULT 1,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_snmp_thr_created DEFAULT SYSUTCDATETIME(),
+                    updated_at DATETIME2 NOT NULL CONSTRAINT DF_snmp_thr_updated DEFAULT SYSUTCDATETIME()
+                )"
+            );
+            self::ensureTable(
+                'snmp_threshold_state',
+                "CREATE TABLE snmp_threshold_state (
+                    threshold_id INT NOT NULL,
+                    entity_type NVARCHAR(20) NOT NULL,
+                    entity_id INT NOT NULL,
+                    last_alert_level NVARCHAR(20) NULL,
+                    last_alert_at DATETIME2 NULL,
+                    last_value DECIMAL(18,6) NULL,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_snmp_thr_st_created DEFAULT SYSUTCDATETIME(),
+                    updated_at DATETIME2 NOT NULL CONSTRAINT DF_snmp_thr_st_updated DEFAULT SYSUTCDATETIME(),
+                    CONSTRAINT PK_snmp_threshold_state PRIMARY KEY (threshold_id, entity_type, entity_id)
+                )"
+            );
             // Inventory templates for rack/row PDUs (electrical + optional outlet layout)
             self::ensureTable(
                 'pdu_templates',
@@ -675,6 +711,8 @@ class Schema
             'pdu_templates' => ['template_id', 'name', 'fields_json'],
             'snmp_v3_profiles' => ['profile_id', 'name', 'security_name'],
             'alert_subscriptions' => ['subscription_id', 'name', 'scope', 'categories'],
+            'snmp_thresholds' => ['threshold_id', 'name', 'entity_type', 'metric_key'],
+            'snmp_threshold_state' => ['threshold_id', 'entity_type', 'entity_id'],
             'device_notes' => ['note_id', 'device_id', 'note_text'],
             'pdus' => [
                 'mount_style', 'position_u', 'u_height', 'snmp_community', 'phases',

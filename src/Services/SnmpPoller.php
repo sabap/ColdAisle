@@ -462,6 +462,29 @@ class SnmpPoller
         }
         $env['alerts'] = $envAlerts;
 
+        // Custom SNMP metric thresholds (Settings → Alerts)
+        $snmpThr = ['checked' => 0, 'alerted' => 0];
+        if (class_exists('SnmpThresholdService')) {
+            try {
+                $flat = SnmpThresholdService::flattenPollMetrics(is_array($metrics) ? $metrics : []);
+                if (isset($got['watts']) && $got['watts'] !== null) {
+                    $flat['watts'] = (float)$got['watts'];
+                }
+                if (isset($got['amps']) && $got['amps'] !== null) {
+                    $flat['amps'] = (float)$got['amps'];
+                }
+                $label = (string)($device['label'] ?? ('Device #' . (int)$device['device_id']));
+                $snmpThr = SnmpThresholdService::evaluateEntity(
+                    'device',
+                    (int)$device['device_id'],
+                    $label,
+                    $flat
+                );
+            } catch (Throwable $e) {
+                App::log('SnmpThreshold device: ' . $e->getMessage(), 'warning');
+            }
+        }
+
         return [
             'watts' => $got['watts'],
             'amps' => $got['amps'],
@@ -472,6 +495,7 @@ class SnmpPoller
             'probe_names' => $probeNames,
             'probe_meta' => $probeMeta ?? [],
             'env' => $env,
+            'snmp_thresholds' => $snmpThr,
         ];
     }
 
@@ -567,6 +591,22 @@ class SnmpPoller
             'last_poll_json' => json_encode($snapshot, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
             'updated_at' => $now,
         ], 'cooling_unit_id = :id', [':id' => (int)$unit['cooling_unit_id']]);
+
+        if (class_exists('SnmpThresholdService')) {
+            try {
+                $flat = SnmpThresholdService::flattenPollMetrics(
+                    is_array($got['metrics'] ?? null) ? $got['metrics'] : $metrics
+                );
+                SnmpThresholdService::evaluateEntity(
+                    'cooling',
+                    (int)$unit['cooling_unit_id'],
+                    (string)($unit['name'] ?? ('Cooling #' . (int)$unit['cooling_unit_id'])),
+                    $flat
+                );
+            } catch (Throwable $e) {
+                App::log('SnmpThreshold cooling: ' . $e->getMessage(), 'warning');
+            }
+        }
 
         $msg = 'Polled ' . (int)$got['ok'] . ' metric(s) from site template';
         if ((int)($got['failed'] ?? 0) > 0) {
@@ -1134,6 +1174,50 @@ class SnmpPoller
                 PowerAlertService::evaluatePdu($pduId);
             } catch (Throwable $e) {
                 App::log('PowerAlertService: ' . $e->getMessage(), 'warning');
+            }
+        }
+
+        // Custom SNMP thresholds against PDU poll metrics / columns
+        if (class_exists('SnmpThresholdService') && $pduId > 0) {
+            try {
+                $fresh = Database::fetchOne('SELECT * FROM pdus WHERE pdu_id = ?', [$pduId]);
+                if ($fresh) {
+                    $flat = SnmpThresholdService::metricsFromPollRow('pdu', $fresh);
+                    if ($watts !== null) {
+                        $flat['watts'] = (float)$watts;
+                    }
+                    if ($amps !== null) {
+                        $flat['amps'] = (float)$amps;
+                    }
+                    if (is_array($phases)) {
+                        $i = 0;
+                        foreach ($phases as $lab => $ph) {
+                            $i++;
+                            if (!is_array($ph)) {
+                                continue;
+                            }
+                            $n = is_numeric($lab) ? ((int)$lab + 1) : $i;
+                            if (isset($ph['amps']) && is_numeric($ph['amps'])) {
+                                $flat['phase' . $n . '_amps'] = (float)$ph['amps'];
+                                $flat[strtolower((string)$lab) . '_amps'] = (float)$ph['amps'];
+                            }
+                            if (isset($ph['watts']) && is_numeric($ph['watts'])) {
+                                $flat['phase' . $n . '_watts'] = (float)$ph['watts'];
+                            }
+                            if (isset($ph['util_pct']) && is_numeric($ph['util_pct'])) {
+                                $flat['phase' . $n . '_util'] = (float)$ph['util_pct'];
+                            }
+                        }
+                    }
+                    SnmpThresholdService::evaluateEntity(
+                        'pdu',
+                        $pduId,
+                        (string)($fresh['name'] ?? ('PDU #' . $pduId)),
+                        $flat
+                    );
+                }
+            } catch (Throwable $e) {
+                App::log('SnmpThreshold pdu: ' . $e->getMessage(), 'warning');
             }
         }
     }

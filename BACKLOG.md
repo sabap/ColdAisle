@@ -269,11 +269,11 @@ Historical note commits:
 
 | Field | Value |
 |-------|--------|
-| **Status** | **blocked / parked** — revisit after Vertiv Monitoring Support reply |
+| **Status** | **blocked / parked** — Vertiv on-site firmware update planned **2026-08-18** (cooling + thermal card); re-test SNMP after that |
 | **Requested** | 2026-08-05…08-06 (user + Vertiv field / monitoring engagement) |
 | **Source** | chat (Liebert DS only showing uptime; Vertiv rep + `AC_Vertiv_Thermal/` templates; ticket to Monitoring.Support) |
 | **Priority** | high for site cooling ops once agent access is fixed |
-| **Do not implement until** | (1) user confirms Monitoring Support unblocked `.3` GETs **or** explicitly asks to import templates for dry-run/probe-only, and (2) scope confirmed |
+| **Do not implement until** | (1) post–Aug 18 firmware visit confirms `.3` GETs work **or** user asks to import templates dry-run, and (2) scope confirmed |
 
 **Goal:** Poll live Liebert **DS** thermal metrics into ColdAisle (supply/return temp, humidity, system state, capacity, alarms—not only sysUpTime / product identity), using **official Vertiv NMS OID maps**, then expand to related product templates in the pack.
 

@@ -67,6 +67,7 @@ class AlertService
             'power' => class_exists('PowerAlertService') ? PowerAlertService::settings() : [],
             'env' => class_exists('EnvSensorAlertService') ? EnvSensorAlertService::settings() : [],
             'icmp' => class_exists('IcmpMonitorService') ? IcmpMonitorService::settings() : [],
+            'snmp' => class_exists('SnmpThresholdService') ? SnmpThresholdService::settings() : [],
         ];
     }
 
@@ -117,6 +118,9 @@ class AlertService
             SettingsService::set(IcmpMonitorService::SETTING_TIMEOUT_MS, (string)$timeout, 'icmp');
             $cd = max(5, min(10080, (int)($post['icmp_alert_cooldown_min'] ?? 60)));
             SettingsService::set(IcmpMonitorService::SETTING_COOLDOWN_MIN, (string)$cd, 'icmp');
+        }
+        if (class_exists('SnmpThresholdService')) {
+            SnmpThresholdService::saveSettingsFromPost($post);
         }
     }
 

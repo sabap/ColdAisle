@@ -288,6 +288,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             App::redirect('pages/settings.php#alerts');
         }
 
+        if ($section === 'snmp_threshold_save') {
+            if (is_file(dirname(__DIR__) . '/src/Services/SnmpThresholdService.php')) {
+                require_once dirname(__DIR__) . '/src/Services/SnmpThresholdService.php';
+            }
+            if (!class_exists('SnmpThresholdService')) {
+                throw new RuntimeException('SnmpThresholdService is not installed.');
+            }
+            $tid = !empty($_POST['threshold_id']) ? (int)$_POST['threshold_id'] : null;
+            SnmpThresholdService::saveThreshold([
+                'name' => $_POST['name'] ?? 'SNMP threshold',
+                'entity_type' => $_POST['entity_type'] ?? 'device',
+                'entity_id' => $_POST['entity_id'] ?? null,
+                'metric_key' => $_POST['metric_key'] ?? '',
+                'oid' => $_POST['oid'] ?? '',
+                'warn_low' => $_POST['warn_low'] ?? null,
+                'warn_high' => $_POST['warn_high'] ?? null,
+                'crit_low' => $_POST['crit_low'] ?? null,
+                'crit_high' => $_POST['crit_high'] ?? null,
+                'unit' => $_POST['unit'] ?? '',
+                'scale_divisor' => $_POST['scale_divisor'] ?? 1,
+                'cooldown_min' => $_POST['cooldown_min'] ?? 60,
+                'is_active' => !empty($_POST['is_active']),
+            ], $tid);
+            App::flash('success', 'SNMP threshold saved.');
+            App::redirect('pages/settings.php#alerts');
+        }
+
+        if ($section === 'snmp_threshold_delete') {
+            if (is_file(dirname(__DIR__) . '/src/Services/SnmpThresholdService.php')) {
+                require_once dirname(__DIR__) . '/src/Services/SnmpThresholdService.php';
+            }
+            if (class_exists('SnmpThresholdService')) {
+                SnmpThresholdService::deleteThreshold((int)($_POST['threshold_id'] ?? 0));
+            }
+            App::flash('success', 'SNMP threshold removed.');
+            App::redirect('pages/settings.php#alerts');
+        }
+
         if ($section === 'snmp_schedule') {
             if (!class_exists('SnmpSchedulerService')) {
                 require_once dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php';
@@ -668,6 +706,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         if (!in_array($section, [
             'update_check', 'update_apply', 'update_backup_now', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
             'power_alerts', 'env_alerts', 'alerts_hub', 'alert_subscription_save', 'alert_subscription_delete',
+            'snmp_threshold_save', 'snmp_threshold_delete',
             'noc', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
             'diagnostics', 'schema_ensure', 'smb_backup_save', 'smb_backup_test',
         ], true)) {
@@ -699,7 +738,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#ldaps';
     } elseif ($secPost === 'mail' || $secPost === 'test_mail') {
         $redirHash = '#mail';
-    } elseif (in_array($secPost, ['power_alerts', 'env_alerts', 'alerts_hub', 'alert_subscription_save', 'alert_subscription_delete'], true)) {
+    } elseif (in_array($secPost, [
+        'power_alerts', 'env_alerts', 'alerts_hub', 'alert_subscription_save', 'alert_subscription_delete',
+        'snmp_threshold_save', 'snmp_threshold_delete',
+    ], true)) {
         $redirHash = '#alerts';
     } elseif ($secPost === 'noc') {
         $redirHash = '#noc';
@@ -753,6 +795,13 @@ $icmpAlerts = class_exists('IcmpMonitorService')
         'packets' => 3, 'timeout_ms' => 1000, 'cooldown_min' => 60,
     ];
 $alertSubs = class_exists('AlertService') ? AlertService::listSubscriptions() : [];
+if (is_file(dirname(__DIR__) . '/src/Services/SnmpThresholdService.php')) {
+    require_once dirname(__DIR__) . '/src/Services/SnmpThresholdService.php';
+}
+$snmpThresholds = class_exists('SnmpThresholdService') ? SnmpThresholdService::listThresholds() : [];
+$snmpThrSettings = class_exists('SnmpThresholdService')
+    ? SnmpThresholdService::settings()
+    : ['enabled' => false];
 $alertDepartments = [];
 try {
     $alertDepartments = Database::fetchAll(
@@ -1802,21 +1851,132 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
                 <?php endif; ?>
             </div>
 
-            <div class="alerts-hub-section alerts-hub-future">
+            <div class="alerts-hub-section">
                 <h3 class="alerts-hub-title">
-                    <span class="health-pulse health-pulse-off" aria-hidden="true"></span>
-                    SNMP thresholds <span class="badge" style="font-weight:500">Coming soon</span>
+                    <span class="health-pulse health-pulse-info" aria-hidden="true"></span>
+                    SNMP thresholds
                 </h3>
-                <p class="text-muted" style="font-size:.8rem;margin:0">
-                    Custom OID warn/crit thresholds (beyond power and env) will appear here —
-                    same routing and delivery as ICMP / power / env.
+                <p class="text-muted" style="font-size:.8rem;margin:0 0 .55rem">
+                    Custom metric warn/crit rules evaluated after SNMP poll (devices, PDUs, cooling).
+                    Use the <strong>metric key</strong> from your site OID template (e.g. <code>watts</code>,
+                    <code>amps</code>, <code>temperature.1</code>, <code>phase1_amps</code>).
+                    Delivery uses the same hub routing as other categories (<code>snmp</code>).
                 </p>
+                <?php if (!class_exists('SnmpThresholdService')): ?>
+                    <p class="alert alert-error">SnmpThresholdService not deployed.</p>
+                <?php else: ?>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="snmp_thresholds_enabled" value="1"
+                        <?= !empty($snmpThrSettings['enabled']) ? 'checked' : '' ?>>
+                    Enable custom SNMP threshold evaluation
+                </label></div>
+                <?php endif; ?>
             </div>
 
             <div class="form-row full" style="margin-top:.25rem">
                 <button class="btn btn-primary" type="submit">Save alert settings</button>
             </div>
         </form>
+
+        <?php if (class_exists('SnmpThresholdService')): ?>
+        <div class="alerts-hub-section" style="margin-top:1.25rem">
+            <h3 class="alerts-hub-title">Threshold rules</h3>
+            <?php if ($snmpThresholds): ?>
+            <div class="table-wrap" style="margin-bottom:1rem">
+                <table class="data">
+                    <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Target</th>
+                        <th>Metric</th>
+                        <th>Bounds</th>
+                        <th>Cooldown</th>
+                        <th></th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($snmpThresholds as $thr):
+                        $tgt = (string)($thr['entity_type'] ?? 'device');
+                        if (!empty($thr['entity_id'])) {
+                            $tgt .= ' #' . (int)$thr['entity_id'];
+                        } else {
+                            $tgt .= ' (all)';
+                        }
+                        $bounds = [];
+                        foreach (['crit_low' => 'c≤', 'warn_low' => 'w≤', 'warn_high' => 'w≥', 'crit_high' => 'c≥'] as $bk => $bl) {
+                            if (isset($thr[$bk]) && $thr[$bk] !== null && $thr[$bk] !== '') {
+                                $bounds[] = $bl . rtrim(rtrim(sprintf('%.4F', (float)$thr[$bk]), '0'), '.');
+                            }
+                        }
+                        $unit = trim((string)($thr['unit'] ?? ''));
+                        ?>
+                        <tr class="<?= empty($thr['is_active']) ? 'text-muted' : '' ?>">
+                            <td><?= App::e((string)$thr['name']) ?></td>
+                            <td><span class="badge"><?= App::e($tgt) ?></span></td>
+                            <td style="font-size:.8rem"><code><?= App::e((string)$thr['metric_key']) ?></code>
+                                <?php if ($unit !== ''): ?><span class="text-muted"><?= App::e($unit) ?></span><?php endif; ?>
+                            </td>
+                            <td style="font-size:.8rem"><?= App::e($bounds ? implode(' · ', $bounds) : '—') ?></td>
+                            <td><?= empty($thr['is_active']) ? 'Off' : 'On' ?></td>
+                            <td>
+                                <form method="post" style="display:inline" onsubmit="return confirm('Remove this threshold rule?');">
+                                    <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                                    <input type="hidden" name="section" value="snmp_threshold_delete">
+                                    <input type="hidden" name="threshold_id" value="<?= (int)$thr['threshold_id'] ?>">
+                                    <button class="btn btn-ghost btn-sm" type="submit">Remove</button>
+                                </form>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php else: ?>
+                <p class="text-muted" style="font-size:.85rem">No custom SNMP threshold rules yet.</p>
+            <?php endif; ?>
+
+            <form method="post" class="form-grid" id="snmpThrForm">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="section" value="snmp_threshold_save">
+                <input type="hidden" name="is_active" value="1">
+                <div class="form-row"><label>Name</label>
+                    <input class="form-control" name="name" required maxlength="150" placeholder="High rack amps"></div>
+                <div class="form-row"><label>Entity type</label>
+                    <select class="form-control" name="entity_type">
+                        <option value="device">Device</option>
+                        <option value="pdu">PDU</option>
+                        <option value="cooling">Cooling unit</option>
+                    </select>
+                </div>
+                <div class="form-row"><label>Entity ID (optional)</label>
+                    <input class="form-control" type="number" min="1" name="entity_id" placeholder="Blank = all of type">
+                    <span class="text-muted" style="font-size:.75rem">Leave empty to apply to every device/PDU/cooling unit of that type.</span>
+                </div>
+                <div class="form-row"><label>Metric key</label>
+                    <input class="form-control" name="metric_key" required placeholder="watts / amps / temperature.1 / phase1_amps">
+                </div>
+                <div class="form-row"><label>Unit (display)</label>
+                    <input class="form-control" name="unit" placeholder="A, kW, °C…"></div>
+                <div class="form-row"><label>Scale divisor</label>
+                    <input class="form-control" type="number" step="any" min="0.000001" name="scale_divisor" value="1">
+                    <span class="text-muted" style="font-size:.75rem">e.g. 10 if SNMP returns amps×10.</span>
+                </div>
+                <div class="form-row"><label>Warn low</label>
+                    <input class="form-control" type="number" step="any" name="warn_low" placeholder="optional"></div>
+                <div class="form-row"><label>Warn high</label>
+                    <input class="form-control" type="number" step="any" name="warn_high" placeholder="optional"></div>
+                <div class="form-row"><label>Crit low</label>
+                    <input class="form-control" type="number" step="any" name="crit_low" placeholder="optional"></div>
+                <div class="form-row"><label>Crit high</label>
+                    <input class="form-control" type="number" step="any" name="crit_high" placeholder="optional"></div>
+                <div class="form-row"><label>Cooldown (min)</label>
+                    <input class="form-control" type="number" min="5" max="10080" name="cooldown_min" value="60"></div>
+                <div class="form-row full">
+                    <button class="btn btn-secondary" type="submit">Add threshold rule</button>
+                </div>
+            </form>
+        </div>
+        <?php endif; ?>
 
         <div class="alerts-hub-section" style="margin-top:1.5rem">
             <h3 class="alerts-hub-title">Routing subscriptions</h3>

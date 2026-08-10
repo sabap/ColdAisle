@@ -313,6 +313,47 @@ try {
     $cabinetHealth = [];
 }
 
+// Recent broadcast notifications for NOC glass toast (no auth — site-wide only)
+$recentAlerts = [];
+try {
+    $rows = Database::fetchAll(
+        "SELECT TOP 12 notification_id, title, message, category, entity_type, entity_id, created_at
+         FROM notifications
+         WHERE user_id IS NULL
+         ORDER BY notification_id DESC"
+    );
+    foreach ($rows as $n) {
+        $cat = strtolower((string)($n['category'] ?? 'info'));
+        $title = (string)($n['title'] ?? 'Alert');
+        $sev = 'info';
+        if (in_array($cat, ['warning', 'critical', 'power', 'icmp', 'snmp', 'env', 'error', 'danger'], true)
+            || stripos($title, 'DOWN') !== false
+            || stripos($title, 'critical') !== false
+            || stripos($title, 'CRIT') !== false
+        ) {
+            $sev = (stripos($title, 'recovered') !== false || stripos($title, ' recovered') !== false)
+                ? 'ok'
+                : ((stripos($title, 'DOWN') !== false || stripos($title, 'critical') !== false || $cat === 'critical')
+                    ? 'crit' : 'warn');
+        }
+        if (stripos($title, 'recovered') !== false || stripos($title, '[TEST]') !== false && stripos($title, 'recovered') !== false) {
+            $sev = 'ok';
+        }
+        $recentAlerts[] = [
+            'id' => (int)$n['notification_id'],
+            'title' => $title,
+            'message' => mb_substr(preg_replace('/\s+/', ' ', (string)($n['message'] ?? '')) ?? '', 0, 180),
+            'category' => $cat,
+            'severity' => $sev,
+            'entity_type' => $n['entity_type'] ?? null,
+            'entity_id' => isset($n['entity_id']) ? (int)$n['entity_id'] : null,
+            'created_at' => (string)($n['created_at'] ?? ''),
+        ];
+    }
+} catch (Throwable $e) {
+    $recentAlerts = [];
+}
+
 $out = [
     'ok' => true,
     'updated_at' => gmdate('c'),
@@ -328,6 +369,7 @@ $out = [
     'cooling' => $cooling,
     'hot_sensors' => $hotSensors,
     'cabinet_health' => $cabinetHealth,
+    'recent_alerts' => $recentAlerts,
 ];
 
 if ($includeScene) {
