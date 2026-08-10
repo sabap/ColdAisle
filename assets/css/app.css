@@ -544,6 +544,47 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
   font-size: .88rem;
 }
 .power-chart-loading .power-chart-empty { opacity: .7; }
+/* Metric not provided by this PDU model / SNMP map */
+.power-chart-unsupported {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: inherit;
+  padding: 1.75rem 1.25rem;
+  text-align: center;
+  gap: .35rem;
+  background:
+    repeating-linear-gradient(
+      -18deg,
+      transparent,
+      transparent 12px,
+      rgba(148, 163, 184, 0.04) 12px,
+      rgba(148, 163, 184, 0.04) 24px
+    );
+}
+.power-chart-unsupported-title {
+  font-size: .95rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.85);
+}
+.power-chart-unsupported-sub {
+  font-size: .82rem;
+  color: var(--muted);
+  max-width: 28rem;
+  line-height: 1.4;
+}
+.metric-card-unsupported .value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: .02em;
+}
+.metric-card-unsupported .value .metric-unit {
+  display: none;
+}
 .power-chart-outage-badge {
   display: inline-block;
   margin-left: .5rem;

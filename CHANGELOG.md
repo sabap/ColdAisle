@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **AP7862 PDU detail unsupported metrics:** Load current chart shows watermark “Unsupported on this unit” when SNMP has no usable amps; hide phase-voltage / util / power indicators that are not collected; polled-current card matches; classic load-state chart labels fixed
+
 ### Bug fixes
 
 ---
