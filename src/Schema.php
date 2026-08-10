@@ -206,6 +206,21 @@ class Schema
                     updated_at DATETIME2 NOT NULL CONSTRAINT DF_pdu_tpl_updated DEFAULT SYSUTCDATETIME()
                 )"
             );
+            // Inventory templates for UPS (Symmetra / Smart-UPS class)
+            self::ensureTable(
+                'ups_templates',
+                "CREATE TABLE ups_templates (
+                    template_id INT IDENTITY(1,1) PRIMARY KEY,
+                    name NVARCHAR(150) NOT NULL,
+                    vendor NVARCHAR(100) NULL,
+                    model NVARCHAR(100) NULL,
+                    fields_json NVARCHAR(MAX) NOT NULL CONSTRAINT DF_ups_tpl_fields DEFAULT '{}',
+                    notes NVARCHAR(500) NULL,
+                    is_active BIT NOT NULL CONSTRAINT DF_ups_tpl_active DEFAULT 1,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_ups_tpl_created DEFAULT SYSUTCDATETIME(),
+                    updated_at DATETIME2 NOT NULL CONSTRAINT DF_ups_tpl_updated DEFAULT SYSUTCDATETIME()
+                )"
+            );
             // Optional link from poll targets to a site OID template (shared map)
             try {
                 $hasTargets = Database::fetchValue(
@@ -643,6 +658,7 @@ class Schema
             self::ensureColumn('ups_units', 'install_date', 'DATE NULL');
             self::ensureColumn('ups_units', 'manufacture_date', 'DATE NULL');
             self::ensureColumn('ups_units', 'asset_tag', 'NVARCHAR(100) NULL');
+            self::ensureColumn('ups_units', 'ups_template_id', 'INT NULL');
 
             // UPS poll history for dashboard / zone charts
             self::ensureTable(
@@ -838,9 +854,10 @@ class Schema
             'auth_sessions' => ['session_id', 'user_id', 'last_seen_at', 'expires_at'],
             'ups_units' => [
                 'ups_id', 'name', 'ups_scope', 'room_id', 'zone_id', 'pos_x', 'pos_y',
-                'snmp_enabled', 'snmp_site_template_id', 'snmp_auto_poll',
+                'snmp_enabled', 'snmp_site_template_id', 'snmp_auto_poll', 'ups_template_id',
                 'last_load_pct', 'last_battery_pct', 'last_output_status',
             ],
+            'ups_templates' => ['template_id', 'name', 'fields_json'],
             'ups_readings' => [
                 'reading_id', 'ups_id', 'load_pct', 'battery_pct', 'runtime_min', 'polled_at',
             ],

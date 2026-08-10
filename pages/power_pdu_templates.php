@@ -1,13 +1,14 @@
 <?php
 /**
- * Power → PDU Templates — list, view, edit inventory templates.
- * Edit can save template only, or save + apply to all linked PDUs.
+ * Power → Power Templates — PDU + UPS inventory templates.
+ * Edit can save template only, or save + apply to all linked PDUs (PDU type).
  */
 declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
 require_once dirname(__DIR__) . '/includes/power_helpers.php';
+require_once dirname(__DIR__) . '/includes/ups_helpers.php';
 App::boot();
 $user = App::requirePermission('view_power');
 $canEdit = AuthManager::canEditPower($user);
@@ -33,17 +34,90 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
     try {
         if ($action === 'delete_template') {
             $tid = (int)($_POST['template_id'] ?? 0);
+            $kind = strtolower(trim((string)($_POST['template_kind'] ?? 'pdu')));
             if ($tid < 1) {
                 throw new RuntimeException('Template id required.');
             }
-            Database::update(
-                'pdu_templates',
-                ['is_active' => 0, 'updated_at' => date('Y-m-d H:i:s')],
-                'template_id = :id',
-                [':id' => $tid]
-            );
-            App::flash('success', 'PDU template deactivated.');
+            if ($kind === 'ups') {
+                Database::update(
+                    'ups_templates',
+                    ['is_active' => 0, 'updated_at' => date('Y-m-d H:i:s')],
+                    'template_id = :id',
+                    [':id' => $tid]
+                );
+                App::flash('success', 'UPS template deactivated.');
+            } else {
+                Database::update(
+                    'pdu_templates',
+                    ['is_active' => 0, 'updated_at' => date('Y-m-d H:i:s')],
+                    'template_id = :id',
+                    [':id' => $tid]
+                );
+                App::flash('success', 'PDU template deactivated.');
+            }
             App::redirect('pages/power_pdu_templates.php');
+        }
+
+        if ($action === 'save_ups_template') {
+            $tid = (int)($_POST['template_id'] ?? 0);
+            $name = trim((string)($_POST['name'] ?? ''));
+            $vendor = trim((string)($_POST['vendor'] ?? ''));
+            $model = trim((string)($_POST['model'] ?? ''));
+            if ($name === '') {
+                $name = ups_template_display_name($vendor, $model);
+            }
+            if ($name === '' || $name === 'UPS template') {
+                throw new RuntimeException('Name or vendor + model is required.');
+            }
+            $fields = [];
+            foreach (ups_template_static_keys() as $k) {
+                if (!array_key_exists($k, $_POST)) {
+                    continue;
+                }
+                $v = $_POST[$k];
+                if ($k === 'snmp_enabled' || $k === 'snmp_auto_poll') {
+                    $fields[$k] = !empty($v) ? 1 : 0;
+                    continue;
+                }
+                if ($v === null || $v === '') {
+                    continue;
+                }
+                if (in_array($k, ['snmp_site_template_id', 'snmp_v3_profile_id', 'snmp_port', 'phases', 'width_mm', 'depth_mm', 'height_mm'], true)) {
+                    $fields[$k] = (int)$v;
+                    if ($fields[$k] === 0 && in_array($k, ['snmp_site_template_id', 'snmp_v3_profile_id'], true)) {
+                        unset($fields[$k]);
+                    }
+                    continue;
+                }
+                if (in_array($k, ['rated_kva', 'rated_kw'], true)) {
+                    $fields[$k] = (float)$v;
+                    continue;
+                }
+                $fields[$k] = is_string($v) ? trim($v) : $v;
+            }
+            if ($vendor !== '') {
+                $fields['manufacturer'] = $vendor;
+            }
+            if ($model !== '') {
+                $fields['model'] = $model;
+            }
+            $row = [
+                'name' => mb_substr($name, 0, 150),
+                'vendor' => $vendor !== '' ? $vendor : null,
+                'model' => $model !== '' ? $model : null,
+                'fields_json' => json_encode($fields, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                'notes' => (($n = trim((string)($_POST['notes'] ?? ''))) !== '') ? $n : null,
+                'is_active' => 1,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ];
+            if ($tid > 0) {
+                Database::update('ups_templates', $row, 'template_id = :id', [':id' => $tid]);
+            } else {
+                $row['created_at'] = date('Y-m-d H:i:s');
+                $tid = (int)Database::insert('ups_templates', $row);
+            }
+            App::flash('success', 'UPS template saved.');
+            App::redirect('pages/power_pdu_templates.php?type=ups&id=' . $tid);
         }
 
         if ($action === 'save_template') {
@@ -152,7 +226,158 @@ try {
     $snmpProfiles = [];
 }
 
-// ── Detail / edit ──────────────────────────────────────────────────────────
+$tplType = strtolower(trim((string)($_GET['type'] ?? 'pdu')));
+if (!in_array($tplType, ['pdu', 'ups'], true)) {
+    $tplType = 'pdu';
+}
+
+// ── UPS template detail / edit ─────────────────────────────────────────────
+if ($tplType === 'ups' && ($templateId > 0 || $actionGet === 'new')) {
+    $tpl = null;
+    $fields = [];
+    if ($templateId > 0) {
+        $tpl = Database::fetchOne('SELECT * FROM ups_templates WHERE template_id = ?', [$templateId]);
+        if (!$tpl || empty($tpl['is_active'])) {
+            App::flash('error', 'UPS template not found.');
+            App::redirect('pages/power_pdu_templates.php');
+        }
+        $fields = json_decode((string)($tpl['fields_json'] ?? '{}'), true) ?: [];
+    }
+    $f = static function (string $k, $default = '') use ($fields) {
+        return $fields[$k] ?? $default;
+    };
+    $linked = $templateId > 0
+        ? ups_template_linked_units($templateId, $tpl['vendor'] ?? null, $tpl['model'] ?? null)
+        : [];
+    layout_header($tpl ? ('UPS template: ' . $tpl['name']) : 'New UPS template', $user, 'power_templates');
+    ?>
+    <div class="flex-between mb-2">
+        <div>
+            <a class="btn btn-secondary btn-sm" href="<?= App::e(App::url('pages/power_pdu_templates.php#ups-templates')) ?>">← Power Templates</a>
+        </div>
+        <?php if ($canEdit && $templateId > 0): ?>
+        <form method="post" onsubmit="return confirm('Deactivate this UPS template?');">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="action" value="delete_template">
+            <input type="hidden" name="template_kind" value="ups">
+            <input type="hidden" name="template_id" value="<?= (int)$templateId ?>">
+            <button type="submit" class="btn btn-danger btn-sm">Deactivate</button>
+        </form>
+        <?php endif; ?>
+    </div>
+    <form method="post" class="card">
+        <div class="card-header"><h2><?= $tpl ? 'Edit UPS template' : 'New UPS template' ?></h2></div>
+        <div class="card-body form-grid">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="action" value="save_ups_template">
+            <?php if ($templateId > 0): ?>
+                <input type="hidden" name="template_id" value="<?= (int)$templateId ?>">
+            <?php endif; ?>
+            <div class="form-row"><label>Name *</label>
+                <input class="form-control" name="name" required value="<?= App::e($tpl['name'] ?? '') ?>" placeholder="Schneider Symmetra 40K"></div>
+            <div class="form-row"><label>Vendor</label>
+                <input class="form-control" name="vendor" value="<?= App::e($tpl['vendor'] ?? (string)$f('manufacturer', '')) ?>"></div>
+            <div class="form-row"><label>Model</label>
+                <input class="form-control" name="model" value="<?= App::e($tpl['model'] ?? (string)$f('model', '')) ?>"></div>
+            <div class="form-row"><label>Scope</label>
+                <select class="form-control" name="ups_scope">
+                    <?php foreach (ups_scopes() as $k => $lab): ?>
+                        <option value="<?= App::e($k) ?>" <?= (string)$f('ups_scope', 'in_row') === $k ? 'selected' : '' ?>><?= App::e($lab) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row"><label>Rated kVA</label>
+                <input class="form-control" type="number" step="0.1" name="rated_kva" value="<?= App::e((string)$f('rated_kva', '40')) ?>"></div>
+            <div class="form-row"><label>Rated kW</label>
+                <input class="form-control" type="number" step="0.1" name="rated_kw" value="<?= App::e((string)$f('rated_kw', '40')) ?>"></div>
+            <div class="form-row"><label>Phases</label>
+                <input class="form-control" type="number" min="1" max="3" name="phases" value="<?= (int)$f('phases', 3) ?>"></div>
+            <div class="form-row"><label>Color</label>
+                <input class="form-control" type="color" name="color_hex" value="<?= App::e((string)$f('color_hex', '#7c3aed')) ?>"></div>
+            <div class="form-row"><label>Width mm</label>
+                <input class="form-control" type="number" name="width_mm" value="<?= (int)$f('width_mm', 600) ?>"></div>
+            <div class="form-row"><label>Depth mm</label>
+                <input class="form-control" type="number" name="depth_mm" value="<?= (int)$f('depth_mm', 1100) ?>"></div>
+            <div class="form-row"><label>Height mm</label>
+                <input class="form-control" type="number" name="height_mm" value="<?= (int)$f('height_mm', 2000) ?>"></div>
+            <div class="form-row"><label>Warranty company</label>
+                <input class="form-control" name="warranty_provider" value="<?= App::e((string)$f('warranty_provider', '')) ?>"></div>
+            <div class="form-row full"><h4 class="mt-0" style="font-size:.95rem;color:var(--muted)">SNMP defaults</h4></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="snmp_enabled" value="1" <?= !empty($f('snmp_enabled', 1)) ? 'checked' : '' ?>>
+                SNMP enabled
+            </label></div>
+            <div class="form-row"><label>Version</label>
+                <select class="form-control" name="snmp_version">
+                    <?php foreach (['3' => 'v3', '2c' => 'v2c', '1' => 'v1'] as $v => $lab): ?>
+                        <option value="<?= $v ?>" <?= (string)$f('snmp_version', '3') === $v ? 'selected' : '' ?>><?= $lab ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row"><label>Port</label>
+                <input class="form-control" type="number" name="snmp_port" value="<?= (int)$f('snmp_port', 161) ?>"></div>
+            <div class="form-row"><label>SNMPv3 profile</label>
+                <select class="form-control" name="snmp_v3_profile_id">
+                    <option value="">—</option>
+                    <?php foreach ($snmpProfiles as $p): ?>
+                        <option value="<?= (int)$p['profile_id'] ?>" <?= (int)$f('snmp_v3_profile_id', 0) === (int)$p['profile_id'] ? 'selected' : '' ?>>
+                            <?= App::e($p['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row full"><label>OID map (site template)</label>
+                <select class="form-control" name="snmp_site_template_id">
+                    <option value="">— None —</option>
+                    <?php foreach ($siteOidTemplates as $st):
+                        $stId = (int)$st['template_id'];
+                        ?>
+                        <option value="<?= $stId ?>" <?= (int)$f('snmp_site_template_id', 0) === $stId ? 'selected' : '' ?>>
+                            <?= App::e((string)($st['name'] ?? ('#' . $stId))) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="snmp_auto_poll" value="1" <?= !empty($f('snmp_auto_poll')) ? 'checked' : '' ?>>
+                Enable scheduled poll when applied
+            </label></div>
+            <div class="form-row full"><label>Notes</label>
+                <textarea class="form-control" name="notes" rows="2"><?= App::e($tpl['notes'] ?? '') ?></textarea></div>
+            <?php if ($canEdit): ?>
+            <div class="form-row full">
+                <button class="btn btn-primary" type="submit">Save UPS template</button>
+                <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_ups.php?action=new')) ?>">Use for new UPS</a>
+            </div>
+            <?php endif; ?>
+        </div>
+    </form>
+    <?php if ($linked): ?>
+    <div class="card mt-2">
+        <div class="card-header"><h2>Linked UPS units</h2></div>
+        <div class="card-body flush">
+            <table class="data">
+                <thead><tr><th>Name</th><th>Model</th><th>IP</th><th></th></tr></thead>
+                <tbody>
+                <?php foreach ($linked as $lu): ?>
+                    <tr>
+                        <td><strong><?= App::e((string)$lu['name']) ?></strong></td>
+                        <td><?= App::e(trim(($lu['manufacturer'] ?? '') . ' ' . ($lu['model'] ?? ''))) ?></td>
+                        <td class="mono"><?= App::e((string)($lu['primary_ip'] ?? '—')) ?></td>
+                        <td><a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/power_ups.php?id=' . (int)$lu['ups_id'])) ?>">Open</a></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <?php endif; ?>
+    <?php
+    layout_footer();
+    exit;
+}
+
+// ── PDU Detail / edit ──────────────────────────────────────────────────────
 if ($templateId > 0 || $actionGet === 'new') {
     $tpl = null;
     $fields = [];
@@ -215,11 +440,11 @@ if ($templateId > 0 || $actionGet === 'new') {
     $title = $templateId > 0
         ? ('PDU template: ' . ($tpl['name'] ?? ''))
         : 'New PDU template';
-    layout_header($title, $user, 'power_pdu_templates');
+    layout_header($title, $user, 'power_templates');
     ?>
     <div class="flex-between mb-2">
         <div>
-            <a class="btn btn-secondary btn-sm" href="<?= App::e(App::url('pages/power_pdu_templates.php')) ?>">← All templates</a>
+            <a class="btn btn-secondary btn-sm" href="<?= App::e(App::url('pages/power_pdu_templates.php#pdu-templates')) ?>">← Power Templates</a>
             <?php if ($templateId > 0): ?>
                 <span class="badge" style="margin-left:.5rem"><?= count($linked) ?> linked PDU(s)</span>
             <?php endif; ?>
@@ -563,7 +788,7 @@ if ($templateId > 0 || $actionGet === 'new') {
     exit;
 }
 
-// ── List ───────────────────────────────────────────────────────────────────
+// ── List (PDU + UPS cards) ─────────────────────────────────────────────────
 $templates = [];
 try {
     $templates = Database::fetchAll(
@@ -573,28 +798,33 @@ try {
 } catch (Throwable $e) {
     $templates = [];
 }
+$upsTemplates = ups_template_list();
 
-layout_header('PDU Templates', $user, 'power_pdu_templates');
+layout_header('Power Templates', $user, 'power_templates');
 ?>
 <div class="flex-between mb-2">
     <div>
         <p class="text-muted mb-0">
-            Reusable electrical + outlet + OID map templates for rack/row PDUs.
-            Create from a configured PDU (“Create PDU template”) or here.
+            Reusable inventory templates for <strong>PDUs</strong> and <strong>UPS</strong> units
+            (electrical defaults, dimensions, SNMP / site OID map).
+            Create from a configured device or add here.
         </p>
     </div>
     <div class="flex gap-1">
         <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_pdus.php')) ?>">PDUs</a>
-        <?php if ($canEdit): ?>
-            <a class="btn btn-primary" href="<?= App::e(App::url('pages/power_pdu_templates.php?action=new')) ?>">+ Template</a>
-        <?php endif; ?>
+        <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_ups.php')) ?>">UPS</a>
     </div>
 </div>
 
-<div class="card">
+<div class="card mb-2" id="pdu-templates">
     <div class="card-header flex-between">
-        <h2>Templates</h2>
-        <span class="text-muted" style="font-size:.85rem"><?= count($templates) ?> active</span>
+        <h2>PDU templates</h2>
+        <div class="flex gap-1" style="align-items:center">
+            <span class="text-muted" style="font-size:.85rem"><?= count($templates) ?> active</span>
+            <?php if ($canEdit): ?>
+                <a class="btn btn-primary btn-sm" href="<?= App::e(App::url('pages/power_pdu_templates.php?action=new')) ?>">+ PDU template</a>
+            <?php endif; ?>
+        </div>
     </div>
     <div class="table-wrap">
         <table class="data">
@@ -665,6 +895,94 @@ layout_header('PDU Templates', $user, 'power_pdu_templates');
                            href="<?= App::e(App::url('pages/power_pdu_templates.php?id=' . (int)$t['template_id'])) ?>">
                             <?= $canEdit ? 'Edit' : 'View' ?>
                         </a>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card" id="ups-templates">
+    <div class="card-header flex-between">
+        <h2>UPS templates</h2>
+        <div class="flex gap-1" style="align-items:center">
+            <span class="text-muted" style="font-size:.85rem"><?= count($upsTemplates) ?> active</span>
+            <?php if ($canEdit): ?>
+                <a class="btn btn-primary btn-sm" href="<?= App::e(App::url('pages/power_pdu_templates.php?type=ups&action=new')) ?>">+ UPS template</a>
+            <?php endif; ?>
+        </div>
+    </div>
+    <div class="table-wrap">
+        <table class="data">
+            <thead>
+            <tr>
+                <th>Name</th>
+                <th>Vendor / model</th>
+                <th>OID map</th>
+                <th>Rated</th>
+                <th>Linked UPS</th>
+                <th>Updated</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php if (!$upsTemplates): ?>
+                <tr><td colspan="7" class="text-muted">
+                    No UPS templates yet. Open a configured UPS and use
+                    <strong>Create UPS template</strong>, or add one here.
+                </td></tr>
+            <?php endif; ?>
+            <?php foreach ($upsTemplates as $t):
+                $fields = json_decode((string)($t['fields_json'] ?? '{}'), true) ?: [];
+                $oidId = (int)($fields['snmp_site_template_id'] ?? 0);
+                $oidName = '';
+                if ($oidId > 0) {
+                    foreach ($siteOidTemplates as $st) {
+                        if ((int)$st['template_id'] === $oidId) {
+                            $oidName = (string)$st['name'];
+                            break;
+                        }
+                    }
+                    if ($oidName === '') {
+                        $oidName = '#' . $oidId;
+                    }
+                }
+                $linkedU = ups_template_linked_units(
+                    (int)$t['template_id'],
+                    $t['vendor'] ?? null,
+                    $t['model'] ?? null
+                );
+                $updated = $t['updated_at'] ?? $t['created_at'] ?? null;
+                $rated = '';
+                if (isset($fields['rated_kva']) && $fields['rated_kva'] !== '') {
+                    $rated = rtrim(rtrim(number_format((float)$fields['rated_kva'], 1), '0'), '.') . ' kVA';
+                }
+                ?>
+                <tr>
+                    <td>
+                        <a href="<?= App::e(App::url('pages/power_pdu_templates.php?type=ups&id=' . (int)$t['template_id'])) ?>">
+                            <strong><?= App::e($t['name']) ?></strong>
+                        </a>
+                    </td>
+                    <td style="font-size:.85rem">
+                        <?= App::e(trim(($t['vendor'] ?? '') . ' / ' . ($t['model'] ?? ''), ' /')) ?: '—' ?>
+                    </td>
+                    <td style="font-size:.85rem">
+                        <?= $oidName !== '' ? App::e($oidName) : '<span class="text-muted">—</span>' ?>
+                    </td>
+                    <td><?= $rated !== '' ? App::e($rated) : '—' ?></td>
+                    <td><?= count($linkedU) ?></td>
+                    <td style="font-size:.8rem" class="text-muted">
+                        <?= $updated ? App::e(is_string($updated) ? substr($updated, 0, 16) : '') : '—' ?>
+                    </td>
+                    <td class="actions">
+                        <a class="btn btn-sm btn-secondary"
+                           href="<?= App::e(App::url('pages/power_pdu_templates.php?type=ups&id=' . (int)$t['template_id'])) ?>">
+                            <?= $canEdit ? 'Edit' : 'View' ?>
+                        </a>
+                        <a class="btn btn-sm btn-ghost"
+                           href="<?= App::e(App::url('pages/power_ups.php?action=new')) ?>">New UPS</a>
                     </td>
                 </tr>
             <?php endforeach; ?>

@@ -486,6 +486,165 @@ function ups_serial_from_metrics(array $metrics): ?string
     return null;
 }
 
+/** Inventory template field keys (no host identity / secrets). */
+function ups_template_static_keys(): array
+{
+    return [
+        'manufacturer', 'model', 'ups_scope',
+        'rated_kva', 'rated_kw', 'phases',
+        'width_mm', 'depth_mm', 'height_mm', 'color_hex',
+        'snmp_enabled', 'snmp_version', 'snmp_port',
+        'snmp_v3_profile_id', 'snmp_v3_sec_level',
+        'snmp_site_template_id', 'snmp_auto_poll',
+        'warranty_provider',
+    ];
+}
+
+function ups_template_display_name(?string $vendor, ?string $model, ?string $fallback = null): string
+{
+    $v = trim((string)$vendor);
+    $m = trim((string)$model);
+    if ($v !== '' && $m !== '') {
+        return $v . ' ' . $m;
+    }
+    if ($m !== '') {
+        return $m;
+    }
+    if ($v !== '') {
+        return $v;
+    }
+    return $fallback !== null && trim($fallback) !== '' ? trim($fallback) : 'UPS template';
+}
+
+/**
+ * Build template fields from a ups_units row.
+ * @param array<string,mixed> $unit
+ * @return array<string,mixed>
+ */
+function ups_template_payload_from_unit(array $unit): array
+{
+    $fields = [];
+    foreach (ups_template_static_keys() as $k) {
+        if (!array_key_exists($k, $unit)) {
+            continue;
+        }
+        $v = $unit[$k];
+        if ($v === null || $v === '') {
+            continue;
+        }
+        if (in_array($k, ['snmp_site_template_id', 'snmp_v3_profile_id', 'snmp_port', 'snmp_auto_poll', 'snmp_enabled', 'phases', 'width_mm', 'depth_mm', 'height_mm'], true)) {
+            $fields[$k] = (int)$v;
+            if ($fields[$k] === 0 && in_array($k, ['snmp_site_template_id', 'snmp_v3_profile_id'], true)) {
+                unset($fields[$k]);
+            }
+            continue;
+        }
+        if (in_array($k, ['rated_kva', 'rated_kw'], true)) {
+            $fields[$k] = (float)$v;
+            continue;
+        }
+        $fields[$k] = $v;
+    }
+    if (empty($fields['snmp_site_template_id'])) {
+        unset($fields['snmp_auto_poll']);
+    }
+    return $fields;
+}
+
+/**
+ * Merge template fields into a UPS row.
+ * When $force is false, non-empty existing values are kept.
+ * @param array<string,mixed> $row
+ * @param array<string,mixed> $fields
+ * @return array<string,mixed>
+ */
+function ups_template_apply_fields(array $row, array $fields, bool $force = false): array
+{
+    $allowed = array_flip(ups_template_static_keys());
+    foreach ($fields as $k => $v) {
+        if (!isset($allowed[$k])) {
+            continue;
+        }
+        if ($v === null || $v === '') {
+            continue;
+        }
+        if (!$force) {
+            $cur = $row[$k] ?? null;
+            if ($cur !== null && $cur !== '') {
+                continue;
+            }
+        }
+        $row[$k] = $v;
+    }
+    return $row;
+}
+
+/**
+ * @return list<array<string,mixed>>
+ */
+function ups_template_list(): array
+{
+    try {
+        return Database::fetchAll(
+            'SELECT template_id, name, vendor, model, fields_json, notes, updated_at, created_at
+             FROM ups_templates WHERE is_active = 1 ORDER BY name'
+        );
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/**
+ * @return list<array<string,mixed>>
+ */
+function ups_template_linked_units(int $templateId, ?string $vendor = null, ?string $model = null): array
+{
+    if ($templateId < 1) {
+        return [];
+    }
+    try {
+        $byId = Database::fetchAll(
+            'SELECT ups_id, name, manufacturer, model, primary_ip, ups_template_id, is_active
+             FROM ups_units WHERE is_active = 1 AND ups_template_id = ?
+             ORDER BY name',
+            [$templateId]
+        );
+    } catch (Throwable $e) {
+        // column may not exist yet
+        $byId = [];
+    }
+    if ($byId) {
+        return $byId;
+    }
+    $v = trim((string)$vendor);
+    $m = trim((string)$model);
+    if ($v === '' || $m === '') {
+        return [];
+    }
+    try {
+        return Database::fetchAll(
+            'SELECT ups_id, name, manufacturer, model, primary_ip, is_active
+             FROM ups_units
+             WHERE is_active = 1 AND manufacturer = ? AND model = ?
+               AND (ups_template_id IS NULL OR ups_template_id = 0 OR ups_template_id = ?)
+             ORDER BY name',
+            [$v, $m, $templateId]
+        );
+    } catch (Throwable $e) {
+        try {
+            return Database::fetchAll(
+                'SELECT ups_id, name, manufacturer, model, primary_ip, is_active
+                 FROM ups_units
+                 WHERE is_active = 1 AND manufacturer = ? AND model = ?
+                 ORDER BY name',
+                [$v, $m]
+            );
+        } catch (Throwable $e2) {
+            return [];
+        }
+    }
+}
+
 /**
  * @param array<string,mixed> $post
  * @return array<string,mixed>
@@ -551,6 +710,7 @@ function ups_fields_from_post(array $post): array
         'snmp_port' => !empty($post['snmp_port']) ? (int)$post['snmp_port'] : 161,
         'snmp_v3_profile_id' => !empty($post['snmp_v3_profile_id']) ? (int)$post['snmp_v3_profile_id'] : null,
         'snmp_site_template_id' => !empty($post['snmp_site_template_id']) ? (int)$post['snmp_site_template_id'] : null,
+        'ups_template_id' => !empty($post['ups_template_id']) ? (int)$post['ups_template_id'] : null,
         'snmp_auto_poll' => !empty($post['snmp_auto_poll']) ? 1 : 0,
         'snmp_v3_sec_level' => (($v = trim((string)($post['snmp_v3_sec_level'] ?? ''))) !== '') ? $v : null,
         'snmp_security_name' => (($v = trim((string)($post['snmp_security_name'] ?? ''))) !== '') ? $v : null,
