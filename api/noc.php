@@ -176,7 +176,10 @@ try {
                 dc.name AS dc_name,
                 (SELECT COUNT(*) FROM pdus p WHERE p.zone_id = z.zone_id AND p.is_active = 1) AS pdu_count,
                 (SELECT ISNULL(SUM(p.last_poll_watts),0) FROM pdus p
-                 WHERE p.zone_id = z.zone_id AND p.is_active = 1 AND p.last_poll_watts IS NOT NULL) AS watts
+                 WHERE p.zone_id = z.zone_id AND p.is_active = 1 AND p.last_poll_watts IS NOT NULL) AS watts,
+                (SELECT COUNT(*) FROM ups_units u WHERE u.zone_id = z.zone_id AND u.is_active = 1) AS ups_count,
+                (SELECT AVG(CAST(u.last_load_pct AS FLOAT)) FROM ups_units u
+                 WHERE u.zone_id = z.zone_id AND u.is_active = 1 AND u.last_load_pct IS NOT NULL) AS ups_avg_load
          FROM power_zones z
          LEFT JOIN datacenters dc ON dc.datacenter_id = z.datacenter_id
          ORDER BY dc.name, z.name'
@@ -191,6 +194,9 @@ try {
             ? round(100.0 * $z['kw'] / $maxKw, 1)
             : null;
         $z['pdu_count'] = (int)($z['pdu_count'] ?? 0);
+        $z['ups_count'] = (int)($z['ups_count'] ?? 0);
+        $z['ups_avg_load'] = $z['ups_avg_load'] !== null && $z['ups_avg_load'] !== ''
+            ? round((float)$z['ups_avg_load'], 1) : null;
         unset($z['watts']);
     }
     unset($z);

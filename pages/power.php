@@ -12,7 +12,12 @@ $zones = Database::fetchAll(
     'SELECT z.*, dc.name AS dc_name,
             (SELECT COUNT(*) FROM pdus p WHERE p.zone_id = z.zone_id AND p.is_active = 1) AS pdu_count,
             (SELECT COUNT(*) FROM power_panels pp WHERE pp.zone_id = z.zone_id) AS panel_count,
-            (SELECT ISNULL(SUM(p.last_poll_watts), 0) FROM pdus p WHERE p.zone_id = z.zone_id AND p.is_active = 1) AS poll_watts
+            (SELECT ISNULL(SUM(p.last_poll_watts), 0) FROM pdus p WHERE p.zone_id = z.zone_id AND p.is_active = 1) AS poll_watts,
+            (SELECT COUNT(*) FROM ups_units u WHERE u.zone_id = z.zone_id AND u.is_active = 1) AS ups_count,
+            (SELECT AVG(CAST(u.last_load_pct AS FLOAT)) FROM ups_units u
+             WHERE u.zone_id = z.zone_id AND u.is_active = 1 AND u.last_load_pct IS NOT NULL) AS ups_avg_load,
+            (SELECT MIN(u.last_battery_pct) FROM ups_units u
+             WHERE u.zone_id = z.zone_id AND u.is_active = 1 AND u.last_battery_pct IS NOT NULL) AS ups_min_batt
      FROM power_zones z
      INNER JOIN datacenters dc ON dc.datacenter_id = z.datacenter_id
      ORDER BY z.name'
@@ -190,16 +195,29 @@ layout_header('Power Dashboard', $user, 'power');
 </div>
 <?php endif; ?>
 
-<!-- 24h facility history (Phase 1) -->
-<div class="card power-history-wide mb-2" data-power-history data-scope="site" data-hours="24">
-    <div class="card-header flex-between">
-        <h2 style="margin:0">Last 24 hours — facility</h2>
-        <span class="text-muted" style="font-size:.8rem">Sum of polled PDUs · 5‑min buckets · red markers = phase outages</span>
+<!-- Overall load + UPS history -->
+<div class="power-dash-grid mb-2" style="grid-template-columns:1fr 1fr;gap:1rem">
+    <div class="card power-history-wide" data-power-history data-scope="site" data-hours="24">
+        <div class="card-header flex-between">
+            <h2 style="margin:0">Overall load — 24h</h2>
+            <span class="text-muted" style="font-size:.8rem">Sum of polled PDUs · red = phase outages</span>
+        </div>
+        <div class="card-body power-history-body">
+            <div class="power-outage-summary" data-outage-summary hidden></div>
+            <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Facility output (kW)" data-color="#38bdf8" data-height="220"></div>
+            <div class="power-chart power-chart-lg" data-metric="volts" data-unit="V" data-label="Input voltage (avg L–N)" data-color="#a78bfa" data-height="140" data-hide-empty="1"></div>
+        </div>
     </div>
-    <div class="card-body power-history-body">
-        <div class="power-outage-summary" data-outage-summary hidden></div>
-        <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Output (usage)" data-color="#38bdf8" data-height="200"></div>
-        <div class="power-chart power-chart-lg" data-metric="volts" data-unit="V" data-label="Input voltage (avg L–N)" data-color="#a78bfa" data-height="160"></div>
+    <div class="card power-history-wide" data-power-history data-scope="ups_site" data-hours="24">
+        <div class="card-header flex-between">
+            <h2 style="margin:0">UPS load — 24h</h2>
+            <span class="text-muted" style="font-size:.8rem">Avg across all UPS · needs scheduled poll</span>
+        </div>
+        <div class="card-body power-history-body">
+            <div class="power-chart power-chart-lg" data-metric="load_pct" data-unit="%" data-label="UPS load %" data-color="#a78bfa" data-height="160" data-outages="0"></div>
+            <div class="power-chart power-chart-lg" data-metric="battery_pct" data-unit="%" data-label="Battery %" data-color="#34d399" data-height="120" data-outages="0" data-hide-empty="1"></div>
+            <div class="power-chart power-chart-lg" data-metric="kw" data-unit="kW" data-label="Est. UPS output (kW)" data-color="#c4b5fd" data-height="120" data-outages="0" data-hide-empty="1"></div>
+        </div>
     </div>
 </div>
 
@@ -250,8 +268,13 @@ layout_header('Power Dashboard', $user, 'power');
                                     <span class="zcm-val"><?= (int)($z['pdu_count'] ?? 0) ?></span>
                                 </div>
                                 <div>
-                                    <span class="zcm-label">Panels</span>
-                                    <span class="zcm-val"><?= (int)($z['panel_count'] ?? 0) ?></span>
+                                    <span class="zcm-label">UPS</span>
+                                    <span class="zcm-val">
+                                        <?= (int)($z['ups_count'] ?? 0) ?>
+                                        <?php if ($z['ups_avg_load'] !== null && $z['ups_avg_load'] !== ''): ?>
+                                            <span class="text-muted" style="font-size:.75rem"> · <?= number_format((float)$z['ups_avg_load'], 0) ?>%</span>
+                                        <?php endif; ?>
+                                    </span>
                                 </div>
                             </div>
                             <?php if ($pct !== null): ?>
@@ -513,5 +536,5 @@ layout_header('Power Dashboard', $user, 'power');
         </table>
     </div>
 </div>
-<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=4"></script>
+<script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=6"></script>
 <?php layout_footer(); ?>

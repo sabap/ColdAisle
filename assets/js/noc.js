@@ -284,9 +284,12 @@
         esc(z.dc_name || '') +
         (z.feed_type ? ' · Feed ' + esc(z.feed_type) : '') +
         ' · ' + fmtNum(z.pdu_count, 0) + ' PDU(s)' +
+        (z.ups_count != null ? ' · ' + fmtNum(z.ups_count, 0) + ' UPS' : '') +
         (z.voltage ? ' · ' + fmtNum(z.voltage, 0) + ' V' : '') +
         '</div>' +
-        '<div class="zn-kw">' + fmtNum(z.kw, 1) + ' <span class="unit">kW</span></div>';
+        '<div class="zn-kw">' + fmtNum(z.kw, 1) + ' <span class="unit">kW</span>' +
+        (z.ups_avg_load != null ? ' <span class="unit">· UPS ' + fmtNum(z.ups_avg_load, 0) + '%</span>' : '') +
+        '</div>';
       if (bar != null) {
         html += '<div class="zn-bar"><i style="width:' + bar + '%"></i></div>' +
           '<div class="zn-util">' + fmtNum(util, 1) + '% of ' + fmtNum(z.max_kw, 1) + ' kW rated</div>';

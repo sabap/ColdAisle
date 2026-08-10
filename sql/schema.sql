@@ -626,6 +626,24 @@ GO
 CREATE NONCLUSTERED INDEX IX_pdu_readings_pdu_time ON pdu_readings(pdu_id, polled_at DESC);
 GO
 
+-- UPS poll history (load / battery charts)
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ups_readings')
+CREATE TABLE ups_readings (
+    reading_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    ups_id INT NOT NULL,
+    load_pct DECIMAL(8,2) NULL,
+    battery_pct DECIMAL(8,2) NULL,
+    runtime_min DECIMAL(10,2) NULL,
+    output_status NVARCHAR(80) NULL,
+    estimated_watts DECIMAL(12,2) NULL,
+    polled_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_ups_readings_ups_time')
+CREATE NONCLUSTERED INDEX IX_ups_readings_ups_time ON ups_readings(ups_id, polled_at DESC);
+GO
+
 -- ============================================================
 -- SNMP device polling (generic sensors)
 -- ============================================================

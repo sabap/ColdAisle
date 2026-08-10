@@ -644,6 +644,38 @@ class Schema
             self::ensureColumn('ups_units', 'manufacture_date', 'DATE NULL');
             self::ensureColumn('ups_units', 'asset_tag', 'NVARCHAR(100) NULL');
 
+            // UPS poll history for dashboard / zone charts
+            self::ensureTable(
+                'ups_readings',
+                "CREATE TABLE ups_readings (
+                    reading_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                    ups_id INT NOT NULL,
+                    load_pct DECIMAL(8,2) NULL,
+                    battery_pct DECIMAL(8,2) NULL,
+                    runtime_min DECIMAL(10,2) NULL,
+                    output_status NVARCHAR(80) NULL,
+                    estimated_watts DECIMAL(12,2) NULL,
+                    polled_at DATETIME2 NOT NULL CONSTRAINT DF_ups_rd_at DEFAULT SYSUTCDATETIME()
+                )"
+            );
+            try {
+                $hasUpsRd = Database::fetchValue(
+                    "SELECT 1 FROM sys.tables WHERE name = 'ups_readings' AND SCHEMA_NAME(schema_id) = 'dbo'"
+                );
+                if ($hasUpsRd) {
+                    $idx = Database::fetchValue(
+                        "SELECT 1 FROM sys.indexes WHERE name = 'IX_ups_readings_ups_time' AND object_id = OBJECT_ID('dbo.ups_readings')"
+                    );
+                    if (!$idx) {
+                        Database::query(
+                            'CREATE NONCLUSTERED INDEX IX_ups_readings_ups_time ON ups_readings(ups_id, polled_at DESC)'
+                        );
+                    }
+                }
+            } catch (Throwable $e) {
+                // ignore index race
+            }
+
             self::ensureTable(
                 'env_sensors',
                 "CREATE TABLE env_sensors (
@@ -805,9 +837,12 @@ class Schema
             'role_group_maps' => ['map_id', 'role_id', 'auth_source', 'group_id'],
             'auth_sessions' => ['session_id', 'user_id', 'last_seen_at', 'expires_at'],
             'ups_units' => [
-                'ups_id', 'name', 'ups_scope', 'room_id', 'pos_x', 'pos_y',
+                'ups_id', 'name', 'ups_scope', 'room_id', 'zone_id', 'pos_x', 'pos_y',
                 'snmp_enabled', 'snmp_site_template_id', 'snmp_auto_poll',
                 'last_load_pct', 'last_battery_pct', 'last_output_status',
+            ],
+            'ups_readings' => [
+                'reading_id', 'ups_id', 'load_pct', 'battery_pct', 'runtime_min', 'polled_at',
             ],
             'cooling_units' => [
                 'cooling_unit_id', 'name', 'unit_type', 'unit_role', 'cooling_medium',
