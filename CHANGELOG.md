@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **Tech mode (field / tablet / phone):** session chrome for aisle work — hub with search, recent cabinets, audits due, moves this week; bottom nav over existing Cabinets / Devices / Work orders pages (same APIs & helpers; no forked business logic). QR plaques and legacy `?field=1` enable the same mode. Exit via **Desktop**. Surfaces registered in `TechMode` (+ optional `includes/tech_surfaces.php`)
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.120] - 2026-08-11
+
+### New features
+
+- **Tech mode (field / tablet / phone):** session chrome for aisle work — hub with search, recent cabinets, audits due, moves this week; bottom nav over existing Cabinets / Devices / Work orders pages (same APIs & helpers; no forked business logic). QR plaques and legacy `?field=1` enable the same mode. Exit via **Desktop**. Surfaces registered in `TechMode` (+ optional `includes/tech_surfaces.php`)
+
+---
 ## [0.3.119] - 2026-08-11
 
 ### New features
