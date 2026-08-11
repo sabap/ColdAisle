@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.106] - 2026-08-11
+
+### Bug fixes
+
 - **UPS history charts only a single blip:** series now holds the last sample for ~90 minutes (was ~10) and forward-fills gaps so 24h graphs draw a continuous line; local time labels; fallback to unit last-poll snapshot if `ups_readings` is empty
 
 ---
-
 ## [0.3.105] - 2026-08-11
 
 ### Enhancements
