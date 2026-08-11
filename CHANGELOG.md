@@ -13,6 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+### Enhancements
+
+### Bug fixes
+
+---
+
+## [0.3.111] - 2026-08-11
+
+### New features
+
 - **Env stale / offline alerts (Tier A / G-A3):** after each SNMP poll cycle, detect sensors with no report past a configurable age; digest or per-sensor mail; Settings → Alerts hub options
 - **Cooling live telemetry cards:** promote known keys from `last_poll_json` (supply/return/control temp, humidity, state, capacity, alarms) on unit detail and Cooling dashboard
 
@@ -21,10 +31,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **Cooling dashboard:** sensors sorted by crit/warn/stale first; unit table shows snapshot telemetry when available
 - **Env scheduled scan:** re-evaluate all sensors with readings after poll (not only the device just polled)
 
-### Bug fixes
-
 ---
-
 ## [0.3.110] - 2026-08-11
 
 ### New features
