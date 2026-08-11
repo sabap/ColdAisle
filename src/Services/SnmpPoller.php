@@ -7,18 +7,14 @@ declare(strict_types=1);
 class SnmpPoller
 {
     /**
-     * @return array{success:int,failed:int,skipped:int,disabled?:bool}
+     * @return array{success:int,failed:int,skipped:int,disabled?:bool,workers?:int,mode?:string}
      */
     public static function pollAll(): array
     {
         if (class_exists('MibService')) {
             MibService::loadAll();
         }
-        $success = 0;
-        $failed = 0;
-        $skipped = 0;
 
-        $schedulerOn = true;
         $defaultInterval = 300;
         if (class_exists('SnmpSchedulerService')) {
             if (!SnmpSchedulerService::isEnabled()) {
@@ -32,9 +28,13 @@ class SnmpPoller
             $defaultInterval = SnmpSchedulerService::intervalSec();
         }
 
-        // 1) Explicit scheduled SNMP targets (is_enabled = scheduled)
+        // Build due-job list, then poll via process pool (or sequential fallback).
+        $jobs = [];
+        $skipped = 0;
+
+        // 1) Explicit scheduled SNMP targets
         try {
-            $targets = Database::fetchAll('SELECT * FROM snmp_targets WHERE is_enabled = 1');
+            $targets = Database::fetchAll('SELECT target_id, name, poll_interval_sec, last_success_at FROM snmp_targets WHERE is_enabled = 1');
         } catch (Throwable $e) {
             $targets = [];
         }
@@ -47,22 +47,17 @@ class SnmpPoller
                 $skipped++;
                 continue;
             }
-            try {
-                self::pollTarget($t);
-                $success++;
-            } catch (Throwable $e) {
-                $failed++;
-                Database::update('snmp_targets', [
-                    'last_error' => substr($e->getMessage(), 0, 500),
-                ], 'target_id = :id', [':id' => (int)$t['target_id']]);
-                App::log('SNMP poll failed for ' . $t['name'] . ': ' . $e->getMessage(), 'error');
-            }
+            $jobs[] = [
+                'type' => 'target',
+                'id' => (int)$t['target_id'],
+                'name' => (string)($t['name'] ?? ('target #' . $t['target_id'])),
+            ];
         }
 
-        // 2) PDUs flagged for scheduled polling + site OID template (not snmp_targets)
+        // 2) PDUs
         try {
             $pdus = Database::fetchAll(
-                'SELECT * FROM pdus
+                'SELECT pdu_id, name, last_poll_at FROM pdus
                  WHERE is_active = 1 AND snmp_auto_poll = 1
                    AND snmp_site_template_id IS NOT NULL
                    AND ip_address IS NOT NULL AND ip_address <> \'\''
@@ -75,22 +70,20 @@ class SnmpPoller
                     $skipped++;
                     continue;
                 }
-                try {
-                    self::pollPduFromSiteTemplate($pdu, (int)$pdu['snmp_site_template_id']);
-                    $success++;
-                } catch (Throwable $e) {
-                    $failed++;
-                    App::log('PDU scheduled poll failed for ' . ($pdu['name'] ?? $pdu['pdu_id']) . ': ' . $e->getMessage(), 'error');
-                }
+                $jobs[] = [
+                    'type' => 'pdu',
+                    'id' => (int)$pdu['pdu_id'],
+                    'name' => (string)($pdu['name'] ?? ('PDU #' . $pdu['pdu_id'])),
+                ];
             }
         } catch (Throwable $e) {
             // columns may not exist yet
         }
 
-        // 3) Devices flagged for scheduled polling + site OID template
+        // 3) Devices
         try {
             $devices = Database::fetchAll(
-                'SELECT * FROM devices
+                'SELECT device_id, label, snmp_last_poll_at FROM devices
                  WHERE is_active = 1 AND snmp_auto_poll = 1
                    AND snmp_site_template_id IS NOT NULL
                    AND snmp_version IS NOT NULL AND snmp_version <> \'\''
@@ -103,25 +96,20 @@ class SnmpPoller
                     $skipped++;
                     continue;
                 }
-                try {
-                    self::pollDevice($dev);
-                    $success++;
-                } catch (Throwable $e) {
-                    $failed++;
-                    Database::update('devices', [
-                        'snmp_fail_count' => (int)($dev['snmp_fail_count'] ?? 0) + 1,
-                    ], 'device_id = :id', [':id' => (int)$dev['device_id']]);
-                    App::log('Device SNMP poll failed for ' . ($dev['label'] ?? $dev['device_id']) . ': ' . $e->getMessage(), 'error');
-                }
+                $jobs[] = [
+                    'type' => 'device',
+                    'id' => (int)$dev['device_id'],
+                    'name' => (string)($dev['label'] ?? ('device #' . $dev['device_id'])),
+                ];
             }
         } catch (Throwable $e) {
             // columns may not exist yet
         }
 
-        // 4) Cooling units (air handlers / pumps) with site OID template
+        // 4) Cooling
         try {
             $cooling = Database::fetchAll(
-                'SELECT * FROM cooling_units
+                'SELECT cooling_unit_id, name, snmp_last_poll_at FROM cooling_units
                  WHERE is_active = 1 AND snmp_auto_poll = 1
                    AND snmp_site_template_id IS NOT NULL
                    AND primary_ip IS NOT NULL AND primary_ip <> \'\''
@@ -134,25 +122,20 @@ class SnmpPoller
                     $skipped++;
                     continue;
                 }
-                try {
-                    self::pollCoolingUnit($cu);
-                    $success++;
-                } catch (Throwable $e) {
-                    $failed++;
-                    App::log(
-                        'Cooling unit SNMP poll failed for ' . ($cu['name'] ?? $cu['cooling_unit_id']) . ': ' . $e->getMessage(),
-                        'error'
-                    );
-                }
+                $jobs[] = [
+                    'type' => 'cooling',
+                    'id' => (int)$cu['cooling_unit_id'],
+                    'name' => (string)($cu['name'] ?? ('cooling #' . $cu['cooling_unit_id'])),
+                ];
             }
         } catch (Throwable $e) {
             // columns may not exist yet
         }
 
-        // 5) UPS units (in-row / in-rack) with site OID template
+        // 5) UPS
         try {
             $upsList = Database::fetchAll(
-                'SELECT * FROM ups_units
+                'SELECT ups_id, name, snmp_last_poll_at FROM ups_units
                  WHERE is_active = 1 AND snmp_auto_poll = 1
                    AND snmp_site_template_id IS NOT NULL
                    AND primary_ip IS NOT NULL AND primary_ip <> \'\''
@@ -165,23 +148,52 @@ class SnmpPoller
                     $skipped++;
                     continue;
                 }
-                try {
-                    self::pollUpsUnit($uu);
-                    $success++;
-                } catch (Throwable $e) {
-                    $failed++;
-                    App::log(
-                        'UPS SNMP poll failed for ' . ($uu['name'] ?? $uu['ups_id']) . ': ' . $e->getMessage(),
-                        'error'
-                    );
-                }
+                $jobs[] = [
+                    'type' => 'ups',
+                    'id' => (int)$uu['ups_id'],
+                    'name' => (string)($uu['name'] ?? ('UPS #' . $uu['ups_id'])),
+                ];
             }
         } catch (Throwable $e) {
             // table may not exist yet
         }
 
+        if (!class_exists('SnmpPollPool')) {
+            require_once __DIR__ . '/SnmpPollPool.php';
+        }
+        $pool = SnmpPollPool::run($jobs);
+        $success = (int)($pool['success'] ?? 0);
+        $failed = (int)($pool['failed'] ?? 0);
+
+        // Device fail_count for failed device jobs (best-effort)
+        foreach ($pool['items'] ?? [] as $item) {
+            if (!empty($item['ok']) || ($item['type'] ?? '') !== 'device') {
+                continue;
+            }
+            $did = (int)($item['id'] ?? 0);
+            if ($did < 1) {
+                continue;
+            }
+            try {
+                $row = Database::fetchOne('SELECT snmp_fail_count FROM devices WHERE device_id = ?', [$did]);
+                Database::update('devices', [
+                    'snmp_fail_count' => (int)($row['snmp_fail_count'] ?? 0) + 1,
+                ], 'device_id = :id', [':id' => $did]);
+            } catch (Throwable $e) {
+            }
+        }
+
+        App::log(sprintf(
+            'SNMP pollAll mode=%s workers=%d jobs=%d ok=%d fail=%d skip=%d',
+            (string)($pool['mode'] ?? '?'),
+            (int)($pool['workers'] ?? 1),
+            count($jobs),
+            $success,
+            $failed,
+            $skipped
+        ), 'info');
+
         // After a multi-PDU cycle: flush digest only if hold window already elapsed
-        // (so 84 PDUs in one event batch together; next scheduled poll also flushes).
         if (class_exists('PowerAlertService')) {
             try {
                 $dig = PowerAlertService::flushDigestsIfDue(false);
@@ -197,7 +209,13 @@ class SnmpPoller
             }
         }
 
-        return ['success' => $success, 'failed' => $failed, 'skipped' => $skipped];
+        return [
+            'success' => $success,
+            'failed' => $failed,
+            'skipped' => $skipped,
+            'workers' => (int)($pool['workers'] ?? 1),
+            'mode' => (string)($pool['mode'] ?? 'unknown'),
+        ];
     }
 
     /**
@@ -217,85 +235,64 @@ class SnmpPoller
         if (class_exists('MibService')) {
             MibService::loadAll();
         }
-        $success = 0;
-        $failed = 0;
-        $skipped = 0;
-        $items = [];
+        $jobs = [];
 
         // PDUs on this zone with template + IP
         try {
             $pdus = Database::fetchAll(
-                'SELECT * FROM pdus
+                'SELECT pdu_id, name FROM pdus
                  WHERE is_active = 1 AND zone_id = ?
                    AND snmp_site_template_id IS NOT NULL
                    AND ip_address IS NOT NULL AND ip_address <> \'\'',
                 [$zoneId]
             );
-        } catch (Throwable $e) {
-            $pdus = [];
-        }
-        foreach ($pdus as $pdu) {
-            $name = (string)($pdu['name'] ?? ('PDU #' . $pdu['pdu_id']));
-            $id = (int)$pdu['pdu_id'];
-            try {
-                self::pollPduFromSiteTemplate($pdu, (int)$pdu['snmp_site_template_id']);
-                $success++;
-                $items[] = ['type' => 'pdu', 'id' => $id, 'name' => $name, 'ok' => true];
-            } catch (Throwable $e) {
-                $failed++;
-                $items[] = [
+            foreach ($pdus as $pdu) {
+                $jobs[] = [
                     'type' => 'pdu',
-                    'id' => $id,
-                    'name' => $name,
-                    'ok' => false,
-                    'error' => substr($e->getMessage(), 0, 300),
+                    'id' => (int)$pdu['pdu_id'],
+                    'name' => (string)($pdu['name'] ?? ('PDU #' . $pdu['pdu_id'])),
                 ];
-                App::log('Zone poll PDU failed ' . $name . ': ' . $e->getMessage(), 'error');
             }
+        } catch (Throwable $e) {
+            // ignore
         }
 
         // UPS on this zone
         try {
             $upsList = Database::fetchAll(
-                'SELECT * FROM ups_units
+                'SELECT ups_id, name FROM ups_units
                  WHERE is_active = 1 AND zone_id = ?
                    AND snmp_site_template_id IS NOT NULL
                    AND primary_ip IS NOT NULL AND primary_ip <> \'\'',
                 [$zoneId]
             );
-        } catch (Throwable $e) {
-            $upsList = [];
-        }
-        foreach ($upsList as $uu) {
-            $name = (string)($uu['name'] ?? ('UPS #' . $uu['ups_id']));
-            $id = (int)$uu['ups_id'];
-            try {
-                self::pollUpsUnit($uu);
-                $success++;
-                $items[] = ['type' => 'ups', 'id' => $id, 'name' => $name, 'ok' => true];
-            } catch (Throwable $e) {
-                $failed++;
-                $items[] = [
+            foreach ($upsList as $uu) {
+                $jobs[] = [
                     'type' => 'ups',
-                    'id' => $id,
-                    'name' => $name,
-                    'ok' => false,
-                    'error' => substr($e->getMessage(), 0, 300),
+                    'id' => (int)$uu['ups_id'],
+                    'name' => (string)($uu['name'] ?? ('UPS #' . $uu['ups_id'])),
                 ];
-                App::log('Zone poll UPS failed ' . $name . ': ' . $e->getMessage(), 'error');
             }
+        } catch (Throwable $e) {
+            // ignore
         }
 
-        if ($success === 0 && $failed === 0) {
-            $skipped = 1; // nothing eligible
+        if (!class_exists('SnmpPollPool')) {
+            require_once __DIR__ . '/SnmpPollPool.php';
         }
+        $pool = SnmpPollPool::run($jobs);
+        $success = (int)($pool['success'] ?? 0);
+        $failed = (int)($pool['failed'] ?? 0);
+        $skipped = ($success === 0 && $failed === 0) ? 1 : 0;
 
         return [
             'success' => $success,
             'failed' => $failed,
             'skipped' => $skipped,
             'zone_id' => $zoneId,
-            'items' => $items,
+            'items' => $pool['items'] ?? [],
+            'workers' => (int)($pool['workers'] ?? 1),
+            'mode' => (string)($pool['mode'] ?? 'unknown'),
         ];
     }
 

@@ -156,7 +156,11 @@ class SnmpSchedulerService
         $interval = max(self::MIN_INTERVAL_SEC, min(self::MAX_INTERVAL_SEC, $interval));
         SettingsService::set(self::SETTING_ENABLED, $enabled ? '1' : '0', 'snmp');
         SettingsService::set(self::SETTING_INTERVAL, (string)$interval, 'snmp');
-        return ['enabled' => $enabled, 'interval_sec' => $interval];
+        $workers = 8;
+        if (class_exists('SnmpPollPool')) {
+            $workers = SnmpPollPool::saveConcurrencyFromPost($post);
+        }
+        return ['enabled' => $enabled, 'interval_sec' => $interval, 'concurrency' => $workers];
     }
 
     public static function recordRun(int $ok, int $failed, string $summary): void

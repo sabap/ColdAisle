@@ -41,12 +41,15 @@ try {
     $result = SnmpPoller::pollZone($zoneId);
     $ok = (int)$result['success'];
     $fail = (int)$result['failed'];
+    $workers = (int)($result['workers'] ?? 1);
+    $mode = (string)($result['mode'] ?? '');
     $msg = sprintf(
-        'Zone %s: %d ok, %d failed%s',
+        'Zone %s: %d ok, %d failed%s%s',
         (string)$zone['name'],
         $ok,
         $fail,
-        ($ok + $fail) === 0 ? ' (no PDUs/UPS with site template + IP on this zone)' : ''
+        ($ok + $fail) === 0 ? ' (no PDUs/UPS with site template + IP on this zone)' : '',
+        $workers > 1 ? " · {$workers} parallel workers" : ''
     );
     App::json([
         'ok' => $fail === 0,
@@ -56,6 +59,8 @@ try {
         'success' => $ok,
         'failed' => $fail,
         'skipped' => (int)$result['skipped'],
+        'workers' => $workers,
+        'mode' => $mode,
         'items' => $result['items'],
     ]);
 } catch (Throwable $e) {

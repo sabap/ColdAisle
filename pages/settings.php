@@ -1553,6 +1553,19 @@ $snmpBadgeClass = match ((string)($snmpSchedule['status'] ?? 'off')) {
                     Classic SNMP targets can override via their own interval.
                 </span>
             </div>
+            <?php
+            $snmpWorkers = class_exists('SnmpPollPool') ? SnmpPollPool::concurrency() : 8;
+            ?>
+            <div class="form-row"><label>Parallel poll workers</label>
+                <input class="form-control" type="number" min="1" max="32" step="1"
+                       name="snmp_poll_concurrency" id="snmpPollConcurrency"
+                       value="<?= (int)$snmpWorkers ?>">
+                <span class="text-muted" style="font-size:.75rem">
+                    Concurrent SNMP unit polls (process pool). Default 8.
+                    Use 1 for sequential. Raise (e.g. 12–16) for large fleets;
+                    each dead host is capped (~45s) so one timeout cannot stall the fleet.
+                </span>
+            </div>
             <div class="form-row"><label>Last worker run</label>
                 <input class="form-control" type="text" readonly
                        value="<?= App::e($snmpSchedule['last_run_at'] ?? '— never —') ?>">
