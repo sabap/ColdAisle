@@ -214,10 +214,29 @@ try {
         }
     }
 
+    // Warranty expiration digests (G-B3)
+    $warrantySummary = '';
+    if (class_exists('ProductMailService')) {
+        try {
+            $war = ProductMailService::processWarrantyReminders(false);
+            $warrantySummary = 'warranty mail due=' . (int)($war['due'] ?? 0)
+                . ' sent=' . (int)($war['sent'] ?? 0);
+            if (!empty($war['message'])) {
+                $warrantySummary .= ' (' . $war['message'] . ')';
+            }
+            echo "Warranty: {$warrantySummary}\n";
+            $earlyLog($warrantySummary);
+        } catch (Throwable $e) {
+            $earlyLog('warranty mail: ' . $e->getMessage());
+            echo 'Warranty mail error: ' . $e->getMessage() . "\n";
+        }
+    }
+
     if ($snmpDisabled) {
         $msg = 'SNMP scheduler disabled in Settings.'
             . ($icmpSummary !== '' ? ' ' . $icmpSummary : ' No SNMP work.')
-            . ($disposalSummary !== '' ? ' · ' . $disposalSummary : '');
+            . ($disposalSummary !== '' ? ' · ' . $disposalSummary : '')
+            . ($warrantySummary !== '' ? ' · ' . $warrantySummary : '');
         echo $msg . "\n";
         $earlyHb($msg);
         $earlyLog($msg);

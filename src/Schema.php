@@ -113,10 +113,38 @@ class Schema
                 'icmp_last_ok' => 'BIT NULL',
                 'icmp_last_rtt_ms' => 'DECIMAL(10,2) NULL',
                 'icmp_last_error' => 'NVARCHAR(255) NULL',
+                // Asset lifecycle (G-B3): PO / purchase / RMA + warranty digest tracking
+                'po_number' => 'NVARCHAR(100) NULL',
+                'purchase_date' => 'DATE NULL',
+                'purchase_cost' => 'DECIMAL(14,2) NULL',
+                'purchase_vendor' => 'NVARCHAR(150) NULL',
+                'rma_number' => 'NVARCHAR(100) NULL',
+                'rma_status' => 'NVARCHAR(30) NULL',
+                'rma_notes' => 'NVARCHAR(MAX) NULL',
+                'warranty_notify_for_end' => 'DATE NULL',
             ];
             foreach ($deviceCols as $col => $def) {
                 self::ensureColumn('devices', $col, $def);
             }
+
+            // Chain-of-custody / lifecycle event log (G-B3)
+            self::ensureTable(
+                'asset_events',
+                "CREATE TABLE asset_events (
+                    event_id INT IDENTITY(1,1) PRIMARY KEY,
+                    device_id INT NOT NULL,
+                    event_type NVARCHAR(40) NOT NULL,
+                    summary NVARCHAR(500) NOT NULL,
+                    from_value NVARCHAR(255) NULL,
+                    to_value NVARCHAR(255) NULL,
+                    notes NVARCHAR(MAX) NULL,
+                    meta_json NVARCHAR(MAX) NULL,
+                    performed_by INT NULL,
+                    performed_by_name NVARCHAR(150) NULL,
+                    occurred_at DATETIME2 NOT NULL CONSTRAINT DF_ae_at DEFAULT SYSUTCDATETIME(),
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_ae_created DEFAULT SYSUTCDATETIME()
+                )"
+            );
 
             self::ensureTable(
                 'snmp_site_oid_templates',
@@ -894,6 +922,8 @@ class Schema
                 'snmp_v3_profile_id', 'snmp_site_template_id', 'snmp_auto_poll',
                 'snmp_last_poll_at', 'snmp_last_poll_watts', 'snmp_last_poll_amps',
                 'idrac_host', 'icmp_monitor', 'icmp_fail_count', 'icmp_last_at', 'icmp_last_ok',
+                'po_number', 'purchase_date', 'purchase_cost', 'purchase_vendor',
+                'rma_number', 'rma_status', 'rma_notes', 'warranty_notify_for_end',
             ],
             'snmp_site_oid_templates' => ['template_id', 'name', 'oid_map'],
             'pdu_templates' => ['template_id', 'name', 'fields_json'],
@@ -919,6 +949,7 @@ class Schema
             'disposal_vendors' => ['vendor_id', 'name'],
             'disposals' => ['stage', 'vendor_id', 'change_ticket', 'notification_sent', 'notification_sent_at'],
             'password_reset_tokens' => ['token_id', 'user_id', 'token_hash', 'expires_at'],
+            'asset_events' => ['event_id', 'device_id', 'event_type', 'summary', 'occurred_at'],
             'work_orders' => [
                 'work_order_id', 'title', 'work_type', 'status', 'change_ticket', 'checklist_json',
             ],

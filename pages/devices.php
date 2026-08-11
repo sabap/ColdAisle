@@ -178,6 +178,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         'install_date' => device_empty_to_null($_POST['install_date'] ?? null),
         'warranty_provider' => device_empty_to_null($_POST['warranty_provider'] ?? null),
         'warranty_end' => device_empty_to_null($_POST['warranty_end'] ?? null),
+        'po_number' => device_empty_to_null($_POST['po_number'] ?? null),
+        'purchase_date' => device_empty_to_null($_POST['purchase_date'] ?? null),
+        'purchase_cost' => ($_POST['purchase_cost'] ?? '') !== '' ? (float)$_POST['purchase_cost'] : null,
+        'purchase_vendor' => device_empty_to_null($_POST['purchase_vendor'] ?? null),
+        'rma_number' => device_empty_to_null($_POST['rma_number'] ?? null),
+        'rma_status' => device_empty_to_null($_POST['rma_status'] ?? null),
+        'rma_notes' => device_empty_to_null($_POST['rma_notes'] ?? null),
         'department_id' => $_POST['department_id'] !== '' ? (int)$_POST['department_id'] : null,
         'nominal_watts' => $_POST['nominal_watts'] !== '' ? (float)$_POST['nominal_watts'] : null,
         'status' => $_POST['status'] ?? 'production',
@@ -488,8 +495,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
 
         if (!empty($_POST['device_id'])) {
             $did = (int)$_POST['device_id'];
+            $before = null;
+            try {
+                $before = Database::fetchOne('SELECT * FROM devices WHERE device_id = ?', [$did]);
+            } catch (Throwable $e) {
+                $before = null;
+            }
             $data['updated_at'] = date('Y-m-d H:i:s');
             Database::update('devices', $data, 'device_id = :id', [':id' => $did]);
+            if (class_exists('AssetLifecycleService')) {
+                AssetLifecycleService::logDeviceChanges($before, $data, $did, [
+                    'user_id' => (int)$user['user_id'],
+                    'username' => (string)($user['username'] ?? ''),
+                ]);
+            }
             AuditService::log((int)$user['user_id'], $user['username'], 'update', 'device', $did);
             $msg = 'Device updated.';
             if ($appliedSnmpProfile) {
@@ -508,6 +527,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
                     [$data['label']]
                 );
                 $did = $row ? (int)$row['device_id'] : 0;
+            }
+            if ($did && class_exists('AssetLifecycleService')) {
+                AssetLifecycleService::logDeviceChanges(null, $data, (int)$did, [
+                    'user_id' => (int)$user['user_id'],
+                    'username' => (string)($user['username'] ?? ''),
+                ]);
             }
             // Auto-create data ports from count (power uses device_power_supplies)
             $dp = (int)($data['num_data_ports'] ?? 0);
@@ -571,11 +596,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             'username' => $user['username'] ?? null,
             'note_text' => $text,
         ]);
+        if (class_exists('AssetLifecycleService')) {
+            AssetLifecycleService::logEvent(
+                $did,
+                AssetLifecycleService::EVENT_NOTE,
+                mb_substr($text, 0, 200),
+                ['user_id' => (int)$user['user_id'], 'username' => (string)($user['username'] ?? '')],
+                null,
+                null,
+                $text
+            );
+        }
         App::flash('success', 'Note added.');
     } catch (Throwable $e) {
         App::flash('error', $e->getMessage());
     }
     App::redirect('pages/devices.php?id=' . $did);
+}
+
+// ---- Add chain-of-custody / lifecycle event ----
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? '') && ($_POST['action'] ?? '') === 'add_lifecycle_event') {
+    $did = (int)($_POST['device_id'] ?? 0);
+    $summary = trim((string)($_POST['event_summary'] ?? ''));
+    $notes = trim((string)($_POST['event_notes'] ?? ''));
+    $eventType = trim((string)($_POST['event_type'] ?? AssetLifecycleService::EVENT_CUSTODY));
+    try {
+        if ($did <= 0 || $summary === '') {
+            throw new RuntimeException('Event summary is required.');
+        }
+        $evDev = Database::fetchOne('SELECT device_id, department_id FROM devices WHERE device_id = ?', [$did]);
+        if (!$evDev || !AuthManager::canEditDevice($user, $evDev)) {
+            throw new RuntimeException('You do not have permission to log events on this device.');
+        }
+        if (!class_exists('AssetLifecycleService')) {
+            throw new RuntimeException('Lifecycle service unavailable.');
+        }
+        $labels = AssetLifecycleService::eventLabels();
+        if (!isset($labels[$eventType])) {
+            $eventType = AssetLifecycleService::EVENT_CUSTODY;
+        }
+        AssetLifecycleService::logEvent(
+            $did,
+            $eventType,
+            $summary,
+            ['user_id' => (int)$user['user_id'], 'username' => (string)($user['username'] ?? '')],
+            null,
+            null,
+            $notes !== '' ? $notes : null
+        );
+        App::flash('success', 'Lifecycle event logged.');
+    } catch (Throwable $e) {
+        App::flash('error', $e->getMessage());
+    }
+    App::redirect('pages/devices.php?id=' . $did . '#lifecycle-events');
 }
 
 // ---- Port update ----
@@ -671,6 +744,11 @@ if ($action === 'new' || $id) {
         } catch (Throwable $e) {
             $deviceNotes = [];
         }
+    }
+
+    $lifecycleEvents = [];
+    if ($id && class_exists('AssetLifecycleService')) {
+        $lifecycleEvents = AssetLifecycleService::listEvents((int)$id, 80);
     }
 
     // Power supplies + PDUs in same cabinet (for mapping)
@@ -1146,7 +1224,44 @@ if ($action === 'new' || $id) {
                             <div><dt>Manufacture date</dt><dd><?= $dash($device['manufacture_date'] ?? null) ?></dd></div>
                             <div><dt>Install date</dt><dd><?= $dash($device['install_date'] ?? null) ?></dd></div>
                             <div><dt>Warranty company</dt><dd><?= $dash($device['warranty_provider'] ?? null) ?></dd></div>
-                            <div><dt>Warranty expiration</dt><dd><?= $dash($device['warranty_end'] ?? null) ?></dd></div>
+                            <div><dt>Warranty expiration</dt><dd>
+                                <?php
+                                $wEnd = $device['warranty_end'] ?? null;
+                                $wDays = class_exists('AssetLifecycleService')
+                                    ? AssetLifecycleService::daysUntil($wEnd !== null ? (string)$wEnd : null)
+                                    : null;
+                                $wBadge = class_exists('AssetLifecycleService')
+                                    ? AssetLifecycleService::warrantyBadge($wDays)
+                                    : ['label' => '', 'class' => ''];
+                                echo $dash($wEnd);
+                                if ($wEnd && $wBadge['label'] !== '—'): ?>
+                                    <span class="badge <?= App::e($wBadge['class']) ?>" style="margin-left:.35rem"><?= App::e($wBadge['label']) ?></span>
+                                <?php endif; ?>
+                            </dd></div>
+                            <div><dt>PO number</dt><dd><?= $dash($device['po_number'] ?? null) ?></dd></div>
+                            <div><dt>Purchase date</dt><dd><?= $dash($device['purchase_date'] ?? null) ?></dd></div>
+                            <div><dt>Purchase vendor</dt><dd><?= $dash($device['purchase_vendor'] ?? null) ?></dd></div>
+                            <div><dt>Purchase cost</dt><dd>
+                                <?php if (isset($device['purchase_cost']) && $device['purchase_cost'] !== null && $device['purchase_cost'] !== ''): ?>
+                                    <?= App::e(number_format((float)$device['purchase_cost'], 2)) ?>
+                                <?php else: ?>—<?php endif; ?>
+                            </dd></div>
+                            <div><dt>RMA</dt><dd>
+                                <?php
+                                $rmaNo = trim((string)($device['rma_number'] ?? ''));
+                                $rmaSt = trim((string)($device['rma_status'] ?? ''));
+                                if ($rmaNo === '' && ($rmaSt === '' || $rmaSt === 'none')): ?>
+                                    —
+                                <?php else: ?>
+                                    <?= App::e($rmaNo !== '' ? $rmaNo : '—') ?>
+                                    <?php if ($rmaSt !== '' && $rmaSt !== 'none'): ?>
+                                        <span class="badge"><?= App::e($rmaSt) ?></span>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+                            </dd></div>
+                            <?php if (!empty($device['rma_notes'])): ?>
+                            <div class="full"><dt>RMA notes</dt><dd><?= nl2br(App::e((string)$device['rma_notes'])) ?></dd></div>
+                            <?php endif; ?>
                             <div><dt>Department owner</dt><dd>
                                 <?php if (!empty($device['department_name'])): ?>
                                     <span class="dept-chip">
@@ -1206,6 +1321,84 @@ if ($action === 'new' || $id) {
                             <input type="hidden" name="device_id" value="<?= (int)$device['device_id'] ?>">
                             <textarea class="form-control" name="note_text" rows="2" required placeholder="Add a note…"></textarea>
                             <button class="btn btn-sm btn-secondary" type="submit">Add note</button>
+                        </form>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+                <div class="card view-pane" id="lifecycle-events">
+                    <div class="card-header"><h2>Lifecycle &amp; chain of custody</h2></div>
+                    <div class="card-body flush">
+                        <?php
+                        $eventLabels = class_exists('AssetLifecycleService')
+                            ? AssetLifecycleService::eventLabels()
+                            : [];
+                        if ($lifecycleEvents): ?>
+                            <table class="data">
+                                <thead>
+                                <tr><th>When</th><th>Type</th><th>Summary</th><th>By</th></tr>
+                                </thead>
+                                <tbody>
+                                <?php foreach ($lifecycleEvents as $ev):
+                                    $etype = (string)($ev['event_type'] ?? '');
+                                    $elab = $eventLabels[$etype] ?? $etype;
+                                    ?>
+                                    <tr>
+                                        <td class="text-muted" style="white-space:nowrap;font-size:.8rem">
+                                            <?= App::e((string)($ev['occurred_at'] ?? '')) ?>
+                                        </td>
+                                        <td><span class="badge"><?= App::e($elab) ?></span></td>
+                                        <td>
+                                            <?= App::e((string)($ev['summary'] ?? '')) ?>
+                                            <?php if (!empty($ev['notes'])): ?>
+                                                <div class="text-muted" style="font-size:.8rem;margin-top:.2rem">
+                                                    <?= nl2br(App::e((string)$ev['notes'])) ?>
+                                                </div>
+                                            <?php endif; ?>
+                                            <?php if (!empty($ev['from_value']) || !empty($ev['to_value'])): ?>
+                                                <div class="text-muted" style="font-size:.75rem">
+                                                    <?= App::e((string)($ev['from_value'] ?? '—')) ?>
+                                                    → <?= App::e((string)($ev['to_value'] ?? '—')) ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td><?= App::e((string)($ev['performed_by_name'] ?? '—')) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        <?php else: ?>
+                            <p class="text-muted" style="padding:1rem;margin:0">
+                                No lifecycle events yet. Status, location, ownership, warranty, PO, and RMA changes are logged automatically.
+                            </p>
+                        <?php endif; ?>
+                        <?php if ($canEditThis && class_exists('AssetLifecycleService')): ?>
+                        <form method="post" class="form-grid" style="padding:.85rem;border-top:1px solid var(--border, #334155)">
+                            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                            <input type="hidden" name="action" value="add_lifecycle_event">
+                            <input type="hidden" name="device_id" value="<?= (int)$device['device_id'] ?>">
+                            <div class="form-row"><label>Type</label>
+                                <select class="form-control" name="event_type">
+                                    <?php foreach ([
+                                        AssetLifecycleService::EVENT_CUSTODY => 'Chain of custody',
+                                        AssetLifecycleService::EVENT_RMA => 'RMA',
+                                        AssetLifecycleService::EVENT_NOTE => 'Note',
+                                        AssetLifecycleService::EVENT_OWNERSHIP => 'Ownership',
+                                        AssetLifecycleService::EVENT_LOCATION => 'Location',
+                                    ] as $ek => $el): ?>
+                                        <option value="<?= App::e($ek) ?>"><?= App::e($el) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div class="form-row full"><label>Summary *</label>
+                                <input class="form-control" name="event_summary" required
+                                       placeholder="e.g. Handed to ITAD courier — BOL 12345"></div>
+                            <div class="form-row full"><label>Notes</label>
+                                <textarea class="form-control" name="event_notes" rows="2"
+                                          placeholder="Optional detail"></textarea></div>
+                            <div class="form-row">
+                                <button class="btn btn-sm btn-secondary" type="submit">Log event</button>
+                            </div>
                         </form>
                         <?php endif; ?>
                     </div>
@@ -2564,6 +2757,42 @@ if ($action === 'new' || $id) {
                 <div class="form-row"><label>Warranty End date</label>
                     <input class="form-control" type="date" name="warranty_end"
                            value="<?= App::e($device['warranty_end'] ?? '') ?>"></div>
+                <div class="form-row"><label>PO number</label>
+                    <input class="form-control" name="po_number"
+                           value="<?= App::e($device['po_number'] ?? '') ?>"
+                           placeholder="Purchase order #"></div>
+                <div class="form-row"><label>Purchase date</label>
+                    <input class="form-control" type="date" name="purchase_date"
+                           value="<?= App::e($device['purchase_date'] ?? '') ?>"></div>
+                <div class="form-row"><label>Purchase vendor</label>
+                    <input class="form-control" name="purchase_vendor"
+                           value="<?= App::e($device['purchase_vendor'] ?? '') ?>"
+                           placeholder="Supplier / VAR"></div>
+                <div class="form-row"><label>Purchase cost</label>
+                    <input class="form-control" type="number" step="0.01" min="0" name="purchase_cost"
+                           value="<?= App::e(isset($device['purchase_cost']) && $device['purchase_cost'] !== null && $device['purchase_cost'] !== '' ? (string)$device['purchase_cost'] : '') ?>"
+                           placeholder="0.00"></div>
+                <div class="form-row"><label>RMA number</label>
+                    <input class="form-control" name="rma_number"
+                           value="<?= App::e($device['rma_number'] ?? '') ?>"></div>
+                <div class="form-row"><label>RMA status</label>
+                    <select class="form-control" name="rma_status">
+                        <?php
+                        $rmaStatuses = class_exists('AssetLifecycleService')
+                            ? AssetLifecycleService::rmaStatuses()
+                            : ['' => '—', 'open' => 'Open', 'closed' => 'Closed'];
+                        $curRma = (string)($device['rma_status'] ?? '');
+                        foreach ($rmaStatuses as $rv => $rl):
+                            ?>
+                            <option value="<?= App::e($rv) ?>" <?= $curRma === (string)$rv ? 'selected' : '' ?>>
+                                <?= App::e($rl) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row full"><label>RMA notes</label>
+                    <textarea class="form-control" name="rma_notes" rows="2"
+                              placeholder="Vendor case, ship tracking, return reason…"><?= App::e($device['rma_notes'] ?? '') ?></textarea></div>
                 <div class="form-row"><label>Departmental Owner</label>
                     <select class="form-control" name="department_id" id="department_id"
                         <?= (!AuthManager::isAdmin($user) && !empty($user['department_id'])) ? 'data-locked="1"' : '' ?>>

@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Asset lifecycle depth (G-B3):** device PO / purchase / RMA fields; **Lifecycle & chain of custody** event log (auto on status, location, ownership, warranty, PO, RMA + manual custody notes); warranty expiration email digests via poll worker; richer **Reports → Warranty Expiration** (remaining days, filters, dept/asset tag)
+
 ### Enhancements
 
 ### Bug fixes

@@ -499,6 +499,147 @@ class ProductMailService
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Warranty expiration digests (G-B3)
+    // -------------------------------------------------------------------------
+
+    public static function warrantyMailEnabled(): bool
+    {
+        $v = SettingsService::get(AssetLifecycleService::SETTING_WARRANTY_MAIL, '1');
+        return $v === '1' || $v === 'true' || $v === 'yes';
+    }
+
+    /** @return list<string> */
+    public static function warrantyRecipients(): array
+    {
+        $raw = trim((string)SettingsService::get(AssetLifecycleService::SETTING_WARRANTY_EMAIL, ''));
+        if ($raw === '') {
+            $raw = trim((string)SettingsService::get(self::SETTING_DISPOSAL_EMAIL, ''));
+        }
+        if ($raw === '') {
+            $raw = trim((string)SettingsService::get('alerts_default_email', ''));
+        }
+        if ($raw === '') {
+            $raw = trim((string)SettingsService::get('power_alerts_email', ''));
+        }
+        return self::normalizeEmails($raw);
+    }
+
+    /**
+     * Email devices whose warranty ends within notify window (or already expired)
+     * and that have not yet been notified for the current warranty_end value.
+     *
+     * @return array{checked:int,due:int,sent:int,skipped:int,message:string}
+     */
+    public static function processWarrantyReminders(bool $force = false): array
+    {
+        $out = ['checked' => 0, 'due' => 0, 'sent' => 0, 'skipped' => 0, 'message' => ''];
+
+        if (!class_exists('AssetLifecycleService')) {
+            $out['message'] = 'AssetLifecycleService missing';
+            return $out;
+        }
+        if (!$force && !self::warrantyMailEnabled()) {
+            $out['message'] = 'warranty mail disabled';
+            return $out;
+        }
+        if (!self::mailReady()) {
+            $out['message'] = 'mail not ready';
+            return $out;
+        }
+
+        $recipients = self::warrantyRecipients();
+        if (!$recipients) {
+            $out['message'] = 'no warranty recipients';
+            return $out;
+        }
+
+        $days = max(0, min(730, (int)SettingsService::get(AssetLifecycleService::SETTING_WARRANTY_DAYS, '60')));
+        $rows = AssetLifecycleService::warrantyDueRows($days, true);
+        $out['checked'] = count($rows);
+        $out['due'] = count($rows);
+        if (!$rows) {
+            $out['message'] = 'no warranties pending notify';
+            return $out;
+        }
+
+        $app = App::APP_NAME;
+        $listUrl = self::absoluteUrl('pages/reports.php?report=warranty_expiration');
+        $lines = [];
+        $htmlItems = [];
+        $ids = [];
+        foreach ($rows as $r) {
+            $label = (string)($r['label'] ?? ('#' . $r['device_id']));
+            $end = (string)($r['warranty_end'] ?? '');
+            $daysLeft = AssetLifecycleService::daysUntil($end);
+            $badge = AssetLifecycleService::warrantyBadge($daysLeft);
+            $serial = trim((string)($r['serial_no'] ?? ''));
+            $asset = trim((string)($r['asset_tag'] ?? ''));
+            $provider = trim((string)($r['warranty_provider'] ?? ''));
+            $dept = trim((string)($r['department_name'] ?? ''));
+            $line = "{$label} — ends {$end} ({$badge['label']})"
+                . ($provider !== '' ? " · {$provider}" : '')
+                . ($serial !== '' ? " · S/N {$serial}" : '')
+                . ($asset !== '' ? " · tag {$asset}" : '')
+                . ($dept !== '' ? " · {$dept}" : '');
+            $lines[] = '  • ' . $line;
+            $htmlItems[] = '<li><strong>' . htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</strong>'
+                . ' — ends ' . htmlspecialchars($end, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . ' <span style="color:#64748b">(' . htmlspecialchars($badge['label'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ')</span>'
+                . ($provider !== '' ? ' · ' . htmlspecialchars($provider, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : '')
+                . '</li>';
+            $ids[] = (int)$r['device_id'];
+        }
+
+        $count = count($rows);
+        $subject = "[{$app}] {$count} warranty(ies) expiring within {$days} day(s)";
+        $text = "{$count} active device(s) have warranty ending within {$days} day(s) (or already expired):\r\n\r\n"
+            . implode("\r\n", $lines)
+            . "\r\n\r\nReport: {$listUrl}\r\n";
+        $html = '<!DOCTYPE html><html><body style="font-family:system-ui,sans-serif;line-height:1.5">'
+            . '<h2 style="margin:0 0 .5rem">Warranty expiration</h2>'
+            . '<p><strong>' . $count . '</strong> device(s) with warranty ending within '
+            . $days . ' day(s) (includes already expired):</p>'
+            . '<ul>' . implode('', $htmlItems) . '</ul>'
+            . '<p><a href="' . htmlspecialchars($listUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '">Open warranty report</a></p>'
+            . '</body></html>';
+
+        try {
+            $result = MailService::send($recipients, $subject, ['text' => $text, 'html' => $html]);
+            if (empty($result['ok'])) {
+                $out['message'] = 'send failed: ' . ($result['message'] ?? 'unknown');
+                $out['skipped'] = $count;
+                return $out;
+            }
+        } catch (Throwable $e) {
+            $out['message'] = 'send exception: ' . $e->getMessage();
+            $out['skipped'] = $count;
+            App::log('Warranty reminder send: ' . $e->getMessage(), 'error');
+            return $out;
+        }
+
+        AssetLifecycleService::markWarrantyNotified($ids);
+        $out['sent'] = count($ids);
+
+        if (class_exists('AlertService')) {
+            try {
+                AlertService::emit([
+                    'category' => AlertService::CAT_SYSTEM,
+                    'severity' => AlertService::SEV_WARNING,
+                    'title' => "{$count} warranty(ies) expiring soon",
+                    'message' => implode("\n", $lines) . "\n" . $listUrl,
+                    'skip_email' => true,
+                ]);
+            } catch (Throwable $e) {
+                // ignore
+            }
+        }
+
+        $out['message'] = "sent digest for {$out['sent']} device(s) to " . implode(', ', $recipients);
+        App::log('Warranty reminders: ' . $out['message'], 'info');
+        return $out;
+    }
+
     /** @return list<string> */
     private static function normalizeEmails(string $raw): array
     {

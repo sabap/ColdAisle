@@ -7,7 +7,7 @@
 - This file tracks **product / competitive gaps** so chat menus and compaction do not lose the map.  
 - Promote a gap into `BACKLOG.md` only when scope is confirmed and work is intentionally deferred.
 
-**Last reviewed:** 2026-08-11 (post **G-B5** mail product flows; G-B2 work orders **0.3.116–117**).
+**Last reviewed:** 2026-08-11 (post **G-B3** asset lifecycle; G-B5 mail **0.3.118**).
 
 ---
 
@@ -83,7 +83,7 @@ These are **not** free-form suggestions; they have acceptance criteria in the ba
 |----|-----|--------|----------|-----------------|-----------------|
 | **G-B1** | **Structured cable plant** | Partial | Patch panels, trunks, pathways | Port–port cables, media, simple routes | Patch panels, trunk bundles, circuit IDs, bulk CSV import |
 | **G-B2** | **Change / move work orders** | **Closed (v1)** — **0.3.116** | ITSM-linked moves, approvals | Ticket, from/to, checklist, apply inventory | External ITSM webhooks later |
-| **G-B3** | **Asset lifecycle depth** | Partial | PO/RMA/warranty campaigns | Serial, asset tag, warranty fields, disposal workflow | Warranty mail digests; owner/dept workflows; chain-of-custody notes |
+| **G-B3** | **Asset lifecycle depth** | **Closed (v1)** — **0.3.119** | PO/RMA/warranty campaigns | PO/RMA fields, custody event log, warranty digests + report | Multi-entity warranty (PDU/UPS); full ITAM campaigns later |
 | **G-B4-net** | **IPAM / network-DCIM bridge** | Gap (often intentional) | Device42, NetBox | Infra-first; interfaces on devices only | Out of default scope unless multi-homed switch inventory is requested |
 | **G-B5** | **Mail product flows** | **Closed (v1)** — **0.3.118** | Welcome, password reset, lifecycle mail | Welcome, local forgot/reset, disposal due-soon digests | Optional: must-change-password gate; richer templates |
 
@@ -122,6 +122,7 @@ Use as a **discussion default**, not a commitment.
 
 | Former gap | Delivered | Release / notes |
 |------------|-----------|-----------------|
+| **G-B3 Asset lifecycle depth** | Device PO/purchase/RMA; chain-of-custody event log; warranty email digests; warranty report polish | **0.3.119** |
 | **G-B5 Mail product flows** | Welcome email; local forgot/reset password tokens; disposal due-soon digests via poll worker | **0.3.118** |
 | **G-B2 Change / move work orders** | Work order list/detail; devices from→to; checklist; complete + apply inventory; bulk cabinet + moves this week | **0.3.116–0.3.117** |
 | **G-A4 OID pack library** | Built-in pack → site template; Vertiv DS NMS JSON import; seed packs labeled | **0.3.115** |

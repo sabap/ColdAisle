@@ -51,6 +51,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 trim((string)($_POST['disposal_notify_email'] ?? '')),
                 'lifecycle'
             );
+            SettingsService::set(
+                'warranty_notify_days',
+                (string)max(0, min(730, (int)($_POST['warranty_notify_days'] ?? 60))),
+                'lifecycle'
+            );
+            SettingsService::set(
+                'warranty_mail_enabled',
+                !empty($_POST['warranty_mail_enabled']) ? '1' : '0',
+                'lifecycle'
+            );
+            SettingsService::set(
+                'warranty_notify_email',
+                trim((string)($_POST['warranty_notify_email'] ?? '')),
+                'lifecycle'
+            );
             if (class_exists('TempUnitService')) {
                 TempUnitService::saveFromPost($_POST);
             }
@@ -966,6 +981,26 @@ layout_header('Settings', $user, 'settings');
                        placeholder="ops@example.com (comma-separated; blank = Alerts default email)">
                 <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
                     Requires Settings → Email (SMTP). Each disposal is emailed once until its target date is changed.
+                </p>
+            </div>
+            <div class="form-row"><label>Warranty notify (days)</label>
+                <input class="form-control" type="number" name="warranty_notify_days" min="0" max="730"
+                       value="<?= App::e(SettingsService::get('warranty_notify_days', '60')) ?>">
+                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                    Devices with warranty ending within this window (or already expired) appear in digests and the warranty report default filter.
+                </p>
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="warranty_mail_enabled" value="1"
+                    <?= SettingsService::get('warranty_mail_enabled', '1') === '1' ? 'checked' : '' ?>>
+                Email warranty expiration digests (via scheduled poll worker)
+            </label></div>
+            <div class="form-row full"><label>Warranty notify email(s)</label>
+                <input class="form-control" type="text" name="warranty_notify_email"
+                       value="<?= App::e(SettingsService::get('warranty_notify_email', '')) ?>"
+                       placeholder="ops@example.com (blank = disposal notify / Alerts default)">
+                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                    Each device is emailed once per warranty end date; changing the date re-arms the digest.
                 </p>
             </div>
             <?php
