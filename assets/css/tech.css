@@ -1,0 +1,268 @@
+/**
+ * ColdAisle Tech mode — tablet / phone field chrome.
+ * Loaded only when TechMode is active (layout). Does not replace app.css.
+ */
+
+body.tech-mode {
+  --tech-bar-h: 4.15rem;
+  --tech-top-h: 3.25rem;
+  padding-bottom: calc(var(--tech-bar-h) + env(safe-area-inset-bottom, 0px));
+}
+
+body.tech-mode .sidebar,
+body.tech-mode .app-footer,
+body.tech-mode #sidebarToggle {
+  display: none !important;
+}
+
+body.tech-mode .app-shell {
+  display: block;
+  min-height: 100vh;
+}
+
+body.tech-mode .main-area {
+  margin: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+body.tech-mode .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 1100;
+  min-height: var(--tech-top-h);
+  padding: .5rem .75rem;
+  padding-top: max(.5rem, env(safe-area-inset-top, 0px));
+  background: rgba(15, 23, 42, 0.97);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+}
+
+body.tech-mode .topbar .page-title {
+  font-size: 1.05rem;
+  line-height: 1.25;
+}
+
+body.tech-mode .content {
+  margin: 0 !important;
+  max-width: 100% !important;
+  padding: .75rem .75rem 1.25rem !important;
+}
+
+/* Bottom nav */
+.tech-bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1200;
+  display: flex;
+  gap: 0;
+  min-height: var(--tech-bar-h);
+  padding: .35rem .25rem calc(.35rem + env(safe-area-inset-bottom, 0px));
+  background: rgba(15, 23, 42, 0.98);
+  border-top: 1px solid rgba(148, 163, 184, 0.28);
+  box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.4);
+}
+
+.tech-bottom-nav a {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .15rem;
+  min-height: 3.25rem;
+  padding: .35rem .2rem;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: .68rem;
+  font-weight: 600;
+  letter-spacing: .01em;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tech-bottom-nav a:hover,
+.tech-bottom-nav a:focus {
+  color: var(--text);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.tech-bottom-nav a.active {
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.14);
+}
+
+.tech-bottom-nav .tech-nav-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+/* Hub */
+.tech-hub-hero {
+  padding: .85rem 1rem;
+  margin-bottom: .85rem;
+  border-radius: 12px;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+}
+
+.tech-hub-hero h2 {
+  margin: 0 0 .25rem;
+  font-size: 1.15rem;
+}
+
+.tech-search-form {
+  display: flex;
+  flex-direction: column;
+  gap: .55rem;
+  margin-bottom: 1rem;
+}
+
+.tech-search-form .form-control {
+  min-height: 3rem;
+  font-size: 1.05rem;
+}
+
+.tech-search-form .btn {
+  min-height: 3rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.tech-card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .65rem;
+  margin-bottom: 1rem;
+}
+
+@media (min-width: 720px) {
+  .tech-card-grid { grid-template-columns: 1fr 1fr 1fr; }
+}
+
+.tech-card {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+  min-height: 5.5rem;
+  padding: .85rem .9rem;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: inherit;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tech-card:hover {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: inherit;
+}
+
+.tech-card .tech-card-icon {
+  font-size: 1.4rem;
+}
+
+.tech-card strong {
+  font-size: 1rem;
+}
+
+.tech-card span {
+  font-size: .78rem;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.tech-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tech-list li {
+  border-bottom: 1px solid var(--border);
+}
+
+.tech-list a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .9rem .15rem;
+  min-height: 3.25rem;
+  color: inherit;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.tech-list a:hover {
+  color: #7dd3fc;
+}
+
+.tech-list .meta {
+  font-size: .8rem;
+  color: var(--muted);
+  font-weight: 400;
+  text-align: right;
+}
+
+/* Larger touch controls on key field pages */
+body.tech-mode .btn {
+  min-height: 2.6rem;
+}
+
+body.tech-mode .btn-sm {
+  min-height: 2.25rem;
+}
+
+body.tech-mode .form-control {
+  min-height: 2.6rem;
+  font-size: 1rem;
+}
+
+body.tech-mode .cab-field-bar {
+  /* Global bottom nav owns chrome; page action bar sits above it */
+  bottom: calc(var(--tech-bar-h) + env(safe-area-inset-bottom, 0px));
+}
+
+body.tech-mode .content {
+  padding-bottom: calc(1.25rem + 3.5rem) !important;
+}
+
+body.tech-mode .rack-detail-grid {
+  grid-template-columns: 1fr !important;
+}
+
+body.tech-mode .cab-desktop-actions .btn-ghost,
+body.tech-mode .cab-desktop-actions a[href*="cabinet_label"] {
+  /* keep QR available but stack on narrow */
+}
+
+body.tech-mode .topbar-actions .tech-exit-link {
+  font-size: .8rem;
+  font-weight: 600;
+  padding: .4rem .65rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+body.tech-mode .topbar-actions .tech-exit-link:hover {
+  color: var(--text);
+  border-color: rgba(148, 163, 184, 0.5);
+}
+
+.tech-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem 1rem;
+  align-items: center;
+  padding: .55rem .75rem;
+  margin: 0 0 .75rem;
+  border-radius: 10px;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  font-size: .88rem;
+}
