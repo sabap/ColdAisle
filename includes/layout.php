@@ -10,6 +10,82 @@ declare(strict_types=1);
 /** @var array{title:string,user:array,active:string,tech:bool}|null */
 $GLOBALS['coldaisle_layout_ctx'] = $GLOBALS['coldaisle_layout_ctx'] ?? null;
 
+/**
+ * Current app-relative path + query (mode/field stripped) for tech toggle round-trips.
+ */
+function layout_current_return_path(string $fallback = 'index.php'): string
+{
+    $script = (string)($_SERVER['SCRIPT_NAME'] ?? '');
+    if ($script === '') {
+        return $fallback;
+    }
+    $base = class_exists('App') ? App::basePath() : '';
+    $rel = str_replace('\\', '/', $script);
+    if ($base !== '' && str_starts_with($rel, $base)) {
+        $rel = substr($rel, strlen($base)) ?: $rel;
+    }
+    $rel = ltrim($rel, '/');
+    if ($rel === '') {
+        $rel = $fallback;
+    }
+    $qs = (string)($_SERVER['QUERY_STRING'] ?? '');
+    if ($qs !== '') {
+        parse_str($qs, $q);
+        unset($q['mode'], $q['field']);
+        $qs = http_build_query($q);
+    }
+    return $rel . ($qs !== '' ? '?' . $qs : '');
+}
+
+/**
+ * Header slider: On = Tech mode, Off = Desktop. Single control for both shells.
+ */
+function layout_tech_mode_toggle(bool $on): void
+{
+    if (!class_exists('TechMode')) {
+        return;
+    }
+    $path = layout_current_return_path('index.php');
+    // Entering tech: hub is the landing; leaving: stay on this page in desktop chrome
+    $onUrl = TechMode::enableUrl('pages/tech.php');
+    // If already on a field surface, re-open same page in tech chrome
+    if ($on || preg_match('#^(pages/(cabinets|devices|work_orders|disposals|audits|power_pdus|tech)\.php)#', $path)) {
+        if (!str_starts_with($path, 'pages/tech.php') && $path !== 'index.php') {
+            $onUrl = TechMode::enableUrl($path);
+        }
+    }
+    $offUrl = TechMode::disableUrl(
+        (str_starts_with($path, 'pages/tech.php') || $path === 'index.php')
+            ? 'index.php'
+            : $path
+    );
+    $uid = 'techModeToggle';
+    ?>
+    <label class="tech-mode-switch" title="<?= $on ? 'Tech mode on — tap for Desktop' : 'Tech mode off — tap for Tech' ?>">
+        <span class="tech-mode-switch-label"><?= $on ? 'Tech' : 'Desktop' ?></span>
+        <span class="tech-mode-switch-track">
+            <input type="checkbox" id="<?= App::e($uid) ?>"
+                   <?= $on ? 'checked' : '' ?>
+                   data-on-url="<?= App::e($onUrl) ?>"
+                   data-off-url="<?= App::e($offUrl) ?>"
+                   aria-label="Tech mode">
+            <span class="tech-mode-switch-thumb" aria-hidden="true"></span>
+        </span>
+    </label>
+    <script>
+    (function () {
+      var el = document.getElementById(<?= json_encode($uid) ?>);
+      if (!el || el.dataset.bound) return;
+      el.dataset.bound = '1';
+      el.addEventListener('change', function () {
+        var url = el.checked ? el.getAttribute('data-on-url') : el.getAttribute('data-off-url');
+        if (url) window.location.href = url;
+      });
+    })();
+    </script>
+    <?php
+}
+
 function layout_header(string $title, array $user, string $active = ''): void
 {
     $appName = App::appName();
@@ -37,7 +113,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     // Flashes already read; free session lock so media.php / parallel requests are not blocked
     App::releaseSessionLock();
 
-    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '46';
+    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '47';
     ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -52,9 +128,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon-32.png')) ?>" type="image/png" sizes="32x32">
     <link rel="apple-touch-icon" href="<?= App::e(App::url('assets/img/favicon-180.png')) ?>" sizes="180x180">
     <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=<?= App::e($cssV) ?>">
-    <?php if ($tech): ?>
     <link rel="stylesheet" href="<?= App::e(App::url('assets/css/tech.css')) ?>?v=<?= App::e($cssV) ?>">
-    <?php endif; ?>
     <script>
     window.ColdAisle = {
       baseUrl: <?= json_encode(App::baseUrl()) ?>,
@@ -94,7 +168,6 @@ function layout_header(string $title, array $user, string $active = ''): void
             <?php
             $nav = [
                 'dashboard' => ['Dashboard', 'index.php', '▣'],
-                'tech' => ['Tech mode', 'pages/tech.php?mode=tech', '📱'],
                 'floorplan' => ['Floor Planner', 'pages/floorplan.php', '▦'],
                 'datacenters' => ['Data Centers', 'pages/datacenters.php', '🏛'],
                 'cabinets' => ['Cabinets', 'pages/cabinets.php', '▤'],
@@ -190,6 +263,7 @@ function layout_header(string $title, array $user, string $active = ''): void
             <button type="button" class="btn btn-ghost btn-icon" id="sidebarToggle" aria-label="Toggle menu">☰</button>
             <h1 class="page-title"><?= App::e($title) ?></h1>
             <div class="topbar-actions">
+                <?php layout_tech_mode_toggle(false); ?>
                 <a class="notif-badge" href="<?= App::e(App::url('pages/notifications.php')) ?>"
                    title="Notifications"
                    <?= $unread < 1 ? 'hidden' : '' ?>><?= (int)$unread ?></a>
@@ -217,28 +291,6 @@ function layout_tech_shell_open(
     array $flashes,
     bool $httpsMismatch
 ): void {
-    $exitUrl = class_exists('TechMode')
-        ? TechMode::disableUrl(null)
-        : App::url('index.php?mode=full');
-    // Prefer returning to the same logical page in full mode
-    $script = (string)($_SERVER['SCRIPT_NAME'] ?? '');
-    if ($script !== '' && class_exists('TechMode')) {
-        $base = App::basePath();
-        $rel = $script;
-        if ($base !== '' && str_starts_with(str_replace('\\', '/', $script), $base)) {
-            $rel = substr(str_replace('\\', '/', $script), strlen($base)) ?: $script;
-        }
-        $rel = ltrim(str_replace('\\', '/', $rel), '/');
-        $qs = (string)($_SERVER['QUERY_STRING'] ?? '');
-        // Strip mode/field so exit is clean
-        if ($qs !== '') {
-            parse_str($qs, $q);
-            unset($q['mode'], $q['field']);
-            $qs = http_build_query($q);
-        }
-        $path = $rel . ($qs !== '' ? '?' . $qs : '');
-        $exitUrl = TechMode::disableUrl($path !== '' ? $path : 'index.php');
-    }
     ?>
     <?php if ($httpsMismatch && AuthManager::can($user, 'manage_settings')): ?>
     <div class="alert alert-error" style="margin:0;border-radius:0">
@@ -249,19 +301,14 @@ function layout_tech_shell_open(
     <div class="main-area">
         <header class="topbar">
             <h1 class="page-title"><?= App::e($title) ?></h1>
-            <div class="topbar-actions" style="display:flex;align-items:center;gap:.5rem">
+            <div class="topbar-actions">
+                <?php layout_tech_mode_toggle(true); ?>
                 <a class="notif-badge" href="<?= App::e(App::url('pages/notifications.php')) ?>"
                    title="Notifications"
                    <?= $unread < 1 ? 'hidden' : '' ?>><?= (int)$unread ?></a>
-                <a class="tech-exit-link" href="<?= App::e($exitUrl) ?>" title="Leave technician chrome">Desktop</a>
             </div>
         </header>
         <main class="content">
-            <div class="tech-banner">
-                <strong>Tech mode</strong>
-                <span class="text-muted">Field chrome · same data &amp; permissions as desktop</span>
-                <span class="text-muted" style="margin-left:auto;font-size:.8rem"><?= App::e($display) ?></span>
-            </div>
             <?php foreach ($flashes as $f): ?>
                 <div class="alert alert-<?= App::e($f['type']) ?>"><?= App::e($f['message']) ?></div>
             <?php endforeach; ?>
@@ -317,9 +364,6 @@ function layout_footer(): void
             ColdAisle v<?= App::VERSION ?> · <?= date('Y') ?>
             · <a href="<?= App::e($donateUrl) ?>" target="_blank" rel="noopener noreferrer">Donate</a>
             · <a href="https://github.com/sabap/ColdAisle" target="_blank" rel="noopener noreferrer">GitHub</a>
-            <?php if (class_exists('TechMode')): ?>
-                · <a href="<?= App::e(TechMode::enableUrl('pages/tech.php')) ?>">Tech mode</a>
-            <?php endif; ?>
             <?php if ($timing): ?>
                 <span class="dev-request-timer"
                       id="devRequestTimer"

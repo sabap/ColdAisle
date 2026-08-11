@@ -224,16 +224,6 @@ layout_header('Dashboard', $user, 'dashboard');
 </div>
 <?php endif; ?>
 
-<?php if (class_exists('TechMode')): ?>
-<div class="alert alert-info" style="margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
-    <div>
-        <strong>Tech mode</strong>
-        <span class="text-muted"> — tablet / phone chrome for cabinet audits, device lookup, and work orders (same data as desktop).</span>
-    </div>
-    <a class="btn btn-sm btn-primary" href="<?= App::e(TechMode::enableUrl('pages/tech.php')) ?>">Open Tech mode</a>
-</div>
-<?php endif; ?>
-
 <div class="metrics">
     <div class="metric-card accent">
         <div class="label">Cabinets</div>
