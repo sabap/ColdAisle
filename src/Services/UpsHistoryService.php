@@ -69,7 +69,11 @@ class UpsHistoryService
             try {
                 Database::insert('ups_readings', $row);
             } catch (Throwable $e2) {
-                App::log('UpsHistory sample failed: ' . $e2->getMessage(), 'warning');
+                App::log(
+                    'UpsHistory sample failed: ' . $e2->getMessage()
+                    . ' (full insert: ' . $e->getMessage() . ')',
+                    'warning'
+                );
             }
         }
         if (random_int(1, 100) === 1) {
@@ -150,8 +154,9 @@ class UpsHistoryService
         $fromSql = date('Y-m-d H:i:s', $fromTs);
         $toSql = date('Y-m-d H:i:s', $toTs);
 
+        // Note: poll timestamp column is snmp_last_poll_at (not last_poll_at)
         $upsSql = 'SELECT ups_id, rated_kw, rated_kva, zone_id,
-                          last_poll_at, last_load_pct, last_battery_pct, last_runtime_min,
+                          snmp_last_poll_at, last_load_pct, last_battery_pct, last_runtime_min,
                           last_input_voltage, last_output_voltage,
                           last_input_freq, last_output_freq, last_output_current
                    FROM ups_units WHERE is_active = 1';
@@ -169,7 +174,7 @@ class UpsHistoryService
             // Older schema without electrical last_* columns
             try {
                 $upsSql = 'SELECT ups_id, rated_kw, rated_kva, zone_id,
-                                  last_poll_at, last_load_pct, last_battery_pct, last_runtime_min
+                                  snmp_last_poll_at, last_load_pct, last_battery_pct, last_runtime_min
                            FROM ups_units WHERE is_active = 1';
                 if ($scope === 'ups_zone' && $scopeId && $scopeId > 0) {
                     $upsSql .= ' AND zone_id = ?';
@@ -178,6 +183,7 @@ class UpsHistoryService
                 }
                 $upsRows = Database::fetchAll($upsSql, $upsParams);
             } catch (Throwable $e2) {
+                App::log('UpsHistory unit load: ' . $e2->getMessage(), 'warning');
                 $upsRows = [];
             }
         }
@@ -508,7 +514,7 @@ class UpsHistoryService
         ) {
             return null;
         }
-        $ts = self::parsePollTs($ur['last_poll_at'] ?? null) ?? time();
+        $ts = self::parsePollTs($ur['snmp_last_poll_at'] ?? $ur['last_poll_at'] ?? null) ?? time();
         $w = null;
         if ($load !== null) {
             if ($ur['rated_kw'] !== null && $ur['rated_kw'] !== '') {
