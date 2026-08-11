@@ -82,7 +82,7 @@ These are **not** free-form suggestions; they have acceptance criteria in the ba
 | ID | Gap | Status | vs peers | ColdAisle today | Suggested slice |
 |----|-----|--------|----------|-----------------|-----------------|
 | **G-B1** | **Structured cable plant** | Partial | Patch panels, trunks, pathways | Port–port cables, media, simple routes | Patch panels, trunk bundles, circuit IDs, bulk CSV import |
-| **G-B2** | **Change / move work orders** | Gap | ITSM-linked moves, approvals | Audits + disposals; no work-order lifecycle | Planned move with ticket ID, from/to cabinet, checklist (optional ITSM later) |
+| **G-B2** | **Change / move work orders** | **Closed (v1)** — **0.3.116** | ITSM-linked moves, approvals | Ticket, from/to, checklist, apply inventory | External ITSM webhooks later |
 | **G-B3** | **Asset lifecycle depth** | Partial | PO/RMA/warranty campaigns | Serial, asset tag, warranty fields, disposal workflow | Warranty mail digests; owner/dept workflows; chain-of-custody notes |
 | **G-B4-net** | **IPAM / network-DCIM bridge** | Gap (often intentional) | Device42, NetBox | Infra-first; interfaces on devices only | Out of default scope unless multi-homed switch inventory is requested |
 | **G-B5** | **Mail product flows** | Partial | Welcome, password reset, lifecycle mail | SMTP + test + power/env alert digests (where built) | Welcome user, forgot-password, disposal reminders |
@@ -122,6 +122,7 @@ Use as a **discussion default**, not a commitment.
 
 | Former gap | Delivered | Release / notes |
 |------------|-----------|-----------------|
+| **G-B2 Change / move work orders** | Work order list/detail; devices from→to; checklist; complete + apply inventory | **0.3.116** |
 | **G-A4 OID pack library** | Built-in pack → site template; Vertiv DS NMS JSON import; seed packs labeled | **0.3.115** |
 | **G-A5 SNMP age + zone poll** | Relative last-poll ages; zone Poll SNMP now; NOC fleet stale; schedule list ages | **0.3.112** |
 | **G-A3 Env polish (stale + cooling snapshot)** | Stale/offline env digest; scheduled threshold scan; cooling unit promoted telemetry; cooling dashboard attention list | **0.3.111** |

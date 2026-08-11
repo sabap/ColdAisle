@@ -77,6 +77,7 @@ function layout_header(string $title, array $user, string $active = ''): void
                 'cooling' => ['Cooling', 'pages/cooling.php', '❄'],
                 'cables' => ['Cabling', 'pages/cables.php', '🔌'],
                 'snmp' => ['SNMP', 'pages/snmp.php', '📡'],
+                'work_orders' => ['Work orders', 'pages/work_orders.php', '📋'],
                 'disposals' => ['Decommission', 'pages/disposals.php', '🗑'],
                 'audits' => ['Audits', 'pages/audits.php', '✓'],
                 'reports' => ['Reports', 'pages/reports.php', '📊'],

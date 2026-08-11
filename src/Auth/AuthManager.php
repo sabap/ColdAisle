@@ -33,6 +33,7 @@ class AuthManager
         'view_cables',
         'view_snmp',
         'view_disposals',
+        'view_work_orders',
         'view_audits',
         'view_reports',
         'view_notifications',
@@ -44,6 +45,7 @@ class AuthManager
         'edit_cables',
         'edit_templates',
         'edit_disposals',
+        'edit_work_orders',
         'edit_audits',
         'edit_snmp',
         'manage_users',
@@ -70,6 +72,7 @@ class AuthManager
         'cables' => 'view_cables',
         'snmp' => 'view_snmp',
         'disposals' => 'view_disposals',
+        'work_orders' => 'view_work_orders',
         'audits' => 'view_audits',
         'reports' => 'view_reports',
         'notifications' => 'view_notifications',
@@ -86,6 +89,7 @@ class AuthManager
         $viewAll = [
             'view_dashboard', 'view_floorplan', 'view_datacenters', 'view_cabinets',
             'view_devices', 'view_power', 'view_cooling', 'view_cables', 'view_snmp', 'view_disposals',
+            'view_work_orders',
             'view_audits', 'view_reports', 'view_notifications',
         ];
 
@@ -99,6 +103,7 @@ class AuthManager
                 'permissions' => array_merge($viewAll, [
                     'edit_devices_dept',
                     'edit_disposals',
+                    'edit_work_orders',
                 ]),
             ],
             'Data Center Admin' => [
@@ -111,6 +116,7 @@ class AuthManager
                     'edit_cables',
                     'edit_templates',
                     'edit_disposals',
+                    'edit_work_orders',
                     'edit_audits',
                     'edit_snmp',
                 ]),
@@ -506,6 +512,7 @@ class AuthManager
             'reports' => ['view_reports'],
             'audits' => ['view_audits', 'edit_audits'],
             'disposals' => ['view_disposals', 'edit_disposals'],
+            'work_orders' => ['view_work_orders', 'edit_work_orders'],
             'snmp' => ['view_snmp', 'edit_snmp'],
         ];
 
@@ -530,6 +537,7 @@ class AuthManager
                 'view_cooling' => ['edit_cooling'],
                 'view_cables' => ['edit_cables'],
                 'view_disposals' => ['edit_disposals'],
+                'view_work_orders' => ['edit_work_orders'],
                 'view_audits' => ['edit_audits'],
                 'view_snmp' => ['edit_snmp'],
             ];
@@ -619,6 +627,11 @@ class AuthManager
     public static function canEditDisposals(array $user): bool
     {
         return self::can($user, 'edit_disposals');
+    }
+
+    public static function canEditWorkOrders(array $user): bool
+    {
+        return self::can($user, 'edit_work_orders');
     }
 
     public static function canEditSnmp(array $user): bool

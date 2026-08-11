@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Change / move work orders (G-B2):** plan rack moves with change ticket, scheduled date, from→to cabinet/U, checklist, status lifecycle (draft → planned → in progress → complete/cancel); optional apply destinations to inventory; nav **Work orders**; device **Move / work order** deep link
+
 ### Enhancements
 
 ### Bug fixes

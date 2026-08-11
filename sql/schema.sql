@@ -843,6 +843,47 @@ CREATE TABLE disposals (
 );
 GO
 
+-- Change / move work orders (G-B2)
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'work_orders')
+CREATE TABLE work_orders (
+    work_order_id INT IDENTITY(1,1) PRIMARY KEY,
+    title NVARCHAR(200) NOT NULL,
+    work_type NVARCHAR(30) NOT NULL CONSTRAINT DF_wo_type DEFAULT 'move',
+    status NVARCHAR(30) NOT NULL CONSTRAINT DF_wo_status DEFAULT 'draft',
+    change_ticket NVARCHAR(100) NULL,
+    requested_by INT NULL REFERENCES users(user_id),
+    assigned_to INT NULL REFERENCES users(user_id),
+    scheduled_date DATE NULL,
+    completed_at DATETIME2 NULL,
+    notes NVARCHAR(MAX) NULL,
+    checklist_json NVARCHAR(MAX) NULL,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_wo_created DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_wo_updated DEFAULT SYSUTCDATETIME()
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'work_order_items')
+CREATE TABLE work_order_items (
+    item_id INT IDENTITY(1,1) PRIMARY KEY,
+    work_order_id INT NOT NULL REFERENCES work_orders(work_order_id) ON DELETE CASCADE,
+    device_id INT NOT NULL REFERENCES devices(device_id),
+    from_cabinet_id INT NULL REFERENCES cabinets(cabinet_id),
+    from_position_u INT NULL,
+    to_cabinet_id INT NULL REFERENCES cabinets(cabinet_id),
+    to_position_u INT NULL,
+    item_status NVARCHAR(20) NOT NULL CONSTRAINT DF_woi_status DEFAULT 'pending',
+    notes NVARCHAR(500) NULL,
+    sort_order INT NOT NULL CONSTRAINT DF_woi_sort DEFAULT 0,
+    completed_at DATETIME2 NULL,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_woi_created DEFAULT SYSUTCDATETIME()
+);
+GO
+
+CREATE NONCLUSTERED INDEX IX_work_order_items_wo ON work_order_items(work_order_id);
+GO
+CREATE NONCLUSTERED INDEX IX_work_orders_status ON work_orders(status);
+GO
+
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'notifications')
 CREATE TABLE notifications (
     notification_id BIGINT IDENTITY(1,1) PRIMARY KEY,
