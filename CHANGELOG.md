@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **Parallel SNMP poll worker pool:** scheduled and zone polls fan out across concurrent CLI unit workers (default 8, configurable 1–32 under Settings → SNMP schedule); each dead host is capped (~45s) so timeouts no longer serialize the whole fleet
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.113] - 2026-08-11
+
+### New features
+
+- **Parallel SNMP poll worker pool:** scheduled and zone polls fan out across concurrent CLI unit workers (default 8, configurable 1–32 under Settings → SNMP schedule); each dead host is capped (~45s) so timeouts no longer serialize the whole fleet
+
+---
 ## [0.3.112] - 2026-08-11
 
 ### New features
