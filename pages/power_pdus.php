@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
 require_once dirname(__DIR__) . '/includes/power_helpers.php';
+require_once dirname(__DIR__) . '/includes/snmp_helpers.php';
 require_once dirname(__DIR__) . '/src/Services/SnmpOidTemplates.php';
 App::boot();
 $user = App::requirePermission('view_power');
@@ -1196,7 +1197,7 @@ if ($pduId) {
                     <?php endif; ?>
                     ·
                 <?php endif; ?>
-                <?= !empty($p['last_poll_at']) ? App::e((string)$p['last_poll_at']) : 'Never polled' ?>
+                <?= snmp_poll_age_html($p['last_poll_at'] ?? null, true, (string)($p['last_poll_at'] ?? '')) ?>
             </div>
         </div>
         <?php elseif ($showPolledCurrentCard): ?>
@@ -1212,7 +1213,7 @@ if ($pduId) {
                     L–L <?= App::e(rtrim(rtrim(sprintf('%.0F', $deviceLlVolts), '0'), '.')) ?> V
                     ·
                 <?php endif; ?>
-                <?= !empty($p['last_poll_at']) ? App::e((string)$p['last_poll_at']) : 'Never polled' ?>
+                <?= snmp_poll_age_html($p['last_poll_at'] ?? null, true, (string)($p['last_poll_at'] ?? '')) ?>
             </div>
             <?php else: ?>
             <div class="value">Unsupported on this unit</div>
@@ -2962,7 +2963,7 @@ if (function_exists('power_site_load_totals')) {
  */
 $renderPduListRows = static function (array $list) use ($canEditPdu): void {
     if (!$list) {
-        echo '<tr><td colspan="14" class="text-muted">None in this group.</td></tr>';
+        echo '<tr><td colspan="15" class="text-muted">None in this group.</td></tr>';
         return;
     }
     foreach ($list as $p) {
@@ -3039,6 +3040,13 @@ $renderPduListRows = static function (array $list) use ($canEditPdu): void {
             <td><?= $p['rated_amps'] !== null ? App::e((string)$p['rated_amps']) : '—' ?></td>
             <td><?= $p['last_poll_watts'] !== null ? number_format((float)$p['last_poll_watts'] / 1000, 2) . ' kW' : '—' ?></td>
             <td>
+                <?= snmp_poll_age_html(
+                    $p['last_poll_at'] ?? null,
+                    !empty($p['snmp_enabled']) || !empty($p['snmp_auto_poll']),
+                    (string)($p['last_poll_at'] ?? '')
+                ) ?>
+            </td>
+            <td>
                 <span class="health-chip health-chip-<?= App::e($hpPdu) ?>"
                       title="<?= App::e((string)($icmpListPdu['label'] ?? '')) ?>">
                     <span class="health-pulse health-pulse-<?= App::e($hpPdu) ?>" aria-hidden="true"></span>
@@ -3094,6 +3102,7 @@ $renderPduListCard = static function (
                     <th>Zone</th>
                     <th>Amps</th>
                     <th>Load</th>
+                    <th>Polled</th>
                     <th>Health</th>
                     <th>SNMP</th>
                     <th class="col-actions"></th>

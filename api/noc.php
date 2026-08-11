@@ -150,12 +150,18 @@ $power = [
     'last_poll_at' => null,
     'top_pdus' => [],
     'site_load_mode' => function_exists('power_site_load_mode') ? power_site_load_mode() : 'all',
+    'snmp_stale' => 0,
+    'snmp_monitored' => 0,
 ];
 try {
     require_once dirname(__DIR__) . '/includes/power_helpers.php';
+    if (is_file(dirname(__DIR__) . '/includes/snmp_helpers.php')) {
+        require_once dirname(__DIR__) . '/includes/snmp_helpers.php';
+    }
     $allPduRows = Database::fetchAll(
         'SELECT p.pdu_id, p.name, p.pdu_scope, p.zone_id, p.include_in_site_load,
-                p.last_poll_watts, p.last_poll_amps, p.last_poll_at, z.name AS zone_name
+                p.last_poll_watts, p.last_poll_amps, p.last_poll_at, p.snmp_enabled, p.snmp_auto_poll,
+                z.name AS zone_name
          FROM pdus p
          LEFT JOIN power_zones z ON z.zone_id = p.zone_id
          WHERE p.is_active = 1'
@@ -187,6 +193,47 @@ try {
     $power['last_poll_at'] = $lastAt;
     $power['pdu_polled'] = $polled;
     $power['pdu_amps'] = $anyAmps ? round($ampsSum, 1) : null;
+    // Fleet SNMP stale (PDUs with SNMP/auto-poll + UPS auto-poll)
+    $staleCount = 0;
+    $monitored = 0;
+    foreach ($allPduRows as $tp) {
+        if (empty($tp['snmp_enabled']) && empty($tp['snmp_auto_poll'])) {
+            continue;
+        }
+        $monitored++;
+        if (function_exists('snmp_poll_is_stale') && snmp_poll_is_stale($tp['last_poll_at'] ?? null)) {
+            $staleCount++;
+        } elseif (!function_exists('snmp_poll_is_stale')) {
+            $at = (string)($tp['last_poll_at'] ?? '');
+            if ($at === '' || strtotime($at) < (time() - 3600)) {
+                $staleCount++;
+            }
+        }
+    }
+    try {
+        $upsMon = Database::fetchAll(
+            'SELECT snmp_last_poll_at, snmp_enabled, snmp_auto_poll
+             FROM ups_units WHERE is_active = 1'
+        );
+        foreach ($upsMon as $uu) {
+            if (empty($uu['snmp_enabled']) && empty($uu['snmp_auto_poll'])) {
+                continue;
+            }
+            $monitored++;
+            if (function_exists('snmp_poll_is_stale') && snmp_poll_is_stale($uu['snmp_last_poll_at'] ?? null)) {
+                $staleCount++;
+            } elseif (!function_exists('snmp_poll_is_stale')) {
+                $at = (string)($uu['snmp_last_poll_at'] ?? '');
+                if ($at === '' || strtotime($at) < (time() - 3600)) {
+                    $staleCount++;
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        // ups table optional
+    }
+    $power['snmp_stale'] = $staleCount;
+    $power['snmp_monitored'] = $monitored;
     usort($ranked, static function ($a, $b) {
         return ((float)($b['last_poll_watts'] ?? 0)) <=> ((float)($a['last_poll_watts'] ?? 0));
     });

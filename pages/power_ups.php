@@ -480,7 +480,20 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
                         ? App::e(sprintf('x=%.2f · y=%.2f', (float)$u['pos_x'], (float)$u['pos_y']))
                         : 'Not placed — use Floor plan palette' ?>
                 </dd></div>
-                <div><dt>Last SNMP poll</dt><dd><?= App::e($u['snmp_last_poll_at'] ?? '—') ?></dd></div>
+                <div><dt>Last SNMP poll</dt>
+                    <dd>
+                        <?php
+                        if (!function_exists('snmp_poll_age_html')) {
+                            require_once dirname(__DIR__) . '/includes/snmp_helpers.php';
+                        }
+                        echo snmp_poll_age_html(
+                            $u['snmp_last_poll_at'] ?? null,
+                            !empty($u['snmp_enabled']) || !empty($u['snmp_auto_poll']),
+                            (string)($u['snmp_last_poll_at'] ?? '')
+                        );
+                        ?>
+                    </dd>
+                </div>
                 <?php
                 $uptimeDisp = null;
                 if (is_array($poll) && !empty($poll['derived']['sysuptime_label'])) {
@@ -1069,12 +1082,17 @@ layout_header('UPS', $user, 'power_ups');
                 <th>Location</th>
                 <th>Load</th>
                 <th>Battery</th>
+                <th>Polled</th>
                 <th>Status</th>
                 <th>Health</th>
             </tr>
             </thead>
             <tbody>
-            <?php foreach ($units as $u):
+            <?php
+            if (!function_exists('snmp_poll_age_html')) {
+                require_once dirname(__DIR__) . '/includes/snmp_helpers.php';
+            }
+            foreach ($units as $u):
                 $hp = ups_health_status($u);
                 ?>
                 <tr class="<?= in_array($hp, ['warn', 'crit'], true) ? 'health-row-' . App::e($hp) : '' ?>">
@@ -1085,6 +1103,13 @@ layout_header('UPS', $user, 'power_ups');
                     <td><?= App::e(trim(($u['dc_name'] ?? '') . ' / ' . ($u['room_name'] ?? ''), ' /') ?: '—') ?></td>
                     <td><?= $u['last_load_pct'] !== null ? App::e((string)$u['last_load_pct']) . '%' : '—' ?></td>
                     <td><?= $u['last_battery_pct'] !== null ? App::e((string)$u['last_battery_pct']) . '%' : '—' ?></td>
+                    <td>
+                        <?= snmp_poll_age_html(
+                            $u['snmp_last_poll_at'] ?? null,
+                            !empty($u['snmp_enabled']) || !empty($u['snmp_auto_poll']),
+                            (string)($u['snmp_last_poll_at'] ?? '')
+                        ) ?>
+                    </td>
                     <td><?= App::e($u['last_output_status'] ?? '—') ?></td>
                     <td>
                         <span class="health-chip health-chip-<?= App::e($hp) ?>">
@@ -1095,7 +1120,7 @@ layout_header('UPS', $user, 'power_ups');
                 </tr>
             <?php endforeach; ?>
             <?php if (!$units): ?>
-                <tr><td colspan="9" class="text-muted">No UPS units yet. Add a Symmetra / Smart-UPS and place in-row frames on the floor plan.</td></tr>
+                <tr><td colspan="10" class="text-muted">No UPS units yet. Add a Symmetra / Smart-UPS and place in-row frames on the floor plan.</td></tr>
             <?php endif; ?>
             </tbody>
         </table>

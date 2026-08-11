@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
 require_once dirname(__DIR__) . '/includes/power_helpers.php';
+require_once dirname(__DIR__) . '/includes/snmp_helpers.php';
 App::boot();
 $user = App::requirePermission('view_power');
 
@@ -300,6 +301,23 @@ if ($zoneId) {
     $imbalanced = !empty($imbalance['imbalanced']);
     $color = power_normalize_color($zone['color_hex'] ?? null);
     $canEditZone = AuthManager::canEditPower($user);
+    $canSnmpZone = $canEditZone || AuthManager::canEditSnmp($user);
+    // Count SNMP-eligible units for poll button label
+    $zoneSnmpEligible = 0;
+    try {
+        $zoneSnmpEligible = (int)Database::fetchValue(
+            'SELECT
+                (SELECT COUNT(*) FROM pdus
+                 WHERE is_active = 1 AND zone_id = ? AND snmp_site_template_id IS NOT NULL
+                   AND ip_address IS NOT NULL AND ip_address <> \'\')
+              + (SELECT COUNT(*) FROM ups_units
+                 WHERE is_active = 1 AND zone_id = ? AND snmp_site_template_id IS NOT NULL
+                   AND primary_ip IS NOT NULL AND primary_ip <> \'\')',
+            [$zoneId, $zoneId]
+        );
+    } catch (Throwable $e) {
+        $zoneSnmpEligible = 0;
+    }
 
     layout_header('Zone: ' . $zone['name'], $user, 'power_zones');
     ?>
@@ -316,6 +334,15 @@ if ($zoneId) {
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power.php')) ?>">Dashboard</a>
             <?php if ($canEditZone): ?>
                 <button type="button" class="btn btn-primary" data-open-modal="modal-edit-zone">Edit zone</button>
+            <?php endif; ?>
+            <?php if ($canSnmpZone): ?>
+                <button type="button" class="btn btn-secondary" id="btnZoneSnmpPoll"
+                        data-zone-id="<?= (int)$zoneId ?>"
+                        data-zone-name="<?= App::e((string)$zone['name']) ?>"
+                        title="Force-poll all PDUs and UPS on this zone that have a site OID template and IP"
+                        <?= $zoneSnmpEligible < 1 ? 'disabled' : '' ?>>
+                    Poll SNMP now<?= $zoneSnmpEligible > 0 ? ' (' . (int)$zoneSnmpEligible . ')' : '' ?>
+                </button>
             <?php endif; ?>
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_pdus.php?zone_id=' . $zoneId)) ?>">Zone PDUs</a>
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_ups.php')) ?>">UPS</a>
@@ -892,6 +919,82 @@ if ($zoneId) {
         });
         if (location.hash === '#edit') {
             openModal('modal-edit-zone');
+        }
+
+        // Zone SNMP force-poll
+        var btnZonePoll = document.getElementById('btnZoneSnmpPoll');
+        if (btnZonePoll) {
+            btnZonePoll.addEventListener('click', function () {
+                if (btnZonePoll.disabled) return;
+                var zid = parseInt(btnZonePoll.getAttribute('data-zone-id') || '0', 10);
+                var zname = btnZonePoll.getAttribute('data-zone-name') || 'Zone';
+                if (zid < 1) return;
+                if (!confirm('Poll all PDUs and UPS on zone "' + zname + '" now? This may take a while.')) {
+                    return;
+                }
+                btnZonePoll.disabled = true;
+                var apiUrl = <?= json_encode(App::url('api/snmp_zone.php')) ?>;
+                var csrf = (window.ColdAisle && window.ColdAisle.csrf) || '';
+                var body = { action: 'poll_zone', zone_id: zid, _csrf: csrf };
+                var doRequest = function (timeoutMs) {
+                    if (window.ColdAisle && typeof ColdAisle.api === 'function') {
+                        return ColdAisle.api(apiUrl, {
+                            method: 'POST',
+                            body: body,
+                            timeoutMs: timeoutMs || 120000
+                        });
+                    }
+                    return fetch(apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-Token': csrf
+                        },
+                        body: JSON.stringify(body),
+                        credentials: 'same-origin'
+                    }).then(function (r) {
+                        return r.json().then(function (j) {
+                            if (!r.ok) throw new Error((j && j.error) || r.statusText);
+                            return j;
+                        });
+                    });
+                };
+                var onOk = function (data) {
+                    var msg = (data && data.message) || 'Zone poll complete';
+                    if (window.ColdAisle && ColdAisle.toast) {
+                        ColdAisle.toast(msg, (data && data.failed) ? 'warning' : 'success');
+                    } else {
+                        alert(msg);
+                    }
+                    setTimeout(function () { location.reload(); }, 900);
+                };
+                var onErr = function (err) {
+                    var msg = (err && err.message) || 'Zone poll failed';
+                    if (window.ColdAisle && ColdAisle.toast) {
+                        ColdAisle.toast(msg, 'error');
+                    } else {
+                        alert(msg);
+                    }
+                    btnZonePoll.disabled = false;
+                };
+                if (typeof ColdAisle !== 'undefined' && typeof ColdAisle.runSnmpPoll === 'function') {
+                    ColdAisle.runSnmpPoll({
+                        title: 'SNMP poll — zone',
+                        name: zname,
+                        host: 'all units',
+                        timeoutMs: 120000,
+                        request: function (ctx) {
+                            return doRequest((ctx && ctx.timeoutMs) || 120000);
+                        },
+                        onSuccess: onOk,
+                        onError: function () { btnZonePoll.disabled = false; }
+                    }).then(function (data) {
+                        if (!data) btnZonePoll.disabled = false;
+                    });
+                } else {
+                    doRequest(120000).then(onOk).catch(onErr);
+                }
+            });
         }
     })();
     </script>

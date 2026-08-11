@@ -200,6 +200,105 @@ class SnmpPoller
         return ['success' => $success, 'failed' => $failed, 'skipped' => $skipped];
     }
 
+    /**
+     * Force-poll SNMP units in a power zone (manual ops action; ignores schedule isDue).
+     * Includes PDUs and UPS assigned to the zone with a site OID template + IP.
+     *
+     * @return array{
+     *   success:int,failed:int,skipped:int,zone_id:int,
+     *   items:list<array{type:string,id:int,name:string,ok:bool,error?:string}>
+     * }
+     */
+    public static function pollZone(int $zoneId): array
+    {
+        if ($zoneId < 1) {
+            throw new RuntimeException('zone_id required');
+        }
+        if (class_exists('MibService')) {
+            MibService::loadAll();
+        }
+        $success = 0;
+        $failed = 0;
+        $skipped = 0;
+        $items = [];
+
+        // PDUs on this zone with template + IP
+        try {
+            $pdus = Database::fetchAll(
+                'SELECT * FROM pdus
+                 WHERE is_active = 1 AND zone_id = ?
+                   AND snmp_site_template_id IS NOT NULL
+                   AND ip_address IS NOT NULL AND ip_address <> \'\'',
+                [$zoneId]
+            );
+        } catch (Throwable $e) {
+            $pdus = [];
+        }
+        foreach ($pdus as $pdu) {
+            $name = (string)($pdu['name'] ?? ('PDU #' . $pdu['pdu_id']));
+            $id = (int)$pdu['pdu_id'];
+            try {
+                self::pollPduFromSiteTemplate($pdu, (int)$pdu['snmp_site_template_id']);
+                $success++;
+                $items[] = ['type' => 'pdu', 'id' => $id, 'name' => $name, 'ok' => true];
+            } catch (Throwable $e) {
+                $failed++;
+                $items[] = [
+                    'type' => 'pdu',
+                    'id' => $id,
+                    'name' => $name,
+                    'ok' => false,
+                    'error' => substr($e->getMessage(), 0, 300),
+                ];
+                App::log('Zone poll PDU failed ' . $name . ': ' . $e->getMessage(), 'error');
+            }
+        }
+
+        // UPS on this zone
+        try {
+            $upsList = Database::fetchAll(
+                'SELECT * FROM ups_units
+                 WHERE is_active = 1 AND zone_id = ?
+                   AND snmp_site_template_id IS NOT NULL
+                   AND primary_ip IS NOT NULL AND primary_ip <> \'\'',
+                [$zoneId]
+            );
+        } catch (Throwable $e) {
+            $upsList = [];
+        }
+        foreach ($upsList as $uu) {
+            $name = (string)($uu['name'] ?? ('UPS #' . $uu['ups_id']));
+            $id = (int)$uu['ups_id'];
+            try {
+                self::pollUpsUnit($uu);
+                $success++;
+                $items[] = ['type' => 'ups', 'id' => $id, 'name' => $name, 'ok' => true];
+            } catch (Throwable $e) {
+                $failed++;
+                $items[] = [
+                    'type' => 'ups',
+                    'id' => $id,
+                    'name' => $name,
+                    'ok' => false,
+                    'error' => substr($e->getMessage(), 0, 300),
+                ];
+                App::log('Zone poll UPS failed ' . $name . ': ' . $e->getMessage(), 'error');
+            }
+        }
+
+        if ($success === 0 && $failed === 0) {
+            $skipped = 1; // nothing eligible
+        }
+
+        return [
+            'success' => $success,
+            'failed' => $failed,
+            'skipped' => $skipped,
+            'zone_id' => $zoneId,
+            'items' => $items,
+        ];
+    }
+
     public static function pollTarget(array $t): void
     {
         if (class_exists('MibService')) {
