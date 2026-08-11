@@ -6,7 +6,8 @@ Primary platform: **IIS + PHP + Microsoft SQL Server** on Windows (with a clean 
 Formerly known as **WinDCIM**. Built as a modern replacement path for environments that outgrew or cannot maintain Linux-based [openDCIM](https://github.com/opendcim/openDCIM), with first-class support for local accounts, **LDAPS**, and **Microsoft Entra ID (Azure AD) SSO**.
 
 **Current version:** see [`VERSION`](VERSION).  
-**Release notes:** [`CHANGELOG.md`](CHANGELOG.md) (New features · Enhancements · Bug fixes).
+**Release notes:** [`CHANGELOG.md`](CHANGELOG.md) (New features · Enhancements · Bug fixes).  
+**Deferred work:** [`BACKLOG.md`](BACKLOG.md). **Competitive DCIM gaps:** [`DCIM_GAPS.md`](DCIM_GAPS.md).
 
 ## Support / donate
 
