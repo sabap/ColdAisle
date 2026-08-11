@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **OID pack library (Tier A / G-A4):** SNMP → **Built-in OID pack library** installs curated packs from `config/snmp_oid_templates.json` as shared site templates (one-click); **Import Vertiv DS** from `AC_Vertiv_Thermal` NMS JSON (no control SETs); new Liebert DS + AP9340 env host packs
+
 ### Enhancements
 
 ### Bug fixes

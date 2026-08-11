@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
 require_once dirname(__DIR__) . '/includes/snmp_helpers.php';
+require_once dirname(__DIR__) . '/src/Services/SnmpOidTemplates.php';
 App::boot();
 $user = App::requirePermission('view_snmp');
 
@@ -404,6 +405,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             $result = SnmpPoller::pollAll();
             App::flash('success', "Poll complete: {$result['success']} ok, {$result['failed']} failed.");
         }
+        if ($action === 'install_oid_pack') {
+            if (!class_exists('SnmpOidTemplates')) {
+                require_once dirname(__DIR__) . '/src/Services/SnmpOidTemplates.php';
+            }
+            if (!class_exists('SnmpDiscover')) {
+                require_once dirname(__DIR__) . '/src/Services/SnmpDiscover.php';
+            }
+            $packId = trim((string)($_POST['pack_id'] ?? ''));
+            $overwrite = !empty($_POST['overwrite']);
+            $result = SnmpOidTemplates::installPackToSite($packId, $overwrite);
+            if (!empty($result['exists'])) {
+                App::flash(
+                    'error',
+                    'Site template already exists for that vendor/model. Check Overwrite to replace OIDs from the pack.'
+                );
+            } elseif (!empty($result['overwritten'])) {
+                App::flash('success', 'Updated site template from pack: ' . (string)$result['name']);
+            } else {
+                App::flash('success', 'Created site template from pack: ' . (string)$result['name']);
+            }
+            AuditService::log((int)$user['user_id'], $user['username'], 'oid_pack_install', 'system', null, [
+                'pack_id' => $packId,
+                'template_id' => $result['template_id'] ?? null,
+            ]);
+        }
+        if ($action === 'import_vertiv_ds') {
+            if (!class_exists('SnmpOidTemplates')) {
+                require_once dirname(__DIR__) . '/src/Services/SnmpOidTemplates.php';
+            }
+            if (!class_exists('SnmpDiscover')) {
+                require_once dirname(__DIR__) . '/src/Services/SnmpDiscover.php';
+            }
+            $path = dirname(__DIR__) . '/AC_Vertiv_Thermal/AC_Vertiv_DS_json.txt';
+            if (!is_file($path)) {
+                $path = dirname(__DIR__) . '/AC_Vertiv_Thermal/AC_Vertiv_DS.json';
+            }
+            $overwrite = !empty($_POST['overwrite']);
+            $result = SnmpOidTemplates::installVertivNmsFile($path, $overwrite);
+            $imp = $result['import'] ?? [];
+            if (!empty($result['exists'])) {
+                App::flash(
+                    'error',
+                    'Vertiv DS site template already exists. Check Overwrite to replace from NMS JSON.'
+                );
+            } else {
+                App::flash(
+                    'success',
+                    sprintf(
+                        'Vertiv DS template %s (%d metrics from NMS JSON). Assign it on a cooling unit — condition OIDs still need Unity read access.',
+                        (string)($result['name'] ?? 'saved'),
+                        count($result['oid_map'] ?? [])
+                    )
+                );
+            }
+            AuditService::log((int)$user['user_id'], $user['username'], 'vertiv_ds_import', 'system', null, [
+                'template_id' => $result['template_id'] ?? null,
+                'points_mapped' => $imp['points_mapped'] ?? null,
+            ]);
+        }
     } catch (Throwable $e) {
         App::flash('error', $e->getMessage());
     }
@@ -413,6 +473,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $hash = '#mibs';
     } elseif (in_array($act, ['add_profile', 'update_profile', 'deactivate_profile'], true)) {
         $hash = '#profiles';
+    } elseif (in_array($act, ['install_oid_pack', 'import_vertiv_ds'], true)) {
+        $hash = '#oid-templates';
     }
     App::redirect('pages/snmp.php' . (!empty($_GET['pdu_id']) ? '?pdu_id=' . (int)$_GET['pdu_id'] . '#targets' : $hash));
 }
@@ -1858,11 +1920,127 @@ window.ColdAisle_OID_TEMPLATES = <?= $oidTemplatesJson ?>;
 </script>
 <?php endif; // $canEdit modals ?>
 
+<?php
+$builtinPacks = [];
+if (class_exists('SnmpOidTemplates')) {
+    try {
+        $builtinPacks = SnmpOidTemplates::installablePacks();
+    } catch (Throwable $e) {
+        $builtinPacks = [];
+    }
+}
+$vertivDsPath = dirname(__DIR__) . '/AC_Vertiv_Thermal/AC_Vertiv_DS_json.txt';
+if (!is_file($vertivDsPath)) {
+    $vertivDsPath = dirname(__DIR__) . '/AC_Vertiv_Thermal/AC_Vertiv_DS.json';
+}
+$vertivDsReady = is_file($vertivDsPath);
+?>
+<div class="card" id="oid-pack-library">
+    <div class="card-header flex-between">
+        <h2>Built-in OID pack library</h2>
+        <span class="text-muted" style="font-size:.85rem">
+            <?= count($builtinPacks) ?> packs · create site templates without Discover
+        </span>
+    </div>
+    <div class="card-body" style="padding-bottom:.5rem">
+        <p class="text-muted mb-0" style="font-size:.85rem">
+            Curated maps from <code>config/snmp_oid_templates.json</code>.
+            <strong>Create site template</strong> installs a shared
+            <code>snmp_site_oid_templates</code> row (source <em>catalog</em>) you can assign on PDUs, UPS, devices, or cooling units.
+            Packs marked <span class="badge">seed</span> need field verification after install.
+        </p>
+    </div>
+    <div class="card-body flush">
+        <table class="data">
+            <thead>
+            <tr>
+                <th>Pack</th>
+                <th>Family</th>
+                <th>Vendor</th>
+                <th>Metrics</th>
+                <th>Notes</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($builtinPacks as $bp): ?>
+                <tr>
+                    <td>
+                        <strong><?= App::e((string)$bp['label']) ?></strong>
+                        <div class="text-muted" style="font-size:.72rem"><code><?= App::e((string)$bp['id']) ?></code></div>
+                    </td>
+                    <td><span class="badge"><?= App::e((string)$bp['family']) ?></span></td>
+                    <td><?= App::e((string)$bp['vendor']) ?></td>
+                    <td><?= (int)$bp['metric_count'] ?></td>
+                    <td style="font-size:.8rem;max-width:22rem">
+                        <?php if (!empty($bp['seed'])): ?>
+                            <span class="badge badge-warning">seed</span>
+                        <?php endif; ?>
+                        <?php
+                        $note = (string)$bp['notes'];
+                        if (function_exists('mb_strimwidth')) {
+                            $note = mb_strimwidth($note, 0, 140, '…');
+                        } elseif (strlen($note) > 140) {
+                            $note = substr($note, 0, 137) . '…';
+                        }
+                        echo App::e($note);
+                        ?>
+                    </td>
+                    <td class="actions" style="white-space:nowrap">
+                        <?php if ($canEdit): ?>
+                        <form method="post" style="display:inline">
+                            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                            <input type="hidden" name="action" value="install_oid_pack">
+                            <input type="hidden" name="pack_id" value="<?= App::e((string)$bp['id']) ?>">
+                            <label style="font-size:.72rem;margin-right:.35rem" title="Replace existing site template with same vendor+model">
+                                <input type="checkbox" name="overwrite" value="1"> Overwrite
+                            </label>
+                            <button class="btn btn-sm btn-primary" type="submit">Create site template</button>
+                        </form>
+                        <?php else: ?>
+                            <span class="text-muted">—</span>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$builtinPacks): ?>
+                <tr><td colspan="6" class="text-muted">No installable packs found in the catalog file.</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php if ($canEdit): ?>
+    <div class="card-body" style="border-top:1px solid var(--border, #334155)">
+        <strong style="font-size:.9rem">Vertiv Liebert DS (NMS JSON)</strong>
+        <p class="text-muted" style="font-size:.8rem;margin:.35rem 0 .5rem">
+            Import official Vertiv NMS device template from
+            <code>AC_Vertiv_Thermal/AC_Vertiv_DS_json.txt</code> into a site OID map
+            (supply/return/control temp, humidity, state, capacity — no Unit Control SETs).
+            Poll may still return empty until Unity grants read on the LGP condition tree.
+        </p>
+        <?php if ($vertivDsReady): ?>
+        <form method="post" style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="action" value="import_vertiv_ds">
+            <label style="font-size:.8rem">
+                <input type="checkbox" name="overwrite" value="1"> Overwrite if site template exists
+            </label>
+            <button class="btn btn-sm btn-secondary" type="submit">Import Vertiv DS template</button>
+        </form>
+        <?php else: ?>
+            <p class="text-muted mb-0" style="font-size:.8rem">
+                Place <code>AC_Vertiv_Thermal/AC_Vertiv_DS_json.txt</code> on the app server to enable import.
+            </p>
+        <?php endif; ?>
+    </div>
+    <?php endif; ?>
+</div>
+
 <div class="card" id="oid-templates">
     <div class="card-header flex-between">
-        <h2>OID Templates</h2>
+        <h2>Site OID templates</h2>
         <span class="text-muted" style="font-size:.85rem">
-            From Discover OIDs · one per vendor + model
+            Discover · catalog install · Vertiv import
         </span>
     </div>
     <div class="card-body flush">
@@ -1938,8 +2116,8 @@ window.ColdAisle_OID_TEMPLATES = <?= $oidTemplatesJson ?>;
             <?php if (!$siteOidTemplates): ?>
                 <tr>
                     <td colspan="6" class="text-muted">
-                        No OID templates yet. Open a PDU or device with manufacturer, model, and IP, then use
-                        <strong>Discover OIDs</strong> to create a template for that vendor + model.
+                        No site templates yet. Use <strong>Discover OIDs</strong> on a unit, or
+                        <strong>Create site template</strong> from the pack library above.
                     </td>
                 </tr>
             <?php endif; ?>
@@ -1949,7 +2127,7 @@ window.ColdAisle_OID_TEMPLATES = <?= $oidTemplatesJson ?>;
     <div class="card-body">
         <p class="text-muted mb-0" style="font-size:.8rem">
             Site templates store OID maps once and are shared by identical gear (matched by vendor + model).
-            PDUs and devices reference a template by id — not by a separate display name.
+            PDUs, devices, UPS, and cooling units reference a template by id.
         </p>
     </div>
 </div>
