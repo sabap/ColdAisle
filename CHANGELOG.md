@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.114] - 2026-08-11
+
+### Bug fixes
+
 - **NOC “Network error loading NOC data”:** `includes/cooling_helpers.php` lost its `<?php` open tag (file was emitted as HTML into `api/noc.php` JSON); restored tag; NOC client shows a clearer invalid-JSON message when the API response is not parseable
 
 ---
-
 ## [0.3.113] - 2026-08-11
 
 ### New features
