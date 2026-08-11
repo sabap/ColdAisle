@@ -41,6 +41,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             // Application name is fixed to ColdAisle (not user-configurable)
             SettingsService::set('org_name', trim($_POST['org_name'] ?? ''), 'general');
             SettingsService::set('disposal_notify_days', (string)(int)($_POST['disposal_notify_days'] ?? 7), 'lifecycle');
+            SettingsService::set(
+                'disposal_mail_enabled',
+                !empty($_POST['disposal_mail_enabled']) ? '1' : '0',
+                'lifecycle'
+            );
+            SettingsService::set(
+                'disposal_notify_email',
+                trim((string)($_POST['disposal_notify_email'] ?? '')),
+                'lifecycle'
+            );
             if (class_exists('TempUnitService')) {
                 TempUnitService::saveFromPost($_POST);
             }
@@ -939,7 +949,25 @@ layout_header('Settings', $user, 'settings');
                 <?php endif; ?>
             </div>
             <div class="form-row"><label>Disposal notify (days)</label>
-                <input class="form-control" type="number" name="disposal_notify_days" value="<?= App::e(SettingsService::get('disposal_notify_days', '7')) ?>"></div>
+                <input class="form-control" type="number" name="disposal_notify_days" min="0" max="365"
+                       value="<?= App::e(SettingsService::get('disposal_notify_days', '7')) ?>">
+                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                    In-app banner and optional email digest for open decommissions with a target date in this window.
+                </p>
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="disposal_mail_enabled" value="1"
+                    <?= SettingsService::get('disposal_mail_enabled', '1') === '1' ? 'checked' : '' ?>>
+                Email disposal due-soon digests (via scheduled SNMP poll worker)
+            </label></div>
+            <div class="form-row full"><label>Disposal notify email(s)</label>
+                <input class="form-control" type="text" name="disposal_notify_email"
+                       value="<?= App::e(SettingsService::get('disposal_notify_email', '')) ?>"
+                       placeholder="ops@example.com (comma-separated; blank = Alerts default email)">
+                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                    Requires Settings → Email (SMTP). Each disposal is emailed once until its target date is changed.
+                </p>
+            </div>
             <?php
             $tempUnit = class_exists('TempUnitService') ? TempUnitService::siteUnit() : 'C';
             ?>

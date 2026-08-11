@@ -172,7 +172,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 $fields['asset_verified'] = disposal_bit($_POST['asset_verified'] ?? 0);
                 $fields['planning_notes'] = disposal_null($_POST['planning_notes'] ?? null);
                 $fields['reason'] = disposal_null($_POST['reason'] ?? null);
-                $fields['scheduled_date'] = disposal_null($_POST['scheduled_date'] ?? null);
+                $newSched = disposal_null($_POST['scheduled_date'] ?? null);
+                $fields['scheduled_date'] = $newSched;
+                $oldSched = $disp['scheduled_date'] ?? null;
+                if ((string)($oldSched ?? '') !== (string)($newSched ?? '')
+                    && class_exists('ProductMailService')
+                ) {
+                    // Re-allow due-soon email after target date changes
+                    $fields['notification_sent'] = 0;
+                    $fields['notification_sent_at'] = null;
+                }
                 if ($advance) {
                     $fields['planning_completed_at'] = date('Y-m-d H:i:s');
                     $fields['stage'] = 'sanitization';
@@ -221,7 +230,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 $fields['vendor_id'] = !empty($_POST['vendor_id']) ? (int)$_POST['vendor_id'] : null;
                 $fields['disposition_ref'] = disposal_null($_POST['disposition_ref'] ?? null);
                 $fields['pickup_date'] = disposal_null($_POST['pickup_date'] ?? null);
-                $fields['scheduled_date'] = disposal_null($_POST['scheduled_date'] ?? null);
+                $newSched = disposal_null($_POST['scheduled_date'] ?? null);
+                $fields['scheduled_date'] = $newSched;
+                if ((string)($disp['scheduled_date'] ?? '') !== (string)($newSched ?? '')) {
+                    $fields['notification_sent'] = 0;
+                    $fields['notification_sent_at'] = null;
+                }
                 $fields['notes'] = disposal_null($_POST['notes'] ?? null);
                 if ($advance) {
                     $fields['stage'] = 'post_review';

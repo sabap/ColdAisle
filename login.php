@@ -84,8 +84,13 @@ $appName = App::appName();
             <button type="submit" class="btn btn-primary" style="width:100%">Sign In</button>
         </form>
 
+        <p style="text-align:center;margin-top:.75rem;font-size:.85rem">
+            <a href="forgot_password.php">Forgot password?</a>
+            <span class="text-muted"> (local accounts)</span>
+        </p>
+
         <?php if ($ldapsEnabled): ?>
-            <p class="text-muted" style="text-align:center;font-size:.8rem;margin-top:.75rem">
+            <p class="text-muted" style="text-align:center;font-size:.8rem;margin-top:.5rem">
                 Domain accounts (LDAPS) are accepted on this form.
             </p>
         <?php endif; ?>

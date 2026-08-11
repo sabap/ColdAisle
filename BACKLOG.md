@@ -578,7 +578,7 @@ The table below is a short legacy index of older “what’s next?” notes. **N
 | Ops: last-poll age, bulk poll zone | “what’s next” #7 | **Partial** (scheduler / poll worker shipped; “poll all in zone” UI may still be thin) |
 | SQL login least-privilege | README checklist + post-schedule optional | **Ops doc** (not app feature); still valid for PROD hardening |
 | Fleet template ops | Post-housekeeping optional | **Partial** (PDU templates 0.2.45); “fleet apply” breadth unclear—confirm before building |
-| Mail: disposal / welcome / forgot-password | After MailService | **Open suggestion** (SMTP/test exists; flows not built) |
+| Mail: disposal / welcome / forgot-password | After MailService | **Done (G-B5)** — welcome + forgot/reset + disposal digests |
 | Bulk import UI (openDCIM migration) | README | **Open suggestion** |
 | Full outlet remote control (on/off) | Explicitly “not next” | Out of scope unless requested |
 | Long-term time-series DB | Explicitly “not next” | Out of scope unless requested |

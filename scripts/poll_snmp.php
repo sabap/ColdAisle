@@ -196,9 +196,28 @@ try {
         }
     }
 
+    // Disposal due-soon digests (G-B5) — independent of SNMP schedule
+    $disposalSummary = '';
+    if (class_exists('ProductMailService')) {
+        try {
+            $disp = ProductMailService::processDisposalReminders(false);
+            $disposalSummary = 'disposal mail due=' . (int)($disp['due'] ?? 0)
+                . ' sent=' . (int)($disp['sent'] ?? 0);
+            if (!empty($disp['message'])) {
+                $disposalSummary .= ' (' . $disp['message'] . ')';
+            }
+            echo "Disposal: {$disposalSummary}\n";
+            $earlyLog($disposalSummary);
+        } catch (Throwable $e) {
+            $earlyLog('disposal mail: ' . $e->getMessage());
+            echo 'Disposal mail error: ' . $e->getMessage() . "\n";
+        }
+    }
+
     if ($snmpDisabled) {
         $msg = 'SNMP scheduler disabled in Settings.'
-            . ($icmpSummary !== '' ? ' ' . $icmpSummary : ' No SNMP work.');
+            . ($icmpSummary !== '' ? ' ' . $icmpSummary : ' No SNMP work.')
+            . ($disposalSummary !== '' ? ' · ' . $disposalSummary : '');
         echo $msg . "\n";
         $earlyHb($msg);
         $earlyLog($msg);
@@ -292,6 +311,8 @@ try {
             $earlyLog('housekeeping: ' . $e->getMessage());
         }
     }
+
+    // Note: disposal due-soon digests already ran earlier (even if SNMP was off)
 
     exit($fail > 0 && $ok === 0 ? 2 : 0);
 } catch (Throwable $e) {
