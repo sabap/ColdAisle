@@ -3043,3 +3043,16 @@ tr.health-row-warn > td:first-child {
 .app-footer a { color: var(--accent, #38bdf8); text-decoration: none; }
 .app-footer a:hover { text-decoration: underline; }
 
+
+/* SNMP last-poll age badges (G-A5) */
+.snmp-age {
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+.snmp-age-ok { color: var(--success, #34d399); }
+.snmp-age-warn { color: var(--warning, #fbbf24); }
+.snmp-age-danger { color: var(--danger, #f87171); }
+.snmp-age-never { color: var(--text-muted, #94a3b8); font-weight: 500; }
+.snmp-age-na { color: var(--text-muted, #64748b); font-weight: 400; }

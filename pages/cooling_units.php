@@ -341,7 +341,18 @@ if ($unitId > 0) {
                     <?php endif; ?>
                 </dd>
                 <dt>Last poll</dt>
-                <dd id="cuSnmpLastPoll"><?= App::e((string)($u['snmp_last_poll_at'] ?? '—')) ?></dd>
+                <dd id="cuSnmpLastPoll">
+                    <?php
+                    if (!function_exists('snmp_poll_age_html')) {
+                        require_once dirname(__DIR__) . '/includes/snmp_helpers.php';
+                    }
+                    echo snmp_poll_age_html(
+                        $u['snmp_last_poll_at'] ?? null,
+                        !empty($u['snmp_enabled']) || !empty($u['snmp_auto_poll']),
+                        (string)($u['snmp_last_poll_at'] ?? '')
+                    );
+                    ?>
+                </dd>
             </dl>
             <?php if (!$discoverReady && $canSnmpActions): ?>
                 <p class="text-muted snmp-poll-stats mb-0 mt-1" style="font-size:.85rem">
@@ -873,12 +884,17 @@ layout_header('Air units & pumps', $user, 'cooling_units');
                         <th>Room</th>
                         <th>IP</th>
                         <th>kW</th>
+                        <th>Polled</th>
                         <th>Status</th>
                         <th>Floor</th>
                     </tr>
                     </thead>
                     <tbody>
-                    <?php foreach ($units as $u):
+                    <?php
+                    if (!function_exists('snmp_poll_age_html')) {
+                        require_once dirname(__DIR__) . '/includes/snmp_helpers.php';
+                    }
+                    foreach ($units as $u):
                         $onFloor = $u['pos_x'] !== null && $u['pos_y'] !== null;
                         ?>
                         <tr>
@@ -911,6 +927,13 @@ layout_header('Air units & pumps', $user, 'cooling_units');
                                 <?= $u['rated_kw_cooling'] !== null && $u['rated_kw_cooling'] !== ''
                                     ? number_format((float)$u['rated_kw_cooling'], 1)
                                     : '—' ?>
+                            </td>
+                            <td>
+                                <?= snmp_poll_age_html(
+                                    $u['snmp_last_poll_at'] ?? null,
+                                    !empty($u['snmp_enabled']) || !empty($u['snmp_auto_poll']),
+                                    (string)($u['snmp_last_poll_at'] ?? '')
+                                ) ?>
                             </td>
                             <td><span class="badge"><?= App::e((string)($u['status'] ?? '—')) ?></span></td>
                             <td><?= $onFloor ? '✓' : '—' ?></td>

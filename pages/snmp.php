@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
+require_once dirname(__DIR__) . '/includes/snmp_helpers.php';
 App::boot();
 $user = App::requirePermission('view_snmp');
 
@@ -1077,7 +1078,7 @@ layout_header('SNMP Polling', $user, 'snmp');
                         ?>
                     </td>
                     <td style="font-size:.85rem">
-                        <?= $last !== '' ? App::e($last) : '—' ?>
+                        <?= snmp_poll_age_html($last !== '' ? $last : null, true, $last) ?>
                         <?php if ($bits): ?> · <?= App::e(implode(' · ', $bits)) ?><?php endif; ?>
                     </td>
                     <td><span class="badge badge-success">Scheduled</span></td>
@@ -1132,7 +1133,7 @@ layout_header('SNMP Polling', $user, 'snmp');
                         ?>
                     </td>
                     <td style="font-size:.85rem">
-                        <?= $last !== '' ? App::e($last) : '—' ?>
+                        <?= snmp_poll_age_html($last !== '' ? $last : null, true, $last) ?>
                         <?php if ($bits): ?> · <?= App::e(implode(' · ', $bits)) ?><?php endif; ?>
                     </td>
                     <td><span class="badge badge-success">Scheduled</span></td>
@@ -1187,7 +1188,7 @@ layout_header('SNMP Polling', $user, 'snmp');
                         ?>
                     </td>
                     <td style="font-size:.85rem">
-                        <?= $last !== '' ? App::e($last) : '—' ?>
+                        <?= snmp_poll_age_html($last !== '' ? $last : null, $ready, $last) ?>
                         <?php if ($bits): ?> · <?= App::e(implode(' · ', $bits)) ?><?php endif; ?>
                     </td>
                     <td>
@@ -1239,7 +1240,7 @@ layout_header('SNMP Polling', $user, 'snmp');
                         echo $scTpl !== '' ? App::e($scTpl) : '<span class="text-muted">No template</span>';
                         ?>
                     </td>
-                    <td style="font-size:.85rem"><?= $last !== '' ? App::e($last) : '—' ?></td>
+                    <td style="font-size:.85rem"><?= snmp_poll_age_html($last !== '' ? $last : null, $ready, $last) ?></td>
                     <td>
                         <?php if ($ready): ?>
                             <span class="badge badge-success">Scheduled</span>

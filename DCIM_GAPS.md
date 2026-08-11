@@ -7,7 +7,7 @@
 - This file tracks **product / competitive gaps** so chat menus and compaction do not lose the map.  
 - Promote a gap into `BACKLOG.md` only when scope is confirmed and work is intentionally deferred.
 
-**Last reviewed:** 2026-08-11 (post **0.3.111** — env stale + cooling snapshot G-A3; capacity G-A2; power path G-A1).
+**Last reviewed:** 2026-08-11 (post **0.3.112** — SNMP age/zone poll G-A5; env G-A3; capacity G-A2; power path G-A1).
 
 ---
 
@@ -75,7 +75,7 @@ These are **not** free-form suggestions; they have acceptance criteria in the ba
 | **G-A2** | **Capacity planning / phase imbalance** | **Closed (v1)** — **0.3.110** | “Where can I place N kW?” tools | Free kW/U, phase amps, 20% imbalance badge, Fits? filter | Reserved/planned capacity bookings still out of scope |
 | **G-A3** | **Cooling live telemetry + env alerts** | **Closed (v1 env)** — **0.3.111**; cooling thermal depth still **G-B8** | Trellis / EcoStruxure thermal panels | Threshold + stale mail, promoted snapshot UI, attention list | Vertiv DS live temps after firmware/#8 |
 | **G-A4** | **Vendor OID / device template library** | Partial | Fleet “pick model → done” | APC/Schneider path mature; Discover rulesets; site templates | Curated packs: more UPS, CyberPower, Raritan, Vertiv cooling JSON import |
-| **G-A5** | **Bulk / zone SNMP ops surface** | Partial | Enterprise “stale poll” / bulk actions | Worker + scheduled list; thin bulk UI | Last-poll age on lists; poll all in zone; stale badge on dashboard/NOC |
+| **G-A5** | **Bulk / zone SNMP ops surface** | **Closed (v1)** — **0.3.112** | Enterprise “stale poll” / bulk actions | Age badges, zone poll, NOC stale count | Optional multi-select bulk poll later |
 
 ### Tier B — Classic mid-tier DCIM
 
@@ -111,8 +111,9 @@ Use as a **discussion default**, not a commitment.
 | 1 | G-A1 | Power path report (read-only) | **Done 0.3.109** |
 | 2 | G-A2 | Phase imbalance / free capacity hints | **Done 0.3.110** |
 | 3 | G-A3 (env slice) | Env threshold mail + history charts | **Done 0.3.111** (stale + cooling snapshot UI) |
-| 4 | G-A5 | Stale poll / last-poll age | **Next** |
-| 5 | G-B8 → G-A3 | Vertiv DS template + poll after ~2026-08-18 | Largest cooling unlock |
+| 4 | G-A5 | Stale poll / last-poll age | **Done 0.3.112** |
+| 5 | G-A4 | Template library (light) | **Next** |
+| 6 | G-B8 → G-A3 | Vertiv DS template + poll after ~2026-08-18 | Largest cooling unlock |
 | 6 | G-B9 A or G-B1 | Airflow anchors **or** cable plant depth | Ops preference |
 
 ---
@@ -121,6 +122,7 @@ Use as a **discussion default**, not a commitment.
 
 | Former gap | Delivered | Release / notes |
 |------------|-----------|-----------------|
+| **G-A5 SNMP age + zone poll** | Relative last-poll ages; zone Poll SNMP now; NOC fleet stale; schedule list ages | **0.3.112** |
 | **G-A3 Env polish (stale + cooling snapshot)** | Stale/offline env digest; scheduled threshold scan; cooling unit promoted telemetry; cooling dashboard attention list | **0.3.111** |
 | **G-A2 Capacity / phase imbalance** | Free kW & U per zone; phase amps + imbalance ≥20%; Fits? report filter; dashboard headroom | **0.3.110** |
 | **G-A1 Power path report** | `PowerPathService`; Reports → Power Path; unmapped / single-feed / half-map / no row feed; Power dashboard card | **0.3.109** |
@@ -162,3 +164,4 @@ Use as a **discussion default**, not a commitment.
 | 2026-08-11 | G-A1 closed in **0.3.109** (power path report); Tier A program in progress |
 | 2026-08-11 | G-A2 closed in **0.3.110** (capacity / phase imbalance / Fits?) |
 | 2026-08-11 | G-A3 env slice closed in **0.3.111** (stale mail + cooling snapshot UI); Vertiv still #8 |
+| 2026-08-11 | G-A5 closed in **0.3.112** (poll age badges + zone SNMP poll + NOC stale) |

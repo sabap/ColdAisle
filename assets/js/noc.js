@@ -159,8 +159,11 @@
       '<div class="value">' + fmtNum(m.u_pct, 1) + '<span class="unit">%</span></div>' +
       utilBar(m.u_pct, 85) +
       '<div class="hint">' + fmtNum(m.u_used, 0) + ' / ' + fmtNum(m.u_total, 0) + ' U</div></div>';
-    html += card('accent', 'Site power', fmtNum(power.kw != null ? power.kw : m.power_kw, 1) + '<span class="unit">kW</span>',
+    var snmpStale = power.snmp_stale != null ? power.snmp_stale : 0;
+    var snmpMon = power.snmp_monitored != null ? power.snmp_monitored : 0;
+    html += card(snmpStale > 0 ? 'warn' : 'accent', 'Site power', fmtNum(power.kw != null ? power.kw : m.power_kw, 1) + '<span class="unit">kW</span>',
       fmtNum(power.pdu_polled != null ? power.pdu_polled : m.pdus, 0) + ' polled · ' +
+      (snmpMon > 0 ? (snmpStale + ' SNMP stale · ') : '') +
       fmtNum(m.pdus, 0) + ' PDU(s)');
     var upsO = data.ups || {};
     var upsCls = (upsO.on_battery > 0 || upsO.health_crit > 0) ? 'crit'
@@ -234,6 +237,9 @@
     var html = '<div class="noc-metrics">';
     html += card('accent', 'PDU load', fmtNum(kw, 1) + '<span class="unit">kW</span>',
       fmtNum(power.pdu_polled != null ? power.pdu_polled : 0, 0) + ' polled · ' +
+      (power.snmp_stale != null && power.snmp_stale > 0
+        ? (fmtNum(power.snmp_stale, 0) + ' SNMP stale · ')
+        : '') +
       fmtNum(m.pdus, 0) + ' PDU(s)' +
       (power.pdu_amps != null ? ' · ' + fmtNum(power.pdu_amps, 0) + ' A sum' : ''));
     html += card('', '24h average', fmtNum(power.kw_avg_24h, 1) + '<span class="unit">kW</span>', 'PDU site total');

@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
 require_once dirname(__DIR__) . '/includes/power_helpers.php';
 require_once dirname(__DIR__) . '/includes/ups_helpers.php';
+require_once dirname(__DIR__) . '/includes/snmp_helpers.php';
 App::boot();
 $user = App::requirePermission('view_power');
 
@@ -174,13 +175,10 @@ $canEditSiteLoad = AuthManager::canEditPower($user);
 
 $unassignedPdus = count(array_filter($pdus, static fn($p) => empty($p['zone_id'])));
 $stalePdus = count(array_filter($pdus, static function ($p) {
-    if (empty($p['snmp_enabled'])) {
+    if (empty($p['snmp_enabled']) && empty($p['snmp_auto_poll'])) {
         return false;
     }
-    if (empty($p['last_poll_at'])) {
-        return true;
-    }
-    return strtotime((string)$p['last_poll_at']) < (time() - 3600);
+    return snmp_poll_is_stale($p['last_poll_at'] ?? null);
 }));
 
 $powerPathCounts = [
@@ -321,11 +319,16 @@ layout_header('Power Dashboard', $user, 'power');
             <?php endif; ?>
         </div>
     </div>
-    <div class="metric-card <?= $stalePdus ? 'danger' : '' ?>">
+    <a class="metric-card <?= $stalePdus ? 'danger' : '' ?>"
+       href="<?= App::e(App::url('pages/snmp.php#targets')) ?>"
+       style="color:inherit;text-decoration:none">
         <div class="label">SNMP</div>
         <div class="value"><?= $snmpOn ?></div>
-        <div class="sub"><?= $stalePdus ? $stalePdus . ' stale / no poll' : 'enabled on PDUs' ?></div>
-    </div>
+        <div class="sub">
+            <?= $stalePdus ? $stalePdus . ' stale (&gt;1h / never)' : 'enabled on PDUs' ?>
+            · schedule
+        </div>
+    </a>
     <a class="metric-card <?= $powerPathRisk > 0 ? 'warning' : 'success' ?>"
        href="<?= App::e(App::url('pages/reports.php?report=power_path')) ?>"
        style="color:inherit;text-decoration:none">
