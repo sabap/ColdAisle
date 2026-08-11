@@ -68,7 +68,8 @@ $earlyHb = static function (string $summary) use ($hbTargets, $pid): void {
 $earlyLog('enter poll_snmp.php' . ($healthOnly ? ' --health' : ''));
 $earlyHb('cli enter');
 
-@ini_set('max_execution_time', $healthOnly ? '20' : '240');
+// Parallel pool finishes wall-clock faster, but allow long parent runs for large fleets
+@ini_set('max_execution_time', $healthOnly ? '20' : '900');
 @ini_set('default_socket_timeout', '3');
 @ini_set('display_errors', '1');
 @error_reporting(E_ALL);
@@ -234,9 +235,16 @@ try {
     $ok = (int)($result['success'] ?? 0);
     $fail = (int)($result['failed'] ?? 0);
     $skip = (int)($result['skipped'] ?? 0);
+    $mode = (string)($result['mode'] ?? '');
+    $workers = (int)($result['workers'] ?? 0);
     $summary = "snmp ok={$ok} fail={$fail} skip={$skip}"
+        . ($workers > 0 ? " workers={$workers}" : '')
+        . ($mode !== '' ? " mode={$mode}" : '')
         . ($icmpSummary !== '' ? ' · ' . $icmpSummary : '');
-    echo "SNMP Success: {$ok}, Failed: {$fail}, Skipped (not due): {$skip}\n";
+    echo "SNMP Success: {$ok}, Failed: {$fail}, Skipped (not due): {$skip}"
+        . ($workers > 0 ? ", Workers: {$workers}" : '')
+        . ($mode !== '' ? " ({$mode})" : '')
+        . "\n";
     $earlyHb($summary);
     $earlyLog($summary);
 
