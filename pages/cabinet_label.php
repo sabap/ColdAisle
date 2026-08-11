@@ -60,6 +60,10 @@ function cabinet_label_parse_ids(): array
  */
 function cabinet_label_deep_link(int $cabinetId, bool $fieldMode = true): string
 {
+    // Single source: TechMode QR target (session tech chrome + elevation page)
+    if ($fieldMode && class_exists('TechMode')) {
+        return TechMode::cabinetFieldUrl($cabinetId);
+    }
     $path = 'pages/cabinets.php?id=' . $cabinetId;
     if ($fieldMode) {
         $path .= '&field=1';
@@ -375,7 +379,7 @@ $baseQ = 'ids=' . urlencode(implode(',', $idList))
     <div>
         <p class="text-muted mb-0" style="font-size:.9rem">
             Printable cabinet ID label / QR plaque.
-            Scan opens the cabinet page<?= $fieldMode ? ' in field mode' : '' ?> (login if required).
+            Scan opens the cabinet page<?= $fieldMode ? ' in Tech mode (field chrome)' : '' ?> (login if required).
         </p>
     </div>
     <div class="flex gap-1">

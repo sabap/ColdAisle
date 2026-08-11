@@ -7,7 +7,7 @@
 - This file tracks **product / competitive gaps** so chat menus and compaction do not lose the map.  
 - Promote a gap into `BACKLOG.md` only when scope is confirmed and work is intentionally deferred.
 
-**Last reviewed:** 2026-08-11 (post **G-B3** asset lifecycle; G-B5 mail **0.3.118**).
+**Last reviewed:** 2026-08-11 (post **Tech mode** field chrome; G-B3 **0.3.119**).
 
 ---
 
@@ -96,7 +96,7 @@ These are **not** free-form suggestions; they have acceptance criteria in the ba
 | **G-C3** | BMS / BACnet / Modbus plant bus | Out of scope | Plant integration product class |
 | **G-C4** | Full CFD / thermal twin | Out of scope | Storytelling via **#9** only unless CFD is requested |
 | **G-C5** | Multi-site / multi-tenant enterprise | Gap | Single-site focus today |
-| **G-C6** | Native iOS/Android app | Out of scope | QR + field mode cover browser field ops |
+| **G-C6** | Native iOS/Android app | Out of scope | **Tech mode** (browser PWA-style chrome) + QR; no store app |
 | **G-C7** | Long-term TSDB (Influx/Prometheus) | Out of scope | SQL history OK until retention becomes a problem |
 | **G-C8** | Auto cooling control (setpoint write) | Out of scope | Safety; Vertiv Unit Control OID deferred even when read works |
 
@@ -122,6 +122,7 @@ Use as a **discussion default**, not a commitment.
 
 | Former gap | Delivered | Release / notes |
 |------------|-----------|-----------------|
+| **Tech mode (field tablet/phone)** | Session chrome + hub; reuses cabinets/devices/WO/audit APIs; QR → tech | **0.3.120** |
 | **G-B3 Asset lifecycle depth** | Device PO/purchase/RMA; chain-of-custody event log; warranty email digests; warranty report polish | **0.3.119** |
 | **G-B5 Mail product flows** | Welcome email; local forgot/reset password tokens; disposal due-soon digests via poll worker | **0.3.118** |
 | **G-B2 Change / move work orders** | Work order list/detail; devices from→to; checklist; complete + apply inventory; bulk cabinet + moves this week | **0.3.116–0.3.117** |

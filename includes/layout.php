@@ -1,8 +1,14 @@
 <?php
 /**
  * ColdAisle - Shared layout helpers
+ *
+ * Tech mode (TechMode): same layout_header/footer entry points; chrome only.
+ * Business logic stays on the real pages/APIs.
  */
 declare(strict_types=1);
+
+/** @var array{title:string,user:array,active:string,tech:bool}|null */
+$GLOBALS['coldaisle_layout_ctx'] = $GLOBALS['coldaisle_layout_ctx'] ?? null;
 
 function layout_header(string $title, array $user, string $active = ''): void
 {
@@ -12,6 +18,13 @@ function layout_header(string $title, array $user, string $active = ''): void
     $csrf = App::csrfToken();
     $flashes = App::getFlashes();
     $httpsMismatch = App::httpsConfigMismatch();
+    $tech = class_exists('TechMode') && TechMode::isActive();
+    $GLOBALS['coldaisle_layout_ctx'] = [
+        'title' => $title,
+        'user' => $user,
+        'active' => $active,
+        'tech' => $tech,
+    ];
     $unread = 0;
     try {
         $unread = (int) Database::fetchValue(
@@ -23,31 +36,43 @@ function layout_header(string $title, array $user, string $active = ''): void
     }
     // Flashes already read; free session lock so media.php / parallel requests are not blocked
     App::releaseSessionLock();
+
+    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '46';
     ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="csrf-token" content="<?= App::e($csrf) ?>">
-    <title><?= App::e($title) ?> · <?= App::e($appName) ?></title>
+    <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title><?= App::e($title) ?> · <?= App::e($appName) ?><?= $tech ? ' · Tech' : '' ?></title>
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon.svg')) ?>" type="image/svg+xml">
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon-32.png')) ?>" type="image/png" sizes="32x32">
     <link rel="apple-touch-icon" href="<?= App::e(App::url('assets/img/favicon-180.png')) ?>" sizes="180x180">
-    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=<?= App::e(preg_replace('/\W+/', '', (string)App::VERSION) . '45') ?>">
+    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=<?= App::e($cssV) ?>">
+    <?php if ($tech): ?>
+    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/tech.css')) ?>?v=<?= App::e($cssV) ?>">
+    <?php endif; ?>
     <script>
     window.ColdAisle = {
       baseUrl: <?= json_encode(App::baseUrl()) ?>,
       csrf: <?= json_encode($csrf) ?>,
       tempUnit: <?= json_encode(class_exists('TempUnitService') ? TempUnitService::siteUnit() : 'C') ?>,
       tempSymbol: <?= json_encode(class_exists('TempUnitService') ? TempUnitService::symbol() : '°C') ?>,
-      liveToasts: true
+      liveToasts: true,
+      techMode: <?= $tech ? 'true' : 'false' ?>
     };
     window.WINDCIM = window.ColdAisle; // legacy alias
     </script>
 </head>
-<body>
+<body class="<?= $tech ? 'tech-mode' : '' ?>">
 <div class="app-shell">
+    <?php if ($tech):
+        layout_tech_shell_open($title, $user, $active, $appName, $display, $unread, $flashes, $httpsMismatch);
+        return;
+    endif; ?>
     <?php if ($httpsMismatch && AuthManager::can($user, 'manage_settings')): ?>
     <div class="alert alert-error" style="margin:0;border-radius:0;border-left:0;border-right:0;border-top:0">
         <strong>HTTPS not active yet.</strong>
@@ -69,6 +94,7 @@ function layout_header(string $title, array $user, string $active = ''): void
             <?php
             $nav = [
                 'dashboard' => ['Dashboard', 'index.php', '▣'],
+                'tech' => ['Tech mode', 'pages/tech.php?mode=tech', '📱'],
                 'floorplan' => ['Floor Planner', 'pages/floorplan.php', '▦'],
                 'datacenters' => ['Data Centers', 'pages/datacenters.php', '🏛'],
                 'cabinets' => ['Cabinets', 'pages/cabinets.php', '▤'],
@@ -176,17 +202,124 @@ function layout_header(string $title, array $user, string $active = ''): void
     <?php
 }
 
+/**
+ * Tech-mode chrome open (main content follows until layout_footer).
+ *
+ * @param list<array{type:string,message:string}> $flashes
+ */
+function layout_tech_shell_open(
+    string $title,
+    array $user,
+    string $active,
+    string $appName,
+    string $display,
+    int $unread,
+    array $flashes,
+    bool $httpsMismatch
+): void {
+    $exitUrl = class_exists('TechMode')
+        ? TechMode::disableUrl(null)
+        : App::url('index.php?mode=full');
+    // Prefer returning to the same logical page in full mode
+    $script = (string)($_SERVER['SCRIPT_NAME'] ?? '');
+    if ($script !== '' && class_exists('TechMode')) {
+        $base = App::basePath();
+        $rel = $script;
+        if ($base !== '' && str_starts_with(str_replace('\\', '/', $script), $base)) {
+            $rel = substr(str_replace('\\', '/', $script), strlen($base)) ?: $script;
+        }
+        $rel = ltrim(str_replace('\\', '/', $rel), '/');
+        $qs = (string)($_SERVER['QUERY_STRING'] ?? '');
+        // Strip mode/field so exit is clean
+        if ($qs !== '') {
+            parse_str($qs, $q);
+            unset($q['mode'], $q['field']);
+            $qs = http_build_query($q);
+        }
+        $path = $rel . ($qs !== '' ? '?' . $qs : '');
+        $exitUrl = TechMode::disableUrl($path !== '' ? $path : 'index.php');
+    }
+    ?>
+    <?php if ($httpsMismatch && AuthManager::can($user, 'manage_settings')): ?>
+    <div class="alert alert-error" style="margin:0;border-radius:0">
+        HTTPS configured but this session is HTTP.
+        <a href="<?= App::e(App::url('pages/settings.php#security')) ?>">Settings</a>
+    </div>
+    <?php endif; ?>
+    <div class="main-area">
+        <header class="topbar">
+            <h1 class="page-title"><?= App::e($title) ?></h1>
+            <div class="topbar-actions" style="display:flex;align-items:center;gap:.5rem">
+                <a class="notif-badge" href="<?= App::e(App::url('pages/notifications.php')) ?>"
+                   title="Notifications"
+                   <?= $unread < 1 ? 'hidden' : '' ?>><?= (int)$unread ?></a>
+                <a class="tech-exit-link" href="<?= App::e($exitUrl) ?>" title="Leave technician chrome">Desktop</a>
+            </div>
+        </header>
+        <main class="content">
+            <div class="tech-banner">
+                <strong>Tech mode</strong>
+                <span class="text-muted">Field chrome · same data &amp; permissions as desktop</span>
+                <span class="text-muted" style="margin-left:auto;font-size:.8rem"><?= App::e($display) ?></span>
+            </div>
+            <?php foreach ($flashes as $f): ?>
+                <div class="alert alert-<?= App::e($f['type']) ?>"><?= App::e($f['message']) ?></div>
+            <?php endforeach; ?>
+    <?php
+}
+
 function layout_footer(): void
 {
+    $ctx = $GLOBALS['coldaisle_layout_ctx'] ?? null;
+    $tech = is_array($ctx) && !empty($ctx['tech']);
+    $user = is_array($ctx) ? ($ctx['user'] ?? []) : [];
+    $active = is_array($ctx) ? (string)($ctx['active'] ?? '') : '';
     $donateUrl = 'https://paypal.me/mattelsberry';
     $timerOn = class_exists('App', false) && App::requestTimerEnabled();
     $timing = $timerOn ? App::requestTimingSnapshot() : null;
+    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '9';
+
+    if ($tech):
+        $nav = (class_exists('TechMode') && $user)
+            ? TechMode::navSurfaces($user)
+            : [];
+        ?>
+        </main>
+    </div>
+    <nav class="tech-bottom-nav" aria-label="Technician navigation">
+        <?php foreach ($nav as $s):
+            $isActive = class_exists('TechMode') && TechMode::surfaceIsActive($s, $active);
+            ?>
+            <a class="<?= $isActive ? 'active' : '' ?>"
+               href="<?= App::e(TechMode::surfaceUrl($s)) ?>">
+                <span class="tech-nav-icon" aria-hidden="true"><?= App::e((string)($s['icon'] ?? '·')) ?></span>
+                <span><?= App::e((string)($s['label'] ?? '')) ?></span>
+            </a>
+        <?php endforeach; ?>
+    </nav>
+</div>
+<script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=<?= App::e($jsV) ?>"></script>
+<script>
+(function () {
+  if (window.ColdAisle && ColdAisle.liveToasts && typeof ColdAisle.initLiveToasts === 'function') {
+    ColdAisle.initLiveToasts();
+  }
+})();
+</script>
+</body>
+</html>
+        <?php
+        return;
+    endif;
     ?>
         </main>
         <footer class="app-footer">
             ColdAisle v<?= App::VERSION ?> · <?= date('Y') ?>
             · <a href="<?= App::e($donateUrl) ?>" target="_blank" rel="noopener noreferrer">Donate</a>
             · <a href="https://github.com/sabap/ColdAisle" target="_blank" rel="noopener noreferrer">GitHub</a>
+            <?php if (class_exists('TechMode')): ?>
+                · <a href="<?= App::e(TechMode::enableUrl('pages/tech.php')) ?>">Tech mode</a>
+            <?php endif; ?>
             <?php if ($timing): ?>
                 <span class="dev-request-timer"
                       id="devRequestTimer"
@@ -219,7 +352,7 @@ function layout_footer(): void
         </footer>
     </div>
 </div>
-<script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=<?= App::e(preg_replace('/\W+/', '', (string)App::VERSION) . '8') ?>"></script>
+<script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=<?= App::e($jsV) ?>"></script>
 <script>
 (function () {
   if (window.ColdAisle && ColdAisle.liveToasts && typeof ColdAisle.initLiveToasts === 'function') {

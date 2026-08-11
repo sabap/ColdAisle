@@ -342,9 +342,18 @@ if ($id) {
         }
     }
 
-    $fieldMode = !empty($_GET['field']);
+    // Field chrome = Tech mode session (and legacy ?field=1). Same elevation / audit APIs.
+    $fieldMode = class_exists('TechMode')
+        ? TechMode::wantsFieldChrome()
+        : !empty($_GET['field']);
+    if ($fieldMode && class_exists('TechMode')) {
+        TechMode::enable();
+        TechMode::rememberCabinet((int)$id, (string)($cab['name'] ?? ''));
+    }
     $openAudit = !empty($_GET['audit']);
-    $cabQrUrl = App::url('pages/cabinets.php?id=' . (int)$id . '&field=1');
+    $cabQrUrl = class_exists('TechMode')
+        ? TechMode::cabinetFieldUrl((int)$id)
+        : App::url('pages/cabinets.php?id=' . (int)$id . '&field=1');
     $cabLabelUrl = App::url('pages/cabinet_label.php?id=' . (int)$id);
     $cabDeviceCount = 0;
     try {
@@ -357,12 +366,12 @@ if ($id) {
     }
 
     layout_header('Cabinet: ' . $cab['name'], $user, 'cabinets');
-    if ($fieldMode): ?>
+    // Sticky audit actions sit above tech bottom nav (styles in tech.css when TechMode active)
+    if ($fieldMode && !(class_exists('TechMode') && TechMode::isActive())): ?>
     <style>
-      body.cabinet-field-mode .topbar-nav,
+      /* Legacy one-shot field=1 without session: light chrome (prefer Tech mode) */
       body.cabinet-field-mode .sidebar,
       body.cabinet-field-mode .app-footer { display: none !important; }
-      body.cabinet-field-mode .main-content,
       body.cabinet-field-mode .content { margin: 0 !important; max-width: 100% !important; padding-bottom: 5.5rem !important; }
       .cab-field-bar {
         position: fixed; left: 0; right: 0; bottom: 0; z-index: 1200;
@@ -372,25 +381,11 @@ if ($id) {
         box-shadow: 0 -8px 24px rgba(0,0,0,.35);
       }
       .cab-field-bar .btn { flex: 1; min-height: 2.75rem; font-size: 1rem; font-weight: 600; }
-      .cab-field-banner {
-        display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center;
-        padding: .65rem .85rem; margin-bottom: .85rem; border-radius: 10px;
-        background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.28);
-        font-size: .9rem;
-      }
       @media (max-width: 720px) {
         .rack-detail-grid { grid-template-columns: 1fr !important; }
-        .cab-field-bar .btn-secondary { flex: 0 0 auto; min-width: 5.5rem; }
       }
     </style>
     <script>document.body.classList.add('cabinet-field-mode');</script>
-    <?php endif; ?>
-    <?php if ($fieldMode): ?>
-    <div class="cab-field-banner">
-        <strong>Field mode</strong>
-        <span class="text-muted">Scan-friendly · large audit control · simplified chrome</span>
-        <a class="btn btn-sm btn-ghost" href="?id=<?= (int)$id ?>">Exit field mode</a>
-    </div>
     <?php endif; ?>
     <div class="flex-between mb-2">
         <div>
@@ -441,17 +436,23 @@ if ($id) {
                         data-audit-u-used="<?= (int)$used ?>">✓ Audit</button>
             <?php endif; ?>
             <a class="btn btn-secondary" href="<?= App::e($cabLabelUrl) ?>" title="Printable ID label / QR plaque">QR / Label</a>
-            <?php if (!$fieldMode): ?>
+            <?php if (!$fieldMode && class_exists('TechMode')): ?>
+                <a class="btn btn-ghost btn-sm" href="<?= App::e(TechMode::cabinetFieldUrl((int)$id)) ?>" title="Technician chrome">Tech</a>
+            <?php elseif (!$fieldMode): ?>
                 <a class="btn btn-ghost btn-sm" href="?id=<?= (int)$id ?>&field=1" title="Field tech layout">Field</a>
             <?php endif; ?>
+            <?php if (!$fieldMode): ?>
             <button type="button" class="btn btn-secondary" id="btnAddPdu">+ PDU</button>
             <a class="btn btn-primary" href="<?= App::e(App::url('pages/devices.php?action=new&cabinet_id=' . $id)) ?>">+ Device</a>
+            <?php else: ?>
+            <a class="btn btn-primary" href="<?= App::e(App::url('pages/devices.php?action=new&cabinet_id=' . $id)) ?>">+ Device</a>
+            <?php endif; ?>
         </div>
     </div>
 
     <?php if ($fieldMode && $cabinetAuditCanLog): ?>
     <div class="cab-field-bar" role="toolbar" aria-label="Field actions">
-        <a class="btn btn-secondary" href="<?= App::e(App::url('pages/cabinets.php')) ?>">Cabinets</a>
+        <a class="btn btn-secondary" href="<?= App::e(class_exists('TechMode') ? TechMode::hubUrl() : App::url('pages/tech.php')) ?>">Hub</a>
         <button type="button" class="btn btn-primary"
                 data-audit-cabinet="<?= (int)$id ?>"
                 data-audit-name="<?= App::e($cab['name']) ?>"
@@ -1970,7 +1971,7 @@ $cabLabelBase = App::url('pages/cabinet_label.php');
                                             </td>
                                             <td class="actions" style="white-space:nowrap">
                                                 <a class="btn btn-sm btn-secondary" href="?id=<?= (int)$c['cabinet_id'] ?>">Rack</a>
-                                                <a class="btn btn-sm btn-ghost" href="?id=<?= (int)$c['cabinet_id'] ?>&field=1" title="Field mode">Field</a>
+                                                <a class="btn btn-sm btn-ghost" href="<?= App::e(class_exists('TechMode') ? TechMode::cabinetFieldUrl((int)$c['cabinet_id']) : ('?id=' . (int)$c['cabinet_id'] . '&field=1')) ?>" title="Tech mode">Tech</a>
                                                 <a class="btn btn-sm btn-ghost" href="<?= App::e($cabLabelBase . '?id=' . (int)$c['cabinet_id']) ?>" title="QR / label">QR</a>
                                             </td>
                                         </tr>

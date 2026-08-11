@@ -12,6 +12,11 @@ if (!App::isInstalled()) {
 }
 $user = App::requireAuth();
 
+// Tech mode session → field hub (desktop chrome is full dashboard)
+if (class_exists('TechMode') && TechMode::isActive() && empty($_GET['stay'])) {
+    App::redirect('pages/tech.php');
+}
+
 // Metrics
 $metrics = [
     'sites' => (int) Database::fetchValue('SELECT COUNT(*) FROM sites WHERE is_active = 1'),
@@ -216,6 +221,16 @@ layout_header('Dashboard', $user, 'dashboard');
         <?= App::e((string)$dashUpdate['error']) ?>
     </div>
     <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/settings.php#updates')) ?>">Update settings</a>
+</div>
+<?php endif; ?>
+
+<?php if (class_exists('TechMode')): ?>
+<div class="alert alert-info" style="margin-bottom:1rem;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+    <div>
+        <strong>Tech mode</strong>
+        <span class="text-muted"> — tablet / phone chrome for cabinet audits, device lookup, and work orders (same data as desktop).</span>
+    </div>
+    <a class="btn btn-sm btn-primary" href="<?= App::e(TechMode::enableUrl('pages/tech.php')) ?>">Open Tech mode</a>
 </div>
 <?php endif; ?>
 
