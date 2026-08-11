@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **SNMP last-poll age + zone poll (Tier A / G-A5):** relative polled ages (green / warn &gt;1h / danger &gt;4h) on PDU, UPS, cooling, and SNMP schedule lists; **Poll SNMP now** on power zone detail force-polls zone PDUs + UPS; NOC reports fleet SNMP stale count
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.112] - 2026-08-11
+
+### New features
+
+- **SNMP last-poll age + zone poll (Tier A / G-A5):** relative polled ages (green / warn &gt;1h / danger &gt;4h) on PDU, UPS, cooling, and SNMP schedule lists; **Poll SNMP now** on power zone detail force-polls zone PDUs + UPS; NOC reports fleet SNMP stale count
+
+---
 ## [0.3.111] - 2026-08-11
 
 ### New features
