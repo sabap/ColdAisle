@@ -973,7 +973,14 @@ if ($action === 'new' || $id) {
                         $openDecomId = null;
                     }
                     $canDecommission = $devStatus !== 'disposed' && !$openDecomId;
+                    $canWorkOrder = AuthManager::canEditWorkOrders($user) && $devStatus !== 'disposed';
                     ?>
+                    <?php if ($canWorkOrder): ?>
+                        <a class="btn btn-secondary"
+                           href="<?= App::e(App::url('pages/work_orders.php?action=new&device_id=' . (int)$device['device_id'])) ?>">
+                            Move / work order
+                        </a>
+                    <?php endif; ?>
                     <?php if ($openDecomId): ?>
                         <a class="btn btn-warning" href="<?= App::e(App::url('pages/disposals.php?id=' . $openDecomId)) ?>">Open decommission</a>
                     <?php elseif ($canDecommission): ?>
