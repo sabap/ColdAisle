@@ -255,6 +255,24 @@ try {
         }
     }
 
+    // Env thresholds + stale/offline sensors (after SNMP cycle)
+    if (class_exists('EnvSensorAlertService')) {
+        try {
+            $envRun = EnvSensorAlertService::runScheduledChecks();
+            $envMsg = sprintf(
+                'env alerts threshold=%d/%d stale=%d/%d',
+                (int)($envRun['threshold_alerted'] ?? 0),
+                (int)($envRun['threshold_checked'] ?? 0),
+                (int)($envRun['stale_alerted'] ?? 0),
+                (int)($envRun['stale_checked'] ?? 0)
+            );
+            echo $envMsg . "\n";
+            $earlyLog($envMsg);
+        } catch (Throwable $e) {
+            $earlyLog('env alerts: ' . $e->getMessage());
+        }
+    }
+
     // Occasional storage prune (at most every 12h when auto-enabled)
     if (class_exists('StorageHousekeepingService')) {
         try {

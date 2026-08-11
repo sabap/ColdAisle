@@ -1819,6 +1819,7 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
                 <p class="text-muted" style="font-size:.8rem;margin:0 0 .5rem">
                     After SNMP poll or manual reading: sensor warn/crit thresholds and RH limits.
                     Temperature thresholds are set per sensor; site RH defaults are below.
+                    Optional <strong>stale / offline</strong> mail when a sensor stops reporting.
                 </p>
                 <?php if (!class_exists('EnvSensorAlertService')): ?>
                     <p class="alert alert-error">EnvSensorAlertService not deployed.</p>
@@ -1848,6 +1849,21 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
                            name="env_alerts_rh_crit"
                            value="<?= App::e((string)(int)($envAlerts['rh_crit'] ?? 90)) ?>">
                 </div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="env_alerts_stale_enabled" value="1"
+                        <?= !isset($envAlerts['stale_enabled']) || !empty($envAlerts['stale_enabled']) ? 'checked' : '' ?>>
+                    Alert when sensors go stale / offline
+                </label></div>
+                <div class="form-row"><label>Stale after (min)</label>
+                    <input class="form-control" type="number" min="15" max="10080" step="1"
+                           name="env_alerts_stale_min"
+                           value="<?= App::e((string)(int)($envAlerts['stale_min'] ?? 60)) ?>">
+                </div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="env_alerts_digest" value="1"
+                        <?= !isset($envAlerts['digest']) || !empty($envAlerts['digest']) ? 'checked' : '' ?>>
+                    Batch stale sensors into one digest email (recommended)
+                </label></div>
                 <?php endif; ?>
             </div>
 

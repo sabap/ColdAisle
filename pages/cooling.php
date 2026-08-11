@@ -69,6 +69,37 @@ $staleSensors = count(array_filter($sensors, static function ($s) {
     return strtotime((string)$s['last_seen_at']) < (time() - 3600);
 }));
 
+// Sort sensors: crit → warn → stale → ok for dashboard attention list
+$sensorAttention = $sensors;
+usort($sensorAttention, static function ($a, $b) {
+    $rank = static function ($s): int {
+        $val = $s['last_value'] !== null && $s['last_value'] !== '' ? (float)$s['last_value'] : null;
+        $st = env_sensor_threshold_status($val, $s);
+        if ($st === 'crit') {
+            return 0;
+        }
+        if ($st === 'warn') {
+            return 1;
+        }
+        $seen = (string)($s['last_seen_at'] ?? '');
+        if ($seen === '' || strtotime($seen) < (time() - 3600)) {
+            return 2;
+        }
+        return 3;
+    };
+    return $rank($a) <=> $rank($b);
+});
+$attentionList = array_slice($sensorAttention, 0, 12);
+
+// Promote cooling SNMP snapshot metrics when last_poll_json has known keys
+foreach ($units as &$cuRow) {
+    $cuRow['poll_snap'] = function_exists('cooling_poll_snapshot_promote')
+        ? cooling_poll_snapshot_promote($cuRow['last_poll_json'] ?? null)
+        : ['has_data' => false, 'display' => []];
+}
+unset($cuRow);
+$unitsWithSnap = count(array_filter($units, static fn($u) => !empty($u['poll_snap']['has_data'])));
+
 $ashraeRec = cooling_ashrae_envelope('recommended');
 
 layout_header('Cooling & Environment', $user, 'cooling');
@@ -180,13 +211,21 @@ layout_header('Cooling & Environment', $user, 'cooling');
                             <th>Name</th>
                             <th>Type</th>
                             <th>Role</th>
-                            <th>Medium</th>
+                            <th>Telemetry</th>
                             <th>Location</th>
                             <th>Status</th>
                         </tr>
                         </thead>
                         <tbody>
-                        <?php foreach (array_slice($units, 0, 12) as $u): ?>
+                        <?php foreach (array_slice($units, 0, 12) as $u):
+                            $snap = is_array($u['poll_snap'] ?? null) ? $u['poll_snap'] : null;
+                            $bits = [];
+                            if ($snap && !empty($snap['display'])) {
+                                foreach (array_slice($snap['display'], 0, 4) as $d) {
+                                    $bits[] = $d['label'] . ' ' . $d['value'];
+                                }
+                            }
+                            ?>
                             <tr>
                                 <td>
                                     <a href="<?= App::e(App::url('pages/cooling_units.php?id=' . (int)$u['cooling_unit_id'])) ?>">
@@ -200,7 +239,15 @@ layout_header('Cooling & Environment', $user, 'cooling');
                                         <span class="text-muted" style="font-size:.75rem">of <?= App::e($u['primary_unit_name']) ?></span>
                                     <?php endif; ?>
                                 </td>
-                                <td><?= App::e($media[$u['cooling_medium'] ?? ''] ?? ($u['cooling_medium'] ?? '—')) ?></td>
+                                <td style="font-size:.8rem">
+                                    <?php if ($bits): ?>
+                                        <?= App::e(implode(' · ', $bits)) ?>
+                                    <?php elseif (!empty($u['snmp_last_poll_at'])): ?>
+                                        <span class="text-muted">Polled · no mapped keys</span>
+                                    <?php else: ?>
+                                        <span class="text-muted">—</span>
+                                    <?php endif; ?>
+                                </td>
                                 <td class="text-muted" style="font-size:.85rem">
                                     <?php
                                     $loc = trim(($u['dc_name'] ?? '') . ' / ' . ($u['room_name'] ?? ''), ' /');
@@ -219,7 +266,7 @@ layout_header('Cooling & Environment', $user, 'cooling');
 
     <div class="card">
         <div class="card-header flex-between">
-            <h3 class="mt-0 mb-0" style="font-size:1rem">Environmental points</h3>
+            <h3 class="mt-0 mb-0" style="font-size:1rem">Sensors needing attention</h3>
             <a class="btn btn-ghost btn-sm" href="<?= App::e(App::url('pages/env_sensors.php')) ?>">All sensors</a>
         </div>
         <div class="card-body" style="padding:0">
@@ -229,6 +276,12 @@ layout_header('Cooling & Environment', $user, 'cooling');
                     <a href="<?= App::e(App::url('pages/env_sensors.php')) ?>">Env sensors</a>.
                 </p>
             <?php else: ?>
+                <p class="text-muted mb-0" style="font-size:.78rem;padding:.5rem .75rem 0">
+                    Crit / warn first, then stale (&gt;1h). Charts on each sensor page.
+                    <?php if ($unitsWithSnap): ?>
+                        · <?= (int)$unitsWithSnap ?> cooling unit(s) with live SNMP snapshot
+                    <?php endif; ?>
+                </p>
                 <div class="table-wrap">
                     <table class="table table-sm">
                         <thead>
@@ -241,12 +294,18 @@ layout_header('Cooling & Environment', $user, 'cooling');
                         </tr>
                         </thead>
                         <tbody>
-                        <?php foreach (array_slice($sensors, 0, 12) as $s):
+                        <?php foreach ($attentionList as $s):
                             $val = $s['last_value'] !== null && $s['last_value'] !== '' ? (float)$s['last_value'] : null;
                             $st = env_sensor_threshold_status($val, $s);
+                            $seen = (string)($s['last_seen_at'] ?? '');
+                            $isStale = $seen === '' || strtotime($seen) < (time() - 3600);
+                            if ($st === 'ok' && $isStale) {
+                                $st = 'stale';
+                            }
                             $badge = match ($st) {
                                 'crit' => 'badge-danger',
                                 'warn' => 'badge-warning',
+                                'stale' => 'badge-warning',
                                 'ok' => 'badge-success',
                                 default => 'badge-muted',
                             };
@@ -256,6 +315,15 @@ layout_header('Cooling & Environment', $user, 'cooling');
                                 'room' => $s['room_name'] ?? 'Room',
                                 default => env_sensor_hosts()[$s['host_type'] ?? ''] ?? ($s['host_type'] ?? '—'),
                             };
+                            $dispVal = $val;
+                            $dispUnit = (string)($s['unit'] ?? '');
+                            if ($val !== null && class_exists('TempUnitService')
+                                && TempUnitService::isTempKind((string)($s['sensor_kind'] ?? ''))
+                                && ($s['sensor_kind'] ?? '') !== 'humidity'
+                            ) {
+                                $dispVal = TempUnitService::fromC($val) ?? $val;
+                                $dispUnit = TempUnitService::symbol();
+                            }
                             ?>
                             <tr>
                                 <td>
@@ -267,8 +335,8 @@ layout_header('Cooling & Environment', $user, 'cooling');
                                 <td class="text-muted" style="font-size:.85rem"><?= App::e((string)$hostLabel) ?></td>
                                 <td>
                                     <?php if ($val !== null): ?>
-                                        <?= App::e(rtrim(rtrim(number_format($val, 2, '.', ''), '0'), '.')) ?>
-                                        <?= App::e((string)($s['unit'] ?? '')) ?>
+                                        <?= App::e(rtrim(rtrim(number_format((float)$dispVal, 2, '.', ''), '0'), '.')) ?>
+                                        <?= App::e($dispUnit) ?>
                                     <?php else: ?>
                                         <span class="text-muted">—</span>
                                     <?php endif; ?>
