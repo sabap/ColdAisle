@@ -342,8 +342,56 @@ if ($id) {
         }
     }
 
+    $fieldMode = !empty($_GET['field']);
+    $openAudit = !empty($_GET['audit']);
+    $cabQrUrl = App::url('pages/cabinets.php?id=' . (int)$id . '&field=1');
+    $cabLabelUrl = App::url('pages/cabinet_label.php?id=' . (int)$id);
+    $cabDeviceCount = 0;
+    try {
+        $cabDeviceCount = (int)Database::fetchValue(
+            'SELECT COUNT(*) FROM devices WHERE cabinet_id = ? AND is_active = 1 AND parent_device_id IS NULL',
+            [$id]
+        );
+    } catch (Throwable $e) {
+        $cabDeviceCount = count($rackDevices ?? []);
+    }
+
     layout_header('Cabinet: ' . $cab['name'], $user, 'cabinets');
-    ?>
+    if ($fieldMode): ?>
+    <style>
+      body.cabinet-field-mode .topbar-nav,
+      body.cabinet-field-mode .sidebar,
+      body.cabinet-field-mode .app-footer { display: none !important; }
+      body.cabinet-field-mode .main-content,
+      body.cabinet-field-mode .content { margin: 0 !important; max-width: 100% !important; padding-bottom: 5.5rem !important; }
+      .cab-field-bar {
+        position: fixed; left: 0; right: 0; bottom: 0; z-index: 1200;
+        display: flex; gap: .5rem; padding: .65rem .75rem;
+        background: rgba(15, 23, 42, 0.96);
+        border-top: 1px solid rgba(148, 163, 184, 0.25);
+        box-shadow: 0 -8px 24px rgba(0,0,0,.35);
+      }
+      .cab-field-bar .btn { flex: 1; min-height: 2.75rem; font-size: 1rem; font-weight: 600; }
+      .cab-field-banner {
+        display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center;
+        padding: .65rem .85rem; margin-bottom: .85rem; border-radius: 10px;
+        background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.28);
+        font-size: .9rem;
+      }
+      @media (max-width: 720px) {
+        .rack-detail-grid { grid-template-columns: 1fr !important; }
+        .cab-field-bar .btn-secondary { flex: 0 0 auto; min-width: 5.5rem; }
+      }
+    </style>
+    <script>document.body.classList.add('cabinet-field-mode');</script>
+    <?php endif; ?>
+    <?php if ($fieldMode): ?>
+    <div class="cab-field-banner">
+        <strong>Field mode</strong>
+        <span class="text-muted">Scan-friendly · large audit control · simplified chrome</span>
+        <a class="btn btn-sm btn-ghost" href="?id=<?= (int)$id ?>">Exit field mode</a>
+    </div>
+    <?php endif; ?>
     <div class="flex-between mb-2">
         <div>
             <span class="text-muted"><?= App::e($cab['dc_name'] . ' / ' . $cab['room_name']) ?></span>
@@ -357,41 +405,61 @@ if ($id) {
             <p class="text-muted mb-0">
                 Floor: <?= (int)$cab['width_mm'] ?>×<?= (int)$cab['depth_mm'] ?> mm ·
                 Rails: 19″ · <?= $height ?>U (<?= App::e(rtrim(rtrim(sprintf('%.2F', $aspectH), '0'), '.')) ?>″ tall)
+                · <?= (int)$cabDeviceCount ?> device(s)
             </p>
-            <p class="mb-0" style="font-size:.85rem;margin-top:.25rem">
+            <p class="mb-0" style="font-size:.85rem;margin-top:.25rem" id="cabAuditSummaryLine">
                 <?php if ($lastCabinetAudit): ?>
-                    <span class="text-muted">Last audit
+                    <span class="text-muted" data-cab-last-audit="<?= (int)$id ?>">Last audit
                         <?= App::e(date('Y-m-d H:i', strtotime((string)$lastCabinetAudit['audited_at']))) ?>
                         by <?= App::e((string)($lastCabinetAudit['audited_by_name'] ?? '—')) ?>
                     </span>
                 <?php else: ?>
-                    <span class="text-muted">No cabinet audit logged yet</span>
+                    <span class="text-muted" data-cab-last-audit="<?= (int)$id ?>">No cabinet audit logged yet</span>
                 <?php endif; ?>
                 ·
-                <span class="badge <?= App::e(audit_status_badge_class($cabAuditSchedule['status'])) ?>">
+                <span class="badge <?= App::e(audit_status_badge_class($cabAuditSchedule['status'])) ?>" id="cabAuditStatusBadge">
                     <?= App::e(audit_status_label($cabAuditSchedule['status'])) ?>
                 </span>
                 <?php if ($cabAuditSchedule['next_due']): ?>
-                    <span class="text-muted">
+                    <span class="text-muted" id="cabAuditNextDue">
                         · Next due <strong><?= App::e($cabAuditSchedule['next_due']) ?></strong>
                         (every <?= (int)$cabAuditInterval ?>d)
                     </span>
                 <?php else: ?>
-                    <span class="text-muted">· Schedule every <?= (int)$cabAuditInterval ?>d from first audit</span>
+                    <span class="text-muted" id="cabAuditNextDue">· Schedule every <?= (int)$cabAuditInterval ?>d from first audit</span>
                 <?php endif; ?>
             </p>
         </div>
-        <div class="flex gap-1">
+        <div class="flex gap-1 cab-desktop-actions">
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/cabinets.php')) ?>">← All Cabinets</a>
             <?php if ($cabinetAuditCanLog): ?>
                 <button type="button" class="btn btn-secondary"
                         data-audit-cabinet="<?= (int)$id ?>"
-                        data-audit-name="<?= App::e($cab['name']) ?>">✓ Audit</button>
+                        data-audit-name="<?= App::e($cab['name']) ?>"
+                        data-audit-devices="<?= (int)$cabDeviceCount ?>"
+                        data-audit-u="<?= (int)$height ?>"
+                        data-audit-u-used="<?= (int)$used ?>">✓ Audit</button>
+            <?php endif; ?>
+            <a class="btn btn-secondary" href="<?= App::e($cabLabelUrl) ?>" title="Printable ID label / QR plaque">QR / Label</a>
+            <?php if (!$fieldMode): ?>
+                <a class="btn btn-ghost btn-sm" href="?id=<?= (int)$id ?>&field=1" title="Field tech layout">Field</a>
             <?php endif; ?>
             <button type="button" class="btn btn-secondary" id="btnAddPdu">+ PDU</button>
             <a class="btn btn-primary" href="<?= App::e(App::url('pages/devices.php?action=new&cabinet_id=' . $id)) ?>">+ Device</a>
         </div>
     </div>
+
+    <?php if ($fieldMode && $cabinetAuditCanLog): ?>
+    <div class="cab-field-bar" role="toolbar" aria-label="Field actions">
+        <a class="btn btn-secondary" href="<?= App::e(App::url('pages/cabinets.php')) ?>">Cabinets</a>
+        <button type="button" class="btn btn-primary"
+                data-audit-cabinet="<?= (int)$id ?>"
+                data-audit-name="<?= App::e($cab['name']) ?>"
+                data-audit-devices="<?= (int)$cabDeviceCount ?>"
+                data-audit-u="<?= (int)$height ?>"
+                data-audit-u-used="<?= (int)$used ?>">✓ Log audit</button>
+    </div>
+    <?php endif; ?>
 
     <!-- Three columns: Front | Rear | Properties -->
     <div class="rack-detail-grid">
@@ -413,6 +481,39 @@ if ($id) {
                     <div class="metric-card"><div class="label">U Free</div><div class="value"><?= max(0, $height - $used) ?></div></div>
                     <div class="metric-card success"><div class="label">Utilization</div><div class="value"><?= $pct ?>%</div></div>
                 </div>
+
+                <?php
+                // Cabinet QR preview for field plaques
+                $cabQrSvg = '';
+                try {
+                    require_once dirname(__DIR__) . '/src/Services/QrCodeService.php';
+                    $cabQrSvg = QrCodeService::svgLabel($cabQrUrl);
+                } catch (Throwable $e) {
+                    $cabQrSvg = '';
+                }
+                if ($cabQrSvg !== ''):
+                    ?>
+                <div class="cab-qr-card" style="margin:0 0 1rem;padding:.75rem;border-radius:10px;border:1px solid var(--border);background:rgba(15,23,42,.25)">
+                    <div class="flex-between" style="align-items:flex-start;gap:.75rem;flex-wrap:wrap">
+                        <div style="background:#fff;padding:6px;border-radius:6px;line-height:0;width:112px;height:112px">
+                            <div style="width:100%;height:100%"><?= str_replace('<svg ', '<svg style="width:100%;height:100%;display:block" ', $cabQrSvg) ?></div>
+                        </div>
+                        <div style="flex:1;min-width:8rem">
+                            <strong style="font-size:.9rem">Cabinet QR</strong>
+                            <p class="text-muted mb-0" style="font-size:.75rem;margin-top:.25rem">
+                                Scan to open this cabinet (field mode). Phone needs site network + login.
+                            </p>
+                            <div class="flex gap-1" style="margin-top:.5rem;flex-wrap:wrap">
+                                <a class="btn btn-sm btn-secondary" href="<?= App::e($cabLabelUrl) ?>">Label / print</a>
+                                <a class="btn btn-sm btn-ghost" href="<?= App::e($cabLabelUrl . '&format=svg') ?>">SVG</a>
+                                <a class="btn btn-sm btn-ghost" href="<?= App::e($cabLabelUrl . '&format=png') ?>">PNG</a>
+                                <a class="btn btn-sm btn-ghost" href="<?= App::e($cabLabelUrl . '&format=sheet') ?>" target="_blank">Sheet</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <?php endif; ?>
+
                 <dl class="rack-prop-list">
                     <div><dt>Name</dt><dd><?= App::e($cab['name']) ?></dd></div>
                     <div><dt>Health</dt><dd>
@@ -566,7 +667,10 @@ if ($id) {
                     <?php if ($cabinetAuditCanLog): ?>
                         <button type="button" class="btn btn-sm btn-secondary"
                                 data-audit-cabinet="<?= (int)$id ?>"
-                                data-audit-name="<?= App::e($cab['name']) ?>">+ Log audit</button>
+                                data-audit-name="<?= App::e($cab['name']) ?>"
+                                data-audit-devices="<?= (int)$cabDeviceCount ?>"
+                                data-audit-u="<?= (int)$height ?>"
+                                data-audit-u-used="<?= (int)$used ?>">+ Log audit</button>
                     <?php endif; ?>
                 </div>
             </div>
@@ -1101,18 +1205,55 @@ if ($id) {
     window.ColdAisle = window.ColdAisle || {};
     window.ColdAisle.refreshCabinetAuditHistory = function (cabinetId, audit) {
         var tbody = document.querySelector('#cabinetAuditHistory tbody');
-        if (!tbody || !audit) return;
-        var empty = tbody.querySelector('.cab-audit-empty');
-        if (empty) empty.remove();
-        var tr = document.createElement('tr');
-        var when = audit.audited_at ? String(audit.audited_at).replace('T', ' ').slice(0, 16) : 'just now';
-        tr.innerHTML =
-            '<td style="white-space:nowrap;font-size:.85rem">' + when + '</td>' +
-            '<td>' + (audit.audited_by_name || '—') + '</td>' +
-            '<td>✓</td>' +
-            '<td style="font-size:.85rem">' + (audit.comments ? String(audit.comments) : '—') + '</td>';
-        tbody.insertBefore(tr, tbody.firstChild);
+        var esc = function (s) {
+            var d = document.createElement('div');
+            d.textContent = s == null ? '' : String(s);
+            return d.innerHTML;
+        };
+        if (tbody && audit) {
+            var empty = tbody.querySelector('.cab-audit-empty');
+            if (empty) empty.remove();
+            var tr = document.createElement('tr');
+            var when = audit.audited_at ? String(audit.audited_at).replace('T', ' ').slice(0, 16) : 'just now';
+            tr.innerHTML =
+                '<td style="white-space:nowrap;font-size:.85rem">' + esc(when) + '</td>' +
+                '<td>' + esc(audit.audited_by_name || '—') + '</td>' +
+                '<td>✓</td>' +
+                '<td style="font-size:.85rem">' + esc(audit.comments || '—') + '</td>';
+            tbody.insertBefore(tr, tbody.firstChild);
+        }
+        document.querySelectorAll('[data-cab-last-audit="' + cabinetId + '"]').forEach(function (el) {
+            el.textContent = 'Last audit just now' + (audit && audit.audited_by_name ? (' by ' + audit.audited_by_name) : '');
+            el.classList.add('cab-audit-fresh');
+        });
+        var badge = document.getElementById('cabAuditStatusBadge');
+        if (badge) {
+            badge.className = 'badge badge-success';
+            badge.textContent = 'OK';
+        }
+        var next = document.getElementById('cabAuditNextDue');
+        if (next) {
+            var days = <?= (int)$cabAuditInterval ?>;
+            var d = new Date();
+            d.setDate(d.getDate() + days);
+            next.innerHTML = '· Next due <strong>' + d.toISOString().slice(0, 10) + '</strong> (every ' + days + 'd)';
+        }
     };
+    <?php if ($openAudit && $cabinetAuditCanLog): ?>
+    document.addEventListener('DOMContentLoaded', function () {
+        if (window.ColdAisle && typeof ColdAisle.openCabinetAudit === 'function') {
+            ColdAisle.openCabinetAudit(
+                <?= (int)$id ?>,
+                <?= json_encode((string)$cab['name'], JSON_UNESCAPED_SLASHES) ?>,
+                {
+                    devices: <?= (int)$cabDeviceCount ?>,
+                    u: <?= (int)$height ?>,
+                    uUsed: <?= (int)$used ?>
+                }
+            );
+        }
+    });
+    <?php endif; ?>
     </script>
     <?php
     require __DIR__ . '/_cabinet_audit_modal.php';
@@ -1652,10 +1793,19 @@ foreach ($tree as $dcNode) {
 $mUPct = $mUTotal > 0 ? round(100 * $mUUsed / $mUTotal, 1) : 0;
 
 layout_header('Cabinets', $user, 'cabinets');
+$cabLabelBase = App::url('pages/cabinet_label.php');
 ?>
 <div class="flex-between mb-2">
     <p class="text-muted mb-0">Cabinets grouped by row. Order follows label (natural A/1… sort) and front-facing L→R for each row.</p>
-    <a class="btn btn-primary" href="<?= App::e(App::url('pages/floorplan.php')) ?>">Open Floor Planner</a>
+    <div class="flex gap-1" style="flex-wrap:wrap">
+        <button type="button" class="btn btn-secondary" id="cabQrBatchBtn" disabled title="Print QR sheet for selected cabinets">
+            QR sheet <span id="cabQrSelCount" class="text-muted"></span>
+        </button>
+        <button type="button" class="btn btn-secondary" id="cabLabelBatchBtn" disabled title="Print labels for selected cabinets">
+            Print labels
+        </button>
+        <a class="btn btn-primary" href="<?= App::e(App::url('pages/floorplan.php')) ?>">Open Floor Planner</a>
+    </div>
 </div>
 
 <div class="metrics">
@@ -1694,7 +1844,32 @@ layout_header('Cabinets', $user, 'cabinets');
         <h2 class="cab-dc-title"><?= App::e($dcNode['name']) ?></h2>
         <?php foreach ($dcNode['rooms'] as $rmNode): ?>
             <div class="cab-room-block">
-                <h3 class="cab-room-title"><?= App::e($rmNode['name']) ?></h3>
+                <div class="flex-between" style="align-items:center;margin-bottom:.65rem;flex-wrap:wrap;gap:.5rem">
+                    <h3 class="cab-room-title" style="margin:0"><?= App::e($rmNode['name']) ?></h3>
+                    <?php
+                    // Room bulk QR if this room has any cabinets
+                    $roomCabCount = 0;
+                    foreach ($rmNode['rows'] as $rn) {
+                        $roomCabCount += count($rn['cabinets'] ?? []);
+                    }
+                    if ($roomCabCount > 0):
+                        $roomIdForQr = null;
+                        foreach ($rmNode['rows'] as $rn) {
+                            foreach ($rn['cabinets'] as $cc) {
+                                if (!empty($cc['room_id'])) {
+                                    $roomIdForQr = (int)$cc['room_id'];
+                                    break 2;
+                                }
+                            }
+                        }
+                        if ($roomIdForQr):
+                            ?>
+                        <a class="btn btn-sm btn-ghost"
+                           href="<?= App::e($cabLabelBase . '?room_id=' . $roomIdForQr . '&format=sheet') ?>"
+                           target="_blank"
+                           title="QR sheet for all cabinets in this room">Room QR sheet (<?= (int)$roomCabCount ?>)</a>
+                        <?php endif; endif; ?>
+                </div>
                 <?php foreach ($rmNode['rows'] as $rowNode):
                     $uPct = $rowNode['u_total'] > 0
                         ? round(100 * $rowNode['u_used'] / $rowNode['u_total'], 1) : 0;
@@ -1741,6 +1916,9 @@ layout_header('Cabinets', $user, 'cabinets');
                                 <table class="data">
                                     <thead>
                                     <tr>
+                                        <th class="col-check" style="width:2rem">
+                                            <input type="checkbox" class="cab-select-all" title="Select all in this row" aria-label="Select all cabinets in row">
+                                        </th>
                                         <th style="width:2.5rem">#</th>
                                         <th>Cabinet</th>
                                         <th>Facing</th>
@@ -1764,6 +1942,12 @@ layout_header('Cabinets', $user, 'cabinets');
                                         $rowCls = in_array($lst, ['warn', 'crit'], true) ? 'health-row-' . $lst : '';
                                         ?>
                                         <tr class="<?= App::e($rowCls) ?>">
+                                            <td class="col-check">
+                                                <input type="checkbox" class="cab-row-check"
+                                                       value="<?= (int)$c['cabinet_id'] ?>"
+                                                       data-cab-name="<?= App::e((string)$c['name']) ?>"
+                                                       aria-label="Select <?= App::e((string)$c['name']) ?>">
+                                            </td>
                                             <td class="text-muted"><?= $seq ?></td>
                                             <td>
                                                 <a href="?id=<?= (int)$c['cabinet_id'] ?>"><strong><?= App::e($c['name']) ?></strong></a>
@@ -1784,8 +1968,10 @@ layout_header('Cabinets', $user, 'cabinets');
                                                     <span class="health-chip-label"><?= App::e((string)($lh['label'] ?? '—')) ?></span>
                                                 </span>
                                             </td>
-                                            <td class="actions">
-                                                <a class="btn btn-sm btn-secondary" href="?id=<?= (int)$c['cabinet_id'] ?>">Rack View</a>
+                                            <td class="actions" style="white-space:nowrap">
+                                                <a class="btn btn-sm btn-secondary" href="?id=<?= (int)$c['cabinet_id'] ?>">Rack</a>
+                                                <a class="btn btn-sm btn-ghost" href="?id=<?= (int)$c['cabinet_id'] ?>&field=1" title="Field mode">Field</a>
+                                                <a class="btn btn-sm btn-ghost" href="<?= App::e($cabLabelBase . '?id=' . (int)$c['cabinet_id']) ?>" title="QR / label">QR</a>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>
@@ -1819,7 +2005,64 @@ layout_header('Cabinets', $user, 'cabinets');
 .cab-row-header { align-items: center; }
 .cab-row-title-wrap { display: flex; align-items: flex-start; gap: .65rem; }
 .cab-row-meta { font-size: .78rem; margin-top: .2rem; }
+.cab-row-check, .cab-select-all { cursor: pointer; }
+tr.cab-row-selected { background: rgba(56, 189, 248, 0.08); }
 /* Row View CSS is in assets/css/app.css (Row View exits before this block). */
 </style>
+<script>
+(function () {
+  var base = <?= json_encode($cabLabelBase, JSON_UNESCAPED_SLASHES) ?>;
+  var qrBtn = document.getElementById('cabQrBatchBtn');
+  var labelBtn = document.getElementById('cabLabelBatchBtn');
+  var countEl = document.getElementById('cabQrSelCount');
+  function checks() {
+    return Array.prototype.slice.call(document.querySelectorAll('.cab-row-check'));
+  }
+  function selectedIds() {
+    return checks().filter(function (c) { return c.checked; }).map(function (c) {
+      return parseInt(c.value, 10);
+    }).filter(function (n) { return n > 0; });
+  }
+  function sync() {
+    var ids = selectedIds();
+    var n = ids.length;
+    if (qrBtn) qrBtn.disabled = n < 1;
+    if (labelBtn) labelBtn.disabled = n < 1;
+    if (countEl) countEl.textContent = n > 0 ? '(' + n + ')' : '';
+    checks().forEach(function (c) {
+      var tr = c.closest('tr');
+      if (tr) tr.classList.toggle('cab-row-selected', c.checked);
+    });
+    document.querySelectorAll('.cab-select-all').forEach(function (sa) {
+      var table = sa.closest('table');
+      if (!table) return;
+      var all = Array.prototype.slice.call(table.querySelectorAll('.cab-row-check'));
+      var cn = all.filter(function (c) { return c.checked; }).length;
+      sa.checked = all.length > 0 && cn === all.length;
+      sa.indeterminate = cn > 0 && cn < all.length;
+    });
+  }
+  checks().forEach(function (c) { c.addEventListener('change', sync); });
+  document.querySelectorAll('.cab-select-all').forEach(function (sa) {
+    sa.addEventListener('change', function () {
+      var table = sa.closest('table');
+      if (!table) return;
+      table.querySelectorAll('.cab-row-check').forEach(function (c) { c.checked = sa.checked; });
+      sync();
+    });
+  });
+  function openBatch(format) {
+    var ids = selectedIds();
+    if (!ids.length) return;
+    var url = base + '?ids=' + encodeURIComponent(ids.join(','));
+    if (format === 'sheet') url += '&format=sheet';
+    else if (format === 'print') url += '&print=1';
+    window.open(url, '_blank');
+  }
+  if (qrBtn) qrBtn.addEventListener('click', function () { openBatch('sheet'); });
+  if (labelBtn) labelBtn.addEventListener('click', function () { openBatch('print'); });
+  sync();
+})();
+</script>
 <?php layout_footer(); ?>
 
