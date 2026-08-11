@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Power path report (Tier A / G-A1):** Reports → **Power Path** walks device PSU → rack PDU outlet → row/room breaker feed → zone → UPS (zone association); filters for unmapped PSUs, single-feed/partial map, half-map links, cabinets without row feed; Power dashboard risk card links to the report
+
 ### Enhancements
 
 ### Bug fixes
