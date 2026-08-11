@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.3.118] - 2026-08-11
+
+### New features
+
+- **Mail product flows (G-B5):** welcome email on user create (login + set-password link, no password in message); local **Forgot password** / **Reset password** pages with hashed tokens (2h TTL); disposal due-soon email digests from the poll worker (`notification_sent` once per target date; Settings → disposal notify days / enable / recipient)
+
+---
 ## [0.3.117] - 2026-08-11
 
 ### Enhancements
