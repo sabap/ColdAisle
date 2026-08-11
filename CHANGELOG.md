@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.107] - 2026-08-11
+
+### Bug fixes
+
 - **UPS graphs “No data yet” after Poll:** history series used wrong column `last_poll_at` (actual: `snmp_last_poll_at`), so unit load failed and charts returned empty series
 
 ---
-
 ## [0.3.106] - 2026-08-11
 
 ### Bug fixes
