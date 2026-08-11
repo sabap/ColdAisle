@@ -148,6 +148,7 @@ layout_header('Reports', $user, 'reports');
 
 $catalog = [
     'power_history' => 'Power History',
+    'power_path' => 'Power Path',
     'inventory_summary' => 'Inventory Summary',
     'cabinet_utilization' => 'Cabinet Utilization',
     'power_capacity' => 'Power Capacity',
@@ -157,6 +158,13 @@ $catalog = [
     'orphaned_devices' => 'Orphaned Devices',
     'audit_history' => 'Audit History',
 ];
+
+// Power path filters
+$ppZone = isset($_GET['zone_id']) && $_GET['zone_id'] !== '' ? (int)$_GET['zone_id'] : 0;
+$ppView = strtolower(trim((string)($_GET['view'] ?? 'all')));
+if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_feed'], true)) {
+    $ppView = 'all';
+}
 ?>
 
 <div class="card">
@@ -364,6 +372,268 @@ $catalog = [
 })();
 </script>
 <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=4"></script>
+
+<?php elseif ($report === 'power_path'):
+    $ppData = class_exists('PowerPathService')
+        ? PowerPathService::report([
+            'zone_id' => $ppZone,
+            'view' => $ppView,
+        ])
+        : [
+            'summary' => [
+                'path_rows' => 0, 'mapped' => 0, 'unmapped_psus' => 0, 'half_maps' => 0,
+                'single_feed_devices' => 0, 'cabinets_no_row_feed' => 0, 'ups_no_zone' => 0,
+                'devices_with_psus' => 0,
+            ],
+            'paths' => [],
+            'single_feed_devices' => [],
+            'cabinets_no_row_feed' => [],
+            'ups_no_zone' => [],
+            'zones' => [],
+            'filters' => ['zone_id' => $ppZone, 'view' => $ppView],
+        ];
+    $ppSum = $ppData['summary'];
+    $ppPaths = $ppData['paths'];
+    $ppZones = $ppData['zones'] ?? [];
+    ?>
+<div class="card mb-2">
+    <div class="card-header flex-between">
+        <h2 style="margin:0">Power Path</h2>
+        <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/power.php')) ?>">Power dashboard</a>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size:.9rem;margin-top:0">
+            End-to-end inventory from <strong>device PSU → rack PDU outlet → row/room feed → zone → UPS</strong>
+            (UPS is associated by power zone, not a hard feed link).
+            Use filters to find unmapped cords, single-feed risk, half-maps, and cabinets without a row breaker feed.
+        </p>
+        <form method="get" class="form-grid">
+            <input type="hidden" name="report" value="power_path">
+            <div class="form-row"><label>Zone</label>
+                <select class="form-control" name="zone_id">
+                    <option value="">All zones</option>
+                    <?php foreach ($ppZones as $z): ?>
+                        <option value="<?= (int)$z['zone_id'] ?>" <?= $ppZone === (int)$z['zone_id'] ? 'selected' : '' ?>>
+                            <?= App::e((string)$z['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row"><label>View</label>
+                <select class="form-control" name="view">
+                    <option value="all" <?= $ppView === 'all' ? 'selected' : '' ?>>All PSU paths</option>
+                    <option value="unmapped" <?= $ppView === 'unmapped' ? 'selected' : '' ?>>Unmapped PSUs only</option>
+                    <option value="single_feed" <?= $ppView === 'single_feed' ? 'selected' : '' ?>>Single-feed / partial map</option>
+                    <option value="half_map" <?= $ppView === 'half_map' ? 'selected' : '' ?>>Half-map inconsistencies</option>
+                    <option value="no_row_feed" <?= $ppView === 'no_row_feed' ? 'selected' : '' ?>>No row/room feed</option>
+                </select>
+            </div>
+            <div class="form-row" style="align-self:end">
+                <button class="btn btn-primary" type="submit">Run report</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="metrics power-metrics mb-2">
+    <div class="metric-card success">
+        <div class="label">Mapped PSUs</div>
+        <div class="value"><?= (int)$ppSum['mapped'] ?></div>
+        <div class="sub">of <?= (int)$ppSum['path_rows'] ?> PSU lines</div>
+    </div>
+    <div class="metric-card <?= (int)$ppSum['unmapped_psus'] > 0 ? 'warning' : '' ?>">
+        <div class="label">Unmapped PSUs</div>
+        <div class="value"><?= (int)$ppSum['unmapped_psus'] ?></div>
+        <div class="sub">no outlet map</div>
+    </div>
+    <div class="metric-card <?= (int)$ppSum['single_feed_devices'] > 0 ? 'warning' : '' ?>">
+        <div class="label">Single-feed risk</div>
+        <div class="value"><?= (int)$ppSum['single_feed_devices'] ?></div>
+        <div class="sub">devices</div>
+    </div>
+    <div class="metric-card <?= (int)$ppSum['half_maps'] > 0 ? 'danger' : '' ?>">
+        <div class="label">Half-maps</div>
+        <div class="value"><?= (int)$ppSum['half_maps'] ?></div>
+        <div class="sub">link mismatch</div>
+    </div>
+    <div class="metric-card <?= (int)$ppSum['cabinets_no_row_feed'] > 0 ? 'warning' : '' ?>">
+        <div class="label">Cabinets no row feed</div>
+        <div class="value"><?= (int)$ppSum['cabinets_no_row_feed'] ?></div>
+        <div class="sub">rack PDU, no breaker</div>
+    </div>
+</div>
+
+<div class="card mb-2">
+    <div class="card-header"><h2>Paths (<?= count($ppPaths) ?>)</h2></div>
+    <div class="card-body flush">
+        <table class="data">
+            <thead>
+            <tr>
+                <th>Device</th>
+                <th>PSU</th>
+                <th>Cabinet</th>
+                <th>Rack PDU / outlet</th>
+                <th>Row/room feed</th>
+                <th>Zone</th>
+                <th>UPS (zone)</th>
+                <th>Status</th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($ppPaths as $pr): ?>
+                <tr>
+                    <td>
+                        <a href="<?= App::e(App::url('pages/devices.php?id=' . (int)$pr['device_id'])) ?>">
+                            <?= App::e((string)$pr['device_label']) ?>
+                        </a>
+                        <?php if (!empty($pr['device_type'])): ?>
+                            <div class="text-muted" style="font-size:.72rem"><?= App::e((string)$pr['device_type']) ?></div>
+                        <?php endif; ?>
+                    </td>
+                    <td><?= App::e((string)$pr['psu_name']) ?></td>
+                    <td>
+                        <?php if (!empty($pr['cabinet_id'])): ?>
+                            <a href="<?= App::e(App::url('pages/cabinets.php?id=' . (int)$pr['cabinet_id'])) ?>">
+                                <?= App::e((string)$pr['cabinet_name']) ?>
+                            </a>
+                        <?php else: ?>
+                            <span class="text-muted">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <td style="font-size:.85rem">
+                        <?php if (!empty($pr['mapped'])): ?>
+                            <a href="<?= App::e(App::url('pages/power_pdus.php?id=' . (int)$pr['rack_pdu_id'])) ?>">
+                                <?= App::e((string)$pr['rack_pdu_name']) ?>
+                            </a>
+                            ·
+                            <?= App::e(
+                                $pr['outlet_label'] !== ''
+                                    ? (string)$pr['outlet_label']
+                                    : ('#' . (string)$pr['outlet_number'])
+                            ) ?>
+                        <?php else: ?>
+                            <span class="text-muted">Unmapped</span>
+                        <?php endif; ?>
+                    </td>
+                    <td style="font-size:.85rem">
+                        <?php if (!empty($pr['row_feed_summary'])): ?>
+                            <?= App::e((string)$pr['row_feed_summary']) ?>
+                        <?php else: ?>
+                            <span class="text-muted">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <?php if (!empty($pr['zone_name'])): ?>
+                            <?= App::e((string)$pr['zone_name']) ?>
+                            <?php if (!empty($pr['feed_type'])): ?>
+                                <span class="badge" style="font-size:.7rem"><?= App::e((string)$pr['feed_type']) ?></span>
+                            <?php endif; ?>
+                        <?php else: ?>
+                            <span class="text-muted">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <td style="font-size:.85rem">
+                        <?php if (!empty($pr['ups_summary'])): ?>
+                            <?= App::e((string)$pr['ups_summary']) ?>
+                        <?php else: ?>
+                            <span class="text-muted">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <?php if (!empty($pr['half_map'])): ?>
+                            <span class="badge badge-danger" title="<?= App::e((string)($pr['half_reason'] ?? '')) ?>">Half-map</span>
+                        <?php elseif (empty($pr['mapped'])): ?>
+                            <span class="badge badge-warning">Unmapped</span>
+                        <?php elseif (empty($pr['has_row_feed']) && !empty($pr['cabinet_id'])): ?>
+                            <span class="badge badge-warning">No row feed</span>
+                        <?php else: ?>
+                            <span class="badge badge-success">OK</span>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$ppPaths): ?>
+                <tr><td colspan="8" class="text-muted">No PSU path rows for this filter.</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<?php if (!empty($ppData['single_feed_devices']) && $ppView === 'all'): ?>
+<div class="card mb-2">
+    <div class="card-header"><h2>Single-feed / partial map devices</h2></div>
+    <div class="card-body flush">
+        <table class="data">
+            <thead><tr><th>Device</th><th>Cabinet</th><th>PSUs</th><th>Mapped</th><th>Distinct PDUs</th><th>Note</th></tr></thead>
+            <tbody>
+            <?php foreach ($ppData['single_feed_devices'] as $sf): ?>
+                <tr>
+                    <td>
+                        <a href="<?= App::e(App::url('pages/devices.php?id=' . (int)$sf['device_id'])) ?>">
+                            <?= App::e((string)$sf['device_label']) ?>
+                        </a>
+                    </td>
+                    <td><?= App::e((string)($sf['cabinet_name'] ?? '—')) ?></td>
+                    <td><?= (int)$sf['psu_count'] ?></td>
+                    <td><?= (int)$sf['mapped_count'] ?></td>
+                    <td><?= (int)$sf['distinct_pdus'] ?></td>
+                    <td class="text-muted" style="font-size:.85rem"><?= App::e((string)$sf['reason']) ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php if (!empty($ppData['cabinets_no_row_feed']) && in_array($ppView, ['all', 'no_row_feed'], true)): ?>
+<div class="card mb-2">
+    <div class="card-header"><h2>Cabinets with rack PDUs but no row/room breaker feed</h2></div>
+    <div class="card-body flush">
+        <table class="data">
+            <thead><tr><th>Cabinet</th><th>Row</th><th>Rack PDUs</th><th>Devices</th></tr></thead>
+            <tbody>
+            <?php foreach ($ppData['cabinets_no_row_feed'] as $cn): ?>
+                <tr>
+                    <td>
+                        <a href="<?= App::e(App::url('pages/cabinets.php?id=' . (int)$cn['cabinet_id'])) ?>">
+                            <?= App::e((string)$cn['cabinet_name']) ?>
+                        </a>
+                    </td>
+                    <td><?= App::e((string)($cn['row_name'] ?: '—')) ?></td>
+                    <td><?= (int)$cn['rack_pdu_count'] ?></td>
+                    <td><?= (int)$cn['device_count'] ?></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (empty($ppData['cabinets_no_row_feed'])): ?>
+                <tr><td colspan="4" class="text-muted">None — every racked cabinet with PDUs has a breaker feed.</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php if (!empty($ppData['ups_no_zone'])): ?>
+<div class="card mb-2">
+    <div class="card-header"><h2>UPS without a power zone</h2></div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size:.85rem;margin:0 0 .5rem">
+            UPS is only shown on paths when assigned to a zone (soft association). Assign a zone on the UPS page to include them.
+        </p>
+        <ul style="margin:0;padding-left:1.2rem">
+            <?php foreach ($ppData['ups_no_zone'] as $uu): ?>
+                <li>
+                    <a href="<?= App::e(App::url('pages/power_ups.php?id=' . (int)$uu['ups_id'])) ?>">
+                        <?= App::e((string)$uu['name']) ?>
+                    </a>
+                </li>
+            <?php endforeach; ?>
+        </ul>
+    </div>
+</div>
+<?php endif; ?>
 
 <?php elseif ($report === 'inventory_summary'):
     $data = report_inventory_summary(); ?>

@@ -1092,6 +1092,16 @@ INSERT INTO report_definitions (name, report_key, description, category) VALUES
 ('Orphaned Devices', 'orphaned_devices', 'Devices not assigned to a cabinet', 'inventory');
 GO
 
+IF NOT EXISTS (SELECT 1 FROM report_definitions WHERE report_key = 'power_path')
+INSERT INTO report_definitions (name, report_key, description, category) VALUES
+('Power Path', 'power_path', 'Device PSU → rack PDU outlet → row feed → zone → UPS; unmapped and single-feed risk', 'power');
+GO
+
+IF NOT EXISTS (SELECT 1 FROM report_definitions WHERE report_key = 'power_history')
+INSERT INTO report_definitions (name, report_key, description, category) VALUES
+('Power History', 'power_history', 'Historical facility / zone / PDU load and voltage', 'power');
+GO
+
 IF NOT EXISTS (SELECT 1 FROM settings WHERE setting_key = 'app_name')
 INSERT INTO settings (setting_key, setting_value, category) VALUES
 ('app_name', 'ColdAisle', 'general'),
