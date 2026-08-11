@@ -1,4 +1,4 @@
-?php
+<?php
 /**
  * Cooling & environmental monitoring â€” labels, ASHRAE guidance, field helpers.
  *

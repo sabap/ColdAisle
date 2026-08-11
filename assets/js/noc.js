@@ -665,13 +665,29 @@
       cache: 'no-store',
     })
       .then(function (r) {
-        return r.json().then(function (j) {
-          return { ok: r.ok, status: r.status, j: j };
+        return r.text().then(function (text) {
+          var j = null;
+          var parseErr = null;
+          try {
+            j = text ? JSON.parse(text) : null;
+          } catch (e) {
+            parseErr = e;
+          }
+          return { ok: r.ok, status: r.status, j: j, text: text, parseErr: parseErr };
         });
       })
       .then(function (res) {
         if (reloadingForUpdate) return;
-        if (!res.ok || !res.j || !res.j.ok) {
+        if (res.parseErr || !res.j) {
+          var snippet = (res.text || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+          showError(
+            'NOC API returned invalid JSON (HTTP ' + res.status + ')' +
+            (snippet ? ': ' + snippet : '')
+          );
+          setStatus(false, 'Bad response');
+          return;
+        }
+        if (!res.ok || !res.j.ok) {
           var err = (res.j && res.j.error) || ('HTTP ' + res.status);
           showError(err);
           setStatus(false, 'Update failed');
@@ -691,9 +707,9 @@
         }
         setStatus(true, 'Live · every ' + Math.round(pollMs / 1000) + 's');
       })
-      .catch(function () {
+      .catch(function (err) {
         if (reloadingForUpdate) return;
-        showError('Network error loading NOC data');
+        showError('Network error loading NOC data' + (err && err.message ? ' (' + err.message + ')' : ''));
         setStatus(false, 'Offline');
       });
   }
