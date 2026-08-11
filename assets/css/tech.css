@@ -99,20 +99,80 @@ body.tech-mode .content {
   line-height: 1;
 }
 
+/* Header Tech / Desktop switch (both shells) */
+.tech-mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  margin: 0;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  flex-shrink: 0;
+}
+.tech-mode-switch-label {
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  min-width: 3.4rem;
+  text-align: right;
+}
+body.tech-mode .tech-mode-switch-label {
+  color: #7dd3fc;
+}
+.tech-mode-switch-track {
+  position: relative;
+  display: inline-block;
+  width: 2.65rem;
+  height: 1.45rem;
+  flex-shrink: 0;
+}
+.tech-mode-switch-track input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+.tech-mode-switch-thumb {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--surface-3, #243044);
+  border: 1px solid var(--border, #2a3648);
+  transition: background .15s ease, border-color .15s ease;
+  pointer-events: none;
+}
+.tech-mode-switch-thumb::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: #e5eef7;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+  transition: transform .15s ease;
+}
+.tech-mode-switch-track input:checked + .tech-mode-switch-thumb {
+  background: rgba(56, 189, 248, 0.35);
+  border-color: rgba(56, 189, 248, 0.55);
+}
+.tech-mode-switch-track input:checked + .tech-mode-switch-thumb::after {
+  transform: translateX(1.15rem);
+  background: #7dd3fc;
+}
+.tech-mode-switch-track input:focus-visible + .tech-mode-switch-thumb {
+  outline: 2px solid rgba(56, 189, 248, 0.7);
+  outline-offset: 2px;
+}
+
 /* Hub */
-.tech-hub-hero {
-  padding: .85rem 1rem;
-  margin-bottom: .85rem;
-  border-radius: 12px;
-  background: rgba(56, 189, 248, 0.1);
-  border: 1px solid rgba(56, 189, 248, 0.28);
-}
-
-.tech-hub-hero h2 {
-  margin: 0 0 .25rem;
-  font-size: 1.15rem;
-}
-
 .tech-search-form {
   display: flex;
   flex-direction: column;
@@ -240,29 +300,4 @@ body.tech-mode .cab-desktop-actions a[href*="cabinet_label"] {
   /* keep QR available but stack on narrow */
 }
 
-body.tech-mode .topbar-actions .tech-exit-link {
-  font-size: .8rem;
-  font-weight: 600;
-  padding: .4rem .65rem;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  color: var(--muted);
-}
 
-body.tech-mode .topbar-actions .tech-exit-link:hover {
-  color: var(--text);
-  border-color: rgba(148, 163, 184, 0.5);
-}
-
-.tech-banner {
-  display: flex;
-  flex-wrap: wrap;
-  gap: .5rem 1rem;
-  align-items: center;
-  padding: .55rem .75rem;
-  margin: 0 0 .75rem;
-  border-radius: 10px;
-  background: rgba(56, 189, 248, 0.1);
-  border: 1px solid rgba(56, 189, 248, 0.25);
-  font-size: .88rem;
-}

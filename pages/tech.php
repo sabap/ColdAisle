@@ -83,22 +83,14 @@ if ($openCab > 0) {
         : ('pages/cabinets.php?id=' . $openCab));
 }
 
-layout_header('Tech mode', $user, 'tech');
+layout_header('Home', $user, 'tech');
 ?>
-
-<div class="tech-hub-hero">
-    <h2>Technician hub</h2>
-    <p class="text-muted mb-0" style="margin:0;font-size:.9rem">
-        Cabinets, audits, power mapping, and work orders use the same tools as the desktop app —
-        this shell is optimized for the aisle.
-    </p>
-</div>
 
 <form class="tech-search-form" method="get" action="">
     <label class="text-muted" style="font-size:.8rem;font-weight:600" for="tech_q">Find device or cabinet</label>
     <input class="form-control" type="search" name="q" id="tech_q" value="<?= App::e($q) ?>"
            placeholder="Serial, asset tag, label, hostname, IP, cabinet name…"
-           autocomplete="off" enterkeyhint="search" autofocus>
+           autocomplete="off" enterkeyhint="search" inputmode="search">
     <div class="flex gap-1" style="display:flex;gap:.5rem">
         <button class="btn btn-primary" type="submit" name="go" value="device" style="flex:1">Find device</button>
         <button class="btn btn-secondary" type="submit" name="go" value="cabinet" style="flex:1">Find cabinet</button>
@@ -232,9 +224,8 @@ layout_header('Tech mode', $user, 'tech');
 <?php endif; ?>
 
 <p class="text-muted" style="font-size:.8rem;margin:1rem 0 0">
-    Scan a cabinet QR plaque to open its elevation here.
-    Power connectors: open the device → edit / power supplies (same as desktop).
-    <a href="<?= App::e(TechMode::disableUrl('index.php')) ?>">Exit to desktop app</a>
+    Scan a cabinet QR plaque to open its elevation. Power map lives on the device page.
+    Use the header switch to return to Desktop.
 </p>
 
 <?php layout_footer(); ?>
