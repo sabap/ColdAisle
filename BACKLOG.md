@@ -3,6 +3,8 @@
 **Single source of truth** for deferred product work.  
 **Do not implement until explicitly requested.** When picking up an item, confirm scope first; prefer the smallest useful slice.
 
+**Competitive / product gaps** (what other DCIM offerings cover that we are thin on or lack) live in **[`DCIM_GAPS.md`](DCIM_GAPS.md)** — reference only, not an implementation queue. Promote a gap here when scope is confirmed.
+
 ### How backlog was tracked before this file
 
 | Era | Where it lived | Notes |
@@ -560,7 +562,8 @@ Original note covered: retention for pre-update + site-export zips, Settings UI 
 
 ## Suggested in chat (not formal backlog)
 
-These appeared in “what’s next?” / optional lists. **Not user-requested backlog entries** unless promoted. Listed so they are not lost in compaction memory.
+Competitive map and tiered gaps: **[`DCIM_GAPS.md`](DCIM_GAPS.md)** (preferred).  
+The table below is a short legacy index of older “what’s next?” notes. **Not user-requested backlog entries** unless promoted.
 
 | Idea | Context | Likely status |
 |------|---------|----------------|
