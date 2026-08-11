@@ -24,18 +24,19 @@ if (!isset($cabinetAuditCanLog)) {
                 Logging an audit for
                 <strong id="cabAuditCabName">—</strong>
             </p>
-            <label class="cab-audit-certify">
-                <input type="checkbox" id="cabAuditCertified">
-                <span>Do you certify that you have completed an audit of this cabinet?</span>
+            <p id="cabAuditContext" class="text-muted" style="font-size:.82rem;margin:.35rem 0 .75rem;display:none"></p>
+            <label class="cab-audit-certify" style="display:flex;gap:.65rem;align-items:flex-start;padding:.65rem .75rem;border-radius:8px;border:1px solid rgba(148,163,184,.25);background:rgba(15,23,42,.2)">
+                <input type="checkbox" id="cabAuditCertified" style="width:1.15rem;height:1.15rem;margin-top:.15rem;flex-shrink:0">
+                <span style="font-size:.95rem;line-height:1.35">I certify I completed a physical audit of this cabinet (devices, labeling, cables as applicable).</span>
             </label>
             <div class="form-row" style="margin-top:1rem">
-                <label for="cabAuditComments">Comments</label>
-                <textarea class="form-control" id="cabAuditComments" rows="4"
-                          placeholder="Optional notes: missing assets, cable issues, labeling, airflow, …"></textarea>
+                <label for="cabAuditComments">Field notes</label>
+                <textarea class="form-control" id="cabAuditComments" rows="3"
+                          placeholder="Optional: missing assets, cable issues, labeling, airflow, empty U slots…"
+                          style="min-height:4.5rem;font-size:1rem"></textarea>
             </div>
             <p class="text-muted" style="font-size:.75rem;margin:.75rem 0 0">
-                This will be stored as an audit record for this cabinet (auditor, date/time, and comments)
-                for future reports by datacenter, cabinet, or user.
+                Saved with auditor, date/time, and comments for compliance reports.
             </p>
             <div id="cabAuditError" class="alert alert-error" hidden style="margin-top:.75rem"></div>
         </div>
@@ -53,6 +54,7 @@ if (!isset($cabinetAuditCanLog)) {
 
     var titleEl = document.getElementById('cabAuditTitle');
     var nameEl = document.getElementById('cabAuditCabName');
+    var ctxEl = document.getElementById('cabAuditContext');
     var certEl = document.getElementById('cabAuditCertified');
     var commentsEl = document.getElementById('cabAuditComments');
     var errEl = document.getElementById('cabAuditError');
@@ -60,12 +62,29 @@ if (!isset($cabinetAuditCanLog)) {
     var currentId = 0;
     var currentName = '';
 
-    function openAuditModal(cabinetId, cabinetName) {
+    function openAuditModal(cabinetId, cabinetName, meta) {
         currentId = parseInt(cabinetId, 10) || 0;
         currentName = cabinetName || ('Cabinet #' + currentId);
         if (!currentId) return;
         if (nameEl) nameEl.textContent = currentName;
         if (titleEl) titleEl.textContent = 'Audit: ' + currentName;
+        if (ctxEl) {
+            meta = meta || {};
+            var bits = [];
+            if (meta.devices != null && meta.devices !== '') bits.push(meta.devices + ' device(s)');
+            if (meta.uUsed != null && meta.u != null && meta.u !== '') {
+                bits.push('U ' + meta.uUsed + ' / ' + meta.u + ' used');
+            } else if (meta.u != null && meta.u !== '') {
+                bits.push(meta.u + 'U rack');
+            }
+            if (bits.length) {
+                ctxEl.textContent = 'Inventory snapshot: ' + bits.join(' · ');
+                ctxEl.style.display = '';
+            } else {
+                ctxEl.textContent = '';
+                ctxEl.style.display = 'none';
+            }
+        }
         if (certEl) certEl.checked = false;
         if (commentsEl) commentsEl.value = '';
         if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
@@ -138,8 +157,29 @@ if (!isset($cabinetAuditCanLog)) {
         var btn = e.target.closest('[data-audit-cabinet]');
         if (!btn) return;
         e.preventDefault();
-        openAuditModal(btn.getAttribute('data-audit-cabinet'), btn.getAttribute('data-audit-name') || '');
+        openAuditModal(
+            btn.getAttribute('data-audit-cabinet'),
+            btn.getAttribute('data-audit-name') || '',
+            {
+                devices: btn.getAttribute('data-audit-devices'),
+                u: btn.getAttribute('data-audit-u'),
+                uUsed: btn.getAttribute('data-audit-u-used')
+            }
+        );
     });
 })();
 </script>
+<style>
+.cab-audit-certify:has(input:checked) {
+  border-color: rgba(52, 211, 153, 0.45) !important;
+  background: rgba(6, 78, 59, 0.25) !important;
+}
+#cabinetAuditModal .modal-panel {
+  width: min(26rem, 96vw);
+}
+#cabAuditSubmit:not(:disabled) {
+  min-height: 2.5rem;
+  font-weight: 600;
+}
+</style>
 <?php endif; ?>

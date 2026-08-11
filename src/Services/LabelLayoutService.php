@@ -383,6 +383,61 @@ class LabelLayoutService
     }
 
     /**
+     * Cabinet plaque / ID label (reuses printer presets; location line instead of IP/SN).
+     *
+     * @param array{
+     *   name?:string,location?:?string,u_height?:?int|string,
+     *   url?:string,show_location?:bool,show_u?:bool,show_qr?:bool,
+     *   printer?:string,media?:string
+     * } $opts
+     * @return array<string,mixed>
+     */
+    public static function cabinetLabel(array $opts): array
+    {
+        $name = trim((string)($opts['name'] ?? 'Cabinet'));
+        if ($name === '') {
+            $name = 'Cabinet';
+        }
+        $loc = trim((string)($opts['location'] ?? ''));
+        $u = $opts['u_height'] ?? null;
+        $uStr = ($u !== null && $u !== '' && (int)$u > 0) ? ((int)$u . 'U') : '';
+
+        // Map to PDU label packer: location as “IP” slot text without IP: prefix when primary lines only
+        $layout = self::pduLabel([
+            'name' => $name,
+            'ip' => ($opts['show_location'] ?? true) !== false ? $loc : '',
+            'serial' => ($opts['show_u'] ?? true) !== false ? $uStr : '',
+            'mac' => '',
+            'url' => (string)($opts['url'] ?? ''),
+            'show_ip' => ($opts['show_location'] ?? true) !== false && $loc !== '',
+            'show_serial' => ($opts['show_u'] ?? true) !== false && $uStr !== '',
+            'show_mac' => false,
+            'show_qr' => ($opts['show_qr'] ?? true) !== false,
+            'printer' => $opts['printer'] ?? null,
+            'media' => $opts['media'] ?? null,
+        ]);
+
+        // Relabel secondary lines for cabinet semantics (LOC / U)
+        $lines = [];
+        foreach ($layout['lines'] as $ln) {
+            if (!empty($ln['primary'])) {
+                $lines[] = $ln;
+                continue;
+            }
+            $lab = (string)($ln['label'] ?? '');
+            if ($lab === 'IP') {
+                $ln['label'] = 'LOC';
+            } elseif ($lab === 'SN') {
+                $ln['label'] = '';
+            }
+            $lines[] = $ln;
+        }
+        $layout['lines'] = $lines;
+        $layout['title'] = $name;
+        return $layout;
+    }
+
+    /**
      * Estimate rendered text width (thousandths of inch).
      * Slightly conservative for thermal bold; not so high that type stays tiny.
      */

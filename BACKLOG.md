@@ -179,11 +179,12 @@ Historical note commits:
 
 | Field | Value |
 |-------|--------|
-| **Status** | open (shared `QrCodeService` landed with PDU labels; cabinets not yet wired) |
-| **Requested** | 2026-07-29 (user) |
+| **Status** | **done** (release **0.3.105** — cabinet QR labels, sheet export, field mode + audit polish) |
+| **Requested** | 2026-07-29 (user); implemented 2026-08-11 |
 | **Source** | `BACKLOG.md` (chat request) |
 | **Priority** | nice-to-have (field ops / audits) |
 | **Related** | PDU ID labels (print/SVG + QR) reuse `QrCodeService` / `LabelLayoutService` |
+| **Delivered** | `pages/cabinet_label.php`; cabinet detail QR card; list bulk QR/labels; field mode sticky audit |
 
 **Goal:** Generate **QR codes per cabinet** for printing labels or laser-engraving plaques. Scanning a code should open that cabinet’s page in ColdAisle for audits or quick device reference.
 
@@ -212,10 +213,10 @@ Historical note commits:
 
 **Acceptance (when built)**
 
-- [ ] Each cabinet can show/download a QR that encodes its ColdAisle URL  
-- [ ] Opening that URL (authenticated) lands on the correct cabinet page  
-- [ ] Printable / engraving-friendly export (at least PNG or SVG)  
-- [ ] Document network/auth expectations for field scanning (no native app required for basic flow)  
+- [x] Each cabinet can show/download a QR that encodes its ColdAisle URL  
+- [x] Opening that URL (authenticated) lands on the correct cabinet page  
+- [x] Printable / engraving-friendly export (at least PNG or SVG)  
+- [x] Document network/auth expectations for field scanning (no native app required for basic flow)  
 
 ---
 

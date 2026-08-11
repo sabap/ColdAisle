@@ -63,4 +63,60 @@ class QrCodeService
         return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' . $outer . ' ' . $outer . '" shape-rendering="crispEdges">'
             . $body . '</svg>';
     }
+
+    /**
+     * PNG binary for a QR (requires GD). Returns null if GD unavailable.
+     */
+    public static function png(string $data, int $scale = 8, int $margin = 2): ?string
+    {
+        if (!function_exists('imagecreatetruecolor') || !function_exists('imagepng')) {
+            return null;
+        }
+        $data = trim($data);
+        if ($data === '') {
+            return null;
+        }
+        // Build from SVG-less matrix via temporary high-contrast SVG raster is hard —
+        // draw using the encoder's raw module path: re-render SVG viewBox size.
+        $svg = self::svgLabel($data, (float)$margin);
+        if (!preg_match('/viewBox="0 0 (\d+) (\d+)"/', $svg, $m)) {
+            return null;
+        }
+        $modules = (int)$m[1];
+        $scale = max(2, min(20, $scale));
+        $px = $modules * $scale;
+        $im = imagecreatetruecolor($px, $px);
+        if ($im === false) {
+            return null;
+        }
+        $white = imagecolorallocate($im, 255, 255, 255);
+        $black = imagecolorallocate($im, 0, 0, 0);
+        imagefilledrectangle($im, 0, 0, $px, $px, $white);
+        // Parse module rects from SVG
+        if (preg_match_all('/<rect[^>]+x="(\d+)"[^>]+y="(\d+)"[^>]+width="(\d+)"[^>]+height="(\d+)"/', $svg, $rects, PREG_SET_ORDER)) {
+            foreach ($rects as $r) {
+                $x = (int)$r[1];
+                $y = (int)$r[2];
+                $w = (int)$r[3];
+                $h = (int)$r[4];
+                // Skip full-background white rect
+                if ($w >= $modules - 1 && $h >= $modules - 1 && $x === 0 && $y === 0) {
+                    continue;
+                }
+                imagefilledrectangle(
+                    $im,
+                    $x * $scale,
+                    $y * $scale,
+                    ($x + $w) * $scale - 1,
+                    ($y + $h) * $scale - 1,
+                    $black
+                );
+            }
+        }
+        ob_start();
+        imagepng($im);
+        $bin = ob_get_clean();
+        imagedestroy($im);
+        return is_string($bin) && $bin !== '' ? $bin : null;
+    }
 }
