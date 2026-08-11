@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **Tech mode control:** header slider (On = Tech, Off = Desktop) on every page; removed redundant tech banner/hero cards and hub search autofocus (no surprise mobile keyboard)
-
 ### Bug fixes
 
 ---
 
+## [0.3.121] - 2026-08-11
+
+### Enhancements
+
+- **Tech mode control:** header slider (On = Tech, Off = Desktop) on every page; removed redundant tech banner/hero cards and hub search autofocus (no surprise mobile keyboard)
+
+---
 ## [0.3.120] - 2026-08-11
 
 ### New features
