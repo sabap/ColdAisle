@@ -150,7 +150,11 @@ class UpsHistoryService
         $fromSql = date('Y-m-d H:i:s', $fromTs);
         $toSql = date('Y-m-d H:i:s', $toTs);
 
-        $upsSql = 'SELECT ups_id, rated_kw, rated_kva, zone_id FROM ups_units WHERE is_active = 1';
+        $upsSql = 'SELECT ups_id, rated_kw, rated_kva, zone_id,
+                          last_poll_at, last_load_pct, last_battery_pct, last_runtime_min,
+                          last_input_voltage, last_output_voltage,
+                          last_input_freq, last_output_freq, last_output_current
+                   FROM ups_units WHERE is_active = 1';
         $upsParams = [];
         if ($scope === 'ups_zone' && $scopeId && $scopeId > 0) {
             $upsSql .= ' AND zone_id = ?';
@@ -162,7 +166,20 @@ class UpsHistoryService
         try {
             $upsRows = Database::fetchAll($upsSql, $upsParams);
         } catch (Throwable $e) {
-            $upsRows = [];
+            // Older schema without electrical last_* columns
+            try {
+                $upsSql = 'SELECT ups_id, rated_kw, rated_kva, zone_id,
+                                  last_poll_at, last_load_pct, last_battery_pct, last_runtime_min
+                           FROM ups_units WHERE is_active = 1';
+                if ($scope === 'ups_zone' && $scopeId && $scopeId > 0) {
+                    $upsSql .= ' AND zone_id = ?';
+                } elseif ($scope === 'ups' && $scopeId && $scopeId > 0) {
+                    $upsSql .= ' AND ups_id = ?';
+                }
+                $upsRows = Database::fetchAll($upsSql, $upsParams);
+            } catch (Throwable $e2) {
+                $upsRows = [];
+            }
         }
         $upsIds = array_map(static fn($r) => (int)$r['ups_id'], $upsRows);
         if (!$upsIds) {
@@ -183,12 +200,15 @@ class UpsHistoryService
         }
 
         $bucketSec = $bucketMin * 60;
+        // Hold last good sample across poll gaps (was only ~2 buckets / 10 min → single "blips")
+        $holdSec = max(90 * 60, $bucketSec * 12);
         $startBucket = (int)(floor($fromTs / $bucketSec) * $bucketSec);
         $tLabels = [];
         $bucketKeys = [];
         for ($t = $startBucket; $t < $toTs; $t += $bucketSec) {
             $bucketKeys[] = $t;
-            $tLabels[] = gmdate('c', $t);
+            // Local ISO (not gmdate) so chart axis matches poll timestamps
+            $tLabels[] = date('c', $t);
         }
         if (!$bucketKeys) {
             return [
@@ -203,7 +223,7 @@ class UpsHistoryService
             ];
         }
 
-        $lookbackSql = date('Y-m-d H:i:s', $fromTs - $bucketSec * 2);
+        $lookbackSql = date('Y-m-d H:i:s', $fromTs - $holdSec);
         $inList = implode(',', array_fill(0, count($upsIds), '?'));
         $paramsLook = array_merge($upsIds, [$lookbackSql, $toSql]);
 
@@ -241,13 +261,14 @@ class UpsHistoryService
         foreach ($upsIds as $id) {
             $byUps[$id] = [];
         }
+        $rawSampleCount = 0;
         foreach ($readings as $r) {
             $uid = (int)$r['ups_id'];
             if (!isset($byUps[$uid])) {
                 continue;
             }
-            $ts = strtotime((string)$r['polled_at']);
-            if ($ts === false) {
+            $ts = self::parsePollTs($r['polled_at'] ?? null);
+            if ($ts === null) {
                 continue;
             }
             $num = static function ($v): ?float {
@@ -265,6 +286,20 @@ class UpsHistoryService
                 'out_hz' => $num($r['output_freq'] ?? null),
                 'out_a' => $num($r['output_current'] ?? null),
             ];
+            $rawSampleCount++;
+        }
+
+        // If history is empty but units have last-poll snapshot, synthesize one point so charts
+        // aren't blank after a successful Poll that failed to insert history (schema race).
+        if ($rawSampleCount === 0) {
+            foreach ($upsRows as $ur) {
+                $uid = (int)$ur['ups_id'];
+                $synth = self::sampleFromUnitRow($ur);
+                if ($synth !== null) {
+                    $byUps[$uid][] = $synth;
+                    $rawSampleCount++;
+                }
+            }
         }
 
         $ratedW = [];
@@ -287,20 +322,28 @@ class UpsHistoryService
         $inHzSeries = [];
         $outHzSeries = [];
         $outASeries = [];
-        $sampleCount = 0;
+        $heldBuckets = 0;
+        $rawBuckets = 0;
 
         foreach ($bucketKeys as $bTs) {
+            $bEnd = $bTs + $bucketSec;
             $acc = [
                 'load' => [0.0, 0], 'batt' => [0.0, 0], 'rt' => [0.0, 0], 'w' => [0.0, 0],
                 'in_v' => [0.0, 0], 'out_v' => [0.0, 0], 'in_hz' => [0.0, 0],
                 'out_hz' => [0.0, 0], 'out_a' => [0.0, 0],
             ];
+            $anyInBucket = false;
+            $anyHeld = false;
             foreach ($upsIds as $uid) {
                 $pts = $byUps[$uid] ?? [];
                 $last = null;
+                $inBucket = false;
                 foreach ($pts as $p) {
-                    if ($p['ts'] <= $bTs + $bucketSec - 1) {
+                    if ($p['ts'] < $bEnd) {
                         $last = $p;
+                        if ($p['ts'] >= $bTs) {
+                            $inBucket = true;
+                        }
                     } else {
                         break;
                     }
@@ -308,10 +351,16 @@ class UpsHistoryService
                 if ($last === null) {
                     continue;
                 }
-                if ($last['ts'] < $bTs - $bucketSec * 2) {
+                // Age of sample relative to end of this bucket
+                $age = ($bEnd - 1) - $last['ts'];
+                if ($age > $holdSec) {
                     continue;
                 }
-                $sampleCount++;
+                if ($inBucket) {
+                    $anyInBucket = true;
+                } else {
+                    $anyHeld = true;
+                }
                 foreach (['load', 'batt', 'rt', 'in_v', 'out_v', 'in_hz', 'out_hz', 'out_a'] as $k) {
                     if ($last[$k] !== null) {
                         $acc[$k][0] += $last[$k];
@@ -332,6 +381,11 @@ class UpsHistoryService
                     $acc['w'][1]++;
                 }
             }
+            if ($anyInBucket) {
+                $rawBuckets++;
+            } elseif ($anyHeld) {
+                $heldBuckets++;
+            }
             $avg = static function (array $pair, int $dec): ?float {
                 return $pair[1] > 0 ? round($pair[0] / $pair[1], $dec) : null;
             };
@@ -351,6 +405,19 @@ class UpsHistoryService
             $outHzSeries[] = $avg($acc['out_hz'], 2);
             $outASeries[] = $avg($acc['out_a'], 2);
         }
+
+        // Forward-fill null gaps so charts draw a continuous historical line (same idea as PDU volts).
+        // Hold already caps how far a sample can stretch; carry fills small holes between buckets.
+        $loadSeries = self::carryForward($loadSeries);
+        $battSeries = self::carryForward($battSeries);
+        $rtSeries = self::carryForward($rtSeries);
+        $wattsSeries = self::carryForward($wattsSeries);
+        $kwSeries = self::carryForward($kwSeries);
+        $inVSeries = self::carryForward($inVSeries);
+        $outVSeries = self::carryForward($outVSeries);
+        $inHzSeries = self::carryForward($inHzSeries);
+        $outHzSeries = self::carryForward($outHzSeries);
+        $outASeries = self::carryForward($outASeries);
 
         return [
             'ok' => true,
@@ -377,7 +444,10 @@ class UpsHistoryService
             'outages' => [],
             'meta' => [
                 'ups_count' => count($upsIds),
-                'sample_count' => $sampleCount,
+                'sample_count' => $rawSampleCount,
+                'held_buckets' => $heldBuckets,
+                'raw_buckets' => $rawBuckets,
+                'hold_sec' => $holdSec,
                 'from' => $fromSql,
                 'to' => $toSql,
             ],
@@ -387,6 +457,102 @@ class UpsHistoryService
                 'kw' => self::summaryStats($kwSeries),
             ],
         ];
+    }
+
+    /**
+     * @param mixed $raw
+     */
+    private static function parsePollTs($raw): ?int
+    {
+        if ($raw === null || $raw === '') {
+            return null;
+        }
+        if ($raw instanceof \DateTimeInterface) {
+            return $raw->getTimestamp();
+        }
+        if (is_numeric($raw)) {
+            $n = (int)$raw;
+            // Heuristic: ms vs s
+            return $n > 2_000_000_000_000 ? (int)round($n / 1000) : $n;
+        }
+        $s = trim((string)$raw);
+        // SQL Server often returns "Y-m-d H:i:s.mmm"
+        if (preg_match('/^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})/', $s, $m)) {
+            $s = str_replace('T', ' ', $m[1]);
+        }
+        $ts = strtotime($s);
+        return $ts !== false ? $ts : null;
+    }
+
+    /**
+     * Build a synthetic history point from ups_units last_* columns when ups_readings is empty.
+     *
+     * @param array<string,mixed> $ur
+     * @return array<string,mixed>|null
+     */
+    private static function sampleFromUnitRow(array $ur): ?array
+    {
+        $num = static function ($v): ?float {
+            return $v !== null && $v !== '' && is_numeric($v) ? (float)$v : null;
+        };
+        $load = $num($ur['last_load_pct'] ?? null);
+        $batt = $num($ur['last_battery_pct'] ?? null);
+        $rt = $num($ur['last_runtime_min'] ?? null);
+        $inV = $num($ur['last_input_voltage'] ?? null);
+        $outV = $num($ur['last_output_voltage'] ?? null);
+        $inHz = $num($ur['last_input_freq'] ?? null);
+        $outHz = $num($ur['last_output_freq'] ?? null);
+        $outA = $num($ur['last_output_current'] ?? null);
+        if ($load === null && $batt === null && $rt === null
+            && $inV === null && $outV === null && $outA === null
+        ) {
+            return null;
+        }
+        $ts = self::parsePollTs($ur['last_poll_at'] ?? null) ?? time();
+        $w = null;
+        if ($load !== null) {
+            if ($ur['rated_kw'] !== null && $ur['rated_kw'] !== '') {
+                $w = (float)$ur['rated_kw'] * 1000.0 * ($load / 100.0);
+            } elseif ($ur['rated_kva'] !== null && $ur['rated_kva'] !== '') {
+                $w = (float)$ur['rated_kva'] * 1000.0 * 0.9 * ($load / 100.0);
+            }
+        }
+        if ($w === null && $outV !== null && $outA !== null && $outV > 0 && $outA > 0) {
+            $w = $outV * $outA;
+        }
+        return [
+            'ts' => $ts,
+            'load' => $load,
+            'batt' => $batt,
+            'rt' => $rt,
+            'w' => $w,
+            'in_v' => $inV,
+            'out_v' => $outV,
+            'in_hz' => $inHz,
+            'out_hz' => $outHz,
+            'out_a' => $outA,
+        ];
+    }
+
+    /**
+     * Forward-fill nulls so sparse polls still draw a continuous line.
+     *
+     * @param list<?float> $vals
+     * @return list<?float>
+     */
+    private static function carryForward(array $vals): array
+    {
+        $last = null;
+        $out = [];
+        foreach ($vals as $v) {
+            if ($v !== null && is_numeric($v)) {
+                $last = (float)$v;
+                $out[] = $last;
+            } else {
+                $out[] = $last;
+            }
+        }
+        return $out;
     }
 
     /**
