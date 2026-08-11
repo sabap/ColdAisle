@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Capacity planning / phase imbalance (Tier A / G-A2):** zones show free kW, free U (rows on zone), phase amps, and **Imbalanced** when phase skew ≥20%; Power dashboard facility headroom strip; Reports → **Power Capacity** live table + **Fits?** filter (need free kW / free U)
+
 ### Enhancements
 
 ### Bug fixes

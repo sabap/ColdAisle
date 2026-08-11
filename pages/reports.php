@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
+require_once dirname(__DIR__) . '/includes/power_helpers.php';
 App::boot();
 $user = App::requirePermission('view_reports');
 
@@ -74,23 +75,67 @@ function report_cabinet_utilization(): array
     );
 }
 
-function report_power_capacity(): array
+function report_power_capacity(float $needKw = 0.0, int $needU = 0): array
 {
+    if (!function_exists('power_zone_capacity_snapshot')) {
+        require_once dirname(__DIR__) . '/includes/power_helpers.php';
+    }
+    $zones = Database::fetchAll(
+        'SELECT z.*, dc.name AS dc_name
+         FROM power_zones z
+         LEFT JOIN datacenters dc ON dc.datacenter_id = z.datacenter_id
+         ORDER BY z.name'
+    );
+    $pdus = [];
+    try {
+        $pdus = Database::fetchAll(
+            'SELECT pdu_id, zone_id, pdu_scope, include_in_site_load, last_poll_watts,
+                    last_poll_phases, rated_amps, phases, name, rated_volts, last_poll_amps, last_poll_at
+             FROM pdus WHERE is_active = 1'
+        );
+    } catch (Throwable $e) {
+        $pdus = Database::fetchAll(
+            'SELECT pdu_id, zone_id, pdu_scope, include_in_site_load, last_poll_watts,
+                    name, rated_amps, rated_volts, last_poll_amps, last_poll_at
+             FROM pdus WHERE is_active = 1'
+        );
+    }
+    $uBy = function_exists('power_all_zones_u_capacity') ? power_all_zones_u_capacity() : [];
+    $snapshots = [];
+    foreach ($zones as $z) {
+        $zid = (int)$z['zone_id'];
+        $snap = power_zone_capacity_snapshot(
+            $pdus,
+            $z,
+            $uBy[$zid] ?? ['u_total' => 0, 'u_used' => 0, 'free_u' => 0, 'cabinets' => 0]
+        );
+        $snap['dc_name'] = (string)($z['dc_name'] ?? '');
+        $snap['voltage'] = $z['voltage'] ?? null;
+        $snap['max_amps'] = $z['max_amps'] ?? null;
+        $snapshots[] = $snap;
+    }
+    $fits = ($needKw > 0 || $needU > 0)
+        ? power_capacity_fits_filter($snapshots, $needKw, $needU)
+        : $snapshots;
+
+    $pduRows = Database::fetchAll(
+        'SELECT p.name, p.pdu_scope, p.rated_amps, p.rated_volts, p.last_poll_watts, p.last_poll_amps, p.last_poll_at,
+                c.name AS cabinet_name, z.name AS zone_name
+         FROM pdus p
+         LEFT JOIN cabinets c ON c.cabinet_id = p.cabinet_id
+         LEFT JOIN power_zones z ON z.zone_id = p.zone_id
+         WHERE p.is_active = 1 ORDER BY p.name'
+    );
+    if (function_exists('power_natural_sort_rows')) {
+        $pduRows = power_natural_sort_rows($pduRows, 'name');
+    }
+
     return [
-        'zones' => Database::fetchAll('SELECT * FROM power_zones ORDER BY name'),
-        'pdus' => (function () {
-            $rows = Database::fetchAll(
-                'SELECT p.name, p.pdu_scope, p.rated_amps, p.rated_volts, p.last_poll_watts, p.last_poll_amps, p.last_poll_at,
-                        c.name AS cabinet_name, z.name AS zone_name
-                 FROM pdus p
-                 LEFT JOIN cabinets c ON c.cabinet_id = p.cabinet_id
-                 LEFT JOIN power_zones z ON z.zone_id = p.zone_id
-                 WHERE p.is_active = 1 ORDER BY p.name'
-            );
-            return function_exists('power_natural_sort_rows')
-                ? power_natural_sort_rows($rows, 'name')
-                : $rows;
-        })(),
+        'zones' => $snapshots,
+        'fits' => $fits,
+        'need_kw' => $needKw,
+        'need_u' => $needU,
+        'pdus' => $pduRows,
     ];
 }
 
@@ -673,16 +718,123 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
         </tbody></table></div></div>
 
 <?php elseif ($report === 'power_capacity'):
-    $data = report_power_capacity(); ?>
-<div class="card"><div class="card-header"><h2>Power Zones</h2></div>
+    $pcNeedKw = isset($_GET['need_kw']) && $_GET['need_kw'] !== '' ? (float)$_GET['need_kw'] : 0.0;
+    $pcNeedU = isset($_GET['need_u']) && $_GET['need_u'] !== '' ? (int)$_GET['need_u'] : 0;
+    if ($pcNeedKw < 0) {
+        $pcNeedKw = 0.0;
+    }
+    if ($pcNeedU < 0) {
+        $pcNeedU = 0;
+    }
+    $data = report_power_capacity($pcNeedKw, $pcNeedU);
+    $pcFiltering = $pcNeedKw > 0 || $pcNeedU > 0;
+    ?>
+<div class="card mb-2">
+    <div class="card-header flex-between">
+        <h2 style="margin:0">Power Capacity</h2>
+        <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/power.php')) ?>">Power dashboard</a>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size:.9rem;margin-top:0">
+            Live headroom per zone: free kW (max − rollup load), free U on assigned rows, phase amps, and
+            <strong>imbalance</strong> when (max−min)/max phase amps ≥ 20%.
+            Use <strong>Fits?</strong> to list zones with enough free power and/or U for a placement.
+        </p>
+        <form method="get" class="form-grid">
+            <input type="hidden" name="report" value="power_capacity">
+            <div class="form-row"><label>Need free kW</label>
+                <input class="form-control" type="number" step="0.1" min="0" name="need_kw"
+                       value="<?= $pcNeedKw > 0 ? App::e((string)$pcNeedKw) : '' ?>" placeholder="e.g. 2.5"></div>
+            <div class="form-row"><label>Need free U</label>
+                <input class="form-control" type="number" min="0" name="need_u"
+                       value="<?= $pcNeedU > 0 ? (int)$pcNeedU : '' ?>" placeholder="e.g. 2"></div>
+            <div class="form-row" style="align-self:end">
+                <button class="btn btn-primary" type="submit">Fits?</button>
+                <?php if ($pcFiltering): ?>
+                    <a class="btn btn-secondary" href="?report=power_capacity">Clear</a>
+                <?php endif; ?>
+            </div>
+        </form>
+        <?php if ($pcFiltering): ?>
+            <p class="text-muted" style="font-size:.85rem;margin:.75rem 0 0">
+                Showing zones with
+                <?= $pcNeedKw > 0 ? '≥ ' . number_format($pcNeedKw, 1) . ' kW free' : '' ?>
+                <?= $pcNeedKw > 0 && $pcNeedU > 0 ? ' and ' : '' ?>
+                <?= $pcNeedU > 0 ? '≥ ' . (int)$pcNeedU . ' U free' : '' ?>
+                — <?= count($data['fits']) ?> of <?= count($data['zones']) ?> zone(s).
+            </p>
+        <?php endif; ?>
+    </div>
+</div>
+
+<div class="card mb-2"><div class="card-header"><h2>Zones (live)</h2></div>
     <div class="card-body flush"><table class="data">
-        <thead><tr><th>Name</th><th>Feed</th><th>Voltage</th><th>Max kW</th><th>Max A</th></tr></thead>
+        <thead>
+        <tr>
+            <th>Zone</th>
+            <th>Feed</th>
+            <th>Load kW</th>
+            <th>Max kW</th>
+            <th>Free kW</th>
+            <th>Util</th>
+            <th>Free U</th>
+            <th>Phases (A)</th>
+            <th>Balance</th>
+        </tr>
+        </thead>
         <tbody>
-        <?php foreach ($data['zones'] as $z): ?>
-            <tr><td><?= App::e($z['name']) ?></td><td><?= App::e($z['feed_type']) ?></td>
-                <td><?= App::e((string)$z['voltage']) ?></td><td><?= App::e((string)$z['max_kw']) ?></td>
-                <td><?= App::e((string)$z['max_amps']) ?></td></tr>
+        <?php
+        $pcRows = $pcFiltering ? $data['fits'] : $data['zones'];
+        foreach ($pcRows as $z):
+            $util = $z['util_pct'];
+            $imb = !empty($z['imbalanced']);
+            ?>
+            <tr>
+                <td>
+                    <a href="<?= App::e(App::url('pages/power_zones.php?id=' . (int)$z['zone_id'])) ?>">
+                        <?= App::e((string)$z['name']) ?>
+                    </a>
+                    <?php if (!empty($z['dc_name'])): ?>
+                        <div class="text-muted" style="font-size:.72rem"><?= App::e((string)$z['dc_name']) ?></div>
+                    <?php endif; ?>
+                </td>
+                <td><?= App::e((string)($z['feed_type'] ?? '—')) ?></td>
+                <td><?= number_format((float)$z['load_kw'], 2) ?></td>
+                <td><?= $z['max_kw'] !== null ? number_format((float)$z['max_kw'], 1) : '—' ?></td>
+                <td>
+                    <?php if ($z['free_kw'] !== null): ?>
+                        <strong><?= number_format((float)$z['free_kw'], 2) ?></strong>
+                    <?php else: ?>
+                        <span class="text-muted">—</span>
+                    <?php endif; ?>
+                </td>
+                <td>
+                    <?php if ($util !== null): ?>
+                        <span class="badge badge-<?= App::e(power_util_class((float)$util) === 'danger' ? 'danger' : (power_util_class((float)$util) === 'warning' ? 'warning' : 'success')) ?>">
+                            <?= App::e((string)$util) ?>%
+                        </span>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                </td>
+                <td><?= (int)$z['free_u'] ?> <span class="text-muted">/ <?= (int)$z['u_total'] ?></span></td>
+                <td style="font-size:.85rem"><?= App::e(power_format_phase_amps($z['phase_amps'] ?? [])) ?></td>
+                <td>
+                    <?php if ($imb): ?>
+                        <span class="badge badge-warning"><?= App::e((string)($z['imbalance']['label'] ?? 'Imbalanced')) ?></span>
+                    <?php else: ?>
+                        <span class="text-muted" style="font-size:.85rem"><?= App::e((string)($z['imbalance']['label'] ?? '—')) ?></span>
+                    <?php endif; ?>
+                </td>
+            </tr>
         <?php endforeach; ?>
+        <?php if (!$pcRows): ?>
+            <tr>
+                <td colspan="9" class="text-muted">
+                    <?= $pcFiltering ? 'No zones fit those free kW / free U requirements.' : 'No power zones defined.' ?>
+                </td>
+            </tr>
+        <?php endif; ?>
         </tbody></table></div></div>
 <div class="card"><div class="card-header"><h2>PDUs</h2></div>
     <div class="card-body flush"><table class="data">
