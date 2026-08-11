@@ -272,7 +272,34 @@ if ($unitId > 0) {
         }
     }
     $lastPollMetrics = is_array($lastPollSnap['metrics'] ?? null) ? $lastPollSnap['metrics'] : [];
+    $promoted = function_exists('cooling_poll_snapshot_promote')
+        ? cooling_poll_snapshot_promote($lastPollSnap ?? $u['last_poll_json'] ?? null)
+        : ['has_data' => false, 'display' => []];
     ?>
+    <?php if (!empty($promoted['has_data'])): ?>
+    <div class="card mb-2" id="coolingTelemetryCard">
+        <div class="card-header flex-between">
+            <h3 class="mt-0 mb-0" style="font-size:1rem">Live telemetry</h3>
+            <?php if (!empty($promoted['polled_at'])): ?>
+                <span class="text-muted" style="font-size:.8rem">Polled <?= App::e((string)$promoted['polled_at']) ?></span>
+            <?php endif; ?>
+        </div>
+        <div class="card-body">
+            <div class="metrics" style="margin:0">
+                <?php foreach ($promoted['display'] as $d): ?>
+                    <div class="metric-card <?= ($d['key'] ?? '') === 'alarms_present' && (float)($promoted['alarms_present'] ?? 0) > 0 ? 'warning' : '' ?>">
+                        <div class="label"><?= App::e((string)$d['label']) ?></div>
+                        <div class="value" style="font-size:1.15rem"><?= App::e((string)$d['value']) ?></div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+            <p class="text-muted mb-0 mt-1" style="font-size:.78rem">
+                Promoted from site OID template keys (supply/return temp, humidity, state, capacity).
+                Raw metric table under SNMP when needed.
+            </p>
+        </div>
+    </div>
+    <?php endif; ?>
     <div class="card mb-2" id="coolingSnmpCard">
         <div class="card-header flex-between">
             <h3 class="mt-0 mb-0" style="font-size:1rem">SNMP</h3>

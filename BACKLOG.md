@@ -99,14 +99,15 @@ Historical note commits:
 
 **Still open (follow-up slices)**
 
-1. **SNMP poll end-to-end** for cooling units + env probes (site OID templates map → `env_readings`, worker)  
+1. **SNMP poll end-to-end** for cooling units + env probes — **partial**: device EMS + cooling site templates + worker exist; Vertiv DS condition OIDs still **#8**  
 2. **AP9340 field mapping** — after user Discover/OID export, curated PowerNet env template (temp/humidity per probe)  
-3. **Threshold alerts / digests** via mail (high temp/humidity, offline sensors)  
-4. History charts (reuse power-history patterns)  
+3. ~~**Threshold alerts / digests**~~ — **done** (`EnvSensorAlertService` + stale/offline digest **0.3.111**)  
+4. ~~History charts~~ — **done** (`env_history` / sensor detail)  
 5. **3D / floor plan sensor markers** using `env_sensors.pos_*` (height/Z later)  
 6. Optional heat/humidity floor overlay  
 7. **Vertiv / Liebert DS LGP condition SNMP** — formal item **#8** (blocked on Unity VACM / Monitoring Support; templates in `AC_Vertiv_Thermal/`)  
-8. **3D airflow particles** (ceiling vents → cold aisle → hot aisle → returns) — formal item **#9**
+8. **3D airflow particles** (ceiling vents → cold aisle → hot aisle → returns) — formal item **#9**  
+9. Cooling unit **live telemetry UI** from `last_poll_json` known keys — **done 0.3.111** (promoted cards; full maps depend on #8)
 
 **Recommended order (AP9340 site)**
 
@@ -127,8 +128,9 @@ Historical note commits:
 
 - [x] Can define temp (+ humidity) points and see last value + recent history (manual readings)  
 - [x] Can inventory cooling units and associate them with rooms; active/standby without zones  
-- [ ] SNMP poll path works for at least one probe template end-to-end  
-- [ ] Threshold alert (e.g. high temp) can notify via existing mail settings  
+- [x] Threshold alert (e.g. high temp) can notify via existing mail settings  
+- [x] Stale / offline sensor mail (digest option) after scheduled poll  
+- [ ] SNMP poll path works for at least one cooling **thermal** template end-to-end (blocked on #8 for Liebert DS)  
 - [x] Power features remain unaffected  
 
 ---

@@ -1,8 +1,8 @@
-<?php
+?php
 /**
- * Cooling & environmental monitoring — labels, ASHRAE guidance, field helpers.
+ * Cooling & environmental monitoring â€” labels, ASHRAE guidance, field helpers.
  *
- * Guidance is based on ASHRAE TC 9.9 thermal envelopes (Recommended / A1–A4).
+ * Guidance is based on ASHRAE TC 9.9 thermal envelopes (Recommended / A1â€“A4).
  * Operators choose how much to use: a single active/standby pair is valid;
  * multi-unit / multi-sensor layouts are supported without requiring cooling zones.
  */
@@ -77,7 +77,7 @@ function cooling_ashrae_classes(): array
 
 /**
  * Rough dry-bulb / RH guidance for display (not a compliance engine).
- * Values: dry-bulb °C low/high, RH % low/high (null = not specified in this summary).
+ * Values: dry-bulb Â°C low/high, RH % low/high (null = not specified in this summary).
  *
  * @return array{label:string,db_c:array{0:?float,1:?float},rh:array{0:?float,1:?float},notes:string}
  */
@@ -88,7 +88,7 @@ function cooling_ashrae_envelope(string $class): array
             'label' => 'Recommended',
             'db_c' => [18.0, 27.0],
             'rh' => [null, 60.0],
-            'notes' => 'Typical enterprise target band (dry-bulb 18–27 °C; dew point / RH limits apply).',
+            'notes' => 'Typical enterprise target band (dry-bulb 18â€“27 Â°C; dew point / RH limits apply).',
         ],
         'A1' => [
             'label' => 'A1',
@@ -304,7 +304,7 @@ function cooling_unit_fields_from_post(array $post): array
         'rated_kw_cooling' => $num($post['rated_kw_cooling'] ?? null),
         'rated_tons' => $num($post['rated_tons'] ?? null),
         'rated_cfm' => $num($post['rated_cfm'] ?? null),
-        // Setpoints stored in °C; form posts site display unit
+        // Setpoints stored in Â°C; form posts site display unit
         'supply_temp_setpoint_c' => class_exists('TempUnitService')
             ? TempUnitService::postToC($post['supply_temp_setpoint_c'] ?? null)
             : $num($post['supply_temp_setpoint_c'] ?? null),
@@ -394,7 +394,7 @@ function cooling_unit_finalize_snmp(array $row, ?array $prev = null): array
                 $row['snmp_context'] = ($ctx === null || trim((string)$ctx) === '')
                     ? null
                     : trim((string)$ctx);
-                // Profile passphrases are already sealed in DB — copy as-is
+                // Profile passphrases are already sealed in DB â€” copy as-is
                 if (!empty($prof['auth_passphrase'])) {
                     $row['snmp_auth_passphrase'] = $prof['auth_passphrase'];
                     $authFromProfile = true;
@@ -471,9 +471,9 @@ function env_sensor_default_unit(string $kind): string
         return TempUnitService::defaultUnitForKind($kind);
     }
     return match ($kind) {
-        'temperature', 'dew_point' => '°C',
+        'temperature', 'dew_point' => 'Â°C',
         'humidity' => '%RH',
-        'temp_humidity' => '°C / %RH',
+        'temp_humidity' => 'Â°C / %RH',
         'differential_pressure' => 'Pa',
         'airflow' => 'CFM',
         'leak' => 'state',
@@ -549,7 +549,7 @@ function env_sensor_fields_from_post(array $post): array
         'is_active' => isset($post['is_active']) ? (!empty($post['is_active']) ? 1 : 0) : 1,
     ];
 
-    // Thresholds entered in site display unit → store °C for temperature kinds
+    // Thresholds entered in site display unit â†’ store Â°C for temperature kinds
     if (class_exists('TempUnitService')) {
         $fields = TempUnitService::thresholdsDisplayToStorage($fields, $kind);
         if (TempUnitService::isTempKind($kind) && ($unitPosted === null || $unitPosted === '')) {
@@ -557,7 +557,7 @@ function env_sensor_fields_from_post(array $post): array
         }
     }
 
-    // Host foreign keys — only the matching host type is populated
+    // Host foreign keys â€” only the matching host type is populated
     switch ($host) {
         case 'cooling_unit':
             $fields['cooling_unit_id'] = $intOrNull($post['cooling_unit_id'] ?? null);
@@ -584,7 +584,7 @@ function env_sensor_fields_from_post(array $post): array
 }
 
 /**
- * Display label for a sensor's host (device name, PDU name, …).
+ * Display label for a sensor's host (device name, PDU name, â€¦).
  * Expects optional join columns: device_label, cooling_unit_name, pdu_name, cabinet_name, room_name.
  *
  * @param array<string,mixed> $sensor
@@ -631,7 +631,7 @@ function env_sensor_kind_short(string $kind, array $kinds = []): string
         'temperature' => 'Temp',
         'humidity' => 'Humidity',
         'dew_point' => 'Dew point',
-        'differential_pressure' => 'ΔP',
+        'differential_pressure' => 'Î”P',
         'airflow' => 'Airflow',
         'leak' => 'Leak',
         default => $kinds[$kind] ?? $kind,
@@ -671,3 +671,241 @@ function env_sensor_threshold_status(?float $value, array $sensor): string
     }
     return 'ok';
 }
+
+
+/**
+ * Promote known keys from cooling unit last_poll_json into a compact snapshot.
+ * Accepts raw JSON string or decoded array (full snapshot or metrics-only).
+ *
+ * @param mixed $jsonOrArray
+ * @return array{
+ *   has_data:bool,
+ *   polled_at:?string,
+ *   supply_temp:?float,
+ *   return_temp:?float,
+ *   control_temp:?float,
+ *   humidity:?float,
+ *   system_state:?string,
+ *   cooling_capacity_pct:?float,
+ *   fan_capacity_pct:?float,
+ *   alarms_present:?float,
+ *   extras:array<string,scalar|null>,
+ *   display:list<array{label:string,value:string,key:string}>
+ * }
+ */
+function cooling_poll_snapshot_promote($jsonOrArray): array
+{
+    $empty = [
+        'has_data' => false,
+        'polled_at' => null,
+        'supply_temp' => null,
+        'return_temp' => null,
+        'control_temp' => null,
+        'humidity' => null,
+        'system_state' => null,
+        'cooling_capacity_pct' => null,
+        'fan_capacity_pct' => null,
+        'alarms_present' => null,
+        'extras' => [],
+        'display' => [],
+    ];
+    if ($jsonOrArray === null || $jsonOrArray === '') {
+        return $empty;
+    }
+    if (is_string($jsonOrArray)) {
+        $decoded = json_decode($jsonOrArray, true);
+    } elseif (is_array($jsonOrArray)) {
+        $decoded = $jsonOrArray;
+    } else {
+        return $empty;
+    }
+    if (!is_array($decoded)) {
+        return $empty;
+    }
+    $metrics = [];
+    if (isset($decoded['metrics']) && is_array($decoded['metrics'])) {
+        $metrics = $decoded['metrics'];
+    } else {
+        foreach ($decoded as $k => $v) {
+            if (is_string($k) && (is_scalar($v) || $v === null)
+                && !in_array($k, ['polled_at', 'template_id', 'template_name', 'ok', 'failed'], true)
+            ) {
+                $metrics[$k] = $v;
+            }
+        }
+    }
+    if (!$metrics) {
+        $empty['polled_at'] = isset($decoded['polled_at']) ? (string)$decoded['polled_at'] : null;
+        return $empty;
+    }
+
+    $norm = static function (string $k): string {
+        $k = strtolower(trim($k));
+        $k = str_replace(['-', ' ', '.', '/'], '_', $k);
+        return preg_replace('/[^a-z0-9_]+/', '', $k) ?? $k;
+    };
+
+    /** @var array<string,mixed> $byNorm */
+    $byNorm = [];
+    foreach ($metrics as $k => $v) {
+        $byNorm[$norm((string)$k)] = $v;
+        $byNorm[(string)$k] = $v;
+    }
+
+    $pick = static function (array $candidates) use ($byNorm, $norm) {
+        foreach ($candidates as $c) {
+            $n = $norm($c);
+            if (array_key_exists($n, $byNorm) && $byNorm[$n] !== null && $byNorm[$n] !== '') {
+                return $byNorm[$n];
+            }
+            if (array_key_exists($c, $byNorm) && $byNorm[$c] !== null && $byNorm[$c] !== '') {
+                return $byNorm[$c];
+            }
+        }
+        foreach ($candidates as $c) {
+            $frag = $norm($c);
+            if ($frag === '') {
+                continue;
+            }
+            foreach ($byNorm as $nk => $v) {
+                if ($v === null || $v === '') {
+                    continue;
+                }
+                if (is_string($nk) && str_contains($nk, $frag)) {
+                    return $v;
+                }
+            }
+        }
+        return null;
+    };
+
+    $num = static function ($v): ?float {
+        if ($v === null || $v === '') {
+            return null;
+        }
+        if (is_numeric($v)) {
+            return (float)$v;
+        }
+        if (is_string($v) && preg_match('/[-+]?\d*\.?\d+/', $v, $m)) {
+            return (float)$m[0];
+        }
+        return null;
+    };
+
+    $supply = $num($pick([
+        'supply_temp', 'supply_temperature', 'supply_air_temp', 'sat',
+        'leaving_air_temp', 'discharge_temp', 'supplytemp',
+    ]));
+    $return = $num($pick([
+        'return_temp', 'return_temperature', 'return_air_temp', 'rat',
+        'entering_air_temp', 'returntemp',
+    ]));
+    $control = $num($pick([
+        'control_temp', 'control_temperature', 'space_temp', 'room_temp',
+    ]));
+    $humidity = $num($pick([
+        'return_humidity', 'control_humidity', 'humidity', 'rh',
+        'relative_humidity', 'return_rh', 'space_humidity',
+    ]));
+    $stateRaw = $pick([
+        'system_state', 'unit_state', 'operating_state', 'mode',
+        'status', 'on_off', 'unit_status',
+    ]);
+    $state = null;
+    if ($stateRaw !== null && $stateRaw !== '') {
+        if (is_numeric($stateRaw)) {
+            $map = [0 => 'Off', 1 => 'On', 2 => 'Standby', 3 => 'Alarm'];
+            $i = (int)$stateRaw;
+            $state = $map[$i] ?? ('State ' . $i);
+        } else {
+            $state = (string)$stateRaw;
+        }
+    }
+    $coolCap = $num($pick([
+        'cooling_capacity', 'cooling_capacity_pct', 'cool_capacity',
+        'capacity_pct', 'cooling_pct',
+    ]));
+    $fanCap = $num($pick([
+        'fan_capacity', 'fan_capacity_pct', 'fan_speed', 'fan_pct',
+    ]));
+    $alarms = $num($pick([
+        'alarms_present', 'alarm_count', 'alarms', 'active_alarms',
+    ]));
+
+    $fmtTemp = static function (?float $c): string {
+        if ($c === null) {
+            return '—';
+        }
+        // Large values may already be Fahrenheit from some vendor maps
+        if (class_exists('TempUnitService') && $c <= 60.0) {
+            return TempUnitService::format($c, 1);
+        }
+        if (class_exists('TempUnitService') && $c > 60.0) {
+            $unit = method_exists('TempUnitService', 'siteUnit') ? TempUnitService::siteUnit() : 'C';
+            if ($unit === 'F' || $unit === 'f') {
+                return rtrim(rtrim(sprintf('%.1F', $c), '0'), '.') . ' °F';
+            }
+            $c2 = ($c - 32.0) * 5.0 / 9.0;
+            return TempUnitService::format($c2, 1);
+        }
+        return rtrim(rtrim(sprintf('%.1F', $c), '0'), '.') . ' °C';
+    };
+
+    $display = [];
+    if ($supply !== null) {
+        $display[] = ['label' => 'Supply', 'value' => $fmtTemp($supply), 'key' => 'supply_temp'];
+    }
+    if ($return !== null) {
+        $display[] = ['label' => 'Return', 'value' => $fmtTemp($return), 'key' => 'return_temp'];
+    }
+    if ($control !== null && $control !== $supply && $control !== $return) {
+        $display[] = ['label' => 'Control', 'value' => $fmtTemp($control), 'key' => 'control_temp'];
+    }
+    if ($humidity !== null) {
+        $display[] = [
+            'label' => 'Humidity',
+            'value' => rtrim(rtrim(sprintf('%.1F', $humidity), '0'), '.') . ' %RH',
+            'key' => 'humidity',
+        ];
+    }
+    if ($state !== null) {
+        $display[] = ['label' => 'State', 'value' => $state, 'key' => 'system_state'];
+    }
+    if ($coolCap !== null) {
+        $display[] = [
+            'label' => 'Cooling %',
+            'value' => rtrim(rtrim(sprintf('%.0F', $coolCap), '0'), '.') . '%',
+            'key' => 'cooling_capacity_pct',
+        ];
+    }
+    if ($fanCap !== null) {
+        $display[] = [
+            'label' => 'Fan %',
+            'value' => rtrim(rtrim(sprintf('%.0F', $fanCap), '0'), '.') . '%',
+            'key' => 'fan_capacity_pct',
+        ];
+    }
+    if ($alarms !== null) {
+        $display[] = [
+            'label' => 'Alarms',
+            'value' => rtrim(rtrim(sprintf('%.0F', $alarms), '0'), '.'),
+            'key' => 'alarms_present',
+        ];
+    }
+
+    return [
+        'has_data' => $display !== [],
+        'polled_at' => isset($decoded['polled_at']) ? (string)$decoded['polled_at'] : null,
+        'supply_temp' => $supply,
+        'return_temp' => $return,
+        'control_temp' => $control,
+        'humidity' => $humidity,
+        'system_state' => $state,
+        'cooling_capacity_pct' => $coolCap,
+        'fan_capacity_pct' => $fanCap,
+        'alarms_present' => $alarms,
+        'extras' => [],
+        'display' => $display,
+    ];
+}
+
