@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.108] - 2026-08-11
+
+### Bug fixes
+
 - **UPS (and cooling) missing from SNMP Scheduled polling list:** units with **Scheduled poll** on now appear with type badge, last load/battery, Open/Unschedule; Incomplete if no site OID template or IP (worker already polled them)
 
 ---
-
 ## [0.3.107] - 2026-08-11
 
 ### Bug fixes
