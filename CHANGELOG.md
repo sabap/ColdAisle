@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **Cabinet QR + field audit polish:** per-cabinet QR preview and labels (SVG/PNG/print/sheet); bulk QR sheet from cabinet list and per-room; field mode (`?field=1`) with sticky audit bar; audit modal shows inventory snapshot; deep link `?audit=1` opens log-audit
-
 ### Bug fixes
 
 ---
 
+## [0.3.105] - 2026-08-11
+
+### Enhancements
+
+- **Cabinet QR + field audit polish:** per-cabinet QR preview and labels (SVG/PNG/print/sheet); bulk QR sheet from cabinet list and per-room; field mode (`?field=1`) with sticky audit bar; audit modal shows inventory snapshot; deep link `?audit=1` opens log-audit
+
+---
 ## [0.3.104] - 2026-08-10
 
 ### Enhancements
