@@ -320,6 +320,15 @@ CREATE TABLE devices (
     install_date DATE NULL,
     warranty_provider NVARCHAR(150) NULL,
     warranty_end DATE NULL,
+    warranty_notify_for_end DATE NULL, -- last warranty_end value emailed in digest (G-B3)
+    -- Purchase / PO / RMA (G-B3)
+    po_number NVARCHAR(100) NULL,
+    purchase_date DATE NULL,
+    purchase_cost DECIMAL(14,2) NULL,
+    purchase_vendor NVARCHAR(150) NULL,
+    rma_number NVARCHAR(100) NULL,
+    rma_status NVARCHAR(30) NULL, -- none, open, shipped, received, closed
+    rma_notes NVARCHAR(MAX) NULL,
     owner_contact_id INT NULL REFERENCES contacts(contact_id),
     tags NVARCHAR(500) NULL, -- comma-separated
     -- SNMP
@@ -843,6 +852,27 @@ CREATE TABLE disposals (
 );
 GO
 
+-- Asset lifecycle / chain-of-custody events (G-B3)
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'asset_events')
+CREATE TABLE asset_events (
+    event_id INT IDENTITY(1,1) PRIMARY KEY,
+    device_id INT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+    event_type NVARCHAR(40) NOT NULL,
+    summary NVARCHAR(500) NOT NULL,
+    from_value NVARCHAR(255) NULL,
+    to_value NVARCHAR(255) NULL,
+    notes NVARCHAR(MAX) NULL,
+    meta_json NVARCHAR(MAX) NULL,
+    performed_by INT NULL REFERENCES users(user_id),
+    performed_by_name NVARCHAR(150) NULL,
+    occurred_at DATETIME2 NOT NULL CONSTRAINT DF_ae_at DEFAULT SYSUTCDATETIME(),
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_ae_created DEFAULT SYSUTCDATETIME()
+);
+GO
+
+CREATE NONCLUSTERED INDEX IX_asset_events_device ON asset_events(device_id, occurred_at DESC);
+GO
+
 -- Password reset tokens (G-B5 local forgot-password)
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'password_reset_tokens')
 CREATE TABLE password_reset_tokens (
@@ -1165,6 +1195,8 @@ INSERT INTO settings (setting_key, setting_value, category) VALUES
 ('default_cabinet_depth_mm', '1200', 'cabinets'),
 ('audit_interval_days', '90', 'compliance'),
 ('disposal_notify_days', '7', 'lifecycle'),
+('warranty_notify_days', '60', 'lifecycle'),
+('warranty_mail_enabled', '1', 'lifecycle'),
 ('snmp_poll_enabled', '0', 'snmp'),
 ('auth_local_enabled', '1', 'auth'),
 ('auth_ldaps_enabled', '0', 'auth'),

@@ -105,9 +105,27 @@ try {
             'status' => $data['status'] ?? 'production',
             'install_date' => $data['install_date'] ?? null,
             'warranty_end' => $data['warranty_end'] ?? null,
+            'warranty_provider' => $data['warranty_provider'] ?? null,
+            'po_number' => $data['po_number'] ?? null,
+            'purchase_date' => $data['purchase_date'] ?? null,
+            'purchase_cost' => $data['purchase_cost'] ?? null,
+            'purchase_vendor' => $data['purchase_vendor'] ?? null,
+            'rma_number' => $data['rma_number'] ?? null,
+            'rma_status' => $data['rma_status'] ?? null,
+            'rma_notes' => $data['rma_notes'] ?? null,
             'notes' => $data['notes'] ?? null,
             'is_active' => 1,
         ]);
+
+        if (class_exists('AssetLifecycleService')) {
+            AssetLifecycleService::logDeviceChanges(null, [
+                'label' => $label,
+                'status' => $data['status'] ?? 'production',
+            ], $id, [
+                'user_id' => (int)$user['user_id'],
+                'username' => (string)($user['username'] ?? ''),
+            ]);
+        }
 
         // Auto-create data ports if count provided (power uses device_power_supplies)
         $dataPorts = (int)($data['num_data_ports'] ?? 0);
@@ -159,12 +177,15 @@ try {
         if (!$id) {
             App::json(['error' => 'device_id required'], 400);
         }
+        $before = Database::fetchOne('SELECT * FROM devices WHERE device_id = ?', [$id]);
         $fields = [];
         foreach ([
             'cabinet_id', 'template_id', 'department_id', 'label', 'serial_no', 'asset_tag',
             'device_type', 'manufacturer', 'model', 'position_u', 'u_height', 'half_depth',
             'back_side', 'primary_ip', 'mgmt_ip', 'idrac_host', 'hostname', 'nominal_watts', 'status',
-            'install_date', 'warranty_end', 'notes',
+            'install_date', 'warranty_end', 'warranty_provider', 'notes',
+            'po_number', 'purchase_date', 'purchase_cost', 'purchase_vendor',
+            'rma_number', 'rma_status', 'rma_notes', 'owner_contact_id',
         ] as $k) {
             if (array_key_exists($k, $data)) {
                 $fields[$k] = $data[$k] === '' ? null : $data[$k];
@@ -200,6 +221,17 @@ try {
         $fields['updated_at'] = date('Y-m-d H:i:s');
         Database::update('devices', $fields, 'device_id = :id', [':id' => $id]);
         $dev = Database::fetchOne('SELECT * FROM devices WHERE device_id = ?', [$id]);
+        if (class_exists('AssetLifecycleService') && is_array($dev)) {
+            AssetLifecycleService::logDeviceChanges(
+                is_array($before) ? $before : $existing,
+                $dev,
+                $id,
+                [
+                    'user_id' => (int)$user['user_id'],
+                    'username' => (string)($user['username'] ?? ''),
+                ]
+            );
+        }
         AuditService::log((int)$user['user_id'], $user['username'], 'update', 'device', $id, $fields);
         App::json(['device' => $dev]);
     }

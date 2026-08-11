@@ -139,14 +139,31 @@ function report_power_capacity(float $needKw = 0.0, int $needU = 0): array
     ];
 }
 
-function report_warranty(): array
+/**
+ * Warranty report rows with optional window filter.
+ * @param string $filter all|soon|expired|window (window = within notify days or expired)
+ * @return list<array<string,mixed>>
+ */
+function report_warranty(string $filter = 'all', int $days = 60): array
 {
-    return Database::fetchAll(
-        "SELECT label, manufacturer, model, serial_no, warranty_end, status, cabinet_id
-         FROM devices
-         WHERE is_active = 1 AND warranty_end IS NOT NULL
-         ORDER BY warranty_end"
-    );
+    $days = max(0, min(730, $days));
+    $sql = "SELECT d.device_id, d.label, d.manufacturer, d.model, d.serial_no, d.asset_tag,
+                   d.warranty_end, d.warranty_provider, d.status, d.cabinet_id,
+                   dep.name AS department_name
+            FROM devices d
+            LEFT JOIN departments dep ON dep.department_id = d.department_id
+            WHERE d.is_active = 1
+              AND d.status NOT IN ('disposed')
+              AND d.warranty_end IS NOT NULL";
+    if ($filter === 'expired') {
+        $sql .= ' AND d.warranty_end < CAST(GETUTCDATE() AS date)';
+    } elseif ($filter === 'soon' || $filter === 'window') {
+        $sql .= ' AND d.warranty_end <= DATEADD(day, ?, CAST(GETUTCDATE() AS date))';
+        $sql .= ' ORDER BY d.warranty_end, d.label';
+        return Database::fetchAll($sql, [$days]);
+    }
+    $sql .= ' ORDER BY d.warranty_end, d.label';
+    return Database::fetchAll($sql);
 }
 
 function report_disposal_queue(): array
@@ -854,21 +871,86 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
         </tbody></table></div></div>
 
 <?php elseif ($report === 'warranty_expiration'):
-    $rows = report_warranty(); ?>
-<div class="card"><div class="card-header"><h2>Warranty Expiration</h2></div>
+    $wDays = max(0, min(730, (int)($_GET['days'] ?? SettingsService::get('warranty_notify_days', '60'))));
+    $wFilter = strtolower(trim((string)($_GET['wfilter'] ?? 'window')));
+    if (!in_array($wFilter, ['all', 'soon', 'expired', 'window'], true)) {
+        $wFilter = 'window';
+    }
+    $rows = report_warranty($wFilter, $wDays);
+    $expiredCount = 0;
+    $soonCount = 0;
+    foreach ($rows as $rr) {
+        $dLeft = class_exists('AssetLifecycleService')
+            ? AssetLifecycleService::daysUntil(isset($rr['warranty_end']) ? (string)$rr['warranty_end'] : null)
+            : null;
+        if ($dLeft !== null && $dLeft < 0) {
+            $expiredCount++;
+        } elseif ($dLeft !== null && $dLeft <= $wDays) {
+            $soonCount++;
+        }
+    }
+    ?>
+<div class="card">
+    <div class="card-header flex-between">
+        <h2 style="margin:0">Warranty Expiration</h2>
+        <form method="get" class="flex gap-1" style="align-items:center;flex-wrap:wrap;margin:0">
+            <input type="hidden" name="report" value="warranty_expiration">
+            <label class="text-muted" style="font-size:.8rem;margin:0">Filter</label>
+            <select class="form-control" name="wfilter" style="width:auto" onchange="this.form.submit()">
+                <option value="window" <?= $wFilter === 'window' ? 'selected' : '' ?>>Due within window + expired</option>
+                <option value="expired" <?= $wFilter === 'expired' ? 'selected' : '' ?>>Expired only</option>
+                <option value="all" <?= $wFilter === 'all' ? 'selected' : '' ?>>All with warranty date</option>
+            </select>
+            <label class="text-muted" style="font-size:.8rem;margin:0">Days</label>
+            <input class="form-control" type="number" name="days" min="0" max="730" value="<?= (int)$wDays ?>"
+                   style="width:5rem" onchange="this.form.submit()">
+        </form>
+    </div>
+    <div class="card-body" style="padding-bottom:0">
+        <p class="text-muted" style="font-size:.85rem;margin:0 0 .75rem">
+            Showing <?= count($rows) ?> device(s)
+            <?php if ($wFilter !== 'all'): ?>
+                · <?= $expiredCount ?> expired · <?= $soonCount ?> within <?= (int)$wDays ?> day(s)
+            <?php endif; ?>
+            · Email digests: Settings → General (warranty notify)
+        </p>
+    </div>
     <div class="card-body flush"><table class="data">
-        <thead><tr><th>Label</th><th>Make/Model</th><th>Serial</th><th>Warranty End</th><th>Status</th></tr></thead>
+        <thead>
+        <tr>
+            <th>Device</th><th>Asset tag</th><th>Make/Model</th><th>Serial</th>
+            <th>Provider</th><th>Warranty end</th><th>Remaining</th><th>Dept</th><th>Status</th>
+        </tr>
+        </thead>
         <tbody>
-        <?php foreach ($rows as $r): ?>
+        <?php foreach ($rows as $r):
+            $dLeft = class_exists('AssetLifecycleService')
+                ? AssetLifecycleService::daysUntil(isset($r['warranty_end']) ? (string)$r['warranty_end'] : null)
+                : null;
+            $badge = class_exists('AssetLifecycleService')
+                ? AssetLifecycleService::warrantyBadge($dLeft)
+                : ['label' => '—', 'class' => ''];
+            $did = (int)($r['device_id'] ?? 0);
+            ?>
             <tr>
-                <td><?= App::e($r['label']) ?></td>
+                <td><?php if ($did): ?>
+                    <a href="<?= App::e(App::url('pages/devices.php?id=' . $did)) ?>"><?= App::e($r['label']) ?></a>
+                <?php else: ?>
+                    <?= App::e($r['label']) ?>
+                <?php endif; ?></td>
+                <td><?= App::e($r['asset_tag'] ?? '') ?></td>
                 <td><?= App::e(trim(($r['manufacturer'] ?? '') . ' ' . ($r['model'] ?? ''))) ?></td>
                 <td><?= App::e($r['serial_no'] ?? '') ?></td>
-                <td><?= App::e($r['warranty_end']) ?></td>
-                <td><?= App::e($r['status']) ?></td>
+                <td><?= App::e($r['warranty_provider'] ?? '') ?></td>
+                <td><?= App::e($r['warranty_end'] ?? '') ?></td>
+                <td><?php if ($badge['label'] !== '—'): ?>
+                    <span class="badge <?= App::e($badge['class']) ?>"><?= App::e($badge['label']) ?></span>
+                <?php else: ?>—<?php endif; ?></td>
+                <td><?= App::e($r['department_name'] ?? '') ?></td>
+                <td><?= App::e($r['status'] ?? '') ?></td>
             </tr>
         <?php endforeach; ?>
-        <?php if (!$rows): ?><tr><td colspan="5" class="text-muted">No warranty dates recorded.</td></tr><?php endif; ?>
+        <?php if (!$rows): ?><tr><td colspan="9" class="text-muted">No matching warranty dates.</td></tr><?php endif; ?>
         </tbody></table></div></div>
 
 <?php elseif ($report === 'disposal_queue'):

@@ -849,6 +849,7 @@ class SiteBackupService
             'password_reset_tokens' => 62,
             'work_orders' => 63,
             'work_order_items' => 64,
+            'asset_events' => 65,
             'notifications' => 70,
             'cabinet_audits' => 80,
             'audit_jobs' => 81,
