@@ -138,6 +138,139 @@ function work_order_status_badge_class(string $status): string
 }
 
 /**
+ * Monday–Sunday of the week containing $ref (local server date).
+ *
+ * @return array{start:string,end:string,label:string}
+ */
+function work_order_week_range(?int $refTs = null): array
+{
+    $ts = $refTs ?? time();
+    $dow = (int)date('N', $ts); // 1=Mon … 7=Sun
+    $startTs = strtotime('-' . ($dow - 1) . ' days', strtotime(date('Y-m-d', $ts)));
+    $endTs = strtotime('+6 days', $startTs);
+    $start = date('Y-m-d', $startTs);
+    $end = date('Y-m-d', $endTs);
+    return [
+        'start' => $start,
+        'end' => $end,
+        'label' => date('M j', $startTs) . ' – ' . date('M j, Y', $endTs),
+    ];
+}
+
+/**
+ * Open work orders scheduled this week (not completed/cancelled).
+ *
+ * @return list<array<string,mixed>>
+ */
+function work_order_moves_this_week(): array
+{
+    $w = work_order_week_range();
+    try {
+        return Database::fetchAll(
+            "SELECT w.*,
+                    (SELECT COUNT(*) FROM work_order_items i WHERE i.work_order_id = w.work_order_id) AS item_count,
+                    (SELECT COUNT(*) FROM work_order_items i
+                     WHERE i.work_order_id = w.work_order_id AND i.item_status = 'done') AS done_count
+             FROM work_orders w
+             WHERE w.status IN ('draft','planned','in_progress')
+               AND w.scheduled_date IS NOT NULL
+               AND w.scheduled_date >= ?
+               AND w.scheduled_date <= ?
+             ORDER BY w.scheduled_date, w.title",
+            [$w['start'], $w['end']]
+        );
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/**
+ * Bulk-add rack-mounted devices from a source cabinet onto a work order.
+ *
+ * @return array{added:int,skipped:int,errors:list<string>}
+ */
+function work_order_add_from_cabinet(
+    int $workOrderId,
+    int $fromCabinetId,
+    ?int $toCabinetId = null,
+    bool $parentsOnly = true
+): array {
+    $result = ['added' => 0, 'skipped' => 0, 'errors' => []];
+    if ($workOrderId < 1 || $fromCabinetId < 1) {
+        $result['errors'][] = 'Work order and source cabinet are required.';
+        return $result;
+    }
+    try {
+        $sql = 'SELECT device_id, label, cabinet_id, position_u
+                FROM devices
+                WHERE is_active = 1 AND cabinet_id = ?';
+        if ($parentsOnly) {
+            $sql .= ' AND parent_device_id IS NULL';
+        }
+        $sql .= ' ORDER BY position_u, label';
+        $devs = Database::fetchAll($sql, [$fromCabinetId]);
+    } catch (Throwable $e) {
+        // Fallback without parent filter
+        try {
+            $devs = Database::fetchAll(
+                'SELECT device_id, label, cabinet_id, position_u
+                 FROM devices WHERE is_active = 1 AND cabinet_id = ?
+                 ORDER BY position_u, label',
+                [$fromCabinetId]
+            );
+        } catch (Throwable $e2) {
+            $result['errors'][] = $e2->getMessage();
+            return $result;
+        }
+    }
+    if (!$devs) {
+        $result['errors'][] = 'No active devices in that cabinet.';
+        return $result;
+    }
+    $maxSort = (int)Database::fetchValue(
+        'SELECT ISNULL(MAX(sort_order),0) FROM work_order_items WHERE work_order_id = ?',
+        [$workOrderId]
+    );
+    foreach ($devs as $dev) {
+        $deviceId = (int)$dev['device_id'];
+        $exists = Database::fetchOne(
+            'SELECT item_id FROM work_order_items WHERE work_order_id = ? AND device_id = ?',
+            [$workOrderId, $deviceId]
+        );
+        if ($exists) {
+            $result['skipped']++;
+            continue;
+        }
+        $maxSort++;
+        try {
+            Database::insert('work_order_items', [
+                'work_order_id' => $workOrderId,
+                'device_id' => $deviceId,
+                'from_cabinet_id' => $dev['cabinet_id'] !== null ? (int)$dev['cabinet_id'] : null,
+                'from_position_u' => $dev['position_u'] !== null ? (int)$dev['position_u'] : null,
+                'to_cabinet_id' => $toCabinetId,
+                'to_position_u' => null,
+                'item_status' => 'pending',
+                'sort_order' => $maxSort,
+            ]);
+            $result['added']++;
+        } catch (Throwable $e) {
+            $result['skipped']++;
+            $result['errors'][] = (string)($dev['label'] ?? $deviceId) . ': ' . $e->getMessage();
+        }
+    }
+    if ($result['added'] > 0) {
+        Database::update(
+            'work_orders',
+            ['updated_at' => date('Y-m-d H:i:s')],
+            'work_order_id = :id',
+            [':id' => $workOrderId]
+        );
+    }
+    return $result;
+}
+
+/**
  * Apply done items' destinations to devices. Soft-skips U conflicts.
  *
  * @return array{applied:int,skipped:int,errors:list<string>}
