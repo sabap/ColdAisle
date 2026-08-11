@@ -7,7 +7,7 @@
 - This file tracks **product / competitive gaps** so chat menus and compaction do not lose the map.  
 - Promote a gap into `BACKLOG.md` only when scope is confirmed and work is intentionally deferred.
 
-**Last reviewed:** 2026-08-11 (post **0.3.108** — UPS scheduled list, UPS charts, cabinet QR/field audit, facility rollup, row PDUs).
+**Last reviewed:** 2026-08-11 (post **0.3.109** — power path report G-A1; prior: UPS scheduled list, charts, cabinet QR, facility rollup).
 
 ---
 
@@ -71,7 +71,7 @@ These are **not** free-form suggestions; they have acceptance criteria in the ba
 
 | ID | Gap | Status | vs peers | ColdAisle today | Suggested slice |
 |----|-----|--------|----------|-----------------|-----------------|
-| **G-A1** | **End-to-end power path report** | Gap / Partial | dcTrack, Nlyte, openDCIM power path style | Outlet ↔ PSU mapping exists; no path diagram / orphans / dual-feed risk view | Read-only path: UPS → panel/row PDU → rack PDU → outlet → PSU → device; list orphans & single-feed devices |
+| **G-A1** | **End-to-end power path report** | **Closed (v1)** — **0.3.109** | dcTrack, Nlyte, openDCIM power path style | Report + dashboard card; soft UPS by zone; no SVG one-line | Optional later: hard UPS/panel FKs, diagram |
 | **G-A2** | **Capacity planning / phase imbalance** | Partial | “Where can I place N kW?” tools | Live load, U util, phase charts; little what-if / reserved capacity | Zone dashboard: free U + free power by phase/feed; imbalance badge; optional “fits?” estimator |
 | **G-A3** | **Cooling live telemetry + env alerts** | Partial + **G-B8** | Trellis / EcoStruxure thermal panels | Unit inventory; SNMP often identity-only on Liebert until unblocked | After #8: supply/return/RH/state on unit + NOC; env threshold digests (can start without Vertiv via AP9340) |
 | **G-A4** | **Vendor OID / device template library** | Partial | Fleet “pick model → done” | APC/Schneider path mature; Discover rulesets; site templates | Curated packs: more UPS, CyberPower, Raritan, Vertiv cooling JSON import |
@@ -108,8 +108,8 @@ Use as a **discussion default**, not a commitment.
 
 | Order | ID | Work | Why now |
 |-------|-----|------|---------|
-| 1 | G-A1 | Power path report (read-only) | Data already largely exists; high ops clarity |
-| 2 | G-A2 | Phase imbalance / free capacity hints | Small UI on zones + dashboard |
+| 1 | G-A1 | Power path report (read-only) | **Done 0.3.109** |
+| 2 | G-A2 | Phase imbalance / free capacity hints | **Next** |
 | 3 | G-A3 (env slice) | Env threshold mail + history charts | Independent of Liebert condition OIDs |
 | 4 | G-A5 | Stale poll / last-poll age | Cheap reliability win |
 | 5 | G-B8 → G-A3 | Vertiv DS template + poll after ~2026-08-18 | Largest cooling unlock |
@@ -121,6 +121,7 @@ Use as a **discussion default**, not a commitment.
 
 | Former gap | Delivered | Release / notes |
 |------------|-----------|-----------------|
+| **G-A1 Power path report** | `PowerPathService`; Reports → Power Path; unmapped / single-feed / half-map / no row feed; Power dashboard card | **0.3.109** |
 | Cabinet QR labels / plaques → cabinet page | QR preview, SVG/PNG/print, bulk sheet, field + audit polish | **0.3.105** (`BACKLOG` #6) |
 | UPS “No data yet” / single-blip charts | `snmp_last_poll_at`; hold ~90m + carry-forward | **0.3.106–0.3.107** |
 | UPS missing from SNMP scheduled list | List UPS + cooling with toggle on; Incomplete if no template/IP | **0.3.108** |
@@ -156,3 +157,4 @@ Use as a **discussion default**, not a commitment.
 | Date | Change |
 |------|--------|
 | 2026-08-11 | Initial formal gap list (tiers A–C, backlog links, closed gaps through 0.3.108) |
+| 2026-08-11 | G-A1 closed in **0.3.109** (power path report); Tier A program in progress |

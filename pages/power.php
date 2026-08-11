@@ -144,6 +144,23 @@ $stalePdus = count(array_filter($pdus, static function ($p) {
     return strtotime((string)$p['last_poll_at']) < (time() - 3600);
 }));
 
+$powerPathCounts = [
+    'unmapped_psus' => 0,
+    'single_feed_devices' => 0,
+    'half_maps' => 0,
+    'cabinets_no_row_feed' => 0,
+];
+try {
+    if (class_exists('PowerPathService')) {
+        $powerPathCounts = PowerPathService::summaryCounts();
+    }
+} catch (Throwable $e) {
+    // keep zeros
+}
+$powerPathRisk = (int)$powerPathCounts['unmapped_psus']
+    + (int)$powerPathCounts['single_feed_devices']
+    + (int)$powerPathCounts['half_maps'];
+
 layout_header('Power Dashboard', $user, 'power');
 ?>
 
@@ -270,6 +287,22 @@ layout_header('Power Dashboard', $user, 'power');
         <div class="value"><?= $snmpOn ?></div>
         <div class="sub"><?= $stalePdus ? $stalePdus . ' stale / no poll' : 'enabled on PDUs' ?></div>
     </div>
+    <a class="metric-card <?= $powerPathRisk > 0 ? 'warning' : 'success' ?>"
+       href="<?= App::e(App::url('pages/reports.php?report=power_path')) ?>"
+       style="color:inherit;text-decoration:none">
+        <div class="label">Power path</div>
+        <div class="value"><?= (int)$powerPathCounts['unmapped_psus'] ?></div>
+        <div class="sub">
+            unmapped PSUs
+            <?php if ((int)$powerPathCounts['single_feed_devices'] > 0): ?>
+                · <?= (int)$powerPathCounts['single_feed_devices'] ?> single-feed
+            <?php endif; ?>
+            <?php if ((int)$powerPathCounts['half_maps'] > 0): ?>
+                · <?= (int)$powerPathCounts['half_maps'] ?> half-map
+            <?php endif; ?>
+            · open report
+        </div>
+    </a>
 </div>
 
 <?php if ($capacityPct !== null): ?>
