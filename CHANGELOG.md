@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Work orders:** bulk-add all rack devices from a source cabinet (optional shared destination); **Moves this week** strip + list filter for open WOs scheduled Mon–Sun
+
 ### Bug fixes
 
 ---

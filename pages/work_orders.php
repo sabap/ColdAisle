@@ -17,6 +17,7 @@ $actionGet = (string)($_GET['action'] ?? '');
 $startDeviceId = isset($_GET['device_id']) ? (int)$_GET['device_id'] : 0;
 $filterStatus = strtolower(trim((string)($_GET['status'] ?? '')));
 $filterTicket = trim((string)($_GET['ticket'] ?? ''));
+$filterWeek = !empty($_GET['week']);
 
 // Ensure tables exist on first hit
 try {
@@ -324,6 +325,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             Database::delete('work_order_items', 'item_id = ? AND work_order_id = ?', [$itemId, $woId]);
             Database::update('work_orders', ['updated_at' => date('Y-m-d H:i:s')], 'work_order_id = :id', [':id' => $woId]);
             App::flash('success', 'Item removed.');
+            App::redirect('pages/work_orders.php?id=' . $woId . '#items');
+        }
+
+        if ($action === 'add_from_cabinet') {
+            $woId = (int)($_POST['work_order_id'] ?? 0);
+            $fromCab = (int)($_POST['from_cabinet_id'] ?? 0);
+            $toCab = !empty($_POST['to_cabinet_id']) ? (int)$_POST['to_cabinet_id'] : null;
+            $wo = Database::fetchOne('SELECT * FROM work_orders WHERE work_order_id = ?', [$woId]);
+            if (!$wo) {
+                throw new RuntimeException('Work order not found.');
+            }
+            if (in_array((string)$wo['status'], ['completed', 'cancelled'], true)) {
+                throw new RuntimeException('Cannot add items to a closed work order.');
+            }
+            if ($fromCab <= 0) {
+                throw new RuntimeException('Select a source cabinet.');
+            }
+            $cab = Database::fetchOne(
+                'SELECT cabinet_id, name FROM cabinets WHERE cabinet_id = ? AND is_active = 1',
+                [$fromCab]
+            );
+            if (!$cab) {
+                throw new RuntimeException('Source cabinet not found.');
+            }
+            $ar = work_order_add_from_cabinet($woId, $fromCab, $toCab, true);
+            $msg = sprintf(
+                'From %s: added %d device(s), skipped %d already on this WO.',
+                (string)$cab['name'],
+                (int)$ar['added'],
+                (int)$ar['skipped']
+            );
+            if ($ar['errors'] && $ar['added'] < 1) {
+                throw new RuntimeException($msg . ' ' . implode(' ', array_slice($ar['errors'], 0, 2)));
+            }
+            AuditService::log((int)$user['user_id'], $user['username'], 'work_order_bulk_cabinet', 'work_order', $woId, [
+                'from_cabinet_id' => $fromCab,
+                'to_cabinet_id' => $toCab,
+                'added' => $ar['added'],
+                'skipped' => $ar['skipped'],
+            ]);
+            if ($ar['errors'] && $ar['added'] > 0) {
+                App::flash('warning', $msg);
+            } else {
+                App::flash('success', $msg);
+            }
             App::redirect('pages/work_orders.php?id=' . $woId . '#items');
         }
     } catch (Throwable $e) {
@@ -760,6 +806,42 @@ if ($id > 0) {
             <p class="text-muted mb-0" style="font-size:.75rem;margin-top:.5rem">
                 Source cabinet/U is snapshotted from inventory when the device is added.
             </p>
+            <hr style="border:none;border-top:1px solid var(--border,#334155);margin:1rem 0">
+            <strong style="font-size:.9rem">Bulk add from cabinet</strong>
+            <p class="text-muted" style="font-size:.8rem;margin:.35rem 0 .5rem">
+                Adds all active rack-mounted devices in the source cabinet (skips blades/modules and devices already on this WO).
+                Optional shared destination cabinet; set U positions per line after.
+            </p>
+            <form method="post" class="form-grid"
+                  onsubmit="return confirm('Add all rack devices from the selected source cabinet?');">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="add_from_cabinet">
+                <input type="hidden" name="work_order_id" value="<?= $id ?>">
+                <div class="form-row"><label>Source cabinet</label>
+                    <select class="form-control" name="from_cabinet_id" required>
+                        <option value="">— select —</option>
+                        <?php foreach ($cabinets as $c): ?>
+                            <option value="<?= (int)$c['cabinet_id'] ?>">
+                                <?= App::e((string)$c['name']) ?>
+                                <?php if (!empty($c['room_name'])): ?>
+                                    (<?= App::e((string)$c['room_name']) ?>)
+                                <?php endif; ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row"><label>Shared destination (optional)</label>
+                    <select class="form-control" name="to_cabinet_id">
+                        <option value="">— set per device later —</option>
+                        <?php foreach ($cabinets as $c): ?>
+                            <option value="<?= (int)$c['cabinet_id'] ?>"><?= App::e((string)$c['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row" style="align-self:end">
+                    <button class="btn btn-secondary" type="submit">Add all from cabinet</button>
+                </div>
+            </form>
         </div>
         <?php endif; ?>
     </div>
@@ -863,6 +945,13 @@ if ($actionGet === 'new') {
 }
 
 // ---------- List ----------
+$weekRange = work_order_week_range();
+$weekMoves = work_order_moves_this_week();
+$weekDeviceCount = 0;
+foreach ($weekMoves as $wm) {
+    $weekDeviceCount += (int)($wm['item_count'] ?? 0);
+}
+
 $list = [];
 try {
     $sql = 'SELECT w.*,
@@ -872,6 +961,13 @@ try {
             LEFT JOIN users ru ON ru.user_id = w.requested_by
             WHERE 1=1';
     $params = [];
+    if ($filterWeek) {
+        $sql .= ' AND w.status IN (\'draft\',\'planned\',\'in_progress\')
+                  AND w.scheduled_date IS NOT NULL
+                  AND w.scheduled_date >= ? AND w.scheduled_date <= ?';
+        $params[] = $weekRange['start'];
+        $params[] = $weekRange['end'];
+    }
     if ($filterStatus !== '' && isset($statuses[$filterStatus])) {
         $sql .= ' AND w.status = ?';
         $params[] = $filterStatus;
@@ -907,6 +1003,79 @@ layout_header('Work orders', $user, 'work_orders');
     </div>
 </div>
 
+<div class="card mb-2 <?= $weekMoves ? 'settings-feature-active' : '' ?>" id="moves-this-week">
+    <div class="card-header flex-between">
+        <h2 style="margin:0;font-size:1.05rem">Moves this week</h2>
+        <span class="text-muted" style="font-size:.85rem"><?= App::e($weekRange['label']) ?></span>
+    </div>
+    <div class="card-body" style="padding-bottom:.35rem">
+        <div class="metrics" style="margin:0">
+            <a class="metric-card <?= $weekMoves ? 'warning' : '' ?>"
+               href="<?= App::e(App::url('pages/work_orders.php?week=1')) ?>"
+               style="color:inherit;text-decoration:none">
+                <div class="label">Open WOs scheduled</div>
+                <div class="value"><?= count($weekMoves) ?></div>
+                <div class="sub">draft / planned / in progress · click to filter</div>
+            </a>
+            <div class="metric-card accent">
+                <div class="label">Devices on those WOs</div>
+                <div class="value"><?= (int)$weekDeviceCount ?></div>
+                <div class="sub">line items (all statuses)</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">In progress this week</div>
+                <div class="value">
+                    <?= count(array_filter($weekMoves, static fn($w) => ($w['status'] ?? '') === 'in_progress')) ?>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php if ($weekMoves): ?>
+    <div class="card-body flush">
+        <table class="data">
+            <thead>
+            <tr>
+                <th>Scheduled</th>
+                <th>Title</th>
+                <th>Ticket</th>
+                <th>Status</th>
+                <th>Devices</th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($weekMoves as $wm): ?>
+                <tr>
+                    <td><?= App::e((string)($wm['scheduled_date'] ?? '—')) ?></td>
+                    <td>
+                        <a href="<?= App::e(App::url('pages/work_orders.php?id=' . (int)$wm['work_order_id'])) ?>">
+                            <?= App::e((string)$wm['title']) ?>
+                        </a>
+                    </td>
+                    <td><?= App::e((string)($wm['change_ticket'] ?: '—')) ?></td>
+                    <td>
+                        <span class="badge <?= App::e(work_order_status_badge_class((string)$wm['status'])) ?>">
+                            <?= App::e($statuses[$wm['status'] ?? ''] ?? (string)$wm['status']) ?>
+                        </span>
+                    </td>
+                    <td>
+                        <?= (int)($wm['done_count'] ?? 0) ?>/<?= (int)($wm['item_count'] ?? 0) ?>
+                        <span class="text-muted" style="font-size:.75rem">done</span>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php else: ?>
+    <div class="card-body">
+        <p class="text-muted mb-0" style="font-size:.85rem">
+            No open work orders scheduled for this calendar week.
+            Set a <strong>scheduled date</strong> on a WO to see it here.
+        </p>
+    </div>
+    <?php endif; ?>
+</div>
+
 <div class="card mb-2">
     <div class="card-body">
         <form method="get" class="form-grid" style="align-items:end">
@@ -920,8 +1089,17 @@ layout_header('Work orders', $user, 'work_orders');
             </div>
             <div class="form-row"><label>Ticket contains</label>
                 <input class="form-control" name="ticket" value="<?= App::e($filterTicket) ?>"></div>
+            <div class="form-row full">
+                <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem">
+                    <input type="checkbox" name="week" value="1" <?= $filterWeek ? 'checked' : '' ?>>
+                    Only moves scheduled this week (<?= App::e($weekRange['label']) ?>)
+                </label>
+            </div>
             <div class="form-row">
                 <button class="btn btn-secondary" type="submit">Filter</button>
+                <?php if ($filterWeek || $filterStatus !== '' || $filterTicket !== ''): ?>
+                    <a class="btn btn-ghost" href="<?= App::e(App::url('pages/work_orders.php')) ?>">Clear</a>
+                <?php endif; ?>
             </div>
         </form>
     </div>
