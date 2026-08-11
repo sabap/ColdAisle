@@ -6,6 +6,7 @@
       "id": "custom",
       "vendor": "Custom",
       "label": "Custom / blank",
+      "family": "meta",
       "notes": "Enter OIDs manually. Metric names containing watt or amp update linked PDU load.",
       "oid_map": {
         "sysUpTime": "1.3.6.1.2.1.1.3.0",
@@ -18,6 +19,7 @@
       "id": "generic_mib2",
       "vendor": "Generic",
       "label": "MIB-II system only",
+      "family": "meta",
       "notes": "sysDescr / sysUpTime only — useful as a connectivity check. No power metrics.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
@@ -42,6 +44,8 @@
       "id": "apc_ups_powernet",
       "vendor": "APC / Schneider",
       "label": "APC UPS (PowerNet typical)",
+      "family": "ups",
+      "model": "Smart-UPS / Symmetra",
       "notes": "Smart-UPS / Symmetra PowerNet. Prefer output_load (not load_pct alone) so poller maps load %. Input/output V, Hz, current for detail charts. Active power OID varies by firmware.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
@@ -64,6 +68,8 @@
       "id": "apc_rack_pdu",
       "vendor": "APC / Schneider",
       "label": "APC Rack PDU (rPDU load status)",
+      "family": "pdu",
+      "model": "rPDU 12.x",
       "notes": "PowerNet classic rPDU (12.x). Phase current is tenths of A (amps_x10). Ident DevicePowerWatts is true watts when calibrated; often 0 on AP7xxx — poller also tries rPDU2 DeviceStatusPower and I×V from phase amps × inventory voltage.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
@@ -82,6 +88,8 @@
       "id": "apc_rpdu_phase_load_state",
       "vendor": "APC / Schneider",
       "label": "APC rPDU 3-phase load state (AP786x typical)",
+      "family": "pdu",
+      "model": "AP786x rPDU",
       "notes": "AP7862 class (classic rPDU 12.x only — no rPDU2). Amps = rPDULoadStatusLoad tenths A. Watts = Ident DevicePowerWatts (0 until NMC L–L voltage …12.1.15.0 is set). Poller estimates W as I×V×PF using input_volts + inventory voltage. Single-phase 120 V models often only index .1 has current.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
@@ -103,6 +111,8 @@
       "id": "apc_rpdu2_phases",
       "vendor": "APC / Schneider",
       "label": "APC rPDU2 3-phase + outlets (AP88xx typical)",
+      "family": "pdu",
+      "model": "AP88xx rPDU2",
       "notes": "AP8861-class: prefer rPDU2DeviceStatusPower (hundredths of kW) for total load — rPDUIdentDevicePowerWatts can stay 0 on some AP7xxx/AP8xxx without L–L calibration. Phase power/VA are hundredths of kW (×10→W). Phase/outlet current tenths of A (÷10). Verify first Poll against the PDU web UI.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
@@ -150,6 +160,8 @@
       "id": "apc_xpdu_row",
       "vendor": "APC / Schneider",
       "label": "APC InfraStruXure xPDU (PD40 / row panel typical)",
+      "family": "pdu",
+      "model": "xPDU PD40 / row",
       "notes": "Modular row PDU (e.g. PD40G6FK1-M, MN:0M-5103, firmware apc_hw02_xpdu_*). PowerNet tree 318.1.1.15 — NOT rack rPDU 12/26. Scales: total/phase power tenths of kW (×100→W); current & volts tenths; PF hundredths. Do not assign this map to AP78xx rack PDUs.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
@@ -185,6 +197,8 @@
       "id": "apc_rpdu2_ap78xx",
       "vendor": "APC / Schneider",
       "label": "APC rPDU2 metered (AP78xx / AP7862 typical)",
+      "family": "pdu",
+      "model": "AP78xx / AP7862",
       "notes": "Zero-U / rack metered (AP7862 class). Device load from rPDU2DeviceStatusPower (0.01 kW units). Phase 1 current/voltage for I×V fallback. rPDUIdentDevicePowerWatts may report 0 if L–L voltage is not calibrated on AP7xxx — do not rely on it alone.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
@@ -205,7 +219,10 @@
       "id": "cyberpower_ups",
       "vendor": "CyberPower",
       "label": "CyberPower UPS (typical)",
-      "notes": "Common CPS-MIB style OIDs for many CyberPower UPS units. Output load is often percent; power OID may be Watts or deci-Watts by model — verify with one poll.",
+      "family": "ups",
+      "seed": true,
+      "model": "CPS-MIB typical",
+      "notes": "Seed map — verify with Discover/Poll. Common CPS-MIB style OIDs; power may be Watts or deci-Watts by model.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
         "sysUpTime": "1.3.6.1.2.1.1.3.0",
@@ -219,7 +236,10 @@
       "id": "cyberpower_pdu",
       "vendor": "CyberPower",
       "label": "CyberPower PDU (ePDU typical)",
-      "notes": "Representative ePDU load OIDs. Table indexes vary by bank/phase — adjust last sub-id after snmpwalk if needed.",
+      "family": "pdu",
+      "seed": true,
+      "model": "ePDU typical",
+      "notes": "Seed map — verify with Discover/Poll. Table indexes vary by bank/phase.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
         "sysUpTime": "1.3.6.1.2.1.1.3.0",
@@ -232,7 +252,10 @@
       "id": "vertiv_geist_pdu",
       "vendor": "Vertiv / Geist",
       "label": "Vertiv / Geist PDU (typical)",
-      "notes": "Geist/Vertiv enterprise tree is model-heavy. These OIDs are starting points for many rPDU / IMD units — confirm with vendor MIB for your SKU.",
+      "family": "pdu",
+      "seed": true,
+      "model": "Geist rPDU typical",
+      "notes": "Seed map — model-heavy tree; confirm with vendor MIB for your SKU.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
         "sysUpTime": "1.3.6.1.2.1.1.3.0",
@@ -245,7 +268,10 @@
       "id": "raritan_px",
       "vendor": "Raritan",
       "label": "Raritan PX / PX2 / PX3 (typical inlet)",
-      "notes": "PDU2-MIB style inlet active power / current. Index .1 is usually inlet 1. Units are typically Watts and 0.001 A or Amps depending on object — verify after first poll.",
+      "family": "pdu",
+      "seed": true,
+      "model": "PX/PX2/PX3 inlet",
+      "notes": "Seed map — verify after first poll. Index .1 is usually inlet 1.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
         "sysUpTime": "1.3.6.1.2.1.1.3.0",
@@ -258,13 +284,54 @@
       "id": "servertech_pro2",
       "vendor": "Server Technology",
       "label": "ServerTech PRO2 / Sentry (typical)",
-      "notes": "Common Sentry3/PRO2 inlet load OIDs. Confirm against your Sentry MIB revision; indexes differ for multi-inlet units.",
+      "family": "pdu",
+      "seed": true,
+      "model": "PRO2/Sentry typical",
+      "notes": "Seed map — confirm Sentry MIB revision; multi-inlet indexes differ.",
       "oid_map": {
         "sysDescr": "1.3.6.1.2.1.1.1.0",
         "sysUpTime": "1.3.6.1.2.1.1.3.0",
         "watts": "1.3.6.1.4.1.1718.3.2.2.1.12.1.1",
         "amps": "1.3.6.1.4.1.1718.3.2.2.1.7.1.1",
         "voltage": "1.3.6.1.4.1.1718.3.2.2.1.11.1.1"
+      }
+    },
+    {
+      "id": "vertiv_liebert_ds",
+      "vendor": "Vertiv",
+      "label": "Vertiv Liebert DS (LGP condition core)",
+      "family": "cooling",
+      "model": "Liebert DS",
+      "notes": "Core IS-UNITY LGP present-value OIDs (supply/return/control temp, humidity, system state, capacity, alarms). Requires Unity SNMP view access to 476.1.42.3 — may return empty until VACM/firmware is fixed. Prefer Import Vertiv NMS JSON for a fuller map. Unit Control SETs are not included.",
+      "oid_map": {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "sysObjectID": "1.3.6.1.2.1.1.2.0",
+        "alarms_present": "1.3.6.1.4.1.476.1.42.3.2.2.0",
+        "control_temp": "1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.1",
+        "supply_temp": "1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.2",
+        "return_temp": "1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.3",
+        "control_humidity": "1.3.6.1.4.1.476.1.42.3.4.2.2.3.1.3.1",
+        "return_humidity": "1.3.6.1.4.1.476.1.42.3.4.2.2.3.1.3.2",
+        "system_state": "1.3.6.1.4.1.476.1.42.3.4.3.1.0",
+        "cooling_state": "1.3.6.1.4.1.476.1.42.3.4.3.2.0",
+        "fan_state": "1.3.6.1.4.1.476.1.42.3.4.3.3.0",
+        "cooling_capacity_pct": "1.3.6.1.4.1.476.1.42.3.4.3.9.0",
+        "fan_capacity_pct": "1.3.6.1.4.1.476.1.42.3.4.3.16.0"
+      }
+    },
+    {
+      "id": "apc_ap9340_env_note",
+      "vendor": "APC / Schneider",
+      "label": "APC AP9340 / EMS (env host note)",
+      "family": "cooling",
+      "model": "AP9340 EMS host",
+      "seed": true,
+      "notes": "Env probe OIDs are expanded at poll time from the APC EMS table (EnvSensorPoll), not only this static map. Install this pack as a connectivity/sys template, then attach env sensors to the host device and use Discover for full maps.",
+      "oid_map": {
+        "sysDescr": "1.3.6.1.2.1.1.1.0",
+        "sysUpTime": "1.3.6.1.2.1.1.3.0",
+        "sysName": "1.3.6.1.2.1.1.5.0"
       }
     }
   ]
