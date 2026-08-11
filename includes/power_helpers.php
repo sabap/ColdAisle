@@ -1556,3 +1556,388 @@ function power_pdu_template_apply_to_pdu(
     }
     return ['updated' => $updated, 'outlets' => $outletN];
 }
+
+// ---------------------------------------------------------------------------
+// Capacity planning / phase imbalance (Tier A / G-A2)
+// ---------------------------------------------------------------------------
+
+/** Warn when (max phase amps - min) / max = this fraction (need =2 phases with amps). */
+function power_imbalance_warn_frac(): float
+{
+    return 0.20;
+}
+
+/**
+ * Phase amps imbalance: (max-min)/max when =2 phases report amps.
+ *
+ * @param array<string,float|null> $ampsByPhase e.g. L1=>12.3
+ * @return array{imbalanced:bool,frac:?float,pct:?float,max:?float,min:?float,phases:int,label:string}
+ */
+function power_phase_imbalance(array $ampsByPhase): array
+{
+    $vals = [];
+    foreach ($ampsByPhase as $lab => $a) {
+        if ($a === null || $a === '') {
+            continue;
+        }
+        if (!is_numeric($a)) {
+            continue;
+        }
+        $f = (float)$a;
+        if ($f < 0) {
+            continue;
+        }
+        $vals[(string)$lab] = $f;
+    }
+    $n = count($vals);
+    if ($n < 2) {
+        return [
+            'imbalanced' => false,
+            'frac' => null,
+            'pct' => null,
+            'max' => $n === 1 ? (float)reset($vals) : null,
+            'min' => $n === 1 ? (float)reset($vals) : null,
+            'phases' => $n,
+            'label' => $n < 1 ? 'No phase amps' : 'Single phase',
+        ];
+    }
+    $max = max($vals);
+    $min = min($vals);
+    $frac = $max > 0.001 ? (($max - $min) / $max) : 0.0;
+    $warn = power_imbalance_warn_frac();
+    $imbalanced = $frac >= $warn;
+    $pct = round(100 * $frac, 1);
+    return [
+        'imbalanced' => $imbalanced,
+        'frac' => round($frac, 4),
+        'pct' => $pct,
+        'max' => round($max, 2),
+        'min' => round($min, 2),
+        'phases' => $n,
+        'label' => $imbalanced
+            ? ('Imbalanced ' . $pct . '%')
+            : ('Balanced (' . $pct . '% skew)'),
+    ];
+}
+
+/**
+ * Map phase labels A/B/C ? L1/L2/L3 for aggregation.
+ */
+function power_phase_label_normalize(string $label): string
+{
+    $l = strtoupper(trim($label));
+    return match ($l) {
+        'A' => 'L1',
+        'B' => 'L2',
+        'C' => 'L3',
+        default => $l,
+    };
+}
+
+/**
+ * Sum phase amps from rollup PDUs in a zone (same IDs as facility load rollup).
+ *
+ * @param list<array<string,mixed>> $allPdus must include zone_id, pdu_scope, include_in_site_load, last_poll_phases, rated_amps
+ * @return array{
+ *   amps: array{L1:?float,L2:?float,L3:?float},
+ *   free_a: array{L1:?float,L2:?float,L3:?float},
+ *   rated_a_sum: ?float,
+ *   pdu_count: int,
+ *   imbalance: array<string,mixed>
+ * }
+ */
+function power_zone_phase_totals(array $allPdus, int $zoneId): array
+{
+    $inZone = array_values(array_filter(
+        $allPdus,
+        static fn($p) => (int)($p['zone_id'] ?? 0) === $zoneId
+    ));
+    $ids = power_site_load_pdu_ids($inZone);
+    $idSet = array_fill_keys($ids, true);
+    $sum = ['L1' => 0.0, 'L2' => 0.0, 'L3' => 0.0];
+    $has = ['L1' => false, 'L2' => false, 'L3' => false];
+    $ratedSum = 0.0;
+    $ratedAny = false;
+    $n = 0;
+    foreach ($inZone as $p) {
+        $pid = (int)($p['pdu_id'] ?? 0);
+        if ($pid < 1 || empty($idSet[$pid])) {
+            continue;
+        }
+        $n++;
+        if (isset($p['rated_amps']) && $p['rated_amps'] !== null && $p['rated_amps'] !== '' && is_numeric($p['rated_amps'])) {
+            $ratedSum += (float)$p['rated_amps'];
+            $ratedAny = true;
+        }
+        $snap = power_phase_poll_decode($p['last_poll_phases'] ?? null);
+        if (!$snap || empty($snap['rows'])) {
+            continue;
+        }
+        foreach ($snap['rows'] as $row) {
+            $lab = power_phase_label_normalize((string)($row['label'] ?? ''));
+            if (!isset($sum[$lab])) {
+                continue;
+            }
+            if ($row['amps'] === null) {
+                continue;
+            }
+            $sum[$lab] += (float)$row['amps'];
+            $has[$lab] = true;
+        }
+    }
+    $amps = [
+        'L1' => $has['L1'] ? round($sum['L1'], 2) : null,
+        'L2' => $has['L2'] ? round($sum['L2'], 2) : null,
+        'L3' => $has['L3'] ? round($sum['L3'], 2) : null,
+    ];
+    $free = ['L1' => null, 'L2' => null, 'L3' => null];
+    if ($ratedAny && $ratedSum > 0) {
+        foreach (['L1', 'L2', 'L3'] as $lab) {
+            if ($amps[$lab] !== null) {
+                $free[$lab] = round(max(0.0, $ratedSum - (float)$amps[$lab]), 2);
+            }
+        }
+    }
+    return [
+        'amps' => $amps,
+        'free_a' => $free,
+        'rated_a_sum' => $ratedAny ? round($ratedSum, 2) : null,
+        'pdu_count' => $n,
+        'imbalance' => power_phase_imbalance($amps),
+    ];
+}
+
+/**
+ * Free U for cabinets on rows assigned to a zone (parent devices only).
+ *
+ * @return array{u_total:int,u_used:int,free_u:int,cabinets:int}
+ */
+function power_zone_u_capacity(int $zoneId): array
+{
+    $empty = ['u_total' => 0, 'u_used' => 0, 'free_u' => 0, 'cabinets' => 0];
+    if ($zoneId <= 0) {
+        return $empty;
+    }
+    try {
+        $row = Database::fetchOne(
+            'SELECT
+                COUNT(*) AS cabinets,
+                ISNULL(SUM(c.u_height), 0) AS u_total,
+                ISNULL(SUM(ISNULL((
+                    SELECT SUM(d.u_height)
+                    FROM devices d
+                    WHERE d.cabinet_id = c.cabinet_id
+                      AND d.is_active = 1
+                      AND d.position_u IS NOT NULL
+                      AND d.parent_device_id IS NULL
+                ), 0)), 0) AS u_used
+             FROM cabinets c
+             INNER JOIN cabinet_rows cr ON cr.row_id = c.row_id
+             WHERE c.is_active = 1 AND cr.zone_id = ?',
+            [$zoneId]
+        );
+        if (!$row) {
+            return $empty;
+        }
+        $total = (int)($row['u_total'] ?? 0);
+        $used = (int)($row['u_used'] ?? 0);
+        return [
+            'u_total' => $total,
+            'u_used' => $used,
+            'free_u' => max(0, $total - $used),
+            'cabinets' => (int)($row['cabinets'] ?? 0),
+        ];
+    } catch (Throwable $e) {
+        // parent_device_id column might be missing on very old DBs
+        try {
+            $row = Database::fetchOne(
+                'SELECT
+                    COUNT(*) AS cabinets,
+                    ISNULL(SUM(c.u_height), 0) AS u_total,
+                    ISNULL(SUM(ISNULL((
+                        SELECT SUM(d.u_height)
+                        FROM devices d
+                        WHERE d.cabinet_id = c.cabinet_id
+                          AND d.is_active = 1
+                          AND d.position_u IS NOT NULL
+                    ), 0)), 0) AS u_used
+                 FROM cabinets c
+                 INNER JOIN cabinet_rows cr ON cr.row_id = c.row_id
+                 WHERE c.is_active = 1 AND cr.zone_id = ?',
+                [$zoneId]
+            );
+            if (!$row) {
+                return $empty;
+            }
+            $total = (int)($row['u_total'] ?? 0);
+            $used = (int)($row['u_used'] ?? 0);
+            return [
+                'u_total' => $total,
+                'u_used' => $used,
+                'free_u' => max(0, $total - $used),
+                'cabinets' => (int)($row['cabinets'] ?? 0),
+            ];
+        } catch (Throwable $e2) {
+            return $empty;
+        }
+    }
+}
+
+/**
+ * @return array<int, array{u_total:int,u_used:int,free_u:int,cabinets:int}>
+ */
+function power_all_zones_u_capacity(): array
+{
+    $out = [];
+    try {
+        $rows = Database::fetchAll(
+            'SELECT cr.zone_id,
+                    COUNT(*) AS cabinets,
+                    ISNULL(SUM(c.u_height), 0) AS u_total,
+                    ISNULL(SUM(ISNULL((
+                        SELECT SUM(d.u_height)
+                        FROM devices d
+                        WHERE d.cabinet_id = c.cabinet_id
+                          AND d.is_active = 1
+                          AND d.position_u IS NOT NULL
+                          AND d.parent_device_id IS NULL
+                    ), 0)), 0) AS u_used
+             FROM cabinets c
+             INNER JOIN cabinet_rows cr ON cr.row_id = c.row_id
+             WHERE c.is_active = 1 AND cr.zone_id IS NOT NULL
+             GROUP BY cr.zone_id'
+        );
+        foreach ($rows as $r) {
+            $zid = (int)$r['zone_id'];
+            $total = (int)($r['u_total'] ?? 0);
+            $used = (int)($r['u_used'] ?? 0);
+            $out[$zid] = [
+                'u_total' => $total,
+                'u_used' => $used,
+                'free_u' => max(0, $total - $used),
+                'cabinets' => (int)($r['cabinets'] ?? 0),
+            ];
+        }
+    } catch (Throwable $e) {
+        try {
+            $rows = Database::fetchAll(
+                'SELECT cr.zone_id,
+                        COUNT(*) AS cabinets,
+                        ISNULL(SUM(c.u_height), 0) AS u_total,
+                        ISNULL(SUM(ISNULL((
+                            SELECT SUM(d.u_height)
+                            FROM devices d
+                            WHERE d.cabinet_id = c.cabinet_id
+                              AND d.is_active = 1
+                              AND d.position_u IS NOT NULL
+                        ), 0)), 0) AS u_used
+                 FROM cabinets c
+                 INNER JOIN cabinet_rows cr ON cr.row_id = c.row_id
+                 WHERE c.is_active = 1 AND cr.zone_id IS NOT NULL
+                 GROUP BY cr.zone_id'
+            );
+            foreach ($rows as $r) {
+                $zid = (int)$r['zone_id'];
+                $total = (int)($r['u_total'] ?? 0);
+                $used = (int)($r['u_used'] ?? 0);
+                $out[$zid] = [
+                    'u_total' => $total,
+                    'u_used' => $used,
+                    'free_u' => max(0, $total - $used),
+                    'cabinets' => (int)($r['cabinets'] ?? 0),
+                ];
+            }
+        } catch (Throwable $e2) {
+            return [];
+        }
+    }
+    return $out;
+}
+
+/**
+ * Full capacity snapshot for one zone row (needs zone_id, max_kw, optionally voltage).
+ *
+ * @param list<array<string,mixed>> $allPdus
+ * @param array<string,mixed> $zone
+ * @param array{u_total?:int,u_used?:int,free_u?:int,cabinets?:int}|null $uPrecomputed
+ * @return array<string,mixed>
+ */
+function power_zone_capacity_snapshot(array $allPdus, array $zone, ?array $uPrecomputed = null): array
+{
+    $zoneId = (int)($zone['zone_id'] ?? 0);
+    $load = power_zone_load_totals($allPdus, $zoneId);
+    $loadKw = (float)$load['kw'];
+    $maxKw = null;
+    if (isset($zone['max_kw']) && $zone['max_kw'] !== null && $zone['max_kw'] !== '' && is_numeric($zone['max_kw'])) {
+        $maxKw = (float)$zone['max_kw'];
+    }
+    $freeKw = ($maxKw !== null) ? max(0.0, round($maxKw - $loadKw, 2)) : null;
+    $utilPct = ($maxKw !== null && $maxKw > 0)
+        ? min(100.0, round(100.0 * $loadKw / $maxKw, 1))
+        : null;
+
+    $phases = power_zone_phase_totals($allPdus, $zoneId);
+    $u = $uPrecomputed ?? power_zone_u_capacity($zoneId);
+
+    return [
+        'zone_id' => $zoneId,
+        'name' => (string)($zone['name'] ?? ''),
+        'feed_type' => (string)($zone['feed_type'] ?? ''),
+        'load_kw' => round($loadKw, 3),
+        'max_kw' => $maxKw,
+        'free_kw' => $freeKw,
+        'util_pct' => $utilPct,
+        'reporting' => (int)$load['reporting'],
+        'rollup_pdu_count' => (int)$load['count'],
+        'u_total' => (int)$u['u_total'],
+        'u_used' => (int)$u['u_used'],
+        'free_u' => (int)$u['free_u'],
+        'cabinets' => (int)$u['cabinets'],
+        'phase_amps' => $phases['amps'],
+        'phase_free_a' => $phases['free_a'],
+        'rated_a_sum' => $phases['rated_a_sum'],
+        'imbalance' => $phases['imbalance'],
+        'imbalanced' => !empty($phases['imbalance']['imbalanced']),
+    ];
+}
+
+/**
+ * @param list<array<string,mixed>> $snapshots from power_zone_capacity_snapshot
+ * @return list<array<string,mixed>> zones that can fit needKw and needU (0 = ignore that dim)
+ */
+function power_capacity_fits_filter(array $snapshots, float $needKw = 0.0, int $needU = 0): array
+{
+    $out = [];
+    foreach ($snapshots as $s) {
+        if ($needKw > 0) {
+            $free = $s['free_kw'];
+            if ($free === null || (float)$free + 0.0001 < $needKw) {
+                continue;
+            }
+        }
+        if ($needU > 0) {
+            if ((int)($s['free_u'] ?? 0) < $needU) {
+                continue;
+            }
+        }
+        $out[] = $s;
+    }
+    return $out;
+}
+
+/**
+ * Format phase amps for compact UI: "L1 12.1 · L2 11.8 · L3 9.2"
+ *
+ * @param array{L1?:?float,L2?:?float,L3?:?float} $amps
+ */
+function power_format_phase_amps(array $amps): string
+{
+    $bits = [];
+    foreach (['L1', 'L2', 'L3'] as $lab) {
+        if (!array_key_exists($lab, $amps) || $amps[$lab] === null) {
+            continue;
+        }
+        $bits[] = $lab . ' ' . rtrim(rtrim(sprintf('%.1F', (float)$amps[$lab]), '0'), '.');
+    }
+    return $bits ? implode(' · ', $bits) : '—';
+}

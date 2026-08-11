@@ -166,26 +166,47 @@ $zones = Database::fetchAll(
      INNER JOIN datacenters dc ON dc.datacenter_id = z.datacenter_id
      ORDER BY dc.name, z.name'
 );
-// Zone load totals honor facility rollup (prefer row/room, manual include, etc.)
+// Zone load + capacity snapshots (rollup, free U, phase imbalance)
+$allPdusForRollup = [];
+$zoneUById = [];
 try {
     $allPdusForRollup = Database::fetchAll(
-        'SELECT pdu_id, zone_id, pdu_scope, include_in_site_load, last_poll_watts
+        'SELECT pdu_id, zone_id, pdu_scope, include_in_site_load, last_poll_watts,
+                last_poll_phases, rated_amps, phases
          FROM pdus WHERE is_active = 1'
     );
-    foreach ($zones as &$zRoll) {
-        $zt = power_zone_load_totals($allPdusForRollup, (int)$zRoll['zone_id']);
-        $zRoll['poll_watts'] = $zt['watts'];
-    }
-    unset($zRoll);
 } catch (Throwable $e) {
-    // Column missing until ensure — leave poll_watts unset / 0
-    foreach ($zones as &$zRoll) {
-        if (!isset($zRoll['poll_watts'])) {
-            $zRoll['poll_watts'] = 0;
-        }
+    try {
+        $allPdusForRollup = Database::fetchAll(
+            'SELECT pdu_id, zone_id, pdu_scope, include_in_site_load, last_poll_watts
+             FROM pdus WHERE is_active = 1'
+        );
+    } catch (Throwable $e2) {
+        $allPdusForRollup = [];
     }
-    unset($zRoll);
 }
+try {
+    $zoneUById = power_all_zones_u_capacity();
+} catch (Throwable $e) {
+    $zoneUById = [];
+}
+foreach ($zones as &$zRoll) {
+    $zid = (int)$zRoll['zone_id'];
+    try {
+        $cap = power_zone_capacity_snapshot(
+            $allPdusForRollup,
+            $zRoll,
+            $zoneUById[$zid] ?? ['u_total' => 0, 'u_used' => 0, 'free_u' => 0, 'cabinets' => 0]
+        );
+        $zRoll['poll_watts'] = $cap['load_kw'] * 1000.0;
+        $zRoll['capacity'] = $cap;
+    } catch (Throwable $e) {
+        $zt = power_zone_load_totals($allPdusForRollup, $zid);
+        $zRoll['poll_watts'] = $zt['watts'];
+        $zRoll['capacity'] = null;
+    }
+}
+unset($zRoll);
 
 // Detail view
 if ($zoneId) {
@@ -264,9 +285,19 @@ if ($zoneId) {
     } catch (Throwable $e) {
         $assignableRows = [];
     }
-    $pollKw = ((float)($zone['poll_watts'] ?? 0)) / 1000.0;
-    $maxKw = $zone['max_kw'] !== null && $zone['max_kw'] !== '' ? (float)$zone['max_kw'] : null;
-    $pct = ($maxKw && $maxKw > 0) ? min(100, round(100 * $pollKw / $maxKw, 1)) : null;
+    $cap = is_array($zone['capacity'] ?? null) ? $zone['capacity'] : null;
+    $pollKw = $cap ? (float)$cap['load_kw'] : (((float)($zone['poll_watts'] ?? 0)) / 1000.0);
+    $maxKw = $cap && $cap['max_kw'] !== null
+        ? (float)$cap['max_kw']
+        : ($zone['max_kw'] !== null && $zone['max_kw'] !== '' ? (float)$zone['max_kw'] : null);
+    $pct = $cap['util_pct'] ?? (($maxKw && $maxKw > 0) ? min(100, round(100 * $pollKw / $maxKw, 1)) : null);
+    $freeKw = $cap['free_kw'] ?? (($maxKw !== null) ? max(0.0, $maxKw - $pollKw) : null);
+    $freeU = $cap ? (int)$cap['free_u'] : 0;
+    $uTotal = $cap ? (int)$cap['u_total'] : 0;
+    $uUsed = $cap ? (int)$cap['u_used'] : 0;
+    $phaseAmps = $cap['phase_amps'] ?? ['L1' => null, 'L2' => null, 'L3' => null];
+    $imbalance = $cap['imbalance'] ?? ['imbalanced' => false, 'label' => '—', 'pct' => null];
+    $imbalanced = !empty($imbalance['imbalanced']);
     $color = power_normalize_color($zone['color_hex'] ?? null);
     $canEditZone = AuthManager::canEditPower($user);
 
@@ -318,11 +349,30 @@ if ($zoneId) {
         <div class="metric-card warning">
             <div class="label">Load</div>
             <div class="value"><?= number_format($pollKw, 1) ?> <span class="metric-unit">kW</span></div>
+            <div class="sub"><?= $pct !== null ? $pct . '% of capacity' : 'No max kW' ?></div>
+        </div>
+        <div class="metric-card <?= $freeKw !== null && $maxKw !== null && $freeKw < max(1.0, $maxKw * 0.1) ? 'warning' : 'success' ?>">
+            <div class="label">Free power</div>
+            <div class="value">
+                <?= $freeKw !== null ? number_format((float)$freeKw, 1) . ' <span class="metric-unit">kW</span>' : '—' ?>
+            </div>
+            <div class="sub"><?= $maxKw !== null ? 'of ' . number_format($maxKw, 1) . ' kW max' : 'Set max kW on zone' ?></div>
         </div>
         <div class="metric-card">
-            <div class="label">Capacity</div>
-            <div class="value"><?= $maxKw !== null ? number_format($maxKw, 1) . ' <span class="metric-unit">kW</span>' : '—' ?></div>
-            <div class="sub"><?= $pct !== null ? $pct . '% used' : 'No max set' ?></div>
+            <div class="label">Free U</div>
+            <div class="value"><?= (int)$freeU ?> <span class="metric-unit">U</span></div>
+            <div class="sub"><?= (int)$uUsed ?> used / <?= (int)$uTotal ?> total · rows on zone</div>
+        </div>
+        <div class="metric-card <?= $imbalanced ? 'warning' : 'accent' ?>">
+            <div class="label">Phases</div>
+            <div class="value" style="font-size:1rem"><?= App::e(power_format_phase_amps($phaseAmps)) ?></div>
+            <div class="sub">
+                <?php if ($imbalanced): ?>
+                    <span class="badge badge-warning"><?= App::e((string)$imbalance['label']) ?></span>
+                <?php else: ?>
+                    <?= App::e((string)($imbalance['label'] ?? '—')) ?>
+                <?php endif; ?>
+            </div>
         </div>
         <div class="metric-card accent">
             <div class="label">Voltage</div>
@@ -347,6 +397,28 @@ if ($zoneId) {
             </div>
         </div>
     </div>
+    <?php if ($pct !== null): ?>
+    <div class="card power-capacity-banner mb-2">
+        <div class="card-body power-capacity-body">
+            <div class="power-capacity-meta">
+                <strong>Zone capacity</strong>
+                <span class="text-muted">
+                    <?= number_format($pollKw, 1) ?> kW used ·
+                    <?= $freeKw !== null ? number_format((float)$freeKw, 1) . ' kW free' : '—' ?>
+                    · <?= (int)$freeU ?> U free
+                    <?php if ($imbalanced): ?>
+                        · <span class="badge badge-warning">Phase imbalance</span>
+                    <?php endif; ?>
+                </span>
+            </div>
+            <div class="util-bar util-bar-lg">
+                <div class="util-bar-fill util-<?= App::e(power_util_class((float)$pct)) ?>"
+                     style="width:<?= min(100, (float)$pct) ?>%"></div>
+            </div>
+            <div class="util-bar-label"><?= App::e((string)$pct) ?>%</div>
+        </div>
+    </div>
+    <?php endif; ?>
 
     <?php if ($pct !== null): ?>
         <div class="util-bar util-bar-lg mb-2">
@@ -902,14 +974,25 @@ layout_header('Power Zones', $user, 'power_zones');
                             </div>
                             <span class="badge"><?= (int)($z['pdu_count'] ?? 0) ?> PDU · <?= (int)($z['ups_count'] ?? 0) ?> UPS</span>
                         </div>
+                        <?php
+                        $zCap = is_array($z['capacity'] ?? null) ? $z['capacity'] : null;
+                        $zFreeKw = $zCap['free_kw'] ?? null;
+                        $zFreeU = $zCap ? (int)$zCap['free_u'] : 0;
+                        $zImb = !empty($zCap['imbalanced']);
+                        $zPhase = $zCap['phase_amps'] ?? [];
+                        ?>
                         <div class="zone-card-metrics">
                             <div>
                                 <span class="zcm-label">Load</span>
                                 <span class="zcm-val"><?= number_format($pollKw, 1) ?> kW</span>
                             </div>
                             <div>
-                                <span class="zcm-label">Cap</span>
-                                <span class="zcm-val"><?= $maxKw !== null ? number_format($maxKw, 1) . ' kW' : '—' ?></span>
+                                <span class="zcm-label">Free</span>
+                                <span class="zcm-val"><?= $zFreeKw !== null ? number_format((float)$zFreeKw, 1) . ' kW' : '—' ?></span>
+                            </div>
+                            <div>
+                                <span class="zcm-label">Free U</span>
+                                <span class="zcm-val"><?= (int)$zFreeU ?> U</span>
                             </div>
                             <?php if ($pct !== null): ?>
                             <div>
@@ -917,14 +1000,12 @@ layout_header('Power Zones', $user, 'power_zones');
                                 <span class="zcm-val"><?= $pct ?>%</span>
                             </div>
                             <?php endif; ?>
-                            <div>
-                                <span class="zcm-label">UPS load</span>
-                                <span class="zcm-val">
-                                    <?= $z['ups_avg_load'] !== null && $z['ups_avg_load'] !== ''
-                                        ? number_format((float)$z['ups_avg_load'], 0) . '%'
-                                        : '—' ?>
-                                </span>
-                            </div>
+                        </div>
+                        <div class="zone-card-util text-muted" style="font-size:.78rem;margin-top:.25rem">
+                            <?= App::e(power_format_phase_amps($zPhase)) ?>
+                            <?php if ($zImb): ?>
+                                · <span class="badge badge-warning" style="font-size:.68rem">Imbalanced</span>
+                            <?php endif; ?>
                         </div>
                         <?php if ($pct !== null): ?>
                             <div class="util-bar" style="margin-top:.35rem">
