@@ -843,6 +843,19 @@ CREATE TABLE disposals (
 );
 GO
 
+-- Password reset tokens (G-B5 local forgot-password)
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'password_reset_tokens')
+CREATE TABLE password_reset_tokens (
+    token_id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    token_hash NVARCHAR(64) NOT NULL,
+    email NVARCHAR(255) NULL,
+    expires_at DATETIME2 NOT NULL,
+    used_at DATETIME2 NULL,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_prt_created DEFAULT SYSUTCDATETIME()
+);
+GO
+
 -- Change / move work orders (G-B2)
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'work_orders')
 CREATE TABLE work_orders (

@@ -30,17 +30,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 }
                 $hash = password_hash($_POST['password'], PASSWORD_DEFAULT);
             }
-            Database::insert('users', [
+            $email = trim($_POST['email'] ?? '');
+            $authSource = $_POST['auth_source'] ?? 'local';
+            $newId = Database::insert('users', [
                 'username' => $username,
-                'email' => trim($_POST['email'] ?? ''),
+                'email' => $email,
                 'display_name' => trim($_POST['display_name'] ?? '') !== '' ? trim($_POST['display_name']) : null,
                 'password_hash' => $hash,
-                'auth_source' => $_POST['auth_source'] ?? 'local',
+                'auth_source' => $authSource,
                 'role_id' => (int)$_POST['role_id'],
                 'department_id' => $_POST['department_id'] !== '' ? (int)$_POST['department_id'] : null,
                 'is_active' => 1,
             ]);
-            App::flash('success', 'User created.');
+            $flash = 'User created.';
+            if (!empty($_POST['send_welcome']) && class_exists('ProductMailService')) {
+                $welcome = ProductMailService::sendWelcome([
+                    'user_id' => $newId,
+                    'username' => $username,
+                    'email' => $email,
+                    'display_name' => trim($_POST['display_name'] ?? ''),
+                    'auth_source' => $authSource,
+                ], true);
+                if (!empty($welcome['ok'])) {
+                    $flash .= ' Welcome email sent.';
+                } else {
+                    $flash .= ' Welcome email not sent: ' . ($welcome['message'] ?? 'unknown error');
+                }
+            }
+            App::flash('success', $flash);
         }
 
         if ($action === 'update') {
@@ -602,6 +619,14 @@ layout_header('Users & Departments', $user, 'users');
                 </div>
                 <div class="form-row"><label>Password (local)</label>
                     <input class="form-control" type="password" name="password" autocomplete="new-password"></div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="send_welcome" value="1" checked>
+                    Send welcome email (login link + set-password link for local accounts)
+                </label>
+                    <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                        Requires SMTP under Settings → Email. Password is never included in the message.
+                    </p>
+                </div>
                 <div class="form-row full app-modal-actions">
                     <button class="btn btn-primary" type="submit">Create user</button>
                     <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>

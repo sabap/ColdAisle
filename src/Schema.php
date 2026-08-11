@@ -469,6 +469,23 @@ class Schema
             foreach ($disposalCols as $col => $def) {
                 self::ensureColumn('disposals', $col, $def);
             }
+            // Due-soon mail flags (G-B5)
+            self::ensureColumn('disposals', 'notification_sent', 'BIT NOT NULL CONSTRAINT DF_disposals_notif DEFAULT 0');
+            self::ensureColumn('disposals', 'notification_sent_at', 'DATETIME2 NULL');
+
+            // Password reset tokens (G-B5 forgot-password)
+            self::ensureTable(
+                'password_reset_tokens',
+                "CREATE TABLE password_reset_tokens (
+                    token_id INT IDENTITY(1,1) PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    token_hash NVARCHAR(64) NOT NULL,
+                    email NVARCHAR(255) NULL,
+                    expires_at DATETIME2 NOT NULL,
+                    used_at DATETIME2 NULL,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_prt_created DEFAULT SYSUTCDATETIME()
+                )"
+            );
 
             // Change / move work orders (G-B2)
             self::ensureTable(
@@ -900,7 +917,8 @@ class Schema
             'device_templates' => ['power_supplies_json'],
             'import_id_map' => ['map_id', 'source', 'entity_type', 'source_id', 'local_id'],
             'disposal_vendors' => ['vendor_id', 'name'],
-            'disposals' => ['stage', 'vendor_id', 'change_ticket'],
+            'disposals' => ['stage', 'vendor_id', 'change_ticket', 'notification_sent', 'notification_sent_at'],
+            'password_reset_tokens' => ['token_id', 'user_id', 'token_hash', 'expires_at'],
             'work_orders' => [
                 'work_order_id', 'title', 'work_type', 'status', 'change_ticket', 'checklist_json',
             ],
