@@ -376,6 +376,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             ], 'device_id = :id', [':id' => $did]);
             App::flash('success', 'Device removed from scheduled polling.');
         }
+        if ($action === 'unschedule_ups') {
+            $uid = (int)($_POST['ups_id'] ?? 0);
+            if ($uid <= 0) {
+                throw new RuntimeException('UPS id required.');
+            }
+            Database::update('ups_units', [
+                'snmp_auto_poll' => 0,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ], 'ups_id = :id', [':id' => $uid]);
+            App::flash('success', 'UPS removed from scheduled polling.');
+        }
+        if ($action === 'unschedule_cooling') {
+            $cid = (int)($_POST['cooling_unit_id'] ?? 0);
+            if ($cid <= 0) {
+                throw new RuntimeException('Cooling unit id required.');
+            }
+            Database::update('cooling_units', [
+                'snmp_auto_poll' => 0,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ], 'cooling_unit_id = :id', [':id' => $cid]);
+            App::flash('success', 'Cooling unit removed from scheduled polling.');
+        }
         if ($action === 'poll_now') {
             require_once dirname(__DIR__) . '/src/Services/SnmpPoller.php';
             $result = SnmpPoller::pollAll();
@@ -403,9 +425,11 @@ $targets = Database::fetchAll(
      WHERE t.is_enabled = 1
      ORDER BY t.name'
 );
-// PDUs / devices with Scheduled poll toggle ON (scheduler inventory)
+// PDUs / devices / UPS / cooling with Scheduled poll toggle ON (scheduler inventory)
 $scheduledPdus = [];
 $scheduledDevices = [];
+$scheduledUps = [];
+$scheduledCooling = [];
 try {
     $scheduledPdus = Database::fetchAll(
         'SELECT p.pdu_id, p.name, p.ip_address, p.snmp_version, p.last_poll_at, p.last_poll_watts, p.last_poll_amps,
@@ -434,6 +458,33 @@ try {
 } catch (Throwable $e) {
     $scheduledDevices = [];
 }
+try {
+    $scheduledUps = Database::fetchAll(
+        'SELECT u.ups_id, u.name, u.primary_ip, u.snmp_version, u.snmp_last_poll_at,
+                u.last_load_pct, u.last_battery_pct, u.last_output_status,
+                u.snmp_site_template_id, t.vendor AS template_vendor, t.model AS template_model, t.name AS template_name
+         FROM ups_units u
+         LEFT JOIN snmp_site_oid_templates t ON t.template_id = u.snmp_site_template_id
+         WHERE u.is_active = 1 AND u.snmp_auto_poll = 1
+         ORDER BY u.name'
+    );
+} catch (Throwable $e) {
+    $scheduledUps = [];
+}
+try {
+    $scheduledCooling = Database::fetchAll(
+        'SELECT c.cooling_unit_id, c.name, c.primary_ip, c.snmp_version, c.snmp_last_poll_at,
+                c.snmp_site_template_id, t.vendor AS template_vendor, t.model AS template_model, t.name AS template_name
+         FROM cooling_units c
+         LEFT JOIN snmp_site_oid_templates t ON t.template_id = c.snmp_site_template_id
+         WHERE c.is_active = 1 AND c.snmp_auto_poll = 1
+         ORDER BY c.name'
+    );
+} catch (Throwable $e) {
+    $scheduledCooling = [];
+}
+$scheduledJobCount = count($scheduledPdus) + count($scheduledDevices)
+    + count($scheduledUps) + count($scheduledCooling) + count($targets);
 // Global schedule policy (Settings → SNMP schedule); mute this section when off
 if (!class_exists('SnmpSchedulerService')
     && is_file(dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php')
@@ -954,7 +1005,7 @@ layout_header('SNMP Polling', $user, 'snmp');
                 <span class="badge">Scheduler off</span>
             <?php endif; ?>
             <span class="text-muted" style="font-size:.85rem">
-                <?= count($scheduledPdus) + count($scheduledDevices) + count($targets) ?> job(s)
+                <?= (int)$scheduledJobCount ?> job(s)
                 <?php if ($snmpScheduleOn): ?>
                     · worker interval in Settings
                 <?php endif; ?>
@@ -973,9 +1024,9 @@ layout_header('SNMP Polling', $user, 'snmp');
                 <strong>Poll now</strong> on a PDU/device still works.
             <?php else: ?>
                 Everything the SNMP scheduler will poll:
-                PDUs and devices with <strong>Scheduled poll</strong> enabled on their properties page
-                (site OID template), plus any free-standing targets added below.
-                <strong>Poll now</strong> on a PDU/device uses the site template only and does not require a target row.
+                PDUs, devices, <strong>UPS</strong>, and cooling units with <strong>Scheduled poll</strong>
+                enabled (site OID template + IP), plus any free-standing targets added below.
+                <strong>Poll now</strong> on a unit uses the site template only and does not require a target row.
             <?php endif; ?>
         </p>
     </div>
@@ -1101,6 +1152,119 @@ layout_header('SNMP Polling', $user, 'snmp');
                 </tr>
             <?php endforeach; ?>
 
+            <?php foreach ($scheduledUps as $su):
+                $host = trim((string)($su['primary_ip'] ?? ''));
+                $last = (string)($su['snmp_last_poll_at'] ?? '');
+                $bits = [];
+                if ($su['last_load_pct'] !== null && $su['last_load_pct'] !== '') {
+                    $bits[] = rtrim(rtrim(sprintf('%.1F', (float)$su['last_load_pct']), '0'), '.') . '% load';
+                }
+                if ($su['last_battery_pct'] !== null && $su['last_battery_pct'] !== '') {
+                    $bits[] = rtrim(rtrim(sprintf('%.0F', (float)$su['last_battery_pct']), '0'), '.') . '% batt';
+                }
+                if (!empty($su['last_output_status'])) {
+                    $bits[] = (string)$su['last_output_status'];
+                }
+                $hasTpl = !empty($su['snmp_site_template_id']);
+                $ready = $hasTpl && $host !== '';
+                ?>
+                <tr>
+                    <td><span class="badge badge-info" style="background:#7c3aed">UPS</span></td>
+                    <td>
+                        <a href="<?= App::e(App::url('pages/power_ups.php?id=' . (int)$su['ups_id'])) ?>">
+                            <?= App::e((string)$su['name']) ?>
+                        </a>
+                    </td>
+                    <td><?= App::e($host !== '' ? $host : '—') ?></td>
+                    <td style="font-size:.85rem">
+                        <?php
+                        $suTpl = snmp_site_template_label([
+                            'vendor' => $su['template_vendor'] ?? '',
+                            'model' => $su['template_model'] ?? '',
+                            'name' => $su['template_name'] ?? '',
+                        ]);
+                        echo $suTpl !== '' ? App::e($suTpl) : '<span class="text-muted">No template</span>';
+                        ?>
+                    </td>
+                    <td style="font-size:.85rem">
+                        <?= $last !== '' ? App::e($last) : '—' ?>
+                        <?php if ($bits): ?> · <?= App::e(implode(' · ', $bits)) ?><?php endif; ?>
+                    </td>
+                    <td>
+                        <?php if ($ready): ?>
+                            <span class="badge badge-success">Scheduled</span>
+                        <?php else: ?>
+                            <span class="badge badge-warning" title="Needs site OID template and IP for the worker to poll">
+                                Incomplete
+                            </span>
+                        <?php endif; ?>
+                    </td>
+                    <td class="actions" style="white-space:nowrap">
+                        <a class="btn btn-sm btn-secondary"
+                           href="<?= App::e(App::url('pages/power_ups.php?id=' . (int)$su['ups_id'])) ?>">Open</a>
+                        <?php if ($canEdit): ?>
+                        <form method="post" style="display:inline"
+                              onsubmit="return confirm('Turn off scheduled poll for this UPS?');">
+                            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                            <input type="hidden" name="action" value="unschedule_ups">
+                            <input type="hidden" name="ups_id" value="<?= (int)$su['ups_id'] ?>">
+                            <button class="btn btn-sm btn-ghost" type="submit">Unschedule</button>
+                        </form>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+
+            <?php foreach ($scheduledCooling as $sc):
+                $host = trim((string)($sc['primary_ip'] ?? ''));
+                $last = (string)($sc['snmp_last_poll_at'] ?? '');
+                $hasTpl = !empty($sc['snmp_site_template_id']);
+                $ready = $hasTpl && $host !== '';
+                ?>
+                <tr>
+                    <td><span class="badge" style="background:#0d9488">Cooling</span></td>
+                    <td>
+                        <a href="<?= App::e(App::url('pages/cooling_units.php?id=' . (int)$sc['cooling_unit_id'])) ?>">
+                            <?= App::e((string)$sc['name']) ?>
+                        </a>
+                    </td>
+                    <td><?= App::e($host !== '' ? $host : '—') ?></td>
+                    <td style="font-size:.85rem">
+                        <?php
+                        $scTpl = snmp_site_template_label([
+                            'vendor' => $sc['template_vendor'] ?? '',
+                            'model' => $sc['template_model'] ?? '',
+                            'name' => $sc['template_name'] ?? '',
+                        ]);
+                        echo $scTpl !== '' ? App::e($scTpl) : '<span class="text-muted">No template</span>';
+                        ?>
+                    </td>
+                    <td style="font-size:.85rem"><?= $last !== '' ? App::e($last) : '—' ?></td>
+                    <td>
+                        <?php if ($ready): ?>
+                            <span class="badge badge-success">Scheduled</span>
+                        <?php else: ?>
+                            <span class="badge badge-warning" title="Needs site OID template and IP for the worker to poll">
+                                Incomplete
+                            </span>
+                        <?php endif; ?>
+                    </td>
+                    <td class="actions" style="white-space:nowrap">
+                        <a class="btn btn-sm btn-secondary"
+                           href="<?= App::e(App::url('pages/cooling_units.php?id=' . (int)$sc['cooling_unit_id'])) ?>">Open</a>
+                        <?php if ($canEdit): ?>
+                        <form method="post" style="display:inline"
+                              onsubmit="return confirm('Turn off scheduled poll for this cooling unit?');">
+                            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                            <input type="hidden" name="action" value="unschedule_cooling">
+                            <input type="hidden" name="cooling_unit_id" value="<?= (int)$sc['cooling_unit_id'] ?>">
+                            <button class="btn btn-sm btn-ghost" type="submit">Unschedule</button>
+                        </form>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+
             <?php foreach ($targets as $t):
                 $tplLab = '';
                 $stId = (int)($t['site_template_id'] ?? 0);
@@ -1152,11 +1316,11 @@ layout_header('SNMP Polling', $user, 'snmp');
                 </tr>
             <?php endforeach; ?>
 
-            <?php if (!$scheduledPdus && !$scheduledDevices && !$targets): ?>
+            <?php if (!$scheduledPdus && !$scheduledDevices && !$scheduledUps && !$scheduledCooling && !$targets): ?>
                 <tr>
                     <td colspan="7" class="text-muted">
-                        Nothing scheduled yet. On a PDU or device, run <strong>Discover OIDs</strong>, then turn on
-                        <strong>Scheduled poll</strong>. Optional free-standing targets: <strong>Add target</strong>.
+                        Nothing scheduled yet. On a PDU, device, UPS, or cooling unit, run <strong>Discover OIDs</strong>,
+                        then turn on <strong>Scheduled poll</strong>. Optional free-standing targets: <strong>Add target</strong>.
                     </td>
                 </tr>
             <?php endif; ?>
