@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **3D raceway camera fade range:** near-camera tray transparency engages at normal orbit distance (not only when zoomed in tight); falloff scales with camera-to-room distance
-
 ### Bug fixes
 
 ---
 
+## [0.3.132] - 2026-08-12
+
+### Enhancements
+
+- **3D raceway camera fade range:** near-camera tray transparency engages at normal orbit distance (not only when zoomed in tight); falloff scales with camera-to-room distance
+
+---
 ## [0.3.131] - 2026-08-12
 
 ### New features
