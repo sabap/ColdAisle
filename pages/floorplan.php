@@ -212,7 +212,7 @@ layout_header('Floor Planner', $user, 'floorplan');
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=13"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=28"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=29"></script>
 <script>
 (function () {
   var c2 = document.getElementById('rwFinishCancel2');
