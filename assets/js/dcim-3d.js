@@ -692,6 +692,11 @@
     var floorUps = options.ups || options.ups_units || options.floor_ups || [];
     var envSensors = options.envSensors || options.env_sensors || [];
     var cablePaths = options.cablePaths || options.cable_paths || options.raceways || [];
+    var showObjectLabels = options.showObjectLabels !== false && options.objectLabels !== false;
+    var showRacewaysOpt = options.showRaceways !== false && options.racewaysVisible !== false;
+    if (!showRacewaysOpt) {
+      cablePaths = [];
+    }
     // Near-camera raceway fade sphere (see-through so trays never block the room)
     var racewayCamFade = options.racewayCamFade !== false && options.racewayFade !== false;
     // Inner radius (m): fully ghosted. Outer: fully solid. Auto-scales with orbit if unset.
@@ -1047,6 +1052,8 @@
       );
       label.position.set(0, h / 2 + 0.08, 0);
       label.rotation.x = -Math.PI / 2;
+      label.userData = { objectLabel: true };
+      label.visible = showObjectLabels;
       mesh.add(label);
 
       // Soft health glow group (shells + floor bloom + crown) — no hard outlines
@@ -1259,6 +1266,8 @@
       );
       label.position.set(0, h / 2 + 0.1, 0);
       label.rotation.x = -Math.PI / 2;
+      label.userData = { objectLabel: true };
+      label.visible = showObjectLabels;
       mesh.add(label);
 
       rackGroup.add(mesh);
@@ -1446,6 +1455,8 @@
       // Sit just above the logo toward one edge so both stay readable
       label.position.set(0, h / 2 + 0.012, d * 0.28);
       label.rotation.x = -Math.PI / 2;
+      label.userData = { objectLabel: true };
+      label.visible = showObjectLabels;
       mesh.add(label);
 
       rackGroup.add(mesh);
@@ -1568,6 +1579,8 @@
       );
       label.position.set(0, h / 2 + 0.06, 0);
       label.rotation.x = -Math.PI / 2;
+      label.userData = { objectLabel: true };
+      label.visible = showObjectLabels;
       mesh.add(label);
 
       rackGroup.add(mesh);
@@ -1945,6 +1958,17 @@
       },
       setAutoRotate: function (on) {
         autoRotate = !!on;
+      },
+      setObjectLabels: function (on) {
+        showObjectLabels = !!on;
+        scene.traverse(function (obj) {
+          if (obj && obj.userData && obj.userData.objectLabel) {
+            obj.visible = showObjectLabels;
+          }
+        });
+      },
+      setRacewaysVisible: function (on) {
+        if (racewayGroup) racewayGroup.visible = !!on;
       },
       setRacewayCamFade: function (on) {
         racewayCamFade = !!on;

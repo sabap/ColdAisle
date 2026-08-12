@@ -13,6 +13,9 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **NOC wall customizations:** Settings → NOC wall display toggles for **object labels**, **raceways** (ladder/fiber/conduit), and **3D auto-rotate**; panel slide timer (5–60s slider); how long **cleared alerts** stay visible
+- **NOC alert grid:** recent alerts under the 3D view in a fixed **2×3** grid (no scroll); newest top-left, older fill right then down until they drop off
+
 ### Enhancements
 
 ### Bug fixes
