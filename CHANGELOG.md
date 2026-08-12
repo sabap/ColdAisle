@@ -13,6 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+### Enhancements
+
+### Bug fixes
+
+---
+
+## [0.3.142] - 2026-08-12
+
+### New features
+
 - **Multi-hop cable paths:** connections can ride ordered raceways (e.g. Cabinet → RS-A → IRC → RS-B → Cabinet) stored as `path_route_json`; Dijkstra shortest-path across raceway graph with cabinet attach
 - **Show cable path:** device connection table (and whole device except switches) and Cabling list open the floor plan with the route drawn in media/jacket color and speed-colored end dots — works in 2D and 3D
 - **Calculate shortest path:** suggest/apply raceway hop sequence when adding a cable, on existing cables, and from work-order **Cable pathways** card
@@ -22,10 +32,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - Work-order checklist includes “Calculate / document raceway cable paths”
 - Cabling UI shows multi-hop path codes and Path / Calc path actions
 
-### Bug fixes
-
 ---
-
 ## [0.3.141] - 2026-08-12
 
 ### Enhancements
