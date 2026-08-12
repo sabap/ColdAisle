@@ -85,6 +85,65 @@ try {
         App::json(['error' => 'Method not allowed'], 405);
     }
 
+    // --- Port-to-port connection (from device UI) ---
+    if ($entity === 'connection') {
+        if (!class_exists('CableRouteService')) {
+            App::json(['error' => 'CableRouteService unavailable'], 500);
+        }
+        if ($method === 'POST') {
+            api_require_csrf();
+            if (!AuthManager::can($user, 'edit_cables')
+                && !AuthManager::can($user, 'edit_infrastructure')
+                && !AuthManager::canManageDevices($user)
+                && !AuthManager::isAdmin($user)
+            ) {
+                App::json(['error' => 'Forbidden'], 403);
+            }
+            $d = api_read_json();
+            $action = (string)($d['action'] ?? 'upsert');
+            if ($action === 'disconnect') {
+                $portId = (int)($d['port_id'] ?? $d['local_port_id'] ?? 0);
+                $res = CableRouteService::disconnectPort($portId);
+                if (empty($res['ok'])) {
+                    App::json(['error' => $res['message'] ?? 'Disconnect failed'], 400);
+                }
+                if (class_exists('AuditService')) {
+                    AuditService::log(
+                        (int)$user['user_id'],
+                        $user['username'] ?? '',
+                        'delete',
+                        'cable',
+                        (int)($res['cable_id'] ?? 0)
+                    );
+                }
+                App::json($res);
+            }
+            // upsert (default)
+            $localPort = (int)($d['local_port_id'] ?? $d['port_id'] ?? $d['a_port_id'] ?? 0);
+            $peerPort = (int)($d['peer_port_id'] ?? $d['b_port_id'] ?? 0);
+            $res = CableRouteService::upsertPortConnection($localPort, $peerPort, $d);
+            if (empty($res['ok'])) {
+                App::json(['error' => $res['message'] ?? 'Connect failed'], 400);
+            }
+            if (class_exists('AuditService')) {
+                AuditService::log(
+                    (int)$user['user_id'],
+                    $user['username'] ?? '',
+                    !empty($res['created']) ? 'create' : 'update',
+                    'cable',
+                    (int)($res['cable_id'] ?? 0)
+                );
+            }
+            // Full route payload for UI refresh
+            if (!empty($res['cable_id'])) {
+                $full = CableRouteService::routeForCable((int)$res['cable_id'], false);
+                $res['route'] = $full['route'] ?? null;
+            }
+            App::json($res);
+        }
+        App::json(['error' => 'Method not allowed'], 405);
+    }
+
     // --- Multi-hop raceway routes ---
     if ($entity === 'routes') {
         if (!class_exists('CableRouteService')) {

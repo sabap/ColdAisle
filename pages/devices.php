@@ -711,20 +711,32 @@ if ($action === 'new' || $id) {
         try {
             $dataPortLinks = Database::fetchAll(
                 "SELECT p.port_id, p.port_number, p.label, p.media_type, p.speed, p.notes,
-                        c.cable_id, c.cable_label, c.media_type AS cable_media, c.length_m,
+                        c.cable_id, c.cable_label, c.media_type AS cable_media, c.speed AS cable_speed,
+                        c.length_m, c.path_id, c.path_route_json, c.color_hex AS cable_color,
+                        c.a_port_id AS cable_a_port_id, c.b_port_id AS cable_b_port_id,
+                        c.cable_role, c.circuit_id,
                         peer.port_id AS peer_port_id,
                         peer.label AS peer_port_label,
                         peer.port_number AS peer_port_number,
                         peer_dev.device_id AS peer_device_id,
-                        peer_dev.label AS peer_device_label
+                        peer_dev.label AS peer_device_label,
+                        peer_dev.cabinet_id AS peer_cabinet_id,
+                        peer_cab.name AS peer_cabinet_name,
+                        peer_cab.room_id AS peer_room_id,
+                        local_cab.name AS local_cabinet_name,
+                        local_cab.room_id AS local_room_id,
+                        local_cab.cabinet_id AS local_cabinet_id
                  FROM device_ports p
+                 INNER JOIN devices dself ON dself.device_id = p.device_id
+                 LEFT JOIN cabinets local_cab ON local_cab.cabinet_id = dself.cabinet_id
                  LEFT JOIN cables c ON (c.a_port_id = p.port_id OR c.b_port_id = p.port_id)
-                      AND c.status <> 'retired'
+                      AND (c.status IS NULL OR c.status <> 'retired')
                  LEFT JOIN device_ports peer ON peer.port_id = CASE
                         WHEN c.a_port_id = p.port_id THEN c.b_port_id
                         WHEN c.b_port_id = p.port_id THEN c.a_port_id
                         ELSE NULL END
                  LEFT JOIN devices peer_dev ON peer_dev.device_id = peer.device_id
+                 LEFT JOIN cabinets peer_cab ON peer_cab.cabinet_id = peer_dev.cabinet_id
                  WHERE p.device_id = ? AND p.port_type = 'data'
                  ORDER BY p.port_number",
                 [$id]
@@ -1463,8 +1475,61 @@ if ($action === 'new' || $id) {
                 $connectedCableIds = array_values(array_unique($connectedCableIds));
                 $roomIdForPath = (int)($loc['room_id'] ?? 0);
                 $fpBase = App::url('pages/floorplan.php');
+                $canEditCablesHere = AuthManager::canEditCables($user)
+                    || AuthManager::canEditInfrastructure($user)
+                    || AuthManager::canManageDevices($user)
+                    || AuthManager::isAdmin($user);
+
+                // Raceway code map for path labels (this room + peer rooms)
+                $pathCodeById = [];
+                try {
+                    $pathRows = Database::fetchAll(
+                        'SELECT path_id, path_code, name, room_id FROM cable_paths
+                         WHERE is_active = 1 OR is_active IS NULL
+                         ORDER BY path_code, name'
+                    );
+                    foreach ($pathRows as $pr) {
+                        $pid = (int)($pr['path_id'] ?? 0);
+                        if ($pid < 1) {
+                            continue;
+                        }
+                        $code = trim((string)($pr['path_code'] ?? ''));
+                        if ($code === '') {
+                            $code = trim((string)($pr['name'] ?? ('#' . $pid)));
+                        }
+                        $pathCodeById[$pid] = $code;
+                    }
+                } catch (Throwable $e) {
+                    $pathCodeById = [];
+                }
+                $mediaPresetsDev = class_exists('CablePlantService') ? CablePlantService::mediaPresets() : [];
+                $speedOptsDev = class_exists('CablePlantService') ? CablePlantService::speedOptions() : [];
+                $racewaysForJs = [];
+                try {
+                    $racewayRows = Database::fetchAll(
+                        'SELECT path_id, path_code, name, room_id, media_class, path_kind
+                         FROM cable_paths
+                         WHERE (is_active = 1 OR is_active IS NULL)
+                         ORDER BY path_code, name'
+                    );
+                    foreach ($racewayRows as $rr) {
+                        $code = trim((string)($rr['path_code'] ?? ''));
+                        if ($code === '') {
+                            $code = trim((string)($rr['name'] ?? ''));
+                        }
+                        $racewaysForJs[] = [
+                            'path_id' => (int)$rr['path_id'],
+                            'code' => $code,
+                            'name' => (string)($rr['name'] ?? ''),
+                            'room_id' => (int)($rr['room_id'] ?? 0),
+                            'media_class' => (string)($rr['media_class'] ?? ''),
+                        ];
+                    }
+                } catch (Throwable $e) {
+                    $racewaysForJs = [];
+                }
                 ?>
-                <div class="card view-pane">
+                <div class="card view-pane" id="deviceDataConnections">
                     <div class="card-header flex-between">
                         <h2>Data connections</h2>
                         <div class="flex gap-1" style="flex-wrap:wrap">
@@ -1496,7 +1561,7 @@ if ($action === 'new' || $id) {
                                 <thead>
                                 <tr>
                                     <th>#</th><th>Label</th><th>Media</th><th>Speed</th>
-                                    <th>Connected to</th><th>Cable</th><th>Path</th>
+                                    <th>Connected to</th><th>Raceway path</th><th></th>
                                 </tr>
                                 </thead>
                                 <tbody>
@@ -1512,15 +1577,41 @@ if ($action === 'new' || $id) {
                                                 . App::e($dp['peer_port_label'] ?? ('Port ' . $dp['peer_port_number']))
                                                 . '</span>';
                                         }
-                                    }
-                                    $cable = '—';
-                                    if ($dp && !empty($dp['cable_id'])) {
-                                        $cable = App::e($dp['cable_label'] ?: ('Cable #' . $dp['cable_id']));
-                                        if (!empty($dp['cable_media'])) {
-                                            $cable .= ' <span class="text-muted">(' . App::e($dp['cable_media']) . ')</span>';
+                                        if (!empty($dp['peer_cabinet_name'])) {
+                                            $peer .= '<div class="text-muted" style="font-size:.72rem">'
+                                                . App::e((string)$dp['peer_cabinet_name']) . '</div>';
                                         }
                                     }
+                                    $routeLabel = '';
+                                    $pathIdsLocal = [];
+                                    if ($dp && !empty($dp['cable_id']) && class_exists('CableRouteService')) {
+                                        $pathIdsLocal = CableRouteService::pathIdsFromPortPerspective([
+                                            'path_route_json' => $dp['path_route_json'] ?? null,
+                                            'path_id' => $dp['path_id'] ?? null,
+                                            'a_port_id' => $dp['cable_a_port_id'] ?? null,
+                                            'b_port_id' => $dp['cable_b_port_id'] ?? null,
+                                        ], (int)$dp['port_id']);
+                                        $routeLabel = CableRouteService::routeLabelFromPort(
+                                            [
+                                                'path_route_json' => $dp['path_route_json'] ?? null,
+                                                'path_id' => $dp['path_id'] ?? null,
+                                                'a_port_id' => $dp['cable_a_port_id'] ?? null,
+                                                'b_port_id' => $dp['cable_b_port_id'] ?? null,
+                                            ],
+                                            (int)$dp['port_id'],
+                                            $pathCodeById,
+                                            (string)($dp['local_cabinet_name'] ?? $loc['cabinet_name'] ?? ''),
+                                            (string)($dp['peer_cabinet_name'] ?? '')
+                                        );
+                                    }
                                     $pathCell = '—';
+                                    if ($routeLabel !== '') {
+                                        $pathCell = '<span style="font-size:.82rem" title="'
+                                            . App::e($routeLabel) . '">' . App::e($routeLabel) . '</span>';
+                                    } elseif ($dp && !empty($dp['cable_id'])) {
+                                        $pathCell = '<span class="text-muted" style="font-size:.78rem">No path set</span>';
+                                    }
+                                    $actions = '';
                                     if ($dp && !empty($dp['cable_id'])) {
                                         $cid = (int)$dp['cable_id'];
                                         $pathHref = $fpBase . '?' . http_build_query(array_filter([
@@ -1529,31 +1620,458 @@ if ($action === 'new' || $id) {
                                             'show_routes' => 1,
                                             'calculate' => 1,
                                         ]));
-                                        $pathCell = '<a class="btn btn-ghost btn-sm" href="' . App::e($pathHref)
-                                            . '" title="Draw this connection on the floor plan">Show path</a>';
+                                        $actions .= '<a class="btn btn-ghost btn-sm" href="' . App::e($pathHref)
+                                            . '" title="Draw on floor plan">Show</a> ';
+                                    }
+                                    if ($canEditCablesHere && $dp && !empty($dp['port_id'])) {
+                                        $actions .= '<button type="button" class="btn btn-secondary btn-sm btn-port-connect"
+                                            data-port-id="' . (int)$dp['port_id'] . '"
+                                            data-port-number="' . (int)($dp['port_number'] ?? $i) . '"
+                                            data-port-label="' . App::e((string)($dp['label'] ?? ('Port ' . $i))) . '"
+                                            data-media="' . App::e((string)($dp['cable_media'] ?? $dp['media_type'] ?? '')) . '"
+                                            data-speed="' . App::e((string)($dp['cable_speed'] ?? $dp['speed'] ?? '')) . '"
+                                            data-cable-id="' . (int)($dp['cable_id'] ?? 0) . '"
+                                            data-cable-label="' . App::e((string)($dp['cable_label'] ?? '')) . '"
+                                            data-peer-device="' . (int)($dp['peer_device_id'] ?? 0) . '"
+                                            data-peer-port="' . (int)($dp['peer_port_id'] ?? 0) . '"
+                                            data-local-cabinet="' . (int)($dp['local_cabinet_id'] ?? $device['cabinet_id'] ?? 0) . '"
+                                            data-path-ids="' . App::e(implode(',', $pathIdsLocal)) . '"
+                                            >' . (!empty($dp['cable_id']) ? 'Edit' : 'Connect') . '</button>';
+                                    } elseif (!$dp) {
+                                        $actions = '<span class="text-muted" style="font-size:.75rem">No port row</span>';
                                     }
                                     ?>
                                     <tr class="<?= $dp ? '' : 'row-empty' ?>">
                                         <td><?= $i ?></td>
                                         <td><?= App::e($dp['label'] ?? ('Port ' . $i)) ?></td>
-                                        <td><?= $dash($dp['media_type'] ?? null) ?></td>
-                                        <td><?= $dash($dp['speed'] ?? null) ?></td>
+                                        <td><?= $dash($dp['cable_media'] ?? $dp['media_type'] ?? null) ?></td>
+                                        <td><?= $dash($dp['cable_speed'] ?? $dp['speed'] ?? null) ?></td>
                                         <td><?= $peer ?></td>
-                                        <td><?= $cable ?></td>
-                                        <td><?= $pathCell ?></td>
+                                        <td style="max-width:18rem"><?= $pathCell ?></td>
+                                        <td style="white-space:nowrap"><?= $actions ?></td>
                                     </tr>
                                 <?php endfor; ?>
                                 </tbody>
                             </table>
                             <p class="text-muted" style="font-size:.75rem;padding:.5rem 1rem;margin:0">
-                                <strong>Show path</strong> draws the multi-hop raceway route on the floor plan
-                                (media color, speed-colored end dots). Assigned pathways are used when set;
-                                otherwise a shortest raceway route is calculated for display.
-                                Manage permanent links under Cabling.
+                                <strong>Connect / Edit</strong> sets the far-end port and ordered raceway hops
+                                (e.g. RS-A → IRC-AB.1 → IRC-BC.1 → IRC-CD.1 → RS-D). One cable record links both
+                                ends — the peer device shows the <em>exact reverse</em> path automatically.
+                                <strong>Show</strong> draws the route on the floor plan.
                             </p>
                         <?php endif; ?>
                     </div>
                 </div>
+
+                <?php if ($canEditCablesHere && $numData > 0): ?>
+                <div class="modal-overlay" id="portConnectModal" hidden>
+                    <div class="modal-panel modal-panel-glass modal-panel-glass-wide" role="dialog" aria-modal="true" aria-labelledby="portConnectTitle">
+                        <div class="modal-header">
+                            <h2 id="portConnectTitle">Connect port</h2>
+                            <button type="button" class="modal-close" id="portConnectClose" aria-label="Close">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <p class="text-muted" style="font-size:.85rem;margin-top:0" id="portConnectSubtitle">
+                                Link this port to a peer and document the multi-hop raceway run.
+                            </p>
+                            <div class="form-grid">
+                                <div class="form-row full">
+                                    <label>Peer device</label>
+                                    <input class="form-control" type="search" id="pcPeerDeviceFilter" placeholder="Filter devices…" autocomplete="off">
+                                    <select class="form-control" id="pcPeerDevice" size="8" style="margin-top:.35rem">
+                                        <option value="">Loading devices…</option>
+                                    </select>
+                                </div>
+                                <div class="form-row full">
+                                    <label>Peer port</label>
+                                    <select class="form-control" id="pcPeerPort">
+                                        <option value="">— select device first —</option>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label>Media</label>
+                                    <select class="form-control" id="pcMedia">
+                                        <option value="">—</option>
+                                        <?php foreach ($mediaPresetsDev as $mp): ?>
+                                            <option value="<?= App::e($mp['value']) ?>"><?= App::e($mp['label']) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label>Speed</label>
+                                    <select class="form-control" id="pcSpeed">
+                                        <option value="">—</option>
+                                        <?php foreach ($speedOptsDev as $sp): ?>
+                                            <option value="<?= App::e($sp) ?>"><?= App::e($sp) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <div class="form-row full">
+                                    <label>Cable label</label>
+                                    <input class="form-control" id="pcCableLabel" placeholder="Optional tag / barcode">
+                                </div>
+                                <div class="form-row full">
+                                    <label>Raceway path (local → peer order)</label>
+                                    <div class="flex gap-1" style="flex-wrap:wrap;align-items:center;margin-bottom:.35rem">
+                                        <select class="form-control" id="pcHopPick" style="flex:1;min-width:12rem">
+                                            <option value="">— add raceway hop —</option>
+                                        </select>
+                                        <button type="button" class="btn btn-secondary btn-sm" id="pcHopAdd">Add hop</button>
+                                        <button type="button" class="btn btn-secondary btn-sm" id="pcCalcPath"
+                                                title="Shortest raceway sequence between cabinets">Calculate shortest path</button>
+                                        <button type="button" class="btn btn-ghost btn-sm" id="pcHopClear">Clear</button>
+                                    </div>
+                                    <ol id="pcHopList" style="margin:.25rem 0 0;padding-left:1.25rem;font-size:.88rem;min-height:2rem"></ol>
+                                    <p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0" id="pcHopHint">
+                                        Example: RS-A → IRC-AB.1 → IRC-BC.1 → IRC-CD.1 → RS-D
+                                    </p>
+                                </div>
+                            </div>
+                            <div id="pcError" class="alert alert-error" hidden style="margin-top:.75rem"></div>
+                        </div>
+                        <div class="modal-footer flex gap-1" style="justify-content:flex-end;flex-wrap:wrap">
+                            <button type="button" class="btn btn-danger btn-sm" id="pcDisconnect" hidden>Disconnect</button>
+                            <button type="button" class="btn btn-ghost" id="pcCancel">Cancel</button>
+                            <button type="button" class="btn btn-primary" id="pcSave">Save connection</button>
+                        </div>
+                    </div>
+                </div>
+                <script>
+                (function () {
+                    var deviceId = <?= (int)$device['device_id'] ?>;
+                    var localCabinetId = <?= (int)($device['cabinet_id'] ?? 0) ?>;
+                    var localRoomId = <?= (int)$roomIdForPath ?>;
+                    var raceways = <?= json_encode($racewaysForJs, JSON_UNESCAPED_UNICODE) ?>;
+                    var modal = document.getElementById('portConnectModal');
+                    if (!modal || !window.ColdAisle) return;
+
+                    var state = {
+                        localPortId: 0,
+                        localPortLabel: '',
+                        cableId: 0,
+                        hopIds: [],
+                        devices: [],
+                        peerCabinetId: 0,
+                    };
+
+                    var el = {
+                        title: document.getElementById('portConnectTitle'),
+                        sub: document.getElementById('portConnectSubtitle'),
+                        filter: document.getElementById('pcPeerDeviceFilter'),
+                        device: document.getElementById('pcPeerDevice'),
+                        port: document.getElementById('pcPeerPort'),
+                        media: document.getElementById('pcMedia'),
+                        speed: document.getElementById('pcSpeed'),
+                        label: document.getElementById('pcCableLabel'),
+                        hopPick: document.getElementById('pcHopPick'),
+                        hopList: document.getElementById('pcHopList'),
+                        hopHint: document.getElementById('pcHopHint'),
+                        err: document.getElementById('pcError'),
+                        disc: document.getElementById('pcDisconnect'),
+                        save: document.getElementById('pcSave'),
+                    };
+
+                    function showErr(msg) {
+                        if (!el.err) return;
+                        if (!msg) { el.err.hidden = true; el.err.textContent = ''; return; }
+                        el.err.hidden = false;
+                        el.err.textContent = msg;
+                    }
+
+                    function racewayById(id) {
+                        id = Number(id);
+                        for (var i = 0; i < raceways.length; i++) {
+                            if (Number(raceways[i].path_id) === id) return raceways[i];
+                        }
+                        return null;
+                    }
+
+                    function fillHopPick() {
+                        if (!el.hopPick) return;
+                        var preferRoom = localRoomId || 0;
+                        var opts = raceways.slice().sort(function (a, b) {
+                            var ar = Number(a.room_id) === preferRoom ? 0 : 1;
+                            var br = Number(b.room_id) === preferRoom ? 0 : 1;
+                            if (ar !== br) return ar - br;
+                            return String(a.code).localeCompare(String(b.code));
+                        });
+                        el.hopPick.innerHTML = '<option value="">— add raceway hop —</option>';
+                        opts.forEach(function (r) {
+                            var o = document.createElement('option');
+                            o.value = String(r.path_id);
+                            o.textContent = r.code + (r.name && r.name !== r.code ? (' · ' + r.name) : '');
+                            el.hopPick.appendChild(o);
+                        });
+                    }
+
+                    function renderHops() {
+                        if (!el.hopList) return;
+                        el.hopList.innerHTML = '';
+                        state.hopIds.forEach(function (id, idx) {
+                            var r = racewayById(id);
+                            var li = document.createElement('li');
+                            li.style.marginBottom = '.25rem';
+                            var label = r ? r.code : ('#' + id);
+                            li.innerHTML =
+                                '<strong>' + label + '</strong> ' +
+                                '<button type="button" class="btn btn-ghost btn-sm hop-up" data-i="' + idx + '" title="Move up">↑</button>' +
+                                '<button type="button" class="btn btn-ghost btn-sm hop-down" data-i="' + idx + '" title="Move down">↓</button>' +
+                                '<button type="button" class="btn btn-ghost btn-sm hop-rm" data-i="' + idx + '" title="Remove">×</button>';
+                            el.hopList.appendChild(li);
+                        });
+                        if (el.hopHint) {
+                            var codes = state.hopIds.map(function (id) {
+                                var r = racewayById(id);
+                                return r ? r.code : ('#' + id);
+                            });
+                            el.hopHint.textContent = codes.length
+                                ? ('Path: ' + codes.join(' → ') + '  ·  peer end will show the reverse order')
+                                : 'Example: RS-A → IRC-AB.1 → IRC-BC.1 → IRC-CD.1 → RS-D';
+                        }
+                    }
+
+                    el.hopList && el.hopList.addEventListener('click', function (e) {
+                        var t = e.target;
+                        if (!t || !t.getAttribute) return;
+                        var i = Number(t.getAttribute('data-i'));
+                        if (t.classList.contains('hop-rm')) {
+                            state.hopIds.splice(i, 1);
+                            renderHops();
+                        } else if (t.classList.contains('hop-up') && i > 0) {
+                            var tmp = state.hopIds[i - 1];
+                            state.hopIds[i - 1] = state.hopIds[i];
+                            state.hopIds[i] = tmp;
+                            renderHops();
+                        } else if (t.classList.contains('hop-down') && i < state.hopIds.length - 1) {
+                            var tmp2 = state.hopIds[i + 1];
+                            state.hopIds[i + 1] = state.hopIds[i];
+                            state.hopIds[i] = tmp2;
+                            renderHops();
+                        }
+                    });
+
+                    document.getElementById('pcHopAdd') && document.getElementById('pcHopAdd').addEventListener('click', function () {
+                        var v = Number(el.hopPick && el.hopPick.value);
+                        if (!(v > 0)) return;
+                        state.hopIds.push(v);
+                        renderHops();
+                        if (el.hopPick) el.hopPick.value = '';
+                    });
+                    document.getElementById('pcHopClear') && document.getElementById('pcHopClear').addEventListener('click', function () {
+                        state.hopIds = [];
+                        renderHops();
+                    });
+
+                    function setSelectValue(sel, val) {
+                        if (!sel) return;
+                        var s = val == null ? '' : String(val);
+                        for (var i = 0; i < sel.options.length; i++) {
+                            if (sel.options[i].value === s) { sel.selectedIndex = i; return; }
+                        }
+                    }
+
+                    function renderDeviceOptions(filter) {
+                        filter = (filter || '').toLowerCase().trim();
+                        if (!el.device) return;
+                        var cur = el.device.value;
+                        el.device.innerHTML = '';
+                        var blank = document.createElement('option');
+                        blank.value = '';
+                        blank.textContent = '— select peer device —';
+                        el.device.appendChild(blank);
+                        state.devices.forEach(function (d) {
+                            if (Number(d.device_id) === deviceId) return;
+                            var lab = String(d.label || '') + (d.cabinet_name ? (' · ' + d.cabinet_name) : '');
+                            if (filter && lab.toLowerCase().indexOf(filter) < 0) return;
+                            var o = document.createElement('option');
+                            o.value = String(d.device_id);
+                            o.textContent = lab;
+                            o.setAttribute('data-cabinet', String(d.cabinet_id || 0));
+                            el.device.appendChild(o);
+                        });
+                        if (cur) setSelectValue(el.device, cur);
+                    }
+
+                    function loadDevices() {
+                        return ColdAisle.api('api/devices.php').then(function (data) {
+                            state.devices = data.devices || [];
+                            renderDeviceOptions(el.filter ? el.filter.value : '');
+                        });
+                    }
+
+                    function loadPeerPorts(peerDeviceId, selectPortId) {
+                        if (!el.port) return Promise.resolve();
+                        el.port.innerHTML = '<option value="">Loading…</option>';
+                        if (!(peerDeviceId > 0)) {
+                            el.port.innerHTML = '<option value="">— select device first —</option>';
+                            return Promise.resolve();
+                        }
+                        return ColdAisle.api('api/ports.php?device_id=' + encodeURIComponent(peerDeviceId)).then(function (data) {
+                            var ports = (data.ports || []).filter(function (p) {
+                                return String(p.port_type || 'data') === 'data';
+                            });
+                            el.port.innerHTML = '';
+                            var blank = document.createElement('option');
+                            blank.value = '';
+                            blank.textContent = '— select port —';
+                            el.port.appendChild(blank);
+                            ports.forEach(function (p) {
+                                var busy = p.cable_id && Number(p.cable_id) > 0
+                                    && Number(p.peer_port_id || 0) !== state.localPortId;
+                                var o = document.createElement('option');
+                                o.value = String(p.port_id);
+                                o.textContent = (p.label || ('Port ' + p.port_number))
+                                    + (p.speed ? (' · ' + p.speed) : '')
+                                    + (busy ? ' (in use)' : '');
+                                if (busy) o.disabled = true;
+                                el.port.appendChild(o);
+                            });
+                            if (selectPortId) setSelectValue(el.port, selectPortId);
+                        }).catch(function (e) {
+                            el.port.innerHTML = '<option value="">' + ((e && e.message) || 'Failed to load ports') + '</option>';
+                        });
+                    }
+
+                    el.device && el.device.addEventListener('change', function () {
+                        var id = Number(el.device.value || 0);
+                        var opt = el.device.options[el.device.selectedIndex];
+                        state.peerCabinetId = opt ? Number(opt.getAttribute('data-cabinet') || 0) : 0;
+                        loadPeerPorts(id, 0);
+                    });
+                    el.filter && el.filter.addEventListener('input', function () {
+                        renderDeviceOptions(el.filter.value);
+                    });
+
+                    document.getElementById('pcCalcPath') && document.getElementById('pcCalcPath').addEventListener('click', function () {
+                        var fromCab = localCabinetId || 0;
+                        var toCab = state.peerCabinetId || 0;
+                        // If peer port selected, resolve cabinet from device list
+                        if (!(toCab > 0) && el.device && el.device.value) {
+                            var o = el.device.options[el.device.selectedIndex];
+                            toCab = o ? Number(o.getAttribute('data-cabinet') || 0) : 0;
+                        }
+                        if (!(fromCab > 0) || !(toCab > 0)) {
+                            showErr('Both devices need cabinets on the floor plan to calculate a path.');
+                            return;
+                        }
+                        if (fromCab === toCab) {
+                            showErr('Same cabinet — no raceway path needed for intra-rack links. Clear hops or leave empty.');
+                            return;
+                        }
+                        showErr('');
+                        ColdAisle.api('api/cables.php?entity=routes', {
+                            method: 'POST',
+                            body: { action: 'calculate', from_cabinet_id: fromCab, to_cabinet_id: toCab },
+                        }).then(function (data) {
+                            state.hopIds = (data.path_ids || []).map(Number).filter(function (n) { return n > 0; });
+                            renderHops();
+                            ColdAisle.toast(data.message || 'Path calculated', 'success');
+                        }).catch(function (e) {
+                            showErr((e && e.message) || 'No route found');
+                        });
+                    });
+
+                    function openModal(btn) {
+                        state.localPortId = Number(btn.getAttribute('data-port-id') || 0);
+                        state.localPortLabel = btn.getAttribute('data-port-label') || '';
+                        state.cableId = Number(btn.getAttribute('data-cable-id') || 0);
+                        state.hopIds = String(btn.getAttribute('data-path-ids') || '')
+                            .split(',').map(Number).filter(function (n) { return n > 0; });
+                        var peerDev = Number(btn.getAttribute('data-peer-device') || 0);
+                        var peerPort = Number(btn.getAttribute('data-peer-port') || 0);
+                        localCabinetId = Number(btn.getAttribute('data-local-cabinet') || localCabinetId) || localCabinetId;
+
+                        if (el.title) {
+                            el.title.textContent = (state.cableId > 0 ? 'Edit connection · ' : 'Connect · ')
+                                + state.localPortLabel;
+                        }
+                        if (el.sub) {
+                            el.sub.textContent = 'Document the far end and ordered raceway hops from this port toward the peer. '
+                                + 'Saving links both ends; the peer shows the reverse path.';
+                        }
+                        setSelectValue(el.media, btn.getAttribute('data-media') || '');
+                        setSelectValue(el.speed, btn.getAttribute('data-speed') || '');
+                        if (el.label) el.label.value = btn.getAttribute('data-cable-label') || '';
+                        if (el.disc) el.disc.hidden = !(state.cableId > 0);
+                        showErr('');
+                        fillHopPick();
+                        renderHops();
+                        modal.hidden = false;
+
+                        loadDevices().then(function () {
+                            if (peerDev > 0) {
+                                setSelectValue(el.device, peerDev);
+                                var o = el.device && el.device.options[el.device.selectedIndex];
+                                state.peerCabinetId = o ? Number(o.getAttribute('data-cabinet') || 0) : 0;
+                                return loadPeerPorts(peerDev, peerPort);
+                            }
+                            return loadPeerPorts(0, 0);
+                        }).catch(function (e) {
+                            showErr((e && e.message) || 'Could not load devices');
+                        });
+                    }
+
+                    function closeModal() {
+                        modal.hidden = true;
+                    }
+
+                    document.querySelectorAll('.btn-port-connect').forEach(function (btn) {
+                        btn.addEventListener('click', function () { openModal(btn); });
+                    });
+                    document.getElementById('portConnectClose') && document.getElementById('portConnectClose').addEventListener('click', closeModal);
+                    document.getElementById('pcCancel') && document.getElementById('pcCancel').addEventListener('click', closeModal);
+                    modal.addEventListener('click', function (e) {
+                        if (e.target === modal) closeModal();
+                    });
+
+                    el.save && el.save.addEventListener('click', function () {
+                        var peerPortId = Number(el.port && el.port.value);
+                        if (!(state.localPortId > 0) || !(peerPortId > 0)) {
+                            showErr('Select a peer device and port.');
+                            return;
+                        }
+                        el.save.disabled = true;
+                        showErr('');
+                        ColdAisle.api('api/cables.php?entity=connection', {
+                            method: 'POST',
+                            body: {
+                                action: 'upsert',
+                                local_port_id: state.localPortId,
+                                peer_port_id: peerPortId,
+                                path_ids: state.hopIds.slice(),
+                                route_source: 'manual',
+                                media_type: el.media ? el.media.value : '',
+                                speed: el.speed ? el.speed.value : '',
+                                cable_label: el.label ? el.label.value : '',
+                                sync_port_attrs: true,
+                            },
+                        }).then(function (data) {
+                            el.save.disabled = false;
+                            ColdAisle.toast(data.message || 'Connection saved', 'success');
+                            window.location.reload();
+                        }).catch(function (e) {
+                            el.save.disabled = false;
+                            showErr((e && e.message) || 'Save failed');
+                        });
+                    });
+
+                    el.disc && el.disc.addEventListener('click', function () {
+                        if (!confirm('Disconnect this port? The peer end will also be cleared.')) return;
+                        el.disc.disabled = true;
+                        ColdAisle.api('api/cables.php?entity=connection', {
+                            method: 'POST',
+                            body: { action: 'disconnect', port_id: state.localPortId },
+                        }).then(function (data) {
+                            ColdAisle.toast(data.message || 'Disconnected', 'success');
+                            window.location.reload();
+                        }).catch(function (e) {
+                            el.disc.disabled = false;
+                            showErr((e && e.message) || 'Disconnect failed');
+                        });
+                    });
+                })();
+                </script>
+                <?php endif; ?>
 
                 <?php
                 $canEditEnv = AuthManager::canEditCooling($user);

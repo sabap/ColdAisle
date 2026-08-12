@@ -504,6 +504,406 @@ class CableRouteService
         ];
     }
 
+    /**
+     * Path hop ids ordered from a given port's perspective (local → peer).
+     * Stored route is always a_port → b_port; reverse when viewing from b.
+     *
+     * @param array<string,mixed> $cable
+     * @return list<int>
+     */
+    public static function pathIdsFromPortPerspective(array $cable, int $portId): array
+    {
+        $ids = self::pathIdsForCable($cable);
+        if ($ids === [] || $portId < 1) {
+            return $ids;
+        }
+        $a = (int)($cable['a_port_id'] ?? 0);
+        $b = (int)($cable['b_port_id'] ?? 0);
+        if ($portId === $b && $portId !== $a) {
+            return array_values(array_reverse($ids));
+        }
+        return $ids;
+    }
+
+    /**
+     * Human path label from a port's perspective (cabinet + raceway codes + peer cabinet).
+     *
+     * @param array<string,mixed> $cable row with optional a_cabinet_name / b_cabinet_name / path_route_json
+     * @param array<int,string> $codeById path_id => code
+     */
+    public static function routeLabelFromPort(
+        array $cable,
+        int $localPortId,
+        array $codeById = [],
+        ?string $localCabinet = null,
+        ?string $peerCabinet = null
+    ): string {
+        $ids = self::pathIdsFromPortPerspective($cable, $localPortId);
+        $parts = [];
+        if ($localCabinet !== null && $localCabinet !== '') {
+            $parts[] = $localCabinet;
+        }
+        foreach ($ids as $pid) {
+            $parts[] = $codeById[$pid] ?? ('#' . $pid);
+        }
+        if ($peerCabinet !== null && $peerCabinet !== '') {
+            $parts[] = $peerCabinet;
+        }
+        if ($parts === [] && $ids === []) {
+            return '';
+        }
+        if ($parts === []) {
+            foreach ($ids as $pid) {
+                $parts[] = $codeById[$pid] ?? ('#' . $pid);
+            }
+        }
+        return implode(' → ', $parts);
+    }
+
+    /**
+     * Create or update a single cable linking local_port ↔ peer_port with multi-hop path.
+     * Path hop order is from the local port toward the peer. Storage is always a→b;
+     * if local is the b end of an existing cable, hops are reversed before save.
+     * Both device ports then show the same connection (peer end gets the reverse path label).
+     *
+     * @param array{
+     *   path_ids?:list<int>,path_ids_ordered?:string,route_source?:string,
+     *   media_type?:?string,speed?:?string,color_hex?:?string,cable_label?:?string,
+     *   length_m?:float|string|null,cable_role?:?string,notes?:?string,status?:?string,
+     *   circuit_id?:?string,strand_count?:int|string|null,
+     *   sync_port_attrs?:bool
+     * } $options
+     * @return array{ok:bool,message:string,cable_id?:int,path_ids?:list<int>,path_ids_stored?:list<int>,created?:bool}
+     */
+    public static function upsertPortConnection(int $localPortId, int $peerPortId, array $options = []): array
+    {
+        if ($localPortId < 1 || $peerPortId < 1) {
+            return ['ok' => false, 'message' => 'Both local and peer ports are required.'];
+        }
+        if ($localPortId === $peerPortId) {
+            return ['ok' => false, 'message' => 'A port cannot connect to itself.'];
+        }
+
+        try {
+            $local = Database::fetchOne(
+                'SELECT p.port_id, p.device_id, p.label, p.port_number, p.port_type, p.media_type, p.speed,
+                        d.label AS device_label, d.cabinet_id, c.name AS cabinet_name, c.room_id
+                 FROM device_ports p
+                 INNER JOIN devices d ON d.device_id = p.device_id
+                 LEFT JOIN cabinets c ON c.cabinet_id = d.cabinet_id
+                 WHERE p.port_id = ?',
+                [$localPortId]
+            );
+            $peer = Database::fetchOne(
+                'SELECT p.port_id, p.device_id, p.label, p.port_number, p.port_type, p.media_type, p.speed,
+                        d.label AS device_label, d.cabinet_id, c.name AS cabinet_name, c.room_id
+                 FROM device_ports p
+                 INNER JOIN devices d ON d.device_id = p.device_id
+                 LEFT JOIN cabinets c ON c.cabinet_id = d.cabinet_id
+                 WHERE p.port_id = ?',
+                [$peerPortId]
+            );
+        } catch (Throwable $e) {
+            return ['ok' => false, 'message' => $e->getMessage()];
+        }
+        if (!$local || !$peer) {
+            return ['ok' => false, 'message' => 'Port not found.'];
+        }
+        if ((string)($local['port_type'] ?? 'data') !== 'data' || (string)($peer['port_type'] ?? 'data') !== 'data') {
+            return ['ok' => false, 'message' => 'Only data ports can be linked with a cable path.'];
+        }
+
+        // Path hops from local → peer (as the operator documents the run)
+        $pathIdsLocal = [];
+        if (!empty($options['path_ids_ordered']) && is_string($options['path_ids_ordered'])) {
+            foreach (explode(',', $options['path_ids_ordered']) as $pid) {
+                $pid = (int)trim($pid);
+                if ($pid > 0) {
+                    $pathIdsLocal[] = $pid;
+                }
+            }
+        } elseif (isset($options['path_ids']) && is_array($options['path_ids'])) {
+            foreach ($options['path_ids'] as $pid) {
+                $pid = (int)$pid;
+                if ($pid > 0) {
+                    $pathIdsLocal[] = $pid;
+                }
+            }
+        }
+        $routeSource = (string)($options['route_source'] ?? ($pathIdsLocal !== [] ? 'manual' : 'manual'));
+
+        // Existing cable on either port
+        $existingLocal = self::activeCableForPort($localPortId);
+        $existingPeer = self::activeCableForPort($peerPortId);
+
+        $cableId = 0;
+        $created = false;
+        $aPort = $localPortId;
+        $bPort = $peerPortId;
+
+        if ($existingLocal && (int)$existingLocal['cable_id'] > 0) {
+            $cableId = (int)$existingLocal['cable_id'];
+            $other = (int)$existingLocal['a_port_id'] === $localPortId
+                ? (int)$existingLocal['b_port_id']
+                : (int)$existingLocal['a_port_id'];
+            if ($other > 0 && $other !== $peerPortId) {
+                return [
+                    'ok' => false,
+                    'message' => 'This port is already connected to another port. Disconnect it first.',
+                ];
+            }
+            // Keep stored a/b endpoints; only reassign if peer was empty
+            $aPort = (int)$existingLocal['a_port_id'];
+            $bPort = (int)$existingLocal['b_port_id'];
+            if ($aPort === $localPortId) {
+                $bPort = $peerPortId;
+            } elseif ($bPort === $localPortId) {
+                $aPort = $peerPortId;
+            } else {
+                // local was null somehow — set as A
+                $aPort = $localPortId;
+                $bPort = $peerPortId;
+            }
+        } elseif ($existingPeer && (int)$existingPeer['cable_id'] > 0) {
+            $cableId = (int)$existingPeer['cable_id'];
+            $other = (int)$existingPeer['a_port_id'] === $peerPortId
+                ? (int)$existingPeer['b_port_id']
+                : (int)$existingPeer['a_port_id'];
+            if ($other > 0 && $other !== $localPortId) {
+                return [
+                    'ok' => false,
+                    'message' => 'Peer port is already connected to a different port. Disconnect it first.',
+                ];
+            }
+            $aPort = (int)$existingPeer['a_port_id'];
+            $bPort = (int)$existingPeer['b_port_id'];
+            if ($aPort === $peerPortId) {
+                $bPort = $localPortId;
+            } elseif ($bPort === $peerPortId) {
+                $aPort = $localPortId;
+            } else {
+                $aPort = $localPortId;
+                $bPort = $peerPortId;
+            }
+        }
+
+        // Convert local→peer hop order into stored a_port→b_port order
+        $pathIdsStored = $pathIdsLocal;
+        if ($aPort === $peerPortId && $bPort === $localPortId && $pathIdsLocal !== []) {
+            $pathIdsStored = array_values(array_reverse($pathIdsLocal));
+        } elseif ($aPort === $localPortId && $bPort === $peerPortId) {
+            $pathIdsStored = $pathIdsLocal;
+        } elseif ($pathIdsLocal !== [] && $aPort !== $localPortId) {
+            // local is b end
+            $pathIdsStored = array_values(array_reverse($pathIdsLocal));
+        }
+
+        $hasPathInput = array_key_exists('path_ids', $options)
+            || array_key_exists('path_ids_ordered', $options);
+
+        $postFields = [
+            'a_port_id' => $aPort,
+            'b_port_id' => $bPort,
+            'media_type' => $options['media_type'] ?? $local['media_type'] ?? $peer['media_type'] ?? null,
+            'speed' => $options['speed'] ?? $local['speed'] ?? $peer['speed'] ?? null,
+            'color_hex' => $options['color_hex'] ?? null,
+            'cable_label' => $options['cable_label'] ?? null,
+            'length_m' => $options['length_m'] ?? null,
+            'cable_role' => $options['cable_role'] ?? 'structured',
+            'notes' => $options['notes'] ?? null,
+            'status' => $options['status'] ?? 'active',
+            'circuit_id' => $options['circuit_id'] ?? null,
+            'strand_count' => $options['strand_count'] ?? null,
+            'route_source' => $routeSource,
+        ];
+        if ($hasPathInput) {
+            $postFields['path_ids'] = $pathIdsStored;
+        }
+
+        $fields = class_exists('CablePlantService')
+            ? CablePlantService::cableFieldsFromInput($postFields)
+            : [
+                'a_port_id' => $aPort,
+                'b_port_id' => $bPort,
+                'media_type' => $postFields['media_type'],
+                'speed' => $postFields['speed'],
+                'status' => 'active',
+            ];
+
+        // Apply / clear multi-hop only when the client sent path fields
+        if ($hasPathInput) {
+            if ($pathIdsStored === []) {
+                $fields['path_id'] = null;
+                $fields['path_route_json'] = self::encodeRouteJson([], $routeSource);
+            } else {
+                $fields['path_id'] = $pathIdsStored[0];
+                $fields['path_route_json'] = self::encodeRouteJson($pathIdsStored, $routeSource);
+            }
+        }
+
+        // Always set endpoints (cableFieldsFromInput may null empty)
+        $fields['a_port_id'] = $aPort;
+        $fields['b_port_id'] = $bPort;
+
+        try {
+            if ($cableId > 0) {
+                Database::update('cables', $fields, 'cable_id = :id', [':id' => $cableId]);
+            } else {
+                $fields['installed_at'] = date('Y-m-d H:i:s');
+                $cableId = (int)Database::insert('cables', $fields);
+                $created = true;
+            }
+        } catch (Throwable $e) {
+            // Retry without path_route_json if column missing
+            unset($fields['path_route_json']);
+            try {
+                if ($cableId > 0) {
+                    Database::update('cables', $fields, 'cable_id = :id', [':id' => $cableId]);
+                } else {
+                    $fields['installed_at'] = date('Y-m-d H:i:s');
+                    $cableId = (int)Database::insert('cables', $fields);
+                    $created = true;
+                }
+            } catch (Throwable $e2) {
+                return ['ok' => false, 'message' => $e2->getMessage()];
+            }
+        }
+
+        // Optionally sync media/speed onto both ports so both ends document the link
+        $syncPorts = !array_key_exists('sync_port_attrs', $options) || !empty($options['sync_port_attrs']);
+        if ($syncPorts) {
+            $media = $fields['media_type'] ?? null;
+            $speed = $fields['speed'] ?? null;
+            foreach ([$localPortId, $peerPortId] as $pid) {
+                $patch = [];
+                if ($media !== null && $media !== '') {
+                    $patch['media_type'] = $media;
+                }
+                if ($speed !== null && $speed !== '') {
+                    $patch['speed'] = $speed;
+                }
+                if ($patch !== []) {
+                    try {
+                        Database::update('device_ports', $patch, 'port_id = :id', [':id' => $pid]);
+                    } catch (Throwable $e) {
+                        // non-fatal
+                    }
+                }
+            }
+        }
+
+        $codeMap = self::pathCodeMapForIds($pathIdsLocal);
+        $hopLabel = self::routeLabelFromPort(
+            [
+                'a_port_id' => $aPort,
+                'b_port_id' => $bPort,
+                'path_route_json' => self::encodeRouteJson($pathIdsStored, $routeSource),
+                'path_id' => $pathIdsStored[0] ?? null,
+            ],
+            $localPortId,
+            $codeMap,
+            (string)($local['cabinet_name'] ?? $local['device_label'] ?? ''),
+            (string)($peer['cabinet_name'] ?? $peer['device_label'] ?? '')
+        );
+
+        $peerLabel = trim(
+            (string)($peer['device_label'] ?? 'peer')
+            . ' · '
+            . (string)($peer['label'] ?? ('Port ' . ($peer['port_number'] ?? '')))
+        );
+
+        return [
+            'ok' => true,
+            'message' => ($created ? 'Connected to ' : 'Updated connection to ')
+                . $peerLabel
+                . ($hopLabel !== '' ? ('. Path: ' . $hopLabel) : '')
+                . '. Peer port shows the reverse path.',
+            'cable_id' => $cableId,
+            'path_ids' => $pathIdsLocal,
+            'path_ids_stored' => $pathIdsStored,
+            'created' => $created,
+            'a_port_id' => $aPort,
+            'b_port_id' => $bPort,
+            'route_label' => $hopLabel,
+            'peer_device_id' => (int)$peer['device_id'],
+            'peer_port_id' => $peerPortId,
+        ];
+    }
+
+    /**
+     * Remove cable link from a port (deletes the cable record so both ends disconnect).
+     *
+     * @return array{ok:bool,message:string,cable_id?:int}
+     */
+    public static function disconnectPort(int $portId): array
+    {
+        if ($portId < 1) {
+            return ['ok' => false, 'message' => 'Invalid port.'];
+        }
+        $cable = self::activeCableForPort($portId);
+        if (!$cable) {
+            return ['ok' => false, 'message' => 'No active cable on this port.'];
+        }
+        $cid = (int)$cable['cable_id'];
+        try {
+            Database::delete('cables', 'cable_id = ?', [$cid]);
+        } catch (Throwable $e) {
+            return ['ok' => false, 'message' => $e->getMessage()];
+        }
+        return [
+            'ok' => true,
+            'message' => 'Connection removed from both ends.',
+            'cable_id' => $cid,
+        ];
+    }
+
+    /** @return array<string,mixed>|null */
+    private static function activeCableForPort(int $portId): ?array
+    {
+        try {
+            $row = Database::fetchOne(
+                "SELECT * FROM cables
+                 WHERE (a_port_id = ? OR b_port_id = ?)
+                   AND (status IS NULL OR status <> 'retired')
+                 ORDER BY cable_id DESC",
+                [$portId, $portId]
+            );
+            return $row ?: null;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * @param list<int> $pathIds
+     * @return array<int,string>
+     */
+    private static function pathCodeMapForIds(array $pathIds): array
+    {
+        $map = [];
+        if ($pathIds === []) {
+            return $map;
+        }
+        try {
+            $ph = implode(',', array_fill(0, count($pathIds), '?'));
+            $rows = Database::fetchAll(
+                "SELECT path_id, path_code, name FROM cable_paths WHERE path_id IN ($ph)",
+                $pathIds
+            );
+            foreach ($rows as $r) {
+                $id = (int)$r['path_id'];
+                $c = trim((string)($r['path_code'] ?? ''));
+                if ($c === '') {
+                    $c = trim((string)($r['name'] ?? ('#' . $id)));
+                }
+                $map[$id] = $c;
+            }
+        } catch (Throwable $e) {
+            // ignore
+        }
+        return $map;
+    }
+
     // --- Graph internals ---
 
     /**
