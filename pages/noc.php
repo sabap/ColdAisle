@@ -36,7 +36,7 @@ $apiUrl = App::url('api/noc.php');
 if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
-$cssUrl = App::url('assets/css/noc.css') . '?v=9';
+$cssUrl = App::url('assets/css/noc.css') . '?v=10';
 $jsUrl = App::url('assets/js/noc.js') . '?v=15';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
 $dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=19';
@@ -67,8 +67,9 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <meta name="robots" content="noindex,nofollow">
+  <meta name="theme-color" content="#05080f">
   <title><?= App::e($title) ?></title>
   <link rel="stylesheet" href="<?= App::e($cssUrl) ?>">
   <script>

@@ -1,46 +1,85 @@
-/* ColdAisle NOC wall — dark TV layout, pinned 3D + rotating panels */
+/* ColdAisle NOC wall — optimized for 1080p (1920×1080) TV walls */
 html, body {
   margin: 0;
   padding: 0;
   height: 100%;
+  width: 100%;
   background: #05080f;
   color: #e2e8f0;
   font-family: "Segoe UI", system-ui, sans-serif;
   overflow: hidden;
+  /* Prefer fixed layout; avoid mobile text inflation on TV browsers */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+:root {
+  /* 1080p vertical budget helpers */
+  --noc-safe-x: max(12px, 1.2vw);
+  --noc-safe-y: max(8px, 0.9vh);
+  --noc-gap: 0.55rem;
+  --noc-left-col: minmax(420px, 38.5%);
+  --noc-alert-row-h: 3.55rem;
+  --noc-alert-gap: 0.3rem;
+  --noc-alert-rows: 3;
+  --noc-alert-pad-y: 0.7rem;
+  --noc-alert-head-h: 1.85rem;
+  --noc-alert-block-h: calc(
+    var(--noc-alert-head-h)
+    + var(--noc-alert-pad-y)
+    + (var(--noc-alert-rows) * var(--noc-alert-row-h))
+    + ((var(--noc-alert-rows) - 1) * var(--noc-alert-gap))
+  );
 }
 .noc-root {
   display: grid;
-  grid-template-columns: minmax(300px, 40vw) 1fr;
-  grid-template-rows: auto 1fr auto;
-  gap: 0.85rem;
+  /* Left: 3D + alerts · Right: metrics — tuned for 1920×1080 */
+  grid-template-columns: var(--noc-left-col) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: var(--noc-gap);
   height: 100vh;
-  padding: 0.85rem 1.1rem;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+  /* TV overscan safe margins */
+  padding: var(--noc-safe-y) var(--noc-safe-x);
   box-sizing: border-box;
+  overflow: hidden;
 }
 .noc-header {
   grid-column: 1 / -1;
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
-  gap: 1rem;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  flex-wrap: nowrap;
   border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-  padding-bottom: 0.55rem;
+  padding-bottom: 0.4rem;
+  min-height: 0;
+  flex-shrink: 0;
 }
 .noc-header h1 {
   margin: 0;
-  font-size: clamp(1.2rem, 2.1vw, 1.75rem);
+  font-size: 1.45rem;
   font-weight: 650;
   letter-spacing: 0.02em;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .noc-header .sub {
   color: #94a3b8;
-  font-size: 0.88rem;
+  font-size: 0.8rem;
+  line-height: 1.25;
+  margin-top: 0.1rem;
 }
 .noc-clock {
   font-variant-numeric: tabular-nums;
-  font-size: clamp(1rem, 1.8vw, 1.35rem);
+  font-size: 1.35rem;
+  font-weight: 600;
   color: #38bdf8;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .noc-3d-wrap {
   grid-row: 2;
@@ -48,29 +87,30 @@ html, body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   background: #0a0f18;
   border: 1px solid rgba(56, 189, 248, 0.22);
-  border-radius: 12px;
+  border-radius: 10px;
   overflow: hidden;
   position: relative;
 }
 .noc-3d-stage {
-  flex: 1 1 58%;
-  min-height: 180px;
+  flex: 1 1 auto;
+  min-height: 0;
   position: relative;
   overflow: hidden;
 }
 .noc-3d {
   width: 100%;
   height: 100%;
-  min-height: 180px;
+  min-height: 0;
 }
 .noc-3d-label {
   position: absolute;
-  top: 0.55rem;
-  left: 0.7rem;
+  top: 0.45rem;
+  left: 0.55rem;
   z-index: 2;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   color: #94a3b8;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -85,14 +125,14 @@ html, body {
   min-width: 0;
   background: rgba(10, 15, 24, 0.55);
   border: 1px solid rgba(148, 163, 184, 0.12);
-  border-radius: 12px;
+  border-radius: 10px;
   overflow: hidden;
 }
 .noc-tabs {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  padding: 0.45rem 0.55rem 0.55rem;
+  flex-wrap: nowrap;
+  gap: 0.2rem;
+  padding: 0.35rem 0.45rem 0.4rem;
   border-bottom: 1px solid rgba(148, 163, 184, 0.15);
   background: rgba(15, 23, 42, 0.85);
   flex-shrink: 0;
@@ -104,14 +144,15 @@ html, body {
   background: transparent;
   color: #94a3b8;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 0.45rem 0.85rem;
-  border-radius: 8px;
+  padding: 0.4rem 0.75rem;
+  border-radius: 7px;
   cursor: pointer;
   transition: background .15s, color .15s;
+  white-space: nowrap;
 }
 .noc-tab:hover { color: #e2e8f0; background: rgba(51, 65, 85, 0.5); }
 .noc-tab.active {
@@ -153,7 +194,7 @@ html, body {
 .noc-panel {
   position: absolute;
   inset: 0;
-  padding: 0.85rem;
+  padding: 0.7rem 0.85rem;
   overflow: auto;
   opacity: 0;
   visibility: hidden;
@@ -169,43 +210,45 @@ html, body {
 }
 .noc-metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
-  gap: 0.75rem;
+  /* ~4–6 cards across on 1080p right pane (~1100px) */
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.6rem;
   align-content: start;
 }
 .noc-card {
   background: linear-gradient(160deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98));
   border: 1px solid rgba(148, 163, 184, 0.15);
-  border-radius: 12px;
-  padding: 0.9rem 1rem;
-  min-height: 5.2rem;
+  border-radius: 10px;
+  padding: 0.7rem 0.85rem;
+  min-height: 4.6rem;
 }
 .noc-card.wide {
   grid-column: 1 / -1;
   min-height: auto;
 }
 .noc-card .label {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: #94a3b8;
-  margin-bottom: 0.3rem;
+  margin-bottom: 0.25rem;
 }
 .noc-card .value {
-  font-size: clamp(1.55rem, 2.8vw, 2.35rem);
+  /* Readable from typical TV viewing distance on 1080p */
+  font-size: clamp(1.45rem, 1.85vw, 2.1rem);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
 .noc-card .unit {
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 500;
   color: #94a3b8;
   margin-left: 0.2rem;
 }
 .noc-card .hint {
-  margin-top: 0.3rem;
-  font-size: 0.78rem;
+  margin-top: 0.25rem;
+  font-size: 0.74rem;
   color: #64748b;
 }
 .noc-card.accent .value { color: #38bdf8; }
@@ -231,14 +274,14 @@ html, body {
   background: linear-gradient(90deg, #fbbf24, #f87171);
 }
 
-/* Sparkline chart */
+/* Sparkline chart — shorter on 1080p so more metrics fit without scroll */
 .noc-chart-wrap {
-  margin-top: 0.35rem;
-  height: 140px;
+  margin-top: 0.3rem;
+  height: 110px;
   width: 100%;
 }
 .noc-chart-wrap.noc-chart-mini {
-  height: 88px;
+  height: 72px;
 }
 .noc-chart-wrap svg {
   width: 100%;
@@ -407,10 +450,19 @@ html, body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 1rem;
-  font-size: 0.78rem;
+  gap: 0.75rem 1.25rem;
+  font-size: 0.72rem;
   color: #64748b;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-height: 0;
+  padding-top: 0.1rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.noc-footer > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .noc-status-dot {
   display: inline-block;
@@ -434,19 +486,20 @@ html, body {
 }
 .noc-error.show { display: block; }
 
-/* Alerts under 3D — full left column width, 2×3 grid (no scrollbar) */
+/* Alerts under 3D — 2×3 grid sized for 1080p left column */
 .noc-alerts-glass {
   position: relative;
   z-index: 6;
   flex: 0 0 auto;
   width: 100%;
-  max-height: none;
+  height: var(--noc-alert-block-h);
+  max-height: var(--noc-alert-block-h);
   display: flex;
   flex-direction: column;
   border-radius: 0;
   border: 0;
   border-top: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(15, 23, 42, 0.92);
+  background: rgba(15, 23, 42, 0.94);
   backdrop-filter: blur(12px) saturate(1.15);
   -webkit-backdrop-filter: blur(12px) saturate(1.15);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -461,46 +514,52 @@ html, body {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.4rem 0.75rem;
+  height: var(--noc-alert-head-h);
+  padding: 0 0.65rem;
+  box-sizing: border-box;
   border-bottom: 1px solid rgba(148, 163, 184, 0.12);
   background: linear-gradient(180deg, rgba(56, 189, 248, 0.08), transparent);
   flex-shrink: 0;
 }
 .noc-alerts-glass-title {
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #94a3b8;
 }
 .noc-alerts-glass-count {
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 700;
   color: #38bdf8;
   font-variant-numeric: tabular-nums;
 }
 .noc-alerts-glass-list {
   overflow: hidden;
-  padding: 0.4rem 0.5rem 0.5rem;
+  padding: 0.35rem 0.4rem 0.35rem;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: repeat(3, minmax(0, 1fr));
-  gap: 0.35rem;
-  /* 3 rows fixed — no scrollbar; older alerts fall off */
-  height: calc(3 * 4.35rem + 2 * 0.35rem);
-  min-height: 13.5rem;
-  max-height: 13.5rem;
+  grid-template-rows: repeat(3, var(--noc-alert-row-h));
+  gap: var(--noc-alert-gap);
+  flex: 1 1 auto;
+  min-height: 0;
+  height: calc(
+    (var(--noc-alert-rows) * var(--noc-alert-row-h))
+    + ((var(--noc-alert-rows) - 1) * var(--noc-alert-gap))
+  );
   pointer-events: auto;
 }
 .noc-alert-chip {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.35rem;
   align-items: flex-start;
-  padding: 0.4rem 0.5rem;
-  border-radius: 8px;
+  padding: 0.3rem 0.4rem;
+  border-radius: 7px;
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: rgba(8, 12, 22, 0.55);
   min-height: 0;
+  height: 100%;
+  box-sizing: border-box;
   overflow: hidden;
   /* No default enter animation — polls must not flash; FLIP handles motion */
   will-change: transform, opacity;
@@ -594,23 +653,23 @@ html, body {
 }
 .noc-alert-chip.sev-ok .noc-alert-pulse { background: #22c55e; }
 .noc-alert-chip.is-cleared .noc-alert-pulse { display: none; }
-.noc-alert-body { min-width: 0; flex: 1; }
+.noc-alert-body { min-width: 0; flex: 1; overflow: hidden; }
 .noc-alert-title {
-  font-size: 0.82rem;
+  font-size: 0.74rem;
   font-weight: 650;
   color: #e2e8f0;
-  line-height: 1.3;
-  margin: 0 0 0.15rem;
+  line-height: 1.25;
+  margin: 0 0 0.1rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .noc-alert-state {
   display: inline-block;
-  margin-left: 0.35rem;
-  padding: 0.05rem 0.35rem;
+  margin-left: 0.3rem;
+  padding: 0.02rem 0.3rem;
   border-radius: 999px;
-  font-size: 0.62rem;
+  font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   vertical-align: middle;
@@ -628,17 +687,17 @@ html, body {
 }
 .noc-alert-msg {
   margin: 0;
-  font-size: 0.68rem;
+  font-size: 0.64rem;
   color: #94a3b8;
-  line-height: 1.3;
+  line-height: 1.25;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 .noc-alert-when {
-  margin: 0.2rem 0 0;
-  font-size: 0.65rem;
+  margin: 0.12rem 0 0;
+  font-size: 0.6rem;
   color: #64748b;
   font-variant-numeric: tabular-nums;
 }
@@ -651,12 +710,57 @@ html, body {
   50% { box-shadow: 0 0 0 5px transparent; }
 }
 
+/* Exact 1080p / near-1080p wall TVs (primary target) */
+@media (min-width: 1700px) and (max-width: 2000px) and (min-height: 900px) and (max-height: 1200px) {
+  :root {
+    --noc-safe-x: 16px;
+    --noc-safe-y: 10px;
+    --noc-gap: 0.5rem;
+    --noc-left-col: 720px; /* ~37.5% of 1920 — roomy 3D + alert grid */
+    --noc-alert-row-h: 3.45rem;
+  }
+  .noc-header h1 { font-size: 1.5rem; }
+  .noc-clock { font-size: 1.4rem; }
+  .noc-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .noc-zone-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .noc-card .value { font-size: 1.85rem; }
+  .noc-chart-wrap { height: 120px; }
+  .noc-chart-wrap.noc-chart-mini { height: 78px; }
+}
+
+/* Slightly larger / 1440p-ish: keep similar balance */
+@media (min-width: 2000px) and (min-height: 1000px) {
+  :root {
+    --noc-left-col: minmax(760px, 36%);
+    --noc-alert-row-h: 3.7rem;
+  }
+  .noc-metrics {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  }
+}
+
+/* Compact / windowed browsers (not full TV) */
+@media (max-width: 1400px) {
+  :root {
+    --noc-left-col: minmax(320px, 40%);
+    --noc-alert-row-h: 3.3rem;
+  }
+}
+
 @media (max-width: 960px) {
   .noc-root {
     grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(220px, 36vh) 1fr auto;
+    grid-template-rows: auto minmax(240px, 40vh) 1fr auto;
     overflow: auto;
+    height: auto;
+    max-height: none;
   }
-  .noc-3d-wrap { grid-row: 2; grid-column: 1; }
+  .noc-3d-wrap { grid-row: 2; grid-column: 1; min-height: 240px; }
   .noc-panel-wrap { grid-row: 3; grid-column: 1; min-height: 40vh; }
+  .noc-footer { flex-wrap: wrap; white-space: normal; }
+  .noc-metrics { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }

@@ -573,13 +573,19 @@
         list.innerHTML = '';
         alertOrderIds = [];
         host.hidden = true;
+        // Free vertical space for 3D on 1080p
+        try { window.dispatchEvent(new Event('resize')); } catch (eHide) { /* ignore */ }
       }
       if (countEl) countEl.textContent = '';
       alertsBootstrapped = true;
       return;
     }
 
+    var wasHidden = !!host.hidden;
     host.hidden = false;
+    if (wasHidden) {
+      try { window.dispatchEvent(new Event('resize')); } catch (eShow) { /* ignore */ }
+    }
     if (countEl) countEl.textContent = String(newIds.length);
 
     // First paint: place quietly, no enter animation
