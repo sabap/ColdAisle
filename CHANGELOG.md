@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.147] - 2026-08-12
+
+### Bug fixes
+
 - **3D raceways:** removed floating path-code / elevation labels from the floor-plan 3D view
 
 ---
-
 ## [0.3.146] - 2026-08-12
 
 ### Enhancements
