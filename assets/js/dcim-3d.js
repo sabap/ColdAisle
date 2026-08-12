@@ -809,41 +809,6 @@
       group.add(line);
     } catch (e) { /* ignore */ }
 
-    // Floating elev tag (path code + meters AFF) — proves height is applied
-    try {
-      var mid = centerline[Math.floor(centerline.length / 2)];
-      if (mid) {
-        var code = String(path.path_code || path.name || kind).slice(0, 18);
-        var tag = code + ' · ' + elev.toFixed(2) + 'm';
-        var c = document.createElement('canvas');
-        c.width = 256;
-        c.height = 48;
-        var cx = c.getContext('2d');
-        cx.fillStyle = 'rgba(15,23,42,0.82)';
-        cx.fillRect(0, 0, 256, 48);
-        cx.strokeStyle = hex;
-        cx.lineWidth = 3;
-        cx.strokeRect(1, 1, 254, 46);
-        cx.fillStyle = '#f8fafc';
-        cx.font = 'bold 18px Segoe UI,sans-serif';
-        cx.textAlign = 'center';
-        cx.textBaseline = 'middle';
-        cx.fillText(tag, 128, 24);
-        var tex = new THREE.CanvasTexture(c);
-        var sm = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
-        var spr = new THREE.Sprite(sm);
-        spr.scale.set(1.6, 0.3, 1);
-        spr.position.set(mid.x, 0.18, mid.z);
-        spr.renderOrder = 12;
-        spr.userData.racewayFade = true;
-        if (sm.userData) {
-          sm.userData.racewayFade = true;
-          sm.userData.fadeBaseOpacity = 1;
-        }
-        group.add(spr);
-      }
-    } catch (eLab) { /* ignore */ }
-
     return group;
   }
 

@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **3D raceways:** removed floating path-code / elevation labels from the floor-plan 3D view
+
 ---
 
 ## [0.3.146] - 2026-08-12
@@ -24,7 +26,6 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 ### Enhancements
 
 - **Raise U-channels +10″** floor-plan action sets each U-channel elev to matching ladder + 0.254 m
-- 3D raceway labels show path code and elevation (m AFF) so height is verifiable
 
 ### Bug fixes
 
