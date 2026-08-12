@@ -790,6 +790,133 @@
       return null;
     }
 
+    const MERGE_SNAP_M = 0.35;
+
+    /**
+     * Find another path endpoint near this path's end (0=start, 1=end) for 90° merge.
+     * @return {{path:object,end:number,distance:number,angleDeg:number}|null}
+     */
+    function findEndpointMergeCandidate(path, end) {
+      if (!path) return null;
+      const pts = pathPoints(path);
+      if (pts.length < 2) return null;
+      end = end ? 1 : 0;
+      const ep = end === 0 ? pts[0] : pts[pts.length - 1];
+      const prev = end === 0 ? pts[1] : pts[pts.length - 2];
+      let vx = Number(prev.x) - Number(ep.x);
+      let vy = Number(prev.y) - Number(ep.y);
+      const vl = Math.hypot(vx, vy);
+      if (vl < 1e-4) return null;
+      vx /= vl;
+      vy /= vl;
+      let best = null;
+      let bestD = MERGE_SNAP_M;
+      cablePaths.forEach(function (o) {
+        if (Number(o.path_id) === Number(path.path_id)) return;
+        const opts = pathPoints(o);
+        if (opts.length < 2) return;
+        for (let oe = 0; oe <= 1; oe++) {
+          const op = oe === 0 ? opts[0] : opts[opts.length - 1];
+          const on = oe === 0 ? opts[1] : opts[opts.length - 2];
+          const d = Math.hypot(Number(ep.x) - Number(op.x), Number(ep.y) - Number(op.y));
+          if (d > bestD) continue;
+          let wx = Number(on.x) - Number(op.x);
+          let wy = Number(on.y) - Number(op.y);
+          const wl = Math.hypot(wx, wy);
+          if (wl < 1e-4) continue;
+          wx /= wl;
+          wy /= wl;
+          const dot = Math.max(-1, Math.min(1, vx * wx + vy * wy));
+          const angle = Math.acos(dot) * (180 / Math.PI);
+          if (angle < 50 || angle > 130) continue;
+          bestD = d;
+          best = { path: o, end: oe, distance: d, angleDeg: angle };
+        }
+      });
+      return best;
+    }
+
+    function mergeEndpointsForPath(path) {
+      if (!path) return;
+      const candidates = [];
+      [0, 1].forEach(function (end) {
+        const c = findEndpointMergeCandidate(path, end);
+        if (c) candidates.push({ endKeep: end, cand: c });
+      });
+      if (!candidates.length) {
+        ColdAisle.toast('No other endpoint nearby at ~90° — drag ends within ~0.35 m', 'info');
+        return;
+      }
+      // Prefer closest
+      candidates.sort(function (a, b) { return a.cand.distance - b.cand.distance; });
+      const pick = candidates[0];
+      const other = pick.cand.path;
+      const labelA = path.path_code || path.name || ('#' + path.path_id);
+      const labelB = other.path_code || other.name || ('#' + other.path_id);
+      if (!window.confirm(
+        'Merge ' + labelB + ' into ' + labelA + ' at ~'
+        + Math.round(pick.cand.angleDeg) + '° junction?\n\n'
+        + 'You can then drag the yellow diamond into the corner for a smooth 90° bend.'
+      )) {
+        return;
+      }
+      ColdAisle.api('api/floorplan.php?action=merge_cable_paths', {
+        method: 'POST',
+        body: {
+          path_id_keep: path.path_id,
+          end_keep: pick.endKeep,
+          path_id_other: other.path_id,
+          end_other: pick.cand.end,
+        },
+      }).then(function (data) {
+        cablePaths = cablePaths.filter(function (x) {
+          return Number(x.path_id) !== Number(other.path_id);
+        });
+        if (data.path) {
+          const idx = cablePaths.findIndex(function (x) {
+            return Number(x.path_id) === Number(data.path.path_id);
+          });
+          if (idx >= 0) cablePaths[idx] = data.path;
+          else cablePaths.push(data.path);
+          selectedPathId = data.path.path_id;
+          renderRacewayProps(data.path, data.junction_index);
+        }
+        setRacewayUi();
+        draw();
+        ColdAisle.toast(data.message || 'Merged — drag yellow ◆ into the corner for the curve', 'success');
+      }).catch(function (err) {
+        ColdAisle.toast((err && err.message) || 'Merge failed', 'error');
+      });
+    }
+
+    /** Draw soft rings on endpoints that can merge with another path. */
+    function drawMergeHints() {
+      if (!showRaceways || racewayDraw) return;
+      const s = scale();
+      cablePaths.forEach(function (p) {
+        const pts = pathPoints(p);
+        if (pts.length < 2) return;
+        [0, pts.length - 1].forEach(function (idx, endFlag) {
+          const cand = findEndpointMergeCandidate(p, endFlag);
+          if (!cand) return;
+          const x = ORIGIN + Number(pts[idx].x) * s;
+          const y = ORIGIN + Number(pts[idx].y) * s;
+          ctx.save();
+          ctx.strokeStyle = 'rgba(34, 197, 94, 0.9)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(x, y, 9, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.strokeStyle = 'rgba(34, 197, 94, 0.35)';
+          ctx.lineWidth = 6;
+          ctx.beginPath();
+          ctx.arc(x, y, 12, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        });
+      });
+    }
+
     function persistRacewayPath(p, toastMsg) {
       if (!p || !room || !room.room_id) return Promise.resolve();
       const pts = p.waypoints_list || pathPoints(p);
@@ -1227,6 +1354,7 @@
       // Raceways on top (full opacity) during draw mode and normal view
       if (showRaceways || racewayDraw) {
         drawCablePaths();
+        drawMergeHints();
       }
 
       // Tips live in HTML #plannerHud (viewport-fixed — not clipped by pan/canvas size)
@@ -1267,8 +1395,10 @@
           '<ul>' +
           '<li><strong>Reshape:</strong> drag a round vertex (others stay fixed)</li>' +
           '<li><strong>Move whole path:</strong> drag the path line</li>' +
-          '<li><strong>90° curve:</strong> drag the <em>yellow diamond</em> <strong>into</strong> the corner; ' +
-          'drag out to a hard stop at sharp 90°. Same path only (not merging two paths).</li>' +
+          '<li><strong>Merge two paths:</strong> drag endpoints within ~0.35&nbsp;m at ~90° (green ring) → ' +
+          '<em>Merge nearby endpoint</em> in props (or after dragging an endpoint close)</li>' +
+          '<li><strong>Smooth 90° bend:</strong> after merge, drag the <em>yellow diamond</em> ' +
+          '<strong>into</strong> the junction (curve equal on both sides); drag out = sharp stop</li>' +
           '<li><strong>Delete path:</strong> Delete path button or <kbd>Delete</kbd></li>' +
           '</ul>';
         return;
@@ -3052,6 +3182,7 @@
         horizontal: 'Horizontal only',
       };
       const code = p.path_code || p.name || 'Path';
+      const canMerge = !!(findEndpointMergeCandidate(p, 0) || findEndpointMergeCandidate(p, 1));
       let vertHtml = '<ul style="margin:.35rem 0;padding-left:1.1rem;font-size:.8rem">';
       pts.forEach(function (pt, i) {
         const end = i === 0 || i === pts.length - 1;
@@ -3084,8 +3215,14 @@
         'pages/cables.php">Cabling</a></p>' +
         '<div class="form-actions" style="flex-wrap:wrap;gap:.35rem;margin-top:.5rem">' +
         '<button type="button" class="btn btn-sm btn-secondary" id="btnClearPathSel">Deselect</button>' +
+        (canMerge
+          ? '<button type="button" class="btn btn-sm btn-primary" id="btnMergePathProp">Merge nearby endpoint</button>'
+          : '') +
         '<button type="button" class="btn btn-sm btn-danger" id="btnDeletePathProp">Delete path</button>' +
-        '</div>';
+        '</div>' +
+        (canMerge
+          ? '<p class="text-muted" style="font-size:.75rem;margin:.4rem 0 0">Green rings mark endpoints ready to join at ~90°.</p>'
+          : '<p class="text-muted" style="font-size:.75rem;margin:.4rem 0 0">To merge: drag this path’s end near another path’s end at roughly 90°.</p>');
       const btn = propsEl.querySelector('#btnClearPathSel');
       if (btn) {
         btn.addEventListener('click', function () {
@@ -3093,6 +3230,12 @@
           setRacewayUi();
           propsEl.innerHTML = '<p class="text-muted">Select a cabinet or raceway.</p>';
           draw();
+        });
+      }
+      const mergeBtn = propsEl.querySelector('#btnMergePathProp');
+      if (mergeBtn) {
+        mergeBtn.addEventListener('click', function () {
+          mergeEndpointsForPath(p);
         });
       }
       const delBtn = propsEl.querySelector('#btnDeletePathProp');
@@ -5615,7 +5758,26 @@
           return;
         }
         updateCanvasCursor();
-        persistRacewayPath(p, 'Vertex anchored');
+        // If dragged an endpoint near another path, offer merge after save
+        const isEnd = d.index === 0 || (p.waypoints_list && d.index === p.waypoints_list.length - 1)
+          || (pathPoints(p).length && (d.index === 0 || d.index === pathPoints(p).length - 1));
+        persistRacewayPath(p, 'Vertex anchored').then(function () {
+          const fresh = cablePaths.find(function (x) { return Number(x.path_id) === Number(d.pathId); }) || p;
+          if (!isEnd) return;
+          const endFlag = d.index === 0 ? 0 : 1;
+          const cand = findEndpointMergeCandidate(fresh, endFlag);
+          if (cand) {
+            if (window.confirm(
+              'Endpoint is near ' + (cand.path.path_code || cand.path.name || 'another path')
+              + ' at ~' + Math.round(cand.angleDeg) + '°.\n\nMerge into a single raceway for a smooth 90° bend?'
+            )) {
+              mergeEndpointsForPath(fresh);
+            } else {
+              renderRacewayProps(fresh, d.index);
+              draw();
+            }
+          }
+        });
         return;
       }
 

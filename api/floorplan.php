@@ -592,6 +592,42 @@ try {
         App::json(['path' => $row, 'message' => $res['message']], $pathId > 0 ? 200 : 201);
     }
 
+    // Merge two raceways at endpoints (shared CablePlantService)
+    if ($method === 'POST' && (($_GET['action'] ?? '') === 'merge_cable_paths')) {
+        api_require_permission('edit_infrastructure');
+        api_require_csrf();
+        if (!class_exists('CablePlantService')) {
+            App::json(['error' => 'CablePlantService unavailable'], 500);
+        }
+        $data = api_read_json();
+        $keepId = (int)($data['path_id_keep'] ?? $data['keep_id'] ?? 0);
+        $otherId = (int)($data['path_id_other'] ?? $data['other_id'] ?? 0);
+        $endKeep = (int)($data['end_keep'] ?? 1);
+        $endOther = (int)($data['end_other'] ?? 0);
+        $res = CablePlantService::mergePathsAtEndpoints($keepId, $endKeep, $otherId, $endOther);
+        if (empty($res['ok'])) {
+            App::json(['error' => $res['message'] ?? 'Merge failed'], 400);
+        }
+        $row = Database::fetchOne('SELECT * FROM cable_paths WHERE path_id = ?', [(int)$res['path_id']]);
+        if ($row && class_exists('CablePlantService')) {
+            $row['waypoints_list'] = CablePlantService::parseWaypoints($row['waypoints'] ?? null);
+        }
+        AuditService::log(
+            (int)$user['user_id'],
+            $user['username'],
+            'merge',
+            'cable_path',
+            (int)$res['path_id'],
+            ['absorbed' => $otherId, 'junction_index' => (int)($res['junction_index'] ?? -1)]
+        );
+        App::json([
+            'path' => $row,
+            'message' => $res['message'],
+            'junction_index' => (int)($res['junction_index'] ?? -1),
+            'absorbed_path_id' => $otherId,
+        ]);
+    }
+
     // Delete raceway / pathway (shared CablePlantService)
     if ($method === 'POST' && (($_GET['action'] ?? '') === 'delete_cable_path')) {
         api_require_permission('edit_infrastructure');
