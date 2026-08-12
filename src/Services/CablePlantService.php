@@ -69,6 +69,17 @@ class CablePlantService
 
     public const DEFAULT_FILLET_RADIUS_M = 0.30;
 
+    /** Typical overhead ladder / fiber tray height (m AFF). */
+    public const DEFAULT_ELEVATION_OVERHEAD_M = 2.70;
+
+    /** Typical under raised-floor path (m; negative = below finished floor). */
+    public const DEFAULT_ELEVATION_UNDERFLOOR_M = -0.30;
+
+    /** Default tray widths (m). */
+    public const DEFAULT_WIDTH_LADDER_M = 0.30;
+    public const DEFAULT_WIDTH_FIBER_M = 0.15;
+    public const DEFAULT_WIDTH_CONDUIT_M = 0.05;
+
     /**
      * Raceway construction type (3D-ready). Primary: ladder, fiber_raceway, conduit.
      * @return array<string,string>
@@ -87,6 +98,25 @@ class CablePlantService
             'busway' => 'Busway / power path',
             'other' => 'Other',
         ];
+    }
+
+    /** Default elevation (m AFF) from cabinet feed mode. */
+    public static function defaultElevationForFeed(string $feed): float
+    {
+        $feed = strtolower(trim($feed));
+        return $feed === 'underfloor'
+            ? self::DEFAULT_ELEVATION_UNDERFLOOR_M
+            : self::DEFAULT_ELEVATION_OVERHEAD_M;
+    }
+
+    /** Default trough / ladder width (m) from path kind. */
+    public static function defaultWidthForKind(string $kind): float
+    {
+        return match (self::normalizePathKind($kind)) {
+            'conduit' => self::DEFAULT_WIDTH_CONDUIT_M,
+            'fiber_raceway', 'fiber_trough' => self::DEFAULT_WIDTH_FIBER_M,
+            default => self::DEFAULT_WIDTH_LADDER_M,
+        };
     }
 
     /** Primary kinds shown in finish UI. @return list<string> */
@@ -465,8 +495,17 @@ class CablePlantService
         if ($waypoints !== null) {
             $fields['waypoints'] = $waypoints;
         }
-        if (isset($data['width_m']) && $data['width_m'] !== '' && $data['width_m'] !== null) {
-            $fields['width_m'] = max(0.05, min(5.0, (float)$data['width_m']));
+        // Width: explicit value, or default on create
+        if (array_key_exists('width_m', $data) && $data['width_m'] !== '' && $data['width_m'] !== null) {
+            $fields['width_m'] = max(0.03, min(5.0, (float)$data['width_m']));
+        } elseif (!$pathId) {
+            $fields['width_m'] = self::defaultWidthForKind($pathKind);
+        }
+        // Elevation AFF (m): explicit, or default from feed on create
+        if (array_key_exists('elevation_m', $data) && $data['elevation_m'] !== '' && $data['elevation_m'] !== null) {
+            $fields['elevation_m'] = max(-2.0, min(12.0, (float)$data['elevation_m']));
+        } elseif (!$pathId) {
+            $fields['elevation_m'] = self::defaultElevationForFeed($feed);
         }
 
         try {

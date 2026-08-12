@@ -418,6 +418,7 @@ CREATE TABLE cable_paths (
     path_code NVARCHAR(40) NULL, -- RS-A, ORC-AB.1, IRC-AB.1 (unique per room when set)
     segment_class NVARCHAR(20) NULL, -- rs, orc, irc, custom
     width_m DECIMAL(8,3) NULL, -- visual / nominal trough width in meters
+    elevation_m DECIMAL(8,3) NULL, -- path height above finished floor (m) for 3D; underfloor negative
     waypoints NVARCHAR(MAX) NULL, -- JSON [{x,y,z?,corner?,radius_m?}] room meters
     color_hex NVARCHAR(7) NOT NULL DEFAULT '#38bdf8',
     notes NVARCHAR(MAX) NULL,
