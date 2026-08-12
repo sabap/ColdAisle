@@ -15,7 +15,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Raise U-channels +10″** floor-plan action sets each U-channel elev to matching ladder + 0.254 m
+- 3D raceway labels show path code and elevation (m AFF) so height is verifiable
+
 ### Bug fixes
+
+- **3D raceway stacking:** elevation is applied as `group.position.y` (geometry built at Y=0); mesh orientation preserves world-up so ladder and U-channel no longer appear coplanar
+- U-channel without a saved elev defaults to overhead + 10″; path save keeps elev/kind on fallback paths
 
 ---
 

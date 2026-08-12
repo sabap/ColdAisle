@@ -75,6 +75,8 @@ layout_header('Floor Planner', $user, 'floorplan');
         <button type="button" class="btn btn-secondary btn-sm" id="btnDrawRaceway" title="Click points on the floor; double-click or Finish to save">Draw raceway</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnBulkCloneUChannel"
                 title="Clone every ladder in this room as yellow fiber U-channel (+10&quot;, same routes)">Clone ladders → U-channel</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btnRaiseUChannelElev"
+                title="Set every U-channel elevation to its matching ladder + 10 inches">Raise U-channels +10″</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnUndoRacewayPt" hidden title="Remove last vertex (Backspace)">Undo point</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnClearRacewayPts" hidden title="Clear all draft vertices; stay in draw mode">Clear points</button>
         <button type="button" class="btn btn-primary btn-sm" id="btnFinishRaceway" hidden title="Save polyline">Finish path</button>
@@ -306,9 +308,9 @@ layout_header('Floor Planner', $user, 'floorplan');
   window.ColdAisle.lengthUnits = <?= json_encode($units) ?>;
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=21"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=22"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=37"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=38"></script>
 <script>
 (function () {
   var c2 = document.getElementById('rwFinishCancel2');

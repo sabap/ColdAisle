@@ -3512,7 +3512,8 @@
         '<input class="form-control" type="number" step="0.05" id="rwPropElev" value="' +
         esc(String(fmtLen(elevM, 3))) + '">' +
         '<p class="text-muted" style="font-size:.72rem;margin:.15rem 0 0">' +
-        'One height for this <strong>entire path</strong> (all vertices / corners together) in 3D. Underfloor: negative.</p></div>' +
+        '3D height for this path. Stored as <strong>' + elevM.toFixed(3) + ' m</strong> AFF. '
+        + 'U-channel is typically ladder + 0.254 m (10″). Underfloor: negative.</p></div>' +
         '</div>' +
         '<p class="text-muted" style="font-size:.78rem;margin:.5rem 0 0">' +
         'Drag a <strong>round vertex</strong> to reshape. Drag the <strong>yellow diamond</strong> into the corner for a 90° curve; drag out to sharp. Drag the <strong>path line</strong> to move the whole raceway.</p>' +
@@ -6811,6 +6812,43 @@
     const bulkU = root.querySelector('#btnBulkCloneUChannel');
     if (bulkU) {
       bulkU.addEventListener('click', function () { bulkCloneLaddersAsUChannel(); });
+    }
+    const raiseU = root.querySelector('#btnRaiseUChannelElev');
+    if (raiseU) {
+      raiseU.addEventListener('click', async function () {
+        if (!room || !room.room_id) {
+          ColdAisle.toast('Select a room first', 'error');
+          return;
+        }
+        if (!window.confirm(
+          'Set every fiber U-channel elevation to its matching ladder + 10″ (0.254 m)?\n'
+          + 'Matches F-RS-A → RS-A (and notes from clone).'
+        )) {
+          return;
+        }
+        try {
+          const data = await ColdAisle.api('api/floorplan.php?action=reapply_uchannel_elev', {
+            method: 'POST',
+            body: { room_id: room.room_id, elevation_offset_m: 0.254 },
+          });
+          if (data.cable_paths) {
+            cablePaths = (data.cable_paths || []).map(function (p) {
+              if (p && p.elevation_m != null && p.elevation_m !== '') {
+                var ev = parseFloat(p.elevation_m);
+                if (isFinite(ev)) p.elevation_m = ev;
+              }
+              return p;
+            });
+          } else {
+            await loadRoom(room.room_id, { skipRouteReload: true });
+          }
+          draw();
+          refresh3d();
+          ColdAisle.toast(data.message || 'U-channel elevations updated', 'success');
+        } catch (e) {
+          ColdAisle.toast((e && e.message) || 'Could not update elevations', 'error');
+        }
+      });
     }
 
     // Clone modal

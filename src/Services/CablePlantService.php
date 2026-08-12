@@ -822,7 +822,8 @@ class CablePlantService
             $id = Database::insert('cable_paths', $fields);
             return ['ok' => true, 'path_id' => (int)$id, 'message' => 'Path created.'];
         } catch (Throwable $e) {
-            // Retry without new columns if mid-upgrade
+            App::log('CablePlantService::savePath full: ' . $e->getMessage(), 'warning');
+            // Retry with core columns; still try to keep elev/kind/width when present
             try {
                 $basic = [
                     'name' => $fields['name'],
@@ -831,20 +832,133 @@ class CablePlantService
                     'color_hex' => $fields['color_hex'],
                     'notes' => $fields['notes'],
                 ];
+                foreach (['media_class', 'path_kind', 'feed_to', 'path_code', 'segment_class', 'width_m', 'elevation_m', 'is_active'] as $extra) {
+                    if (array_key_exists($extra, $fields)) {
+                        $basic[$extra] = $fields[$extra];
+                    }
+                }
                 if ($waypoints !== null) {
                     $basic['waypoints'] = $waypoints;
                 }
                 if ($pathId && $pathId > 0) {
                     Database::update('cable_paths', $basic, 'path_id = :id', [':id' => $pathId]);
-                    return ['ok' => true, 'path_id' => $pathId, 'message' => 'Path updated (basic columns).'];
+                    return ['ok' => true, 'path_id' => $pathId, 'message' => 'Path updated.'];
                 }
                 $id = Database::insert('cable_paths', $basic);
-                return ['ok' => true, 'path_id' => (int)$id, 'message' => 'Path created (basic columns).'];
+                return ['ok' => true, 'path_id' => (int)$id, 'message' => 'Path created.'];
             } catch (Throwable $e2) {
-                App::log('CablePlantService::savePath: ' . $e2->getMessage(), 'error');
-                return ['ok' => false, 'path_id' => 0, 'message' => $e2->getMessage()];
+                // Last resort: absolute minimum columns
+                try {
+                    $min = [
+                        'name' => $fields['name'],
+                        'room_id' => $fields['room_id'],
+                        'path_type' => $fields['path_type'] ?? 'tray',
+                        'color_hex' => $fields['color_hex'] ?? '#38bdf8',
+                    ];
+                    if ($waypoints !== null) {
+                        $min['waypoints'] = $waypoints;
+                    }
+                    if ($pathId && $pathId > 0) {
+                        Database::update('cable_paths', $min, 'path_id = :id', [':id' => $pathId]);
+                        $id = $pathId;
+                    } else {
+                        $id = (int)Database::insert('cable_paths', $min);
+                    }
+                    // Best-effort elev/kind after minimal insert
+                    try {
+                        $patch = [];
+                        foreach (['path_kind', 'media_class', 'elevation_m', 'width_m', 'feed_to', 'path_code'] as $k) {
+                            if (array_key_exists($k, $fields)) {
+                                $patch[$k] = $fields[$k];
+                            }
+                        }
+                        if ($patch !== []) {
+                            Database::update('cable_paths', $patch, 'path_id = :id', [':id' => $id]);
+                        }
+                    } catch (Throwable $e3) {
+                    }
+                    return ['ok' => true, 'path_id' => (int)$id, 'message' => 'Path saved (compat mode).'];
+                } catch (Throwable $e4) {
+                    App::log('CablePlantService::savePath: ' . $e4->getMessage(), 'error');
+                    return ['ok' => false, 'path_id' => 0, 'message' => $e4->getMessage()];
+                }
             }
         }
+    }
+
+    /**
+     * Set each fiber U-channel elevation to matching ladder elev + offset (default +10 in).
+     * Match by path_code: F-RS-A ↔ RS-A, or notes "Cloned from …".
+     *
+     * @return array{ok:bool,message:string,updated:int}
+     */
+    public static function reapplyUChannelElevations(int $roomId, float $offsetM = self::DEFAULT_U_CHANNEL_ELEV_OFFSET_M): array
+    {
+        if ($roomId < 1) {
+            return ['ok' => false, 'message' => 'Room required.', 'updated' => 0];
+        }
+        $paths = self::pathsForRoom($roomId, true);
+        $laddersByCode = [];
+        foreach ($paths as $p) {
+            $k = self::normalizePathKind((string)($p['path_kind'] ?? ''));
+            if (!in_array($k, ['ladder', 'tray'], true)) {
+                continue;
+            }
+            $code = strtoupper(trim((string)($p['path_code'] ?? $p['name'] ?? '')));
+            if ($code !== '') {
+                $laddersByCode[$code] = $p;
+            }
+        }
+        $updated = 0;
+        foreach ($paths as $p) {
+            $k = self::normalizePathKind((string)($p['path_kind'] ?? ''));
+            if ($k !== 'fiber_u_channel') {
+                continue;
+            }
+            $code = strtoupper(trim((string)($p['path_code'] ?? $p['name'] ?? '')));
+            $src = null;
+            // F-RS-A or FRS-A → RS-A
+            if ($code !== '' && str_starts_with($code, 'F-') && isset($laddersByCode[substr($code, 2)])) {
+                $src = $laddersByCode[substr($code, 2)];
+            } elseif ($code !== '' && str_starts_with($code, 'F') && isset($laddersByCode[substr($code, 1)])) {
+                $src = $laddersByCode[substr($code, 1)];
+            } else {
+                // notes: Cloned from RS-A (path_id N)
+                $notes = (string)($p['notes'] ?? '');
+                if (preg_match('/Cloned from\s+([^\s(]+)/i', $notes, $m)) {
+                    $sc = strtoupper(trim($m[1]));
+                    if (isset($laddersByCode[$sc])) {
+                        $src = $laddersByCode[$sc];
+                    }
+                }
+            }
+            $srcElev = self::defaultElevationForFeed((string)($p['feed_to'] ?? 'overhead'));
+            if ($src) {
+                if (isset($src['elevation_m']) && $src['elevation_m'] !== null && $src['elevation_m'] !== '') {
+                    $srcElev = (float)$src['elevation_m'];
+                }
+            }
+            $newElev = max(-2.0, min(12.0, $srcElev + $offsetM));
+            try {
+                Database::update(
+                    'cable_paths',
+                    ['elevation_m' => $newElev],
+                    'path_id = :id',
+                    [':id' => (int)$p['path_id']]
+                );
+                $updated++;
+            } catch (Throwable $e) {
+                // continue
+            }
+        }
+        return [
+            'ok' => $updated > 0,
+            'message' => $updated > 0
+                ? ("Set elevation on {$updated} U-channel path(s) to ladder + "
+                    . number_format($offsetM, 3) . ' m (~10″).')
+                : 'No fiber U-channel paths found to update in this room.',
+            'updated' => $updated,
+        ];
     }
 
     public const MERGE_ENDPOINT_SNAP_M = 0.35;
