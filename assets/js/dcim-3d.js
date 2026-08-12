@@ -343,10 +343,47 @@
   // --- Raceway / cable path geometry (plan X,Y → scene X,Z; elevation → Y) ---
 
   function racewayDefaultWidth(kind) {
-    var k = String(kind || 'ladder');
+    var k = String(kind || 'ladder').toLowerCase();
     if (k === 'conduit') return 0.05;
+    if (k === 'fiber_u_channel' || k === 'u_channel') return 0.10;
     if (k === 'fiber_raceway' || k === 'fiber_trough') return 0.15;
     return 0.30;
+  }
+
+  /** Map path_kind to a render network bucket for filters. */
+  function racewayNetworkKey(kind) {
+    var k = String(kind || 'ladder').toLowerCase();
+    if (k === 'fiber_trough') k = 'fiber_raceway';
+    if (k === 'u_channel' || k === 'uchannel') k = 'fiber_u_channel';
+    if (k === 'tray') k = 'ladder';
+    if (k === 'fiber_u_channel') return 'fiber_u_channel';
+    if (k === 'fiber_raceway') return 'fiber_raceway';
+    if (k === 'conduit') return 'conduit';
+    if (k === 'ladder' || k === 'raceway') return 'ladder';
+    return k || 'ladder';
+  }
+
+  function racewayMatchesFilter(path, filter) {
+    if (!filter || filter === 'all' || filter === true) return true;
+    var kind = String(path.path_kind || path.path_type || 'ladder');
+    var net = racewayNetworkKey(kind);
+    var f = String(filter).toLowerCase();
+    if (f === 'fiber') {
+      return net === 'fiber_u_channel' || net === 'fiber_raceway';
+    }
+    if (f === 'ladder') return net === 'ladder';
+    if (f === 'fiber_u_channel' || f === 'u_channel') return net === 'fiber_u_channel';
+    if (f === 'fiber_raceway' || f === 'trough') return net === 'fiber_raceway';
+    if (f === 'conduit') return net === 'conduit';
+    // Comma-separated list of kinds/networks
+    if (f.indexOf(',') >= 0) {
+      var parts = f.split(',');
+      for (var i = 0; i < parts.length; i++) {
+        if (racewayMatchesFilter(path, parts[i].trim())) return true;
+      }
+      return false;
+    }
+    return net === f || kind.toLowerCase() === f;
   }
 
   function racewayDefaultElev(feed) {
@@ -593,6 +630,52 @@
     }
   }
 
+  /**
+   * Fiber U-channel (yellow PVC): open U profile — floor + tall side walls.
+   * Mounts on ladder brackets (typically ~10" higher); same centerline in plan.
+   */
+  function buildUChannelRaceway(group, centerline, width, mat) {
+    if (!centerline || centerline.length < 2) return;
+    var floorT = 0.014;
+    var sideH = 0.085;
+    var sideT = 0.010;
+    var lipW = Math.max(0.012, Math.min(0.02, width * 0.12));
+    var halfW = Math.max(0.025, width / 2);
+    var i;
+    for (i = 0; i < centerline.length - 1; i++) {
+      var a = centerline[i];
+      var b = centerline[i + 1];
+      // Bottom channel floor
+      placeOrientedBox(group, mat, a, b, width, floorT, floorT / 2);
+      var dir = new THREE.Vector3().subVectors(b, a);
+      if (dir.lengthSq() < 1e-8) continue;
+      dir.normalize();
+      var flat = new THREE.Vector3(dir.x, 0, dir.z);
+      if (flat.lengthSq() < 1e-8) flat.set(1, 0, 0);
+      else flat.normalize();
+      var rightV = new THREE.Vector3().crossVectors(flat, new THREE.Vector3(0, 1, 0)).normalize();
+      if (!isFinite(rightV.x)) rightV.set(0, 0, 1);
+      var aL = a.clone().addScaledVector(rightV, -halfW);
+      var bL = b.clone().addScaledVector(rightV, -halfW);
+      var aR = a.clone().addScaledVector(rightV, halfW);
+      var bR = b.clone().addScaledVector(rightV, halfW);
+      // Tall side walls
+      placeOrientedBox(group, mat, aL, bL, sideT, sideH, sideH / 2);
+      placeOrientedBox(group, mat, aR, bR, sideT, sideH, sideH / 2);
+      // Small top lips (open U)
+      var aLtop = aL.clone(); aLtop.y += sideH * 0.9;
+      var bLtop = bL.clone(); bLtop.y += sideH * 0.9;
+      var aRtop = aR.clone(); aRtop.y += sideH * 0.9;
+      var bRtop = bR.clone(); bRtop.y += sideH * 0.9;
+      var aLin = aLtop.clone().addScaledVector(rightV, lipW);
+      var bLin = bLtop.clone().addScaledVector(rightV, lipW);
+      var aRin = aRtop.clone().addScaledVector(rightV, -lipW);
+      var bRin = bRtop.clone().addScaledVector(rightV, -lipW);
+      placeOrientedBox(group, mat, aLin, bLin, lipW, floorT * 0.8, 0);
+      placeOrientedBox(group, mat, aRin, bRin, lipW, floorT * 0.8, 0);
+    }
+  }
+
   function buildConduitRaceway(group, centerline, diameter, mat) {
     if (!centerline || centerline.length < 2) return;
     var r = Math.max(0.015, diameter / 2);
@@ -620,6 +703,7 @@
     if (pts.length < 2) return null;
     var kind = String(path.path_kind || path.path_type || 'ladder').toLowerCase();
     if (kind === 'fiber_trough') kind = 'fiber_raceway';
+    if (kind === 'u_channel' || kind === 'uchannel') kind = 'fiber_u_channel';
     if (kind === 'tray') kind = 'ladder';
     var feed = String(path.feed_to || path.path_type || 'overhead').toLowerCase();
     var width = Number(path.width_m);
@@ -630,12 +714,13 @@
     var centerline = planToScene3d(plan, elev, null);
     if (centerline.length < 2) return null;
 
-    var hex = path.color_hex || '#2563eb';
+    var hex = path.color_hex || (kind === 'fiber_u_channel' || kind === 'fiber_raceway' ? '#eab308' : '#2563eb');
     var color = new THREE.Color(hex);
     var mat = new THREE.MeshStandardMaterial({
       color: color,
-      metalness: kind === 'conduit' ? 0.65 : 0.45,
-      roughness: kind === 'conduit' ? 0.35 : 0.5,
+      metalness: kind === 'conduit' ? 0.65 : (kind === 'fiber_u_channel' ? 0.15 : 0.45),
+      roughness: kind === 'conduit' ? 0.35 : (kind === 'fiber_u_channel' ? 0.55 : 0.5),
+      emissive: (kind === 'fiber_u_channel' || kind === 'fiber_raceway') ? color.clone().multiplyScalar(0.08) : new THREE.Color(0x000000),
       transparent: true,
       opacity: 1,
     });
@@ -644,6 +729,8 @@
 
     if (kind === 'conduit') {
       buildConduitRaceway(group, centerline, width, mat);
+    } else if (kind === 'fiber_u_channel') {
+      buildUChannelRaceway(group, centerline, width, mat);
     } else if (kind === 'fiber_raceway' || kind === 'raceway' || kind === 'underfloor') {
       buildTroughRaceway(group, centerline, width, mat);
     } else {
@@ -695,8 +782,14 @@
     var cableRoutes = options.cableRoutes || options.cable_routes || options.connectionRoutes || [];
     var showObjectLabels = options.showObjectLabels !== false && options.objectLabels !== false;
     var showRacewaysOpt = options.showRaceways !== false && options.racewaysVisible !== false;
+    // Filter: 'all' | 'ladder' | 'fiber' | 'fiber_u_channel' | 'fiber_raceway' | 'conduit' | comma list
+    var racewayFilter = options.racewayFilter || options.raceway_filter || options.racewayKind || 'all';
     if (!showRacewaysOpt) {
       cablePaths = [];
+    } else if (racewayFilter && racewayFilter !== 'all') {
+      cablePaths = (cablePaths || []).filter(function (p) {
+        return racewayMatchesFilter(p, racewayFilter);
+      });
     }
     // Near-camera raceway fade sphere (see-through so trays never block the room)
     var racewayCamFade = options.racewayCamFade !== false && options.racewayFade !== false;

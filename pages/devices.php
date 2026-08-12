@@ -1523,6 +1523,7 @@ if ($action === 'new' || $id) {
                             'name' => (string)($rr['name'] ?? ''),
                             'room_id' => (int)($rr['room_id'] ?? 0),
                             'media_class' => (string)($rr['media_class'] ?? ''),
+                            'path_kind' => (string)($rr['path_kind'] ?? ''),
                         ];
                     }
                 } catch (Throwable $e) {
@@ -1711,6 +1712,20 @@ if ($action === 'new' || $id) {
                                     <input class="form-control" id="pcCableLabel" placeholder="Optional tag / barcode">
                                 </div>
                                 <div class="form-row full">
+                                    <label>Raceway network (for calculate + hop list)</label>
+                                    <select class="form-control" id="pcRacewayNetwork">
+                                        <option value="all">All raceways</option>
+                                        <option value="fiber_u_channel" selected>Fiber U-channel</option>
+                                        <option value="fiber">Fiber (U-channel + trough)</option>
+                                        <option value="fiber_raceway">Fiber trough only</option>
+                                        <option value="ladder">Ladder tray</option>
+                                        <option value="conduit">Conduit</option>
+                                    </select>
+                                    <p class="text-muted" style="font-size:.72rem;margin:.2rem 0 0">
+                                        Shortest-path uses only this network. Hop picker prefers matching raceways.
+                                    </p>
+                                </div>
+                                <div class="form-row full">
                                     <label>Raceway path (local → peer order)</label>
                                     <div class="flex gap-1" style="flex-wrap:wrap;align-items:center;margin-bottom:.35rem">
                                         <select class="form-control" id="pcHopPick" style="flex:1;min-width:12rem">
@@ -1718,7 +1733,7 @@ if ($action === 'new' || $id) {
                                         </select>
                                         <button type="button" class="btn btn-secondary btn-sm" id="pcHopAdd">Add hop</button>
                                         <button type="button" class="btn btn-secondary btn-sm" id="pcCalcPath"
-                                                title="Shortest raceway sequence between cabinets">Calculate shortest path</button>
+                                                title="Shortest raceway sequence on the selected network">Calculate shortest path</button>
                                         <button type="button" class="btn btn-ghost btn-sm" id="pcHopClear">Clear</button>
                                     </div>
                                     <ol id="pcHopList" style="margin:.25rem 0 0;padding-left:1.25rem;font-size:.88rem;min-height:2rem"></ol>
@@ -1763,6 +1778,7 @@ if ($action === 'new' || $id) {
                         media: document.getElementById('pcMedia'),
                         speed: document.getElementById('pcSpeed'),
                         label: document.getElementById('pcCableLabel'),
+                        network: document.getElementById('pcRacewayNetwork'),
                         hopPick: document.getElementById('pcHopPick'),
                         hopList: document.getElementById('pcHopList'),
                         hopHint: document.getElementById('pcHopHint'),
@@ -1770,6 +1786,17 @@ if ($action === 'new' || $id) {
                         disc: document.getElementById('pcDisconnect'),
                         save: document.getElementById('pcSave'),
                     };
+
+                    function hopMatchesNetwork(r, net) {
+                        net = String(net || 'all').toLowerCase();
+                        if (!net || net === 'all') return true;
+                        var k = String(r.path_kind || '').toLowerCase();
+                        if (k === 'fiber_trough') k = 'fiber_raceway';
+                        if (k === 'tray') k = 'ladder';
+                        if (net === 'fiber') return k === 'fiber_u_channel' || k === 'fiber_raceway';
+                        if (net === 'ladder') return k === 'ladder' || k === 'raceway';
+                        return k === net;
+                    }
 
                     function showErr(msg) {
                         if (!el.err) return;
@@ -1789,17 +1816,27 @@ if ($action === 'new' || $id) {
                     function fillHopPick() {
                         if (!el.hopPick) return;
                         var preferRoom = localRoomId || 0;
-                        var opts = raceways.slice().sort(function (a, b) {
+                        var net = el.network ? el.network.value : 'all';
+                        var opts = raceways.slice().filter(function (r) {
+                            return hopMatchesNetwork(r, net);
+                        }).sort(function (a, b) {
                             var ar = Number(a.room_id) === preferRoom ? 0 : 1;
                             var br = Number(b.room_id) === preferRoom ? 0 : 1;
                             if (ar !== br) return ar - br;
                             return String(a.code).localeCompare(String(b.code));
                         });
+                        // If filter emptied the list, fall back to all
+                        if (!opts.length && net !== 'all') {
+                            opts = raceways.slice().sort(function (a, b) {
+                                return String(a.code).localeCompare(String(b.code));
+                            });
+                        }
                         el.hopPick.innerHTML = '<option value="">— add raceway hop —</option>';
                         opts.forEach(function (r) {
                             var o = document.createElement('option');
                             o.value = String(r.path_id);
-                            o.textContent = r.code + (r.name && r.name !== r.code ? (' · ' + r.name) : '');
+                            var kindTag = r.path_kind ? (' [' + r.path_kind.replace('fiber_', '') + ']') : '';
+                            o.textContent = r.code + kindTag + (r.name && r.name !== r.code ? (' · ' + r.name) : '');
                             el.hopPick.appendChild(o);
                         });
                     }
@@ -1942,6 +1979,8 @@ if ($action === 'new' || $id) {
                         renderDeviceOptions(el.filter.value);
                     });
 
+                    el.network && el.network.addEventListener('change', function () { fillHopPick(); });
+
                     document.getElementById('pcCalcPath') && document.getElementById('pcCalcPath').addEventListener('click', function () {
                         var fromCab = localCabinetId || 0;
                         var toCab = state.peerCabinetId || 0;
@@ -1959,9 +1998,15 @@ if ($action === 'new' || $id) {
                             return;
                         }
                         showErr('');
+                        var net = el.network ? el.network.value : 'all';
                         ColdAisle.api('api/cables.php?entity=routes', {
                             method: 'POST',
-                            body: { action: 'calculate', from_cabinet_id: fromCab, to_cabinet_id: toCab },
+                            body: {
+                                action: 'calculate',
+                                from_cabinet_id: fromCab,
+                                to_cabinet_id: toCab,
+                                network: net,
+                            },
                         }).then(function (data) {
                             state.hopIds = (data.path_ids || []).map(Number).filter(function (n) { return n > 0; });
                             renderHops();

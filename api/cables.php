@@ -153,15 +153,22 @@ try {
             $cableId = (int)($_GET['cable_id'] ?? 0);
             $deviceId = (int)($_GET['device_id'] ?? 0);
             $calc = !empty($_GET['calculate']);
+            $routeOpts = [];
+            if (!empty($_GET['network']) || !empty($_GET['raceway_network'])) {
+                $routeOpts['network'] = (string)($_GET['network'] ?? $_GET['raceway_network']);
+            }
+            if (!empty($_GET['media_class'])) {
+                $routeOpts['media_class'] = (string)$_GET['media_class'];
+            }
             if ($cableId > 0) {
-                $res = CableRouteService::routeForCable($cableId, $calc);
+                $res = CableRouteService::routeForCable($cableId, $calc, $routeOpts);
                 if (empty($res['ok'])) {
                     App::json(['error' => $res['message'] ?? 'Route failed'], 400);
                 }
                 App::json($res);
             }
             if ($deviceId > 0) {
-                $res = CableRouteService::routesForDevice($deviceId, $calc);
+                $res = CableRouteService::routesForDevice($deviceId, $calc, $routeOpts);
                 App::json($res);
             }
             App::json(['error' => 'cable_id or device_id required'], 400);
@@ -179,7 +186,17 @@ try {
             if ($action === 'calculate') {
                 $from = (int)($d['from_cabinet_id'] ?? $d['cabinet_a'] ?? 0);
                 $to = (int)($d['to_cabinet_id'] ?? $d['cabinet_b'] ?? 0);
-                $res = CableRouteService::calculateBetweenCabinets($from, $to);
+                $routeOpts = [];
+                if (!empty($d['network']) || !empty($d['raceway_network'])) {
+                    $routeOpts['network'] = (string)($d['network'] ?? $d['raceway_network']);
+                }
+                if (!empty($d['media_class'])) {
+                    $routeOpts['media_class'] = (string)$d['media_class'];
+                }
+                if (isset($d['path_kinds']) && is_array($d['path_kinds'])) {
+                    $routeOpts['path_kinds'] = $d['path_kinds'];
+                }
+                $res = CableRouteService::calculateBetweenCabinets($from, $to, $routeOpts);
                 if (empty($res['ok'])) {
                     App::json(['error' => $res['message'] ?? 'No route'], 400);
                 }
@@ -212,7 +229,17 @@ try {
                         $to = (int)$r0['route']['b']['cabinet_id'];
                     }
                 }
-                $calc = CableRouteService::calculateBetweenCabinets($from, $to);
+                $routeOpts = [];
+                if (!empty($d['network']) || !empty($d['raceway_network'])) {
+                    $routeOpts['network'] = (string)($d['network'] ?? $d['raceway_network']);
+                }
+                if (!empty($d['media_class'])) {
+                    $routeOpts['media_class'] = (string)$d['media_class'];
+                }
+                if (isset($d['path_kinds']) && is_array($d['path_kinds'])) {
+                    $routeOpts['path_kinds'] = $d['path_kinds'];
+                }
+                $calc = CableRouteService::calculateBetweenCabinets($from, $to, $routeOpts);
                 if (empty($calc['ok'])) {
                     App::json(['error' => $calc['message'] ?? 'No route'], 400);
                 }

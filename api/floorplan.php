@@ -592,6 +592,48 @@ try {
         App::json(['path' => $row, 'message' => $res['message']], $pathId > 0 ? 200 : 201);
     }
 
+    // Clone raceway (same plan geometry / fillets; new kind + elevation offset)
+    if ($method === 'POST' && (($_GET['action'] ?? '') === 'clone_cable_path')) {
+        api_require_permission('edit_infrastructure');
+        api_require_csrf();
+        if (!class_exists('CablePlantService')) {
+            App::json(['error' => 'CablePlantService unavailable'], 500);
+        }
+        $data = api_read_json();
+        $sourceId = (int)($data['path_id'] ?? $data['source_path_id'] ?? 0);
+        $bulk = !empty($data['bulk']) || !empty($data['all_of_kind']);
+        if ($bulk) {
+            $roomId = (int)($data['room_id'] ?? 0);
+            $srcKind = (string)($data['source_kind'] ?? $data['from_kind'] ?? 'ladder');
+            $res = CablePlantService::clonePathsByKindInRoom($roomId, $srcKind, $data);
+            if (empty($res['ok'])) {
+                App::json(['error' => $res['message'] ?? 'Clone failed'], 400);
+            }
+            AuditService::log(
+                (int)$user['user_id'],
+                $user['username'],
+                'create',
+                'cable_path',
+                0,
+                ['bulk_clone' => true, 'count' => count($res['created'] ?? []), 'from_kind' => $srcKind]
+            );
+            App::json($res);
+        }
+        $res = CablePlantService::clonePath($sourceId, $data);
+        if (empty($res['ok'])) {
+            App::json(['error' => $res['message'] ?? 'Clone failed'], 400);
+        }
+        AuditService::log(
+            (int)$user['user_id'],
+            $user['username'],
+            'create',
+            'cable_path',
+            (int)$res['path_id'],
+            ['cloned_from' => $sourceId]
+        );
+        App::json($res, 201);
+    }
+
     // Merge two raceways at endpoints (shared CablePlantService)
     if ($method === 'POST' && (($_GET['action'] ?? '') === 'merge_cable_paths')) {
         api_require_permission('edit_infrastructure');
