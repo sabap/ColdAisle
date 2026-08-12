@@ -14,6 +14,17 @@
   var nocAutoRotate = cfg.autoRotate !== false;
   var nocClearedTtlSec = Number(cfg.clearedAlertTtlSec);
   if (!isFinite(nocClearedTtlSec)) nocClearedTtlSec = 120;
+  var nocCamTiltPct = Number(cfg.camTiltPct);
+  var nocCamZoomPct = Number(cfg.camZoomPct);
+  if (!isFinite(nocCamTiltPct)) nocCamTiltPct = 63;
+  if (!isFinite(nocCamZoomPct)) nocCamZoomPct = 72;
+
+  function nocCameraOpts() {
+    if (window.ColdAisle3D && typeof ColdAisle3D.cameraFromPercents === 'function') {
+      return ColdAisle3D.cameraFromPercents(nocCamTiltPct, nocCamZoomPct);
+    }
+    return { phi: Math.PI / 3.2, radius: 28 };
+  }
   /** Version of HTML/JS this tab loaded; API version change triggers full reload */
   var bootVersion = cfg.appVersion ? String(cfg.appVersion) : null;
   var reloadingForUpdate = false;
@@ -749,6 +760,12 @@
     if (nocCfg.cleared_alert_ttl_sec != null) {
       nocClearedTtlSec = Number(nocCfg.cleared_alert_ttl_sec);
     }
+    if (nocCfg.cam_tilt_pct != null) {
+      nocCamTiltPct = Math.max(0, Math.min(100, Number(nocCfg.cam_tilt_pct)));
+    }
+    if (nocCfg.cam_zoom_pct != null) {
+      nocCamZoomPct = Math.max(0, Math.min(100, Number(nocCfg.cam_zoom_pct)));
+    }
     // Raceways on after off needs geometry reload (mount used empty list)
     if (prevRaceways !== nocShowRaceways) {
       sceneLoadedAt = 0;
@@ -762,6 +779,10 @@
       }
       if (typeof view3d.setAutoRotate === 'function') {
         view3d.setAutoRotate(nocAutoRotate);
+      }
+      if (typeof view3d.setCameraView === 'function') {
+        var cam = nocCameraOpts();
+        view3d.setCameraView({ phi: cam.phi, radius: cam.radius });
       }
     }
     // Restart panel timer if interval changed
@@ -885,6 +906,7 @@
         view3d = null;
       }
       try {
+        var cam0 = nocCameraOpts();
         view3d = ColdAisle3D.mount(el, {
           cabinets: cabinets,
           pdus: pdus,
@@ -901,6 +923,8 @@
           autoRotate: nocAutoRotate,
           autoRotateSpeed: 0.0025,
           textureFaces: 'none',
+          cameraPhi: cam0.phi,
+          cameraRadius: cam0.radius,
         });
       } catch (eMount) {
         view3d = null;

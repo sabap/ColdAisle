@@ -565,6 +565,8 @@ $nocShowRaceways = true;
 $nocAutoRotate = true;
 $nocPanelSec = 20;
 $nocClearedTtl = 120;
+$nocCamTiltPct = 63;
+$nocCamZoomPct = 72;
 try {
     $nocShowLabels = SettingsService::get('noc_show_labels', '1') === '1';
     $nocShowRaceways = SettingsService::get('noc_show_raceways', '1') === '1';
@@ -577,6 +579,8 @@ try {
     if (!in_array($nocClearedTtl, [0, 30, 60, 120, 300, 600, 1800, -1], true)) {
         $nocClearedTtl = 120;
     }
+    $nocCamTiltPct = max(0, min(100, (int)SettingsService::get('noc_cam_tilt_pct', '63')));
+    $nocCamZoomPct = max(0, min(100, (int)SettingsService::get('noc_cam_zoom_pct', '72')));
 } catch (Throwable $e) {
 }
 
@@ -624,6 +628,8 @@ $out = [
         'panel_rotate_sec' => $nocPanelSec,
         'panel_rotate_ms' => $nocPanelSec * 1000,
         'cleared_alert_ttl_sec' => $nocClearedTtl,
+        'cam_tilt_pct' => $nocCamTiltPct,
+        'cam_zoom_pct' => $nocCamZoomPct,
     ],
     'metrics' => $metrics,
     'env' => $env,

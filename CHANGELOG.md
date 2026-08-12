@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **NOC 3D tilt & zoom:** Settings → NOC wall display sliders with a live mini preview; saved camera applied on the wall
+
 ### Enhancements
 
 ### Bug fixes
