@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **NOC line graphs:** charts use a fixed height instead of stretching tall into free vertical space
+
 ---
 
 ## [0.3.139] - 2026-08-12

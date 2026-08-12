@@ -280,7 +280,8 @@ html, body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.55rem;
-  flex: 1 1 42%;
+  /* Fixed chart band — do not stretch graphs into empty vertical space */
+  flex: 0 0 auto;
   min-height: 0;
 }
 .noc-viz-row.noc-viz-single {
@@ -290,11 +291,12 @@ html, body {
   background: linear-gradient(160deg, rgba(22, 32, 48, 0.95), rgba(12, 18, 30, 0.98));
   border: 1px solid rgba(56, 189, 248, 0.14);
   border-radius: 12px;
-  padding: 0.55rem 0.75rem 0.5rem;
+  padding: 0.55rem 0.75rem 0.55rem;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  flex: 0 0 auto;
 }
 .noc-viz-title,
 .noc-section-label {
@@ -317,15 +319,18 @@ html, body {
   color: #64748b;
   font-variant-numeric: tabular-nums;
 }
+/* Fixed graph heights (readable strip, room left for future content) */
 .noc-chart-wrap.noc-chart-hero {
-  flex: 1 1 auto;
-  min-height: 0;
-  height: auto;
+  flex: 0 0 auto;
+  height: 96px;
+  min-height: 96px;
+  max-height: 96px;
 }
 .noc-chart-wrap.noc-chart-side {
-  flex: 1 1 auto;
-  min-height: 0;
-  height: auto;
+  flex: 0 0 auto;
+  height: 96px;
+  min-height: 96px;
+  max-height: 96px;
 }
 
 .noc-foot-strip {
@@ -635,15 +640,17 @@ html, body {
   background: linear-gradient(90deg, #fbbf24, #f87171);
 }
 
-/* Sparkline chart */
+/* Sparkline chart — fixed heights only */
 .noc-chart-wrap {
   margin-top: 0.2rem;
-  height: 100px;
+  height: 96px;
   width: 100%;
-  min-height: 64px;
+  flex: 0 0 auto;
 }
 .noc-chart-wrap.noc-chart-mini {
   height: 72px;
+  min-height: 72px;
+  max-height: 72px;
 }
 .noc-chart-meta {
   flex-shrink: 0;
@@ -1111,6 +1118,12 @@ html, body {
   .noc-hero-stat .hs-value { font-size: 2.25rem; }
   .noc-temp-tile .tt-val { font-size: 2rem; }
   .noc-zone .zn-kw { font-size: 2rem; }
+  .noc-chart-wrap.noc-chart-hero,
+  .noc-chart-wrap.noc-chart-side {
+    height: 100px;
+    min-height: 100px;
+    max-height: 100px;
+  }
 }
 
 /* Slightly larger / 1440p-ish: keep similar balance */
