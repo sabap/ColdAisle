@@ -9,6 +9,10 @@
   var pollMs = Math.max(5000, Number(cfg.pollMs) || 20000);
   var panelRotateMs = Math.max(5000, Number(cfg.panelRotateMs) || 20000);
   var sceneReloadMs = Math.max(60000, Number(cfg.sceneReloadMs) || 300000);
+  /** If no successful poll within 2× expected interval, mark the live dot red (TV lockup cue). */
+  var staleAfterMs = Math.max(pollMs * 2, 60000);
+  var lastPollSuccessAt = 0;
+  var statusMode = 'wait'; // ok | wait | err
   var nocShowLabels = cfg.showLabels !== false;
   var nocShowRaceways = cfg.showRaceways !== false;
   var nocAutoRotate = cfg.autoRotate !== false;
@@ -62,13 +66,59 @@
     });
   }
 
+  /**
+   * Footer live indicator. Label is "Live" when connected; dot color carries state:
+   * green = fresh data, amber = refreshing, red = failed or stale (no update).
+   */
   function setStatus(ok, msg) {
     var dot = $('nocDot');
     var st = $('nocStatus');
-    if (dot) {
-      dot.className = 'noc-status-dot ' + (ok === true ? '' : ok === false ? 'err' : 'wait');
+    if (ok === true) {
+      statusMode = 'ok';
+      lastPollSuccessAt = Date.now();
+    } else if (ok === false) {
+      statusMode = 'err';
+    } else {
+      statusMode = 'wait';
     }
-    if (st) st.textContent = msg || '';
+    if (dot) {
+      dot.className = 'noc-status-dot ' + (
+        statusMode === 'ok' ? '' : statusMode === 'err' ? 'err' : 'wait'
+      );
+      dot.title = statusMode === 'ok'
+        ? 'Receiving updates'
+        : statusMode === 'wait'
+          ? 'Updating…'
+          : 'No recent update — check this TV / network';
+    }
+    if (st) {
+      // Keep the wall label simple; never show panel-rotate intervals here
+      if (msg === 'Offline' || msg === 'Connecting…') {
+        st.textContent = msg;
+      } else if (statusMode === 'err' && lastPollSuccessAt > 0) {
+        st.textContent = 'Stale';
+      } else if (statusMode === 'err') {
+        st.textContent = msg || 'Offline';
+      } else {
+        st.textContent = 'Live';
+      }
+    }
+  }
+
+  function checkPollWatchdog() {
+    if (reloadingForUpdate || hidden) return;
+    if (!lastPollSuccessAt) return;
+    if (Date.now() - lastPollSuccessAt < staleAfterMs) return;
+    // Stuck / frozen wall: expected poll never completed
+    var dot = $('nocDot');
+    var st = $('nocStatus');
+    statusMode = 'err';
+    if (dot) {
+      dot.className = 'noc-status-dot err';
+      dot.title = 'No update for ' + Math.round(staleAfterMs / 1000) +
+        's+ (expected every ' + Math.round(pollMs / 1000) + 's)';
+    }
+    if (st) st.textContent = 'Stale';
   }
 
   function showError(msg) {
@@ -791,6 +841,8 @@
       var sec = Number(nocCfg.panel_rotate_sec);
       if (isFinite(sec) && sec >= 5) panelRotateMs = sec * 1000;
     }
+    // Keep stale watchdog at 2× data poll interval (not panel slide timer)
+    staleAfterMs = Math.max(pollMs * 2, 60000);
     if (nocCfg.cleared_alert_ttl_sec != null) {
       nocClearedTtlSec = Number(nocCfg.cleared_alert_ttl_sec);
     }
@@ -1039,7 +1091,7 @@
   function poll(forceScene) {
     if (hidden || reloadingForUpdate) return;
     var needScene = forceScene || !view3d || (Date.now() - sceneLoadedAt > sceneReloadMs);
-    setStatus(null, 'Refreshing…');
+    setStatus(null, 'Live'); // amber “updating” pulse; label stays Live
     fetch(apiUrl(needScene), {
       credentials: 'same-origin',
       headers: { Accept: 'application/json' },
@@ -1084,7 +1136,7 @@
           // Scene geometry kept; refresh alert tints every poll
           applyNocCabinetHealth(res.j.cabinet_health);
         }
-        setStatus(true, 'Live · every ' + Math.round(pollMs / 1000) + 's');
+        setStatus(true, 'Live');
       })
       .catch(function (err) {
         if (reloadingForUpdate) return;
@@ -1120,7 +1172,10 @@
   setClock();
   setInterval(setClock, 1000);
   showPanel('overview');
+  setStatus(null, 'Connecting…');
   poll(true);
   setInterval(function () { poll(false); }, pollMs);
+  // Watchdog: if polls stop (frozen TV / hung tab), turn the live dot red
+  setInterval(checkPollWatchdog, 5000);
   panelTimer = setInterval(nextPanel, panelRotateMs);
 })();
