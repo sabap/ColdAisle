@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.127] - 2026-08-12
+
+### Bug fixes
+
 - **Floor plan tips clipped:** raceway/place help moved to a fixed HUD (not canvas bottom-left, which pan cut off); clearer steps for **90° curved corners** (Alt+click interior vertex)
 
 ---
-
 ## [0.3.126] - 2026-08-12
 
 ### Enhancements
