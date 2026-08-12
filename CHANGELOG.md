@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **Raceway draw mode:** dim inventory + semi-opaque veil while drawing (equipment not selectable); finish dialog with pathway codes (RS / ORC / IRC), raceway type (Ladder / Fiber raceway / Conduit), OH vs underfloor feed; **curved corners** (fillet) via Alt+click / props; path_code + segment_class on pathways
-
 ### Bug fixes
 
 ---
 
+## [0.3.123] - 2026-08-12
+
+### Enhancements
+
+- **Raceway draw mode:** dim inventory + semi-opaque veil while drawing (equipment not selectable); finish dialog with pathway codes (RS / ORC / IRC), raceway type (Ladder / Fiber raceway / Conduit), OH vs underfloor feed; **curved corners** (fillet) via Alt+click / props; path_code + segment_class on pathways
+
+---
 ## [0.3.122] - 2026-08-12
 
 ### New features
