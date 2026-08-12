@@ -130,6 +130,78 @@ layout_header('Floor Planner', $user, 'floorplan');
     </div>
 </div>
 
+<!-- Raceway finish dialog (pathway code, type, OH/UF) -->
+<div class="modal-overlay modal-overlay-glass" id="racewayFinishModal" hidden>
+    <div class="modal-panel modal-panel-glass" role="dialog" aria-modal="true" aria-labelledby="rwFinishTitle" style="max-width:28rem">
+        <div class="modal-header">
+            <h2 id="rwFinishTitle">Finish raceway</h2>
+            <button type="button" class="modal-close" id="rwFinishCancel" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body form-grid" style="gap:.65rem">
+            <div class="form-row full">
+                <label for="rwSegClass">Segment class</label>
+                <select class="form-control" id="rwSegClass">
+                    <option value="rs">RS — row span (along row)</option>
+                    <option value="orc">ORC — outer row connector</option>
+                    <option value="irc">IRC — inner row connector</option>
+                    <option value="custom">Custom code</option>
+                </select>
+            </div>
+            <div class="form-row full" id="rwRowPairWrap">
+                <label for="rwRowPair" id="rwRowPairLabel">Row letter (A–Z)</label>
+                <input class="form-control" id="rwRowPair" value="A" placeholder="A or AB">
+            </div>
+            <div class="form-row full">
+                <label for="rwPathCode">Pathway code *</label>
+                <input class="form-control" id="rwPathCode" required placeholder="RS-A / ORC-AB.1">
+                <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">Unique in this room (TIA-606 style pathway ID).</p>
+            </div>
+            <div class="form-row">
+                <label for="rwPathKind">Raceway type *</label>
+                <select class="form-control" id="rwPathKind">
+                    <option value="ladder">Ladder tray</option>
+                    <option value="fiber_raceway" selected>Fiber raceway</option>
+                    <option value="conduit">Conduit</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label for="rwFeed">Cabinet feed *</label>
+                <select class="form-control" id="rwFeed">
+                    <option value="overhead">Overhead</option>
+                    <option value="underfloor">Underfloor (raised floor)</option>
+                    <option value="both">Both / mixed drops</option>
+                    <option value="horizontal">Horizontal only</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label for="rwMedia">Media class</label>
+                <select class="form-control" id="rwMedia">
+                    <option value="fiber" selected>Fiber</option>
+                    <option value="copper">Copper</option>
+                    <option value="mixed">Mixed</option>
+                    <option value="power">Power</option>
+                </select>
+            </div>
+            <div class="form-row full">
+                <label for="rwDisplayName">Display name (optional)</label>
+                <input class="form-control" id="rwDisplayName" placeholder="Defaults to pathway code">
+            </div>
+            <div class="form-row full">
+                <label for="rwNotes">Notes</label>
+                <input class="form-control" id="rwNotes" placeholder="Optional">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="rwFinishCancel2">Back to drawing</button>
+            <button type="button" class="btn btn-primary" id="rwFinishSave">Save raceway</button>
+        </div>
+    </div>
+</div>
+<style>
+  body.raceway-draw-mode .planner-palette { opacity: 0.35; pointer-events: none; }
+  body.raceway-draw-mode #planner-canvas { cursor: crosshair; }
+</style>
+
 <script>
   window.ColdAisle = window.ColdAisle || {};
   window.ColdAisle.lengthUnits = <?= json_encode($units) ?>;
@@ -137,5 +209,16 @@ layout_header('Floor Planner', $user, 'floorplan');
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=13"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=26"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=27"></script>
+<script>
+(function () {
+  var c2 = document.getElementById('rwFinishCancel2');
+  if (c2) {
+    c2.addEventListener('click', function () {
+      var m = document.getElementById('racewayFinishModal');
+      if (m) m.hidden = true;
+    });
+  }
+})();
+</script>
 <?php layout_footer(); ?>
