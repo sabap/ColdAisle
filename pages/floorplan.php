@@ -61,8 +61,11 @@ layout_header('Floor Planner', $user, 'floorplan');
         <button type="button" class="btn btn-secondary btn-sm" id="toggle3d">3D View</button>
         <button type="button" class="btn btn-secondary btn-sm" id="toggleRaceways" title="Show cable raceways / fiber troughs">Raceways: On</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnDrawRaceway" title="Click points on the floor; double-click or Finish to save">Draw raceway</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btnUndoRacewayPt" hidden title="Remove last vertex (Backspace)">Undo point</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btnClearRacewayPts" hidden title="Clear all draft vertices; stay in draw mode">Clear points</button>
         <button type="button" class="btn btn-primary btn-sm" id="btnFinishRaceway" hidden title="Save polyline">Finish path</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="btnCancelRaceway" hidden>Cancel</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnCancelRaceway" hidden title="Exit raceway draw mode">Exit draw</button>
+        <button type="button" class="btn btn-danger btn-sm" id="btnDeleteRaceway" hidden title="Delete selected saved raceway">Delete path</button>
         <span class="text-muted" style="font-size:.8rem;margin-left:auto">
             SHIFT+click multi-select · Arrows nudge · Drag floor to pan · Scroll zoom
         </span>
@@ -209,7 +212,7 @@ layout_header('Floor Planner', $user, 'floorplan');
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=13"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=27"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=28"></script>
 <script>
 (function () {
   var c2 = document.getElementById('rwFinishCancel2');
