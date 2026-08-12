@@ -1835,7 +1835,15 @@
     }
 
     var isDown = false, lastX = 0, lastY = 0;
-    var theta = Math.PI / 4, phi = Math.PI / 3.2, radius = 28;
+    // Orbit camera: theta=yaw, phi=tilt from vertical, radius=distance
+    var theta = Number(options.cameraTheta);
+    if (!isFinite(theta)) theta = Math.PI / 4;
+    var phi = Number(options.cameraPhi);
+    if (!isFinite(phi)) phi = Math.PI / 3.2;
+    phi = Math.max(0.15, Math.min(Math.PI / 2.1, phi));
+    var radius = Number(options.cameraRadius);
+    if (!isFinite(radius) || radius <= 0) radius = 28;
+    radius = Math.max(5, Math.min(80, radius));
     var target = new THREE.Vector3(fw / 2, 0.5, fd / 2);
 
     function updateCamera() {
@@ -1959,6 +1967,26 @@
       setAutoRotate: function (on) {
         autoRotate = !!on;
       },
+      /**
+       * Orbit camera: phi = tilt from vertical (rad), radius = distance (m).
+       * Optional theta = yaw. Values clamped to interactive ranges.
+       */
+      setCameraView: function (opts) {
+        opts = opts || {};
+        if (opts.theta != null && isFinite(Number(opts.theta))) {
+          theta = Number(opts.theta);
+        }
+        if (opts.phi != null && isFinite(Number(opts.phi))) {
+          phi = Math.max(0.15, Math.min(Math.PI / 2.1, Number(opts.phi)));
+        }
+        if (opts.radius != null && isFinite(Number(opts.radius))) {
+          radius = Math.max(5, Math.min(80, Number(opts.radius)));
+        }
+        updateCamera();
+      },
+      getCameraView: function () {
+        return { theta: theta, phi: phi, radius: radius };
+      },
       setObjectLabels: function (on) {
         showObjectLabels = !!on;
         scene.traverse(function (obj) {
@@ -2017,7 +2045,49 @@
     };
   }
 
-  global.ColdAisle3D = { mount: mount };
+  /**
+   * Map UI percents (0–100) ↔ orbit camera used by NOC / settings preview.
+   * tilt 0 = top-down, 100 = side-on. zoom 0 = far, 100 = close.
+   */
+  function cameraFromPercents(tiltPct, zoomPct) {
+    var t = Math.max(0, Math.min(100, Number(tiltPct)));
+    var z = Math.max(0, Math.min(100, Number(zoomPct)));
+    if (!isFinite(t)) t = 63;
+    if (!isFinite(z)) z = 72;
+    var phiMin = 0.18;
+    var phiMax = 1.45;
+    var rFar = 80;
+    var rNear = 8;
+    return {
+      phi: phiMin + (phiMax - phiMin) * (t / 100),
+      radius: rFar - (rFar - rNear) * (z / 100),
+      tiltPct: t,
+      zoomPct: z,
+    };
+  }
+
+  function percentsFromCamera(phi, radius) {
+    var phiMin = 0.18;
+    var phiMax = 1.45;
+    var rFar = 80;
+    var rNear = 8;
+    var p = Number(phi);
+    var r = Number(radius);
+    if (!isFinite(p)) p = Math.PI / 3.2;
+    if (!isFinite(r)) r = 28;
+    var tilt = ((p - phiMin) / (phiMax - phiMin)) * 100;
+    var zoom = ((rFar - r) / (rFar - rNear)) * 100;
+    return {
+      tiltPct: Math.round(Math.max(0, Math.min(100, tilt))),
+      zoomPct: Math.round(Math.max(0, Math.min(100, zoom))),
+    };
+  }
+
+  global.ColdAisle3D = {
+    mount: mount,
+    cameraFromPercents: cameraFromPercents,
+    percentsFromCamera: percentsFromCamera,
+  };
   // Legacy alias (WinDCIM)
   global.WinDCIM3D = global.ColdAisle3D;
 })(typeof window !== 'undefined' ? window : this);

@@ -37,15 +37,17 @@ if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
 $cssUrl = App::url('assets/css/noc.css') . '?v=9';
-$jsUrl = App::url('assets/js/noc.js') . '?v=14';
+$jsUrl = App::url('assets/js/noc.js') . '?v=15';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=18';
+$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=19';
 $org = '';
 $nocPanelSec = 20;
 $nocShowLabels = true;
 $nocShowRaceways = true;
 $nocAutoRotate = true;
 $nocClearedTtl = 120;
+$nocCamTiltPct = 63;
+$nocCamZoomPct = 72;
 try {
     $org = (string)SettingsService::get('org_name', '');
     $nocPanelSec = (int)SettingsService::get('noc_panel_rotate_sec', '20');
@@ -56,6 +58,8 @@ try {
     $nocShowRaceways = SettingsService::get('noc_show_raceways', '1') === '1';
     $nocAutoRotate = SettingsService::get('noc_auto_rotate', '1') === '1';
     $nocClearedTtl = (int)SettingsService::get('noc_cleared_alert_ttl_sec', '120');
+    $nocCamTiltPct = max(0, min(100, (int)SettingsService::get('noc_cam_tilt_pct', '63')));
+    $nocCamZoomPct = max(0, min(100, (int)SettingsService::get('noc_cam_zoom_pct', '72')));
 } catch (Throwable $e) {
 }
 $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
@@ -81,6 +85,8 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
       showRaceways: <?= $nocShowRaceways ? 'true' : 'false' ?>,
       autoRotate: <?= $nocAutoRotate ? 'true' : 'false' ?>,
       clearedAlertTtlSec: <?= (int)$nocClearedTtl ?>,
+      camTiltPct: <?= (int)$nocCamTiltPct ?>,
+      camZoomPct: <?= (int)$nocCamZoomPct ?>,
       threeUrl: <?= json_encode($threeUrl, JSON_UNESCAPED_SLASHES) ?>,
       dcim3dUrl: <?= json_encode($dcim3dUrl, JSON_UNESCAPED_SLASHES) ?>
     };

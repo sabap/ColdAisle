@@ -102,6 +102,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 $clearedTtl = 120;
             }
             SettingsService::set('noc_cleared_alert_ttl_sec', (string)$clearedTtl, 'noc');
+            $tiltPct = max(0, min(100, (int)($_POST['noc_cam_tilt_pct'] ?? 63)));
+            $zoomPct = max(0, min(100, (int)($_POST['noc_cam_zoom_pct'] ?? 72)));
+            SettingsService::set('noc_cam_tilt_pct', (string)$tiltPct, 'noc');
+            SettingsService::set('noc_cam_zoom_pct', (string)$zoomPct, 'noc');
             App::flash('success', $tok === ''
                 ? 'NOC wall settings saved (open access — no token).'
                 : 'NOC wall settings saved. Use the URL below on TVs.');
@@ -1060,6 +1064,75 @@ $nocClearedTtl = (int)SettingsService::get('noc_cleared_alert_ttl_sec', '120');
 if (!in_array($nocClearedTtl, [0, 30, 60, 120, 300, 600, 1800, -1], true)) {
     $nocClearedTtl = 120;
 }
+$nocCamTiltPct = max(0, min(100, (int)SettingsService::get('noc_cam_tilt_pct', '63')));
+$nocCamZoomPct = max(0, min(100, (int)SettingsService::get('noc_cam_zoom_pct', '72')));
+
+// Compact scene for live 3D camera preview on this page
+$nocPreviewScene = [
+    'cabinets' => [],
+    'pdus' => [],
+    'cooling' => [],
+    'ups' => [],
+    'rooms' => [],
+    'cable_paths' => [],
+];
+try {
+    $nocPreviewScene['rooms'] = Database::fetchAll(
+        'SELECT TOP 3 r.room_id, r.name, r.width_m, r.depth_m
+         FROM rooms r WHERE r.is_active = 1 ORDER BY r.name'
+    );
+    $nocPreviewScene['cabinets'] = Database::fetchAll(
+        'SELECT TOP 40 c.cabinet_id, c.name, c.pos_x, c.pos_y, c.pos_z, c.rotation_deg,
+                c.u_height, c.width_mm, c.depth_mm, c.color_hex,
+                r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth
+         FROM cabinets c
+         INNER JOIN rooms r ON r.room_id = c.room_id
+         WHERE c.is_active = 1 AND c.pos_x IS NOT NULL AND c.pos_y IS NOT NULL
+         ORDER BY c.name'
+    );
+    $nocPreviewScene['pdus'] = Database::fetchAll(
+        "SELECT TOP 20 p.pdu_id, p.name, p.pos_x, p.pos_y, p.pos_z, p.rotation_deg,
+                p.width_mm, p.depth_mm, p.height_mm, p.color_hex, p.pdu_scope,
+                r.width_m AS room_width, r.depth_m AS room_depth
+         FROM pdus p
+         LEFT JOIN rooms r ON r.room_id = p.room_id
+         WHERE p.is_active = 1 AND p.pdu_scope IN ('row', 'room')
+           AND p.pos_x IS NOT NULL AND p.pos_y IS NOT NULL
+         ORDER BY p.name"
+    );
+    try {
+        $nocPreviewScene['cooling'] = Database::fetchAll(
+            'SELECT TOP 12 u.cooling_unit_id, u.name, u.unit_type, u.pos_x, u.pos_y, u.pos_z,
+                    u.rotation_deg, u.width_mm, u.depth_mm, u.height_mm, u.color_hex, u.status
+             FROM cooling_units u
+             WHERE u.is_active = 1 AND u.pos_x IS NOT NULL AND u.pos_y IS NOT NULL
+             ORDER BY u.name'
+        );
+    } catch (Throwable $eC) {
+        $nocPreviewScene['cooling'] = [];
+    }
+    try {
+        if (class_exists('CablePlantService') && $nocShowRaceways) {
+            $paths = Database::fetchAll(
+                'SELECT TOP 15 path_id, room_id, name, path_code, path_kind, feed_to, width_m,
+                        elevation_m, color_hex, waypoints, is_active
+                 FROM cable_paths
+                 WHERE (is_active IS NULL OR is_active = 1)
+                 ORDER BY name'
+            );
+            foreach ($paths as &$cp) {
+                $cp['waypoints_list'] = CablePlantService::parseWaypoints($cp['waypoints'] ?? null);
+                unset($cp['waypoints']);
+            }
+            unset($cp);
+            $nocPreviewScene['cable_paths'] = $paths;
+        }
+    } catch (Throwable $eP) {
+        $nocPreviewScene['cable_paths'] = [];
+    }
+} catch (Throwable $e) {
+    // preview optional
+}
 ?>
 <div class="card" id="noc">
     <div class="card-header"><h2>NOC wall display</h2></div>
@@ -1107,10 +1180,65 @@ if (!in_array($nocClearedTtl, [0, 30, 60, 120, 300, 600, 1800, -1], true)) {
                 <span class="text-muted" style="font-size:.75rem;margin-left:1.6rem">Cable plant paths in the NOC 3D scene.</span>
             </div>
             <div class="form-row full"><label class="toggle-row" style="display:flex;align-items:center;gap:.55rem;cursor:pointer">
-                <input type="checkbox" name="noc_auto_rotate" value="1" <?= $nocAutoRotate ? 'checked' : '' ?>>
+                <input type="checkbox" name="noc_auto_rotate" value="1" <?= $nocAutoRotate ? 'checked' : '' ?> id="noc_auto_rotate">
                 <span>Auto-rotate 3D view</span>
             </label>
                 <span class="text-muted" style="font-size:.75rem;margin-left:1.6rem">Slow orbit of the floor model on the wall display.</span>
+            </div>
+
+            <div class="form-row full" style="margin-top:.85rem">
+                <strong style="font-size:.9rem">3D camera (tilt &amp; zoom)</strong>
+                <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 .5rem">
+                    Drag the sliders — the preview updates live. Save to apply on the NOC wall.
+                </p>
+                <div class="noc-cam-preview-layout">
+                    <div class="noc-cam-preview-pane">
+                        <div id="nocCamPreview" class="noc-cam-preview-stage"
+                             data-scene="<?= App::e(json_encode($nocPreviewScene, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>"
+                             data-labels="<?= $nocShowLabels ? '1' : '0' ?>"
+                             data-raceways="<?= $nocShowRaceways ? '1' : '0' ?>"
+                             data-tilt="<?= (int)$nocCamTiltPct ?>"
+                             data-zoom="<?= (int)$nocCamZoomPct ?>"></div>
+                        <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 0;text-align:center">Live preview</p>
+                    </div>
+                    <div class="noc-cam-sliders">
+                        <label for="noc_cam_tilt_pct">Tilt <output id="noc_cam_tilt_out" style="font-weight:700"><?= (int)$nocCamTiltPct ?></output></label>
+                        <input type="range" id="noc_cam_tilt_pct" name="noc_cam_tilt_pct" min="0" max="100" step="1"
+                               value="<?= (int)$nocCamTiltPct ?>" style="width:100%">
+                        <div class="text-muted" style="font-size:.7rem;display:flex;justify-content:space-between;margin:.1rem 0 .65rem">
+                            <span>Top-down</span><span>Side-on</span>
+                        </div>
+                        <label for="noc_cam_zoom_pct">Zoom <output id="noc_cam_zoom_out" style="font-weight:700"><?= (int)$nocCamZoomPct ?></output></label>
+                        <input type="range" id="noc_cam_zoom_pct" name="noc_cam_zoom_pct" min="0" max="100" step="1"
+                               value="<?= (int)$nocCamZoomPct ?>" style="width:100%">
+                        <div class="text-muted" style="font-size:.7rem;display:flex;justify-content:space-between;margin:.1rem 0 0">
+                            <span>Far</span><span>Close</span>
+                        </div>
+                    </div>
+                </div>
+                <style>
+                  .noc-cam-preview-layout {
+                    display: grid;
+                    grid-template-columns: minmax(200px, 280px) 1fr;
+                    gap: 1rem;
+                    align-items: start;
+                    max-width: 40rem;
+                  }
+                  @media (max-width: 640px) {
+                    .noc-cam-preview-layout { grid-template-columns: 1fr; }
+                  }
+                  .noc-cam-preview-stage {
+                    width: 100%;
+                    height: 200px;
+                    border-radius: 10px;
+                    border: 1px solid rgba(56, 189, 248, 0.28);
+                    background: #0a0f18;
+                    overflow: hidden;
+                    position: relative;
+                  }
+                  .noc-cam-preview-stage .dcim-3d-status { display: none !important; }
+                  .noc-cam-sliders label { display: block; font-size: .85rem; margin-bottom: .25rem; }
+                </style>
             </div>
 
             <div class="form-row full" style="margin-top:.75rem">
@@ -1219,6 +1347,83 @@ if (!in_array($nocClearedTtl, [0, 30, 60, 120, 300, 600, 1800, -1], true)) {
         </form>
     </div>
 </div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=19"></script>
+<script>
+(function () {
+  var el = document.getElementById('nocCamPreview');
+  var tiltEl = document.getElementById('noc_cam_tilt_pct');
+  var zoomEl = document.getElementById('noc_cam_zoom_pct');
+  var tiltOut = document.getElementById('noc_cam_tilt_out');
+  var zoomOut = document.getElementById('noc_cam_zoom_out');
+  var rotEl = document.getElementById('noc_auto_rotate');
+  if (!el || !window.THREE || !window.ColdAisle3D) return;
+
+  var scene = {};
+  try { scene = JSON.parse(el.getAttribute('data-scene') || '{}'); } catch (e) { scene = {}; }
+  var labelsOn = el.getAttribute('data-labels') === '1';
+  var racewaysOn = el.getAttribute('data-raceways') === '1';
+  var tilt = parseInt(el.getAttribute('data-tilt') || '63', 10);
+  var zoom = parseInt(el.getAttribute('data-zoom') || '72', 10);
+  if (isNaN(tilt)) tilt = 63;
+  if (isNaN(zoom)) zoom = 72;
+
+  function cam() {
+    if (ColdAisle3D.cameraFromPercents) {
+      return ColdAisle3D.cameraFromPercents(tilt, zoom);
+    }
+    return { phi: Math.PI / 3.2, radius: 28 };
+  }
+
+  var c = cam();
+  var view = null;
+  try {
+    view = ColdAisle3D.mount(el, {
+      cabinets: scene.cabinets || [],
+      pdus: scene.pdus || [],
+      cooling: scene.cooling || [],
+      ups: scene.ups || [],
+      rooms: scene.rooms || [],
+      cablePaths: racewaysOn ? (scene.cable_paths || []) : [],
+      showRaceways: racewaysOn,
+      showObjectLabels: labelsOn,
+      envSensors: [],
+      heatOverlay: false,
+      interactive: false,
+      autoRotate: !!(rotEl && rotEl.checked),
+      autoRotateSpeed: 0.0035,
+      textureFaces: 'none',
+      cameraPhi: c.phi,
+      cameraRadius: c.radius,
+    });
+  } catch (err) {
+    el.innerHTML = '<div style="padding:1rem;color:#94a3b8;font-size:.8rem">Preview unavailable</div>';
+    return;
+  }
+
+  function applySliders() {
+    tilt = parseInt(tiltEl && tiltEl.value, 10);
+    zoom = parseInt(zoomEl && zoomEl.value, 10);
+    if (isNaN(tilt)) tilt = 63;
+    if (isNaN(zoom)) zoom = 72;
+    if (tiltOut) tiltOut.textContent = String(tilt);
+    if (zoomOut) zoomOut.textContent = String(zoom);
+    var v = cam();
+    if (view && typeof view.setCameraView === 'function') {
+      view.setCameraView({ phi: v.phi, radius: v.radius });
+    }
+  }
+  if (tiltEl) tiltEl.addEventListener('input', applySliders);
+  if (zoomEl) zoomEl.addEventListener('input', applySliders);
+  if (rotEl && view && typeof view.setAutoRotate === 'function') {
+    rotEl.addEventListener('change', function () {
+      view.setAutoRotate(!!rotEl.checked);
+    });
+  }
+  // Match stage size after layout
+  try { window.dispatchEvent(new Event('resize')); } catch (e2) {}
+})();
+</script>
 
 <?php if (AuthManager::isAdmin($user)):
     if (is_file(dirname(__DIR__) . '/src/Services/IcmpMonitorService.php')) {
