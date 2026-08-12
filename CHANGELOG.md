@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Merge intersecting raceways:** when two path endpoints meet (~0.35 m, ~90°), green rings appear — **Merge nearby endpoint** (or confirm after dragging an end close); junction becomes one corner; drag yellow diamond for a symmetric smooth bend
+
 ### Enhancements
 
 ### Bug fixes

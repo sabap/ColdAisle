@@ -310,7 +310,8 @@ class CablePlantService
             if (!$isEnd && ($corner === 'fillet' || $corner === 'curve' || $corner === 'curved')) {
                 $row['corner'] = 'fillet';
                 $r = isset($pt['radius_m']) ? (float)$pt['radius_m'] : self::DEFAULT_FILLET_RADIUS_M;
-                $row['radius_m'] = max(0.15, min(1.5, $r > 0 ? $r : self::DEFAULT_FILLET_RADIUS_M));
+                // Allow small radii (symmetric pull); hard-stop sharp is corner=sharp
+                $row['radius_m'] = max(0.05, min(1.5, $r > 0 ? $r : self::DEFAULT_FILLET_RADIUS_M));
             }
             $clean[] = $row;
         }
@@ -499,6 +500,228 @@ class CablePlantService
                 return ['ok' => false, 'path_id' => 0, 'message' => $e2->getMessage()];
             }
         }
+    }
+
+    public const MERGE_ENDPOINT_SNAP_M = 0.35;
+    public const MERGE_ANGLE_TOL_DEG = 40.0; // how close to 90° for a “corner” merge
+
+    /**
+     * Merge two raceways at endpoints into one continuous path (junction becomes an interior corner).
+     * Cables on the absorbed path are reassigned to the kept path.
+     *
+     * @param int $pathIdKeep Path that remains (geometry replaced by merged polyline)
+     * @param int $endKeep 0 = start of keep, 1 = end of keep
+     * @param int $pathIdOther Path that will be deleted after merge
+     * @param int $endOther 0 = start of other, 1 = end of other
+     * @return array{ok:bool,message:string,path_id:int,junction_index:int}
+     */
+    public static function mergePathsAtEndpoints(
+        int $pathIdKeep,
+        int $endKeep,
+        int $pathIdOther,
+        int $endOther
+    ): array {
+        if ($pathIdKeep < 1 || $pathIdOther < 1 || $pathIdKeep === $pathIdOther) {
+            return ['ok' => false, 'message' => 'Select two different raceways.', 'path_id' => 0, 'junction_index' => -1];
+        }
+        $endKeep = $endKeep ? 1 : 0;
+        $endOther = $endOther ? 1 : 0;
+
+        try {
+            $keep = Database::fetchOne('SELECT * FROM cable_paths WHERE path_id = ?', [$pathIdKeep]);
+            $other = Database::fetchOne('SELECT * FROM cable_paths WHERE path_id = ?', [$pathIdOther]);
+        } catch (Throwable $e) {
+            return ['ok' => false, 'message' => $e->getMessage(), 'path_id' => 0, 'junction_index' => -1];
+        }
+        if (!$keep || !$other) {
+            return ['ok' => false, 'message' => 'Path not found.', 'path_id' => 0, 'junction_index' => -1];
+        }
+        if ((int)($keep['room_id'] ?? 0) !== (int)($other['room_id'] ?? 0)) {
+            return ['ok' => false, 'message' => 'Both raceways must be in the same room.', 'path_id' => 0, 'junction_index' => -1];
+        }
+
+        $a = self::parseWaypoints($keep['waypoints'] ?? null);
+        $b = self::parseWaypoints($other['waypoints'] ?? null);
+        if (count($a) < 2 || count($b) < 2) {
+            return ['ok' => false, 'message' => 'Each raceway needs at least two points.', 'path_id' => 0, 'junction_index' => -1];
+        }
+
+        // Orient so we always append other after keep: keep ends at junction, other starts at junction
+        if ($endKeep === 0) {
+            $a = array_reverse($a);
+        }
+        if ($endOther === 1) {
+            $b = array_reverse($b);
+        }
+
+        $ja = $a[count($a) - 1];
+        $jb = $b[0];
+        $dist = hypot((float)$ja['x'] - (float)$jb['x'], (float)$ja['y'] - (float)$jb['y']);
+        if ($dist > self::MERGE_ENDPOINT_SNAP_M * 2.5) {
+            return [
+                'ok' => false,
+                'message' => 'Endpoints are too far apart to merge (move them closer first).',
+                'path_id' => 0,
+                'junction_index' => -1,
+            ];
+        }
+
+        // Inbound direction at keep end and outbound at other start → angle at junction
+        $prev = $a[count($a) - 2];
+        $next = $b[1];
+        $v1x = (float)$prev['x'] - (float)$ja['x'];
+        $v1y = (float)$prev['y'] - (float)$ja['y'];
+        $v2x = (float)$next['x'] - (float)$jb['x'];
+        $v2y = (float)$next['y'] - (float)$jb['y'];
+        $l1 = hypot($v1x, $v1y);
+        $l2 = hypot($v2x, $v2y);
+        if ($l1 < 1e-4 || $l2 < 1e-4) {
+            return ['ok' => false, 'message' => 'Invalid geometry near endpoints.', 'path_id' => 0, 'junction_index' => -1];
+        }
+        $dot = max(-1.0, min(1.0, ($v1x * $v2x + $v1y * $v2y) / ($l1 * $l2)));
+        $angleDeg = acos($dot) * (180.0 / M_PI);
+        // Angle between directions from junction back along keep and out along other
+        // For L-shape we want ~90° between the two legs
+        if ($angleDeg < 90.0 - self::MERGE_ANGLE_TOL_DEG || $angleDeg > 90.0 + self::MERGE_ANGLE_TOL_DEG) {
+            // Still allow merge but warn via message; many installs want join even if not exact 90
+            // Strict-ish: allow 50–130°
+            if ($angleDeg < 50.0 || $angleDeg > 130.0) {
+                return [
+                    'ok' => false,
+                    'message' => 'Endpoints meet at ~' . round($angleDeg) . '° — need roughly 90° for a corner merge.',
+                    'path_id' => 0,
+                    'junction_index' => -1,
+                ];
+            }
+        }
+
+        // Junction point: midpoint (symmetric), sharp until user pulls curve
+        $jx = ((float)$ja['x'] + (float)$jb['x']) / 2.0;
+        $jy = ((float)$ja['y'] + (float)$jb['y']) / 2.0;
+        $junction = ['x' => $jx, 'y' => $jy, 'corner' => 'sharp'];
+
+        $merged = [];
+        for ($i = 0, $n = count($a) - 1; $i < $n; $i++) {
+            $merged[] = $a[$i];
+        }
+        $junctionIndex = count($merged);
+        $merged[] = $junction;
+        for ($i = 1, $n = count($b); $i < $n; $i++) {
+            $merged[] = $b[$i];
+        }
+
+        $fields = [
+            'waypoints' => self::encodeWaypoints($merged),
+            // Prefer keep identity; note merge in notes lightly if empty
+        ];
+        try {
+            Database::update('cable_paths', $fields, 'path_id = :id', [':id' => $pathIdKeep]);
+            // Reassign cables from other → keep
+            Database::query('UPDATE cables SET path_id = ? WHERE path_id = ?', [$pathIdKeep, $pathIdOther]);
+            Database::delete('cable_paths', 'path_id = ?', [$pathIdOther]);
+        } catch (Throwable $e) {
+            return ['ok' => false, 'message' => $e->getMessage(), 'path_id' => 0, 'junction_index' => -1];
+        }
+
+        $codeKeep = trim((string)($keep['path_code'] ?? $keep['name'] ?? ''));
+        $codeOther = trim((string)($other['path_code'] ?? $other['name'] ?? ''));
+        return [
+            'ok' => true,
+            'message' => 'Merged ' . ($codeOther !== '' ? $codeOther : '#' . $pathIdOther)
+                . ' into ' . ($codeKeep !== '' ? $codeKeep : '#' . $pathIdKeep)
+                . '. Drag the yellow diamond into the junction for a smooth 90° bend.',
+            'path_id' => $pathIdKeep,
+            'junction_index' => $junctionIndex,
+        ];
+    }
+
+    /**
+     * Find other-path endpoint within snap of a given path endpoint.
+     *
+     * @return array{path_id:int,end:int,distance:float,angle_deg:float}|null
+     */
+    public static function findMergeCandidate(int $pathId, int $end): ?array
+    {
+        $end = $end ? 1 : 0;
+        try {
+            $self = Database::fetchOne('SELECT * FROM cable_paths WHERE path_id = ?', [$pathId]);
+        } catch (Throwable $e) {
+            return null;
+        }
+        if (!$self) {
+            return null;
+        }
+        $roomId = (int)($self['room_id'] ?? 0);
+        $pts = self::parseWaypoints($self['waypoints'] ?? null);
+        if (count($pts) < 2 || $roomId < 1) {
+            return null;
+        }
+        $ep = $end === 0 ? $pts[0] : $pts[count($pts) - 1];
+        $prev = $end === 0 ? $pts[1] : $pts[count($pts) - 2];
+        $vx = (float)$prev['x'] - (float)$ep['x'];
+        $vy = (float)$prev['y'] - (float)$ep['y'];
+        $vl = hypot($vx, $vy);
+        if ($vl < 1e-4) {
+            return null;
+        }
+        $vx /= $vl;
+        $vy /= $vl;
+
+        try {
+            $others = Database::fetchAll(
+                'SELECT * FROM cable_paths WHERE room_id = ? AND path_id <> ? AND (is_active IS NULL OR is_active = 1)',
+                [$roomId, $pathId]
+            );
+        } catch (Throwable $e) {
+            try {
+                $others = Database::fetchAll(
+                    'SELECT * FROM cable_paths WHERE room_id = ? AND path_id <> ?',
+                    [$roomId, $pathId]
+                );
+            } catch (Throwable $e2) {
+                return null;
+            }
+        }
+
+        $best = null;
+        $bestD = self::MERGE_ENDPOINT_SNAP_M;
+        foreach ($others as $o) {
+            $opts = self::parseWaypoints($o['waypoints'] ?? null);
+            if (count($opts) < 2) {
+                continue;
+            }
+            foreach ([0, 1] as $oe) {
+                $op = $oe === 0 ? $opts[0] : $opts[count($opts) - 1];
+                $on = $oe === 0 ? $opts[1] : $opts[count($opts) - 2];
+                $d = hypot((float)$ep['x'] - (float)$op['x'], (float)$ep['y'] - (float)$op['y']);
+                if ($d > $bestD) {
+                    continue;
+                }
+                $wx = (float)$on['x'] - (float)$op['x'];
+                $wy = (float)$on['y'] - (float)$op['y'];
+                $wl = hypot($wx, $wy);
+                if ($wl < 1e-4) {
+                    continue;
+                }
+                $wx /= $wl;
+                $wy /= $wl;
+                // Directions from each endpoint along its path; for L-join, angle between -vx and wx ~ 90
+                // From junction: along keep is toward prev = (prev-ep) already as v; along other is wx,wy
+                $dot = max(-1.0, min(1.0, $vx * $wx + $vy * $wy));
+                $angle = acos($dot) * (180.0 / M_PI);
+                if ($angle < 50.0 || $angle > 130.0) {
+                    continue;
+                }
+                $bestD = $d;
+                $best = [
+                    'path_id' => (int)$o['path_id'],
+                    'end' => $oe,
+                    'distance' => $d,
+                    'angle_deg' => $angle,
+                ];
+            }
+        }
+        return $best;
     }
 
     /**
