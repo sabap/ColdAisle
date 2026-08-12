@@ -390,22 +390,35 @@
     return String(feed || 'overhead') === 'underfloor' ? -0.30 : 2.70;
   }
 
+  /** Typical U-channel bracket height above ladder (~10 in). */
+  var U_CHANNEL_DEFAULT_OFFSET_M = 0.254;
+
   /**
    * Path height AFF (meters) for 3D. Never treat null/'' as 0 (Number(null)===0 would
    * pin raceways to the floor and hide real elevation differences).
+   * Fiber U-channel without a saved elev defaults to overhead + 10 in (bracket mount).
    */
   function resolvePathElevationM(path) {
     path = path || {};
+    var kind = String(path.path_kind || path.path_type || 'ladder').toLowerCase();
+    if (kind === 'fiber_trough') kind = 'fiber_raceway';
+    if (kind === 'u_channel' || kind === 'uchannel') kind = 'fiber_u_channel';
+    var feed = path.feed_to || path.path_type || 'overhead';
+    var base = racewayDefaultElev(feed);
     var raw = path.elevation_m;
     if (raw === undefined || raw === null || raw === '') {
       raw = path.elev_m;
     }
     if (raw === undefined || raw === null || raw === '') {
-      return racewayDefaultElev(path.feed_to || path.path_type || 'overhead');
+      // U-channel sits on ladder brackets when elev was never stored
+      if (kind === 'fiber_u_channel') {
+        return base + U_CHANNEL_DEFAULT_OFFSET_M;
+      }
+      return base;
     }
     var elev = typeof raw === 'number' ? raw : parseFloat(String(raw).replace(',', '.').trim());
     if (!isFinite(elev)) {
-      return racewayDefaultElev(path.feed_to || path.path_type || 'overhead');
+      return kind === 'fiber_u_channel' ? base + U_CHANNEL_DEFAULT_OFFSET_M : base;
     }
     // Clamp to same range as CablePlantService
     if (elev < -2) elev = -2;
@@ -538,10 +551,21 @@
     if (upNudge) mid.y += upNudge;
     var geo = new THREE.BoxGeometry(len, height, width);
     var mesh = new THREE.Mesh(geo, racewayPieceMaterial(mat));
-    // Align local +X with dir
-    var quat = new THREE.Quaternion();
-    quat.setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir);
-    mesh.quaternion.copy(quat);
+    // Local +X along run, local +Y = world up (height), local +Z = lateral width.
+    // setFromUnitVectors alone does not preserve world-up for arbitrary headings.
+    var up = new THREE.Vector3(0, 1, 0);
+    if (Math.abs(dir.dot(up)) > 0.92) {
+      up.set(0, 0, 1); // nearly vertical segment
+    }
+    var zAxis = new THREE.Vector3().crossVectors(dir, up);
+    if (zAxis.lengthSq() < 1e-10) {
+      zAxis.set(0, 0, 1);
+    } else {
+      zAxis.normalize();
+    }
+    var yAxis = new THREE.Vector3().crossVectors(zAxis, dir).normalize();
+    var basis = new THREE.Matrix4().makeBasis(dir, yAxis, zAxis);
+    mesh.setRotationFromMatrix(basis);
     mesh.position.copy(mid);
     mesh.userData.racewayFade = true;
     group.add(mesh);
@@ -732,10 +756,11 @@
     var feed = String(path.feed_to || path.path_type || 'overhead').toLowerCase();
     var width = Number(path.width_m);
     if (!isFinite(width) || width <= 0) width = racewayDefaultWidth(kind);
-    // Always use path.elevation_m (m AFF) — ladder vs U-channel differ by this value
+    // Elevation = group.position.y. Geometry is built on the ground plane (Y=0)
+    // so AFF height cannot be lost inside mesh orientation math.
     var elev = resolvePathElevationM(path);
     var plan = sampleRacewayPlan(pts);
-    var centerline = planToScene3d(plan, elev, null);
+    var centerline = planToScene3d(plan, 0, null);
     if (centerline.length < 2) return null;
 
     var hex = path.color_hex || (kind === 'fiber_u_channel' || kind === 'fiber_raceway' ? '#eab308' : '#2563eb');
@@ -749,6 +774,7 @@
       opacity: 1,
     });
     var group = new THREE.Group();
+    group.position.y = elev;
     group.userData = {
       cablePath: path,
       kind: kind,
@@ -782,6 +808,41 @@
       line.userData.racewayFade = true;
       group.add(line);
     } catch (e) { /* ignore */ }
+
+    // Floating elev tag (path code + meters AFF) — proves height is applied
+    try {
+      var mid = centerline[Math.floor(centerline.length / 2)];
+      if (mid) {
+        var code = String(path.path_code || path.name || kind).slice(0, 18);
+        var tag = code + ' · ' + elev.toFixed(2) + 'm';
+        var c = document.createElement('canvas');
+        c.width = 256;
+        c.height = 48;
+        var cx = c.getContext('2d');
+        cx.fillStyle = 'rgba(15,23,42,0.82)';
+        cx.fillRect(0, 0, 256, 48);
+        cx.strokeStyle = hex;
+        cx.lineWidth = 3;
+        cx.strokeRect(1, 1, 254, 46);
+        cx.fillStyle = '#f8fafc';
+        cx.font = 'bold 18px Segoe UI,sans-serif';
+        cx.textAlign = 'center';
+        cx.textBaseline = 'middle';
+        cx.fillText(tag, 128, 24);
+        var tex = new THREE.CanvasTexture(c);
+        var sm = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+        var spr = new THREE.Sprite(sm);
+        spr.scale.set(1.6, 0.3, 1);
+        spr.position.set(mid.x, 0.18, mid.z);
+        spr.renderOrder = 12;
+        spr.userData.racewayFade = true;
+        if (sm.userData) {
+          sm.userData.racewayFade = true;
+          sm.userData.fadeBaseOpacity = 1;
+        }
+        group.add(spr);
+      }
+    } catch (eLab) { /* ignore */ }
 
     return group;
   }

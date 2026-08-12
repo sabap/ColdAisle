@@ -592,6 +592,26 @@ try {
         App::json(['path' => $row, 'message' => $res['message']], $pathId > 0 ? 200 : 201);
     }
 
+    // Re-apply U-channel elevations = matching ladder + offset (~10 in)
+    if ($method === 'POST' && (($_GET['action'] ?? '') === 'reapply_uchannel_elev')) {
+        api_require_permission('edit_infrastructure');
+        api_require_csrf();
+        if (!class_exists('CablePlantService')) {
+            App::json(['error' => 'CablePlantService unavailable'], 500);
+        }
+        $data = api_read_json();
+        $roomId = (int)($data['room_id'] ?? $_GET['room_id'] ?? 0);
+        $offset = isset($data['elevation_offset_m']) && $data['elevation_offset_m'] !== '' && $data['elevation_offset_m'] !== null
+            ? (float)$data['elevation_offset_m']
+            : CablePlantService::DEFAULT_U_CHANNEL_ELEV_OFFSET_M;
+        $res = CablePlantService::reapplyUChannelElevations($roomId, $offset);
+        if (empty($res['ok'])) {
+            App::json(['error' => $res['message'] ?? 'No updates'], 400);
+        }
+        $paths = CablePlantService::pathsForRoom($roomId, true);
+        App::json(['ok' => true, 'message' => $res['message'], 'updated' => $res['updated'], 'cable_paths' => $paths]);
+    }
+
     // Clone raceway (same plan geometry / fillets; new kind + elevation offset)
     if ($method === 'POST' && (($_GET['action'] ?? '') === 'clone_cable_path')) {
         api_require_permission('edit_infrastructure');
