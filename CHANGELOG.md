@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **NOC no-scroll TV panels:** rotating panes fill the viewport without scrollbars; top-N caps for PDUs/UPS/zones/sensors; mix of large heroes, charts, rank bars, and temp tiles for readability at distance
+
 ### Bug fixes
 
 ---

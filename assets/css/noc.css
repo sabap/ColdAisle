@@ -194,13 +194,15 @@ html, body {
 .noc-panel {
   position: absolute;
   inset: 0;
-  padding: 0.7rem 0.85rem;
-  overflow: auto;
+  padding: 0.65rem 0.85rem 0.55rem;
+  overflow: hidden; /* TVs cannot scroll */
   opacity: 0;
   visibility: hidden;
   transform: translateY(6px);
   transition: opacity .45s ease, transform .45s ease, visibility .45s;
   pointer-events: none;
+  display: flex;
+  flex-direction: column;
 }
 .noc-panel.active {
   opacity: 1;
@@ -208,9 +210,369 @@ html, body {
   transform: translateY(0);
   pointer-events: auto;
 }
+
+/* Fixed fill layout for each rotating panel — no expansion with inventory growth */
+.noc-panel-frame {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  overflow: hidden;
+}
+.noc-frame-empty {
+  align-items: center;
+  justify-content: center;
+}
+.noc-hero-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
+  flex: 0 0 auto;
+}
+.noc-hero-row.noc-hero-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.noc-hero-stat {
+  background: linear-gradient(160deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98));
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  padding: 0.75rem 0.9rem;
+  min-height: 5.5rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.noc-hero-stat .hs-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #94a3b8;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.noc-hero-stat .hs-value {
+  font-size: 2.15rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.05;
+  color: #f1f5f9;
+}
+.noc-hero-stat .hs-value .unit {
+  font-size: 1rem;
+  font-weight: 500;
+  color: #94a3b8;
+  margin-left: 0.15rem;
+}
+.noc-hero-stat .hs-hint {
+  margin-top: 0.3rem;
+  font-size: 0.8rem;
+  color: #64748b;
+  line-height: 1.25;
+}
+.noc-hero-stat.accent .hs-value { color: #38bdf8; }
+.noc-hero-stat.ok .hs-value { color: #34d399; }
+.noc-hero-stat.warn .hs-value { color: #fbbf24; }
+.noc-hero-stat.crit .hs-value { color: #f87171; }
+
+.noc-viz-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+  flex: 1 1 42%;
+  min-height: 0;
+}
+.noc-viz-row.noc-viz-single {
+  grid-template-columns: 1.35fr 0.85fr;
+}
+.noc-viz-panel {
+  background: linear-gradient(160deg, rgba(22, 32, 48, 0.95), rgba(12, 18, 30, 0.98));
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 12px;
+  padding: 0.55rem 0.75rem 0.5rem;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.noc-viz-title,
+.noc-section-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #94a3b8;
+  font-weight: 650;
+  margin-bottom: 0.25rem;
+  flex-shrink: 0;
+}
+.noc-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-shrink: 0;
+}
+.noc-section-count {
+  font-size: 0.75rem;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+.noc-chart-wrap.noc-chart-hero {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+.noc-chart-wrap.noc-chart-side {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+.noc-foot-strip {
+  flex: 0 0 auto;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 10px;
+  padding: 0.45rem 0.65rem 0.5rem;
+  min-height: 0;
+  overflow: hidden;
+}
+.noc-foot-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #64748b;
+  font-weight: 650;
+  margin-bottom: 0.3rem;
+}
+
+.noc-split-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+  flex: 1 1 38%;
+  min-height: 0;
+  overflow: hidden;
+}
+.noc-split-row.noc-split-cool {
+  flex: 1 1 auto;
+}
+.noc-split-pane {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
+  padding: 0.5rem 0.65rem 0.45rem;
+  display: flex;
+  flex-direction: column;
+}
+.noc-split-pane.noc-split-wide {
+  /* used when parent grid weights left heavier */
+}
+
+/* Horizontal rank bars (top PDUs) — readable, not a dense list */
+.noc-rank-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  justify-content: space-evenly;
+}
+.noc-rank-row {
+  display: flex;
+  gap: 0.45rem;
+  align-items: flex-start;
+  min-height: 0;
+}
+.noc-rank-row .rr-idx {
+  flex: 0 0 1.25rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+  padding-top: 0.1rem;
+}
+.noc-rank-row .rr-body { flex: 1; min-width: 0; }
+.noc-rank-row .rr-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+.noc-rank-row .rr-name {
+  font-size: 0.9rem;
+  font-weight: 650;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.noc-rank-row .rr-val {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #38bdf8;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.noc-rank-row .rr-sub {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin: 0.05rem 0 0.15rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.noc-rank-row .rr-track {
+  height: 8px;
+  background: rgba(51, 65, 85, 0.85);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.noc-rank-row .rr-track > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #22d3ee, #38bdf8);
+}
+.noc-rank-row.hot .rr-track > i {
+  background: linear-gradient(90deg, #fbbf24, #f87171);
+}
+.noc-rank-row.hot .rr-val { color: #fbbf24; }
+
+/* UPS / unit pills — variety vs pure number cards */
+.noc-pill-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-content: start;
+  overflow: hidden;
+}
+.noc-pill-grid.noc-pill-stack {
+  grid-template-columns: 1fr;
+}
+.noc-pill {
+  background: rgba(8, 14, 24, 0.75);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 10px;
+  padding: 0.45rem 0.55rem;
+  min-height: 0;
+  overflow: hidden;
+}
+.noc-pill.ok { border-color: rgba(52, 211, 153, 0.35); }
+.noc-pill.warn { border-color: rgba(251, 191, 36, 0.4); }
+.noc-pill.crit { border-color: rgba(248, 113, 113, 0.45); }
+.noc-pill .np-name {
+  font-size: 0.85rem;
+  font-weight: 650;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.noc-pill .np-val {
+  font-size: 1.35rem;
+  font-weight: 750;
+  color: #a78bfa;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  margin: 0.1rem 0;
+}
+.noc-pill .np-val.small {
+  font-size: 1rem;
+  color: #94a3b8;
+}
+.noc-pill .np-meta {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-bottom: 0.2rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Temperature tiles for cooling panel */
+.noc-temp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.45rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-content: start;
+  overflow: hidden;
+}
+.noc-temp-tile {
+  background: radial-gradient(120% 120% at 20% 0%, rgba(56, 189, 248, 0.12), rgba(8, 14, 24, 0.9));
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  padding: 0.55rem 0.65rem;
+  text-align: center;
+  min-height: 5.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+}
+.noc-temp-tile.warn {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: radial-gradient(120% 120% at 20% 0%, rgba(251, 191, 36, 0.15), rgba(8, 14, 24, 0.9));
+}
+.noc-temp-tile.crit {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: radial-gradient(120% 120% at 20% 0%, rgba(248, 113, 113, 0.16), rgba(8, 14, 24, 0.9));
+}
+.noc-temp-tile.ok {
+  border-color: rgba(52, 211, 153, 0.35);
+}
+.noc-temp-tile .tt-name {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-weight: 600;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.noc-temp-tile .tt-val {
+  font-size: 1.85rem;
+  font-weight: 750;
+  color: #f1f5f9;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.05;
+}
+.noc-temp-tile .tt-val .unit {
+  font-size: 0.9rem;
+  color: #94a3b8;
+  font-weight: 500;
+  margin-left: 0.1rem;
+}
+.noc-temp-tile .tt-rh {
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.noc-more {
+  flex-shrink: 0;
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  color: #64748b;
+  text-align: right;
+  font-weight: 600;
+}
+.noc-empty-inline {
+  color: #64748b;
+  font-size: 0.9rem;
+  padding: 0.75rem 0.25rem;
+}
+
+/* legacy card helpers (if any remain) */
 .noc-metrics {
   display: grid;
-  /* ~4–6 cards across on 1080p right pane (~1100px) */
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 0.6rem;
   align-content: start;
@@ -234,7 +596,6 @@ html, body {
   margin-bottom: 0.25rem;
 }
 .noc-card .value {
-  /* Readable from typical TV viewing distance on 1080p */
   font-size: clamp(1.45rem, 1.85vw, 2.1rem);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -274,14 +635,18 @@ html, body {
   background: linear-gradient(90deg, #fbbf24, #f87171);
 }
 
-/* Sparkline chart — shorter on 1080p so more metrics fit without scroll */
+/* Sparkline chart */
 .noc-chart-wrap {
-  margin-top: 0.3rem;
-  height: 110px;
+  margin-top: 0.2rem;
+  height: 100px;
   width: 100%;
+  min-height: 64px;
 }
 .noc-chart-wrap.noc-chart-mini {
   height: 72px;
+}
+.noc-chart-meta {
+  flex-shrink: 0;
 }
 .noc-chart-wrap svg {
   width: 100%;
@@ -322,19 +687,23 @@ html, body {
 /* Zone strip on overview */
 .noc-zone-strip {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 0.45rem;
+  flex-wrap: nowrap;
+  gap: 0.4rem;
+  margin-top: 0.15rem;
+  overflow: hidden;
 }
 .noc-zone-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.65rem;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
   background: rgba(15, 23, 42, 0.85);
   border: 1px solid rgba(148, 163, 184, 0.15);
   border-radius: 999px;
-  font-size: 0.82rem;
+  font-size: 0.8rem;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 .noc-zone-chip .dot {
   width: 0.55rem;
@@ -355,34 +724,52 @@ html, body {
 }
 .noc-zone-chip.hot .ut { color: #fbbf24; }
 
-/* Zone cards */
+/* Zone cards — fixed grid, top N only (no scroll) */
 .noc-zone-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+.noc-zone-grid-fixed {
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  align-content: stretch;
 }
 .noc-zone {
   background: linear-gradient(160deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98));
   border: 1px solid rgba(148, 163, 184, 0.15);
   border-radius: 12px;
-  padding: 0.85rem 1rem;
-  border-left: 4px solid #64748b;
+  padding: 0.75rem 0.9rem;
+  border-left: 5px solid #64748b;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 .noc-zone .zn-name {
   font-weight: 650;
-  font-size: 1.05rem;
-  margin-bottom: 0.2rem;
+  font-size: 1.15rem;
+  margin-bottom: 0.15rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .noc-zone .zn-meta {
   font-size: 0.78rem;
   color: #94a3b8;
-  margin-bottom: 0.55rem;
+  margin-bottom: 0.4rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .noc-zone .zn-kw {
-  font-size: 1.65rem;
-  font-weight: 700;
+  font-size: 1.85rem;
+  font-weight: 750;
   font-variant-numeric: tabular-nums;
   color: #38bdf8;
+  line-height: 1.1;
 }
 .noc-zone .zn-bar {
   margin-top: 0.55rem;
@@ -721,15 +1108,9 @@ html, body {
   }
   .noc-header h1 { font-size: 1.5rem; }
   .noc-clock { font-size: 1.4rem; }
-  .noc-metrics {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-  .noc-zone-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .noc-card .value { font-size: 1.85rem; }
-  .noc-chart-wrap { height: 120px; }
-  .noc-chart-wrap.noc-chart-mini { height: 78px; }
+  .noc-hero-stat .hs-value { font-size: 2.25rem; }
+  .noc-temp-tile .tt-val { font-size: 2rem; }
+  .noc-zone .zn-kw { font-size: 2rem; }
 }
 
 /* Slightly larger / 1440p-ish: keep similar balance */
