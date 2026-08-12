@@ -1754,16 +1754,28 @@
     });
 
     /**
-     * Dynamic camera-proximity fade: pieces inside a sphere around the camera
-     * go transparent so overhead ladders never obstruct the room as you orbit.
-     * Sphere radius scales with zoom (orbit distance) when near/far not fixed.
+     * Dynamic camera-proximity fade: pieces closer to the camera go transparent
+     * so overhead ladders never obstruct the room as you orbit.
+     *
+     * Distances are scaled to camera→look-at so the bubble works at normal
+     * orbit range (not only when zoomed in tight).
      */
     function updateRacewayCameraFade() {
       if (!racewayCamFade || !racewayFadeMeshes.length) return;
       var camPos = camera.position;
-      var nearR = isFinite(racewayFadeNearOpt) ? racewayFadeNearOpt : Math.max(2.2, radius * 0.22);
-      var farR = isFinite(racewayFadeFarOpt) ? racewayFadeFarOpt : Math.max(nearR + 4, radius * 0.62);
-      if (farR <= nearR) farR = nearR + 4;
+      // Distance from camera to orbit target (room center-ish)
+      var dTarget = camPos.distanceTo(target);
+      if (!isFinite(dTarget) || dTarget < 1) dTarget = Math.max(radius, 12);
+      // Fully ghost inside nearR; fully solid past farR.
+      // Defaults reach well past the room center so front-of-scene trays clear at
+      // typical wall / dashboard zoom (no need to nose-dive into the aisle).
+      var nearR = isFinite(racewayFadeNearOpt)
+        ? racewayFadeNearOpt
+        : Math.max(8, dTarget * 0.72);
+      var farR = isFinite(racewayFadeFarOpt)
+        ? racewayFadeFarOpt
+        : Math.max(nearR + 10, dTarget * 1.45);
+      if (farR <= nearR) farR = nearR + 10;
       for (var i = 0; i < racewayFadeMeshes.length; i++) {
         var obj = racewayFadeMeshes[i];
         if (!obj || !obj.material) continue;
@@ -1783,7 +1795,7 @@
         mat.transparent = true;
         mat.opacity = op;
         // Avoid z-fight / solid blocking when mostly see-through
-        mat.depthWrite = op > 0.62;
+        mat.depthWrite = op > 0.55;
         // Keep raceways under health glows (glow renderOrder ≥ 20)
         obj.renderOrder = op < 0.85 ? 2 : 0;
       }
