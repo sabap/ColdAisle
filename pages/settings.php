@@ -1118,16 +1118,19 @@ if (!in_array($nocClearedTtl, [0, 30, 60, 120, 300, 600, 1800, -1], true)) {
             </div>
             <div class="form-row full">
                 <label for="noc_panel_rotate_slider">Panel slide timer</label>
-                <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
-                    <input type="range" id="noc_panel_rotate_slider"
-                           min="0" max="6" step="1"
-                           value="<?= (int)array_search($nocPanelSec, [5, 10, 20, 30, 40, 50, 60], true) ?>"
-                           list="noc_panel_ticks"
-                           style="flex:1;min-width:12rem">
-                    <output id="noc_panel_sec_out" style="font-weight:700;min-width:2.5rem"><?= (int)$nocPanelSec ?>s</output>
-                </div>
-                <div class="text-muted" style="font-size:.72rem;display:flex;justify-content:space-between;max-width:28rem;margin-top:.15rem">
-                    <span>5s</span><span>10</span><span>20</span><span>30</span><span>40</span><span>50</span><span>60s</span>
+                <div class="noc-panel-slider-row">
+                    <div class="noc-panel-slider-track">
+                        <input type="range" id="noc_panel_rotate_slider" class="noc-panel-slider"
+                               min="0" max="6" step="1"
+                               value="<?= (int)array_search($nocPanelSec, [5, 10, 20, 30, 40, 50, 60], true) ?>"
+                               list="noc_panel_ticks"
+                               aria-valuetext="<?= (int)$nocPanelSec ?> seconds">
+                        <div class="noc-panel-slider-ticks text-muted" aria-hidden="true">
+                            <span>5s</span><span>10s</span><span>20s</span><span>30s</span>
+                            <span>40s</span><span>50s</span><span>60s</span>
+                        </div>
+                    </div>
+                    <output id="noc_panel_sec_out" class="noc-panel-slider-out"><?= (int)$nocPanelSec ?>s</output>
                 </div>
                 <datalist id="noc_panel_ticks">
                     <option value="0"></option><option value="1"></option><option value="2"></option>
@@ -1135,6 +1138,46 @@ if (!in_array($nocClearedTtl, [0, 30, 60, 120, 300, 600, 1800, -1], true)) {
                 </datalist>
                 <span class="text-muted" style="font-size:.75rem">How long Overview / Power / Zones / Cooling stay on screen before sliding.</span>
                 <input type="hidden" name="noc_panel_rotate_sec" id="noc_panel_rotate_sec_val" value="<?= (int)$nocPanelSec ?>">
+                <style>
+                  .noc-panel-slider-row {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 0.85rem;
+                    max-width: 32rem;
+                  }
+                  .noc-panel-slider-track {
+                    flex: 1 1 auto;
+                    min-width: 12rem;
+                  }
+                  .noc-panel-slider {
+                    display: block;
+                    width: 100%;
+                    margin: 0;
+                    /* Thumb centers land on grid midpoints for 7 steps */
+                    box-sizing: border-box;
+                  }
+                  .noc-panel-slider-ticks {
+                    display: grid;
+                    grid-template-columns: repeat(7, 1fr);
+                    margin-top: 0.25rem;
+                    font-size: 0.72rem;
+                    line-height: 1.2;
+                    user-select: none;
+                  }
+                  .noc-panel-slider-ticks span {
+                    text-align: center;
+                  }
+                  /* Edge thumbs sit at track ends — pin first/last labels to ends */
+                  .noc-panel-slider-ticks span:first-child { text-align: left; }
+                  .noc-panel-slider-ticks span:last-child { text-align: right; }
+                  .noc-panel-slider-out {
+                    flex: 0 0 2.75rem;
+                    font-weight: 700;
+                    padding-top: 0.15rem;
+                    text-align: right;
+                    font-variant-numeric: tabular-nums;
+                  }
+                </style>
                 <script>
                 (function () {
                   var r = document.getElementById('noc_panel_rotate_slider');
@@ -1146,6 +1189,7 @@ if (!in_array($nocClearedTtl, [0, 30, 60, 120, 300, 600, 1800, -1], true)) {
                     h.value = String(v);
                     var o = document.getElementById('noc_panel_sec_out');
                     if (o) o.textContent = v + 's';
+                    r.setAttribute('aria-valuetext', v + ' seconds');
                   }
                   r.addEventListener('input', sync);
                   if (r.form) r.form.addEventListener('submit', sync);
