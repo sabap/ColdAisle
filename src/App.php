@@ -30,6 +30,7 @@ require_once __DIR__ . '/Services/CablePlantService.php';
 require_once __DIR__ . '/Services/MibService.php';
 require_once __DIR__ . '/Services/PowerAlertService.php';
 require_once __DIR__ . '/Services/AlertService.php';
+require_once __DIR__ . '/Services/NotificationAlertStatus.php';
 require_once __DIR__ . '/Services/SnmpThresholdService.php';
 require_once __DIR__ . '/Services/PowerHistoryService.php';
 require_once __DIR__ . '/Services/PowerPathService.php';

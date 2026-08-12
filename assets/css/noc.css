@@ -506,6 +506,11 @@ html, body {
 .noc-alert-chip.sev-ok {
   border-color: rgba(34, 197, 94, 0.3);
 }
+.noc-alert-chip.is-cleared {
+  border-color: rgba(34, 197, 94, 0.38);
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.08);
+  opacity: 0.95;
+}
 .noc-alert-pulse {
   flex-shrink: 0;
   width: 0.5rem;
@@ -514,6 +519,22 @@ html, body {
   border-radius: 50%;
   background: #64748b;
   box-shadow: 0 0 0 0 rgba(100, 116, 139, 0.4);
+}
+.noc-alert-check {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-top: 0.15rem;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.18);
+  border: 1px solid rgba(34, 197, 94, 0.5);
+  color: #4ade80;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
 }
 .noc-alert-chip.sev-crit .noc-alert-pulse {
   background: #ef4444;
@@ -524,6 +545,7 @@ html, body {
   animation: noc-pulse-warn 2s ease-in-out infinite;
 }
 .noc-alert-chip.sev-ok .noc-alert-pulse { background: #22c55e; }
+.noc-alert-chip.is-cleared .noc-alert-pulse { display: none; }
 .noc-alert-body { min-width: 0; flex: 1; }
 .noc-alert-title {
   font-size: 0.82rem;
@@ -534,6 +556,27 @@ html, body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.noc-alert-state {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+  text-transform: uppercase;
+}
+.noc-alert-state.state-cleared {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.14);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+}
+.noc-alert-state.state-active {
+  color: #fde68a;
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(234, 179, 8, 0.35);
 }
 .noc-alert-msg {
   margin: 0;

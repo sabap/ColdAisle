@@ -479,12 +479,30 @@
       var isNew = alertsBootstrapped && id > 0 && !knownAlertIds[id];
       var sev = (a.severity || 'info').toLowerCase();
       if (sev !== 'crit' && sev !== 'warn' && sev !== 'ok') sev = 'info';
-      html += '<div class="noc-alert-chip sev-' + sev + (isNew ? ' is-new' : '') + '" data-id="' + id + '">' +
-        '<span class="noc-alert-pulse" aria-hidden="true"></span>' +
+      var cleared = !!(a.is_cleared || a.alert_state === 'cleared' || sev === 'ok');
+      var stateLabel = cleared
+        ? (a.alert_state_label || 'Cleared')
+        : (sev === 'info' ? '' : (a.alert_state_label || 'Active'));
+      var chipClass = 'noc-alert-chip sev-' + sev
+        + (cleared ? ' is-cleared' : (sev === 'info' ? '' : ' is-active'))
+        + (isNew ? ' is-new' : '');
+      // Marker: green check when cleared; pulse when still active
+      var marker = cleared
+        ? '<span class="noc-alert-check" title="Cleared" aria-label="Cleared">✓</span>'
+        : '<span class="noc-alert-pulse" aria-hidden="true"></span>';
+      html += '<div class="' + chipClass + '" data-id="' + id + '">' +
+        marker +
         '<div class="noc-alert-body">' +
-        '<div class="noc-alert-title">' + esc(a.title || 'Alert') + '</div>' +
+        '<div class="noc-alert-title">' + esc(a.title || 'Alert') +
+        (stateLabel
+          ? ' <span class="noc-alert-state' + (cleared ? ' state-cleared' : ' state-active') + '">' +
+            esc(stateLabel) + '</span>'
+          : '') +
+        '</div>' +
         (a.message ? '<p class="noc-alert-msg">' + esc(a.message) + '</p>' : '') +
-        '<p class="noc-alert-when">' + esc(formatAlertWhen(a.created_at)) + '</p>' +
+        '<p class="noc-alert-when">' + esc(formatAlertWhen(a.created_at)) +
+        (cleared && a.cleared_at ? ' · cleared' : '') +
+        '</p>' +
         '</div></div>';
       if (id > 0) knownAlertIds[id] = true;
     });

@@ -224,6 +224,10 @@ class EnvSensorAlertService
             } catch (Throwable $e) {
                 // columns may not exist yet
             }
+            // Keep history rows; mark env notices as cleared for NOC / Notifications UI
+            if (class_exists('NotificationAlertStatus')) {
+                NotificationAlertStatus::markEntityCleared('env_sensor', $sid);
+            }
             return false;
         }
 

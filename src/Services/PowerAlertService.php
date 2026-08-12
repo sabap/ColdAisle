@@ -824,6 +824,13 @@ class PowerAlertService
                 // ignore
             }
         }
+        // When this PDU (or all PDUs) has no active conditions left, update notification badges
+        if (class_exists('NotificationAlertStatus')) {
+            if ($pduId > 0) {
+                NotificationAlertStatus::markEntityCleared('pdu', $pduId);
+            }
+            NotificationAlertStatus::markPowerDigestsClearedIfQuiet();
+        }
     }
 
     private static function clearWindowStart(): void

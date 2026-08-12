@@ -28,29 +28,55 @@ if ($method === 'GET') {
     $rows = [];
     try {
         if ($sinceId > 0) {
-            $rows = Database::fetchAll(
-                'SELECT TOP ' . $limit . ' notification_id, title, message, category, entity_type, entity_id,
-                        is_read, created_at
-                 FROM notifications
-                 WHERE (user_id = ? OR user_id IS NULL) AND notification_id > ?
-                 ORDER BY notification_id ASC',
-                [$uid, $sinceId]
-            );
+            try {
+                $rows = Database::fetchAll(
+                    'SELECT TOP ' . $limit . ' notification_id, title, message, category, entity_type, entity_id,
+                            is_read, is_cleared, cleared_at, created_at
+                     FROM notifications
+                     WHERE (user_id = ? OR user_id IS NULL) AND notification_id > ?
+                     ORDER BY notification_id ASC',
+                    [$uid, $sinceId]
+                );
+            } catch (Throwable $eCols) {
+                $rows = Database::fetchAll(
+                    'SELECT TOP ' . $limit . ' notification_id, title, message, category, entity_type, entity_id,
+                            is_read, created_at
+                     FROM notifications
+                     WHERE (user_id = ? OR user_id IS NULL) AND notification_id > ?
+                     ORDER BY notification_id ASC',
+                    [$uid, $sinceId]
+                );
+            }
         } else {
             // Initial poll: only recent unread (avoid toast flood on every page load)
-            $rows = Database::fetchAll(
-                'SELECT TOP ' . $limit . ' notification_id, title, message, category, entity_type, entity_id,
-                        is_read, created_at
-                 FROM notifications
-                 WHERE (user_id = ? OR user_id IS NULL) AND is_read = 0
-                 ORDER BY notification_id DESC',
-                [$uid]
-            );
+            try {
+                $rows = Database::fetchAll(
+                    'SELECT TOP ' . $limit . ' notification_id, title, message, category, entity_type, entity_id,
+                            is_read, is_cleared, cleared_at, created_at
+                     FROM notifications
+                     WHERE (user_id = ? OR user_id IS NULL) AND is_read = 0
+                     ORDER BY notification_id DESC',
+                    [$uid]
+                );
+            } catch (Throwable $eCols) {
+                $rows = Database::fetchAll(
+                    'SELECT TOP ' . $limit . ' notification_id, title, message, category, entity_type, entity_id,
+                            is_read, created_at
+                     FROM notifications
+                     WHERE (user_id = ? OR user_id IS NULL) AND is_read = 0
+                     ORDER BY notification_id DESC',
+                    [$uid]
+                );
+            }
             // Return ascending so client can toast oldest-first
             $rows = array_reverse($rows);
         }
     } catch (Throwable $e) {
         $rows = [];
+    }
+
+    if ($rows && class_exists('NotificationAlertStatus')) {
+        $rows = NotificationAlertStatus::enrich($rows);
     }
 
     $items = [];
@@ -62,7 +88,7 @@ if ($method === 'GET') {
         }
         $cat = strtolower((string)($r['category'] ?? 'info'));
         $toastType = 'info';
-        if (in_array($cat, ['warning', 'critical', 'power', 'icmp', 'error', 'danger'], true)) {
+        if (in_array($cat, ['warning', 'critical', 'power', 'icmp', 'env', 'error', 'danger'], true)) {
             $toastType = in_array($cat, ['critical', 'error', 'danger'], true) ? 'error' : 'warning';
         } elseif (in_array($cat, ['success', 'ok'], true) || stripos((string)($r['title'] ?? ''), 'recovered') !== false) {
             $toastType = 'success';
@@ -75,16 +101,28 @@ if ($method === 'GET') {
             $toastType = 'success';
         }
 
+        $isCleared = !empty($r['is_cleared'])
+            || (string)($r['alert_state'] ?? '') === 'cleared'
+            || $toastType === 'success';
+        // Cleared problem alerts: keep history but toast as success-tint with check
+        if ($isCleared && in_array($toastType, ['error', 'warning'], true)) {
+            $toastType = 'success';
+        }
+
         $items[] = [
             'id' => $id,
             'title' => $title,
             'message' => mb_substr((string)($r['message'] ?? ''), 0, 280),
             'category' => $cat,
             'toast_type' => $toastType,
+            'is_cleared' => $isCleared,
+            'alert_state' => $isCleared ? 'cleared' : (string)($r['alert_state'] ?? 'active'),
+            'alert_state_label' => $isCleared ? 'Cleared' : (string)($r['alert_state_label'] ?? 'Active'),
             'entity_type' => $r['entity_type'] ?? null,
             'entity_id' => isset($r['entity_id']) ? (int)$r['entity_id'] : null,
             'is_read' => !empty($r['is_read']),
             'created_at' => (string)($r['created_at'] ?? ''),
+            'cleared_at' => isset($r['cleared_at']) ? (string)$r['cleared_at'] : null,
         ];
     }
 

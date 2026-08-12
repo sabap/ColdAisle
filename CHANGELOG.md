@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Alert cleared state:** NOC glass toasts and Notifications page show a **green check** when a warn/crit condition has recovered (history kept); **Active** badge while the condition is still live. ICMP/env/power clears update status automatically
+
 ### Enhancements
 
 ### Bug fixes

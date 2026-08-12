@@ -545,6 +545,10 @@ class Schema
             self::ensureColumn('cables', 'cable_role', "NVARCHAR(30) NOT NULL CONSTRAINT DF_cables_role DEFAULT 'patch'");
             self::ensureColumn('cables', 'strand_count', 'INT NULL');
 
+            // Notification active vs cleared (history kept; UI shows green check when recovered)
+            self::ensureColumn('notifications', 'is_cleared', 'BIT NOT NULL CONSTRAINT DF_notif_cleared DEFAULT 0');
+            self::ensureColumn('notifications', 'cleared_at', 'DATETIME2 NULL');
+
             // Password reset tokens (G-B5 forgot-password)
             self::ensureTable(
                 'password_reset_tokens',
@@ -953,7 +957,7 @@ class Schema
             'settings', 'roles', 'users', 'auth_sessions', 'audit_log',
             'departments', 'sites', 'datacenters', 'rooms', 'cabinet_rows', 'cabinets',
             'manufacturers', 'device_templates', 'devices', 'device_ports',
-            'power_zones', 'pdus', 'pdu_outlets', 'notifications',
+            'power_zones', 'pdus', 'pdu_outlets',
         ];
         $managed = [
             'datacenters' => ['north_edge'],
@@ -992,6 +996,7 @@ class Schema
             'import_id_map' => ['map_id', 'source', 'entity_type', 'source_id', 'local_id'],
             'disposal_vendors' => ['vendor_id', 'name'],
             'disposals' => ['stage', 'vendor_id', 'change_ticket', 'notification_sent', 'notification_sent_at'],
+            'notifications' => ['notification_id', 'user_id', 'title', 'category', 'is_read', 'is_cleared', 'cleared_at'],
             'password_reset_tokens' => ['token_id', 'user_id', 'token_hash', 'expires_at'],
             'asset_events' => ['event_id', 'device_id', 'event_type', 'summary', 'occurred_at'],
             'cable_paths' => [
