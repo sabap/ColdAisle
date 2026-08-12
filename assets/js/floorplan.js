@@ -593,23 +593,32 @@
       });
     }
 
-    function hitTestRacewayVertex(mx, my) {
+    function hitTestRacewayVertex(mx, my, preferPathId) {
       const s = scale();
-      const tol = 10;
+      // Larger grab radius when a path is selected (post-save editing)
+      const baseTol = 12;
+      const selTol = 16;
       // Draft first
       if (racewayDraw && racewayDraw.points) {
         for (let j = 0; j < racewayDraw.points.length; j++) {
           const pt = racewayDraw.points[j];
           const x = ORIGIN + Number(pt.x || 0) * s;
           const y = ORIGIN + Number(pt.y || 0) * s;
-          if (Math.hypot(mx - x, my - y) <= tol) {
+          if (Math.hypot(mx - x, my - y) <= baseTol) {
             return { path: null, draft: true, index: j, pathId: 0 };
           }
         }
       }
-      for (let i = cablePaths.length - 1; i >= 0; i--) {
-        const p = cablePaths[i];
+      // Prefer selected path vertices first (easier to re-grab after save)
+      const ordered = cablePaths.slice().sort(function (a, b) {
+        const ap = Number(a.path_id) === Number(preferPathId || selectedPathId) ? 0 : 1;
+        const bp = Number(b.path_id) === Number(preferPathId || selectedPathId) ? 0 : 1;
+        return ap - bp;
+      });
+      for (let i = 0; i < ordered.length; i++) {
+        const p = ordered[i];
         const pts = pathPoints(p);
+        const tol = Number(p.path_id) === Number(preferPathId || selectedPathId) ? selTol : baseTol;
         for (let j = 0; j < pts.length; j++) {
           const x = ORIGIN + Number(pts[j].x || 0) * s;
           const y = ORIGIN + Number(pts[j].y || 0) * s;
@@ -619,6 +628,63 @@
         }
       }
       return null;
+    }
+
+    /** Hit test path body (segment) for whole-path move; returns { path, segIndex } */
+    function hitTestRacewaySegment(mx, my) {
+      const s = scale();
+      const tol = 10;
+      for (let i = cablePaths.length - 1; i >= 0; i--) {
+        const p = cablePaths[i];
+        const pts = pathPoints(p);
+        for (let j = 0; j < pts.length - 1; j++) {
+          const x1 = ORIGIN + Number(pts[j].x || 0) * s;
+          const y1 = ORIGIN + Number(pts[j].y || 0) * s;
+          const x2 = ORIGIN + Number(pts[j + 1].x || 0) * s;
+          const y2 = ORIGIN + Number(pts[j + 1].y || 0) * s;
+          if (distToSegment(mx, my, x1, y1, x2, y2) <= tol) {
+            return { path: p, segIndex: j };
+          }
+        }
+      }
+      return null;
+    }
+
+    function persistRacewayPath(p, toastMsg) {
+      if (!p || !room || !room.room_id) return Promise.resolve();
+      const pts = p.waypoints_list || pathPoints(p);
+      p.waypoints_list = pts;
+      return ColdAisle.api('api/floorplan.php?action=save_cable_path', {
+        method: 'POST',
+        body: {
+          path_id: p.path_id,
+          room_id: room.room_id,
+          name: p.name,
+          path_code: p.path_code || p.name,
+          segment_class: p.segment_class || '',
+          media_class: p.media_class || 'mixed',
+          path_kind: p.path_kind || 'ladder',
+          feed_to: p.feed_to || 'overhead',
+          color_hex: p.color_hex,
+          notes: p.notes || '',
+          waypoints: pts,
+        },
+      }).then(function (data) {
+        if (data.path) {
+          const idx = cablePaths.findIndex(function (x) {
+            return Number(x.path_id) === Number(data.path.path_id);
+          });
+          if (idx >= 0) cablePaths[idx] = data.path;
+          selectedPathId = data.path.path_id;
+          renderRacewayProps(data.path);
+        }
+        setRacewayUi();
+        draw();
+        if (toastMsg) ColdAisle.toast(toastMsg, 'success');
+      }).catch(function (err) {
+        ColdAisle.toast((err && err.message) || 'Could not save path', 'error');
+        draw();
+      });
     }
 
     function toggleVertexFillet(target) {
@@ -2842,7 +2908,8 @@
         '<div><dt>Cabinet feed</dt><dd>' + esc(feeds[p.feed_to] || p.feed_to || '—') + '</dd></div>' +
         '<div><dt>Vertices</dt><dd>' + pts.length + '</dd></div>' +
         '</dl>' +
-        '<p class="text-muted" style="font-size:.78rem;margin:.5rem 0 0">Corners (Alt+click on plan or use buttons)</p>' +
+        '<p class="text-muted" style="font-size:.78rem;margin:.5rem 0 0">' +
+        'Drag a <strong>vertex</strong> to reshape (other ends stay put). Drag the <strong>path line</strong> to move the whole raceway. Alt+click vertex = curve.</p>' +
         vertHtml +
         '<p class="text-muted" style="font-size:.78rem">Dashed = underfloor. '
         + '<a href="' + (window.ColdAisle && window.ColdAisle.baseUrl
@@ -4728,6 +4795,78 @@
 
       if (!isLeft) return;
 
+      // Prefer raceway vertex / body hits over cabinets so saved paths stay editable
+      // even when vertices sit over equipment footprints.
+      if (!racewayDraw && showRaceways) {
+        const vtxPref = hitTestRacewayVertex(pt.x, pt.y);
+        if (vtxPref && !vtxPref.draft && vtxPref.path && !(e.altKey)) {
+          e.preventDefault();
+          selectedPathId = vtxPref.path.path_id;
+          selectedId = null;
+          selectedPduId = null;
+          selectedCoolingId = null;
+          selectedUpsId = null;
+          selectedIds.clear();
+          renderRacewayProps(vtxPref.path, vtxPref.index);
+          setRacewayUi();
+          drag = {
+            kind: 'raceway_vertex',
+            draft: false,
+            pathId: Number(vtxPref.path.path_id),
+            index: vtxPref.index,
+            startX: pt.x,
+            startY: pt.y,
+            active: false,
+            pointerId: e.pointerId,
+          };
+          canvas.style.cursor = 'grabbing';
+          try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+          draw();
+          return;
+        }
+        // Drag whole path by grabbing a segment (not a vertex)
+        const segHit = hitTestRacewaySegment(pt.x, pt.y);
+        if (segHit && segHit.path && !hitTestRacewayVertex(pt.x, pt.y)) {
+          e.preventDefault();
+          const p = segHit.path;
+          selectedPathId = p.path_id;
+          selectedId = null;
+          selectedPduId = null;
+          selectedCoolingId = null;
+          selectedUpsId = null;
+          selectedIds.clear();
+          const pts = pathPoints(p);
+          p.waypoints_list = pts.map(function (pt0) {
+            return {
+              x: Number(pt0.x) || 0,
+              y: Number(pt0.y) || 0,
+              z: pt0.z,
+              corner: pt0.corner,
+              radius_m: pt0.radius_m,
+            };
+          });
+          const w0 = worldFromCanvas(pt.x, pt.y);
+          drag = {
+            kind: 'raceway_path',
+            pathId: Number(p.path_id),
+            startWorld: { x: w0.x, y: w0.y },
+            origins: p.waypoints_list.map(function (pt0) {
+              return { x: Number(pt0.x) || 0, y: Number(pt0.y) || 0 };
+            }),
+            startX: pt.x,
+            startY: pt.y,
+            active: false,
+            pointerId: e.pointerId,
+          };
+          renderRacewayProps(p);
+          setRacewayUi();
+          canvas.style.cursor = 'grabbing';
+          try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+          draw();
+          return;
+        }
+      }
+
       // Raceway drawing mode: no equipment hits; dim overlay active
       if (racewayDraw) {
         e.preventDefault();
@@ -4789,34 +4928,8 @@
         }
       }
 
-      // Select / drag existing raceway vertex when not hitting equipment
+      // Select raceway body when not on equipment (vertex/path drag handled above)
       if (!hit && showRaceways) {
-        const vtx3 = hitTestRacewayVertex(pt.x, pt.y);
-        if (vtx3 && !vtx3.draft && vtx3.path) {
-          selectedPathId = vtx3.path.path_id;
-          selectedId = null;
-          selectedPduId = null;
-          selectedCoolingId = null;
-          selectedUpsId = null;
-          selectedIds.clear();
-          renderRacewayProps(vtx3.path, vtx3.index);
-          setRacewayUi();
-          // Left-click vertex starts drag (adjacent ends stay put)
-          drag = {
-            kind: 'raceway_vertex',
-            draft: false,
-            pathId: Number(vtx3.path.path_id),
-            index: vtx3.index,
-            startX: pt.x,
-            startY: pt.y,
-            active: false,
-            pointerId: e.pointerId,
-          };
-          canvas.style.cursor = 'grabbing';
-          try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-          draw();
-          return;
-        }
         const rp = hitTestRaceway(pt.x, pt.y);
         if (rp) {
           selectedPathId = rp.path_id;
@@ -5020,10 +5133,14 @@
       // Hover cursor when not dragging
       if (!drag && !pan) {
         const pt = canvasPoint(e);
-        if (racewayDraw || (showRaceways && selectedPathId)) {
+        if (racewayDraw || showRaceways) {
           const vtxH = hitTestRacewayVertex(pt.x, pt.y);
           if (vtxH) {
             canvas.style.cursor = 'grab';
+            return;
+          }
+          if (!racewayDraw && hitTestRacewaySegment(pt.x, pt.y)) {
+            canvas.style.cursor = 'move';
             return;
           }
         }
@@ -5066,6 +5183,41 @@
         // Preserve corner metadata; only move this vertex
         cur.x = wpt.x;
         cur.y = wpt.y;
+        canvas.style.cursor = 'grabbing';
+        draw();
+        return;
+      }
+
+      // Drag entire saved path (all vertices translate together)
+      if (drag.kind === 'raceway_path') {
+        const p = cablePaths.find(function (x) { return Number(x.path_id) === Number(drag.pathId); });
+        if (!p || !drag.origins) {
+          drag = null;
+          return;
+        }
+        const wpt = racewayVertexWorldFromEvent(e);
+        if (!drag.active) {
+          const dx = wpt.canvas.x - drag.startX;
+          const dy = wpt.canvas.y - drag.startY;
+          if ((dx * dx + dy * dy) < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) return;
+          drag.active = true;
+        }
+        const dxW = wpt.x - drag.startWorld.x;
+        const dyW = wpt.y - drag.startWorld.y;
+        if (!p.waypoints_list || p.waypoints_list.length !== drag.origins.length) {
+          p.waypoints_list = pathPoints(p);
+        }
+        for (let i = 0; i < drag.origins.length; i++) {
+          const o = drag.origins[i];
+          const cur = p.waypoints_list[i];
+          if (!cur) continue;
+          let nx = o.x + dxW;
+          let ny = o.y + dyW;
+          nx = Math.max(0, Math.min(roomW(), nx));
+          ny = Math.max(0, Math.min(roomD(), ny));
+          cur.x = nx;
+          cur.y = ny;
+        }
         canvas.style.cursor = 'grabbing';
         draw();
         return;
@@ -5216,47 +5368,33 @@
           ColdAisle.toast('Vertex anchored', 'info');
           return;
         }
-        // Persist saved path geometry
         const p = cablePaths.find(function (x) { return Number(x.path_id) === Number(d.pathId); });
         if (!p || !room) {
           updateCanvasCursor();
           draw();
           return;
         }
-        const pts = p.waypoints_list || pathPoints(p);
-        p.waypoints_list = pts;
-        ColdAisle.api('api/floorplan.php?action=save_cable_path', {
-          method: 'POST',
-          body: {
-            path_id: p.path_id,
-            room_id: room.room_id,
-            name: p.name,
-            path_code: p.path_code || p.name,
-            segment_class: p.segment_class || '',
-            media_class: p.media_class || 'mixed',
-            path_kind: p.path_kind || 'ladder',
-            feed_to: p.feed_to || 'overhead',
-            color_hex: p.color_hex,
-            notes: p.notes || '',
-            waypoints: pts,
-          },
-        }).then(function (data) {
-          if (data.path) {
-            const idx = cablePaths.findIndex(function (x) {
-              return Number(x.path_id) === Number(data.path.path_id);
-            });
-            if (idx >= 0) cablePaths[idx] = data.path;
-            selectedPathId = data.path.path_id;
-            renderRacewayProps(data.path, d.index);
-          }
-          setRacewayUi();
-          draw();
-          ColdAisle.toast('Vertex anchored', 'success');
-        }).catch(function (err) {
-          ColdAisle.toast((err && err.message) || 'Could not save vertex', 'error');
-          draw();
-        });
         updateCanvasCursor();
+        persistRacewayPath(p, 'Vertex anchored');
+        return;
+      }
+
+      if (kind === 'raceway_path') {
+        const d = drag;
+        drag = null;
+        if (!wasActive) {
+          updateCanvasCursor();
+          draw();
+          return;
+        }
+        const p = cablePaths.find(function (x) { return Number(x.path_id) === Number(d.pathId); });
+        if (!p || !room) {
+          updateCanvasCursor();
+          draw();
+          return;
+        }
+        updateCanvasCursor();
+        persistRacewayPath(p, 'Path location saved');
         return;
       }
 

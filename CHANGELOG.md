@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Edit saved raceways on plan:** path vertices take priority over cabinets for grab/drag after save; drag a **segment** to move the whole path; release saves location (vertex or full path)
+
 ### Bug fixes
 
 ---
