@@ -13,7 +13,11 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Connect ports from the device page:** Data connections **Connect / Edit** sets peer device+port, media/speed, and ordered multi-hop raceways (e.g. RS-A → IRC-AB.1 → IRC-BC.1 → IRC-CD.1 → RS-D); one cable links both ends so the peer shows the reverse path automatically
+
 ### Enhancements
+
+- Device connection table shows full raceway path labels from each port’s perspective; Calculate shortest path and Disconnect in the connect modal
 
 ### Bug fixes
 
