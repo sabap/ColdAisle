@@ -68,6 +68,10 @@
     let envSensors3d = []; // heat spheres for 3D view
     let roomRows = []; // cabinet_rows for current room
     let powerZones = []; // zones for DC (row → zone)
+    let cablePaths = []; // raceways / fiber troughs for room
+    let showRaceways = true;
+    let racewayDraw = null; // { points: [{x,y}], media_class, path_kind, name }
+    let selectedPathId = null;
     let selectedId = null; // primary cabinet selection (props panel focus)
     let selectedPduId = null; // selected floor PDU (exclusive with cabinets)
     let selectedCoolingId = null; // selected cooling unit
@@ -434,6 +438,117 @@
       return { x: x, y: y, w: w, d: d };
     }
 
+    function pathPoints(p) {
+      if (!p) return [];
+      if (Array.isArray(p.waypoints_list) && p.waypoints_list.length) return p.waypoints_list;
+      if (typeof p.waypoints === 'string' && p.waypoints) {
+        try {
+          const j = JSON.parse(p.waypoints);
+          return Array.isArray(j) ? j : [];
+        } catch (e) {
+          return [];
+        }
+      }
+      return Array.isArray(p.waypoints) ? p.waypoints : [];
+    }
+
+    function drawCablePaths() {
+      if (!room) return;
+      const s = scale();
+      const list = cablePaths.slice();
+      if (racewayDraw && racewayDraw.points.length) {
+        list.push({
+          path_id: 0,
+          name: racewayDraw.name || 'New path',
+          color_hex: racewayDraw.color_hex || '#eab308',
+          media_class: racewayDraw.media_class || 'fiber',
+          feed_to: racewayDraw.feed_to || 'overhead',
+          path_kind: racewayDraw.path_kind || 'fiber_trough',
+          waypoints_list: racewayDraw.points,
+          _draft: true,
+        });
+      }
+      list.forEach(function (p) {
+        const pts = pathPoints(p);
+        if (pts.length < 1) return;
+        const col = p.color_hex || '#38bdf8';
+        const feed = String(p.feed_to || p.path_type || 'overhead').toLowerCase();
+        const dashed = feed === 'underfloor' || String(p.path_kind || '') === 'underfloor';
+        const selected = Number(p.path_id) === Number(selectedPathId) || p._draft;
+        ctx.save();
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = col;
+        ctx.lineWidth = selected ? Math.max(4, 5 * zoom) : Math.max(2.5, 3.5 * zoom);
+        if (dashed) ctx.setLineDash([8 * zoom, 5 * zoom]);
+        ctx.globalAlpha = p._draft ? 0.95 : 0.85;
+        ctx.beginPath();
+        pts.forEach(function (pt, i) {
+          const x = ORIGIN + Number(pt.x || 0) * s;
+          const y = ORIGIN + Number(pt.y || 0) * s;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // vertices
+        pts.forEach(function (pt) {
+          const x = ORIGIN + Number(pt.x || 0) * s;
+          const y = ORIGIN + Number(pt.y || 0) * s;
+          ctx.fillStyle = col;
+          ctx.beginPath();
+          ctx.arc(x, y, selected ? 4.5 : 3, 0, Math.PI * 2);
+          ctx.fill();
+        });
+        // label at midpoint
+        if (pts.length >= 1 && p.name) {
+          const mid = pts[Math.floor(pts.length / 2)];
+          const lx = ORIGIN + Number(mid.x || 0) * s + 6;
+          const ly = ORIGIN + Number(mid.y || 0) * s - 6;
+          ctx.fillStyle = '#e2e8f0';
+          ctx.font = (selected ? 'bold ' : '') + Math.max(10, 11 * zoom) + 'px Segoe UI';
+          ctx.textAlign = 'left';
+          const tag = (p.media_class === 'fiber' ? '◆ ' : '■ ') + p.name
+            + (feed === 'underfloor' ? ' ↓' : feed === 'overhead' ? ' ↑' : '');
+          ctx.fillText(tag, lx, ly);
+        }
+        ctx.restore();
+      });
+    }
+
+    function hitTestRaceway(mx, my) {
+      const s = scale();
+      const tol = 8;
+      for (let i = cablePaths.length - 1; i >= 0; i--) {
+        const p = cablePaths[i];
+        const pts = pathPoints(p);
+        for (let j = 0; j < pts.length - 1; j++) {
+          const x1 = ORIGIN + Number(pts[j].x || 0) * s;
+          const y1 = ORIGIN + Number(pts[j].y || 0) * s;
+          const x2 = ORIGIN + Number(pts[j + 1].x || 0) * s;
+          const y2 = ORIGIN + Number(pts[j + 1].y || 0) * s;
+          const d = distToSegment(mx, my, x1, y1, x2, y2);
+          if (d <= tol) return p;
+        }
+        for (let j = 0; j < pts.length; j++) {
+          const x = ORIGIN + Number(pts[j].x || 0) * s;
+          const y = ORIGIN + Number(pts[j].y || 0) * s;
+          if (Math.hypot(mx - x, my - y) <= tol + 2) return p;
+        }
+      }
+      return null;
+    }
+
+    function distToSegment(px, py, x1, y1, x2, y2) {
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const len2 = dx * dx + dy * dy;
+      if (len2 < 1e-9) return Math.hypot(px - x1, py - y1);
+      let t = ((px - x1) * dx + (py - y1) * dy) / len2;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+    }
+
     function drawGrid() {
       if (!showGrid || !room) return;
       const s = scale();
@@ -602,7 +717,21 @@
         drawCompass();
       }
 
-      if (pendingTemplate || pendingPdu || pendingCooling || pendingUps) {
+      // Raceways under equipment (structured cable plant)
+      if (showRaceways) {
+        drawCablePaths();
+      }
+
+      if (racewayDraw) {
+        ctx.fillStyle = '#eab308';
+        ctx.font = '11px Segoe UI';
+        ctx.fillText(
+          'Raceway draw: click points · double-click or Finish to save · Esc cancel (' +
+            racewayDraw.points.length + ' pt)',
+          ORIGIN,
+          canvas.height - 10
+        );
+      } else if (pendingTemplate || pendingPdu || pendingCooling || pendingUps) {
         ctx.fillStyle = pendingUps ? '#a78bfa' : (pendingCooling ? '#0ea5e9' : (pendingPdu ? '#f59e0b' : '#3b82f6'));
         ctx.font = '11px Segoe UI';
         let msg = 'Click on the floor to place the selected template…';
@@ -2477,6 +2606,53 @@
       return html;
     }
 
+    function renderRacewayProps(p) {
+      if (!propsEl || !p) return;
+      const pts = pathPoints(p);
+      const kinds = {
+        tray: 'Cable tray / ladder',
+        fiber_trough: 'Fiber trough',
+        raceway: 'Raceway',
+        conduit: 'Conduit',
+        underfloor: 'Underfloor channel',
+        busway: 'Busway',
+        other: 'Other',
+      };
+      const feeds = {
+        overhead: 'Overhead into cabinets',
+        underfloor: 'Underfloor (raised floor)',
+        both: 'Both',
+        horizontal: 'Horizontal only',
+      };
+      propsEl.innerHTML =
+        '<h3 style="margin-top:0">Raceway</h3>' +
+        '<p style="margin:.25rem 0"><strong>' + esc(p.name || 'Path') + '</strong></p>' +
+        '<dl class="prop-dl">' +
+        '<div><dt>Kind</dt><dd>' + esc(kinds[p.path_kind] || p.path_kind || p.path_type || '—') + '</dd></div>' +
+        '<div><dt>Media</dt><dd>' + esc(p.media_class || '—') + '</dd></div>' +
+        '<div><dt>Cabinet feed</dt><dd>' + esc(feeds[p.feed_to] || p.feed_to || '—') + '</dd></div>' +
+        '<div><dt>Vertices</dt><dd>' + pts.length + '</dd></div>' +
+        '<div><dt>Color</dt><dd><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:' +
+          esc(p.color_hex || '#38bdf8') + ';vertical-align:middle"></span> ' +
+          esc(p.color_hex || '') + '</dd></div>' +
+        '</dl>' +
+        (p.notes ? '<p class="text-muted" style="font-size:.85rem">' + esc(p.notes) + '</p>' : '') +
+        '<p class="text-muted" style="font-size:.78rem;margin-top:.75rem">' +
+        'Dashed = underfloor feed. Assign cables to this path under ' +
+        '<a href="' + (window.ColdAisle && window.ColdAisle.baseUrl
+          ? String(window.ColdAisle.baseUrl).replace(/\/$/, '') + '/' : '') +
+        'pages/cables.php">Cabling</a>.</p>' +
+        '<button type="button" class="btn btn-sm btn-secondary" id="btnClearPathSel">Deselect</button>';
+      const btn = propsEl.querySelector('#btnClearPathSel');
+      if (btn) {
+        btn.addEventListener('click', function () {
+          selectedPathId = null;
+          propsEl.innerHTML = '<p class="text-muted">Select a cabinet or raceway.</p>';
+          draw();
+        });
+      }
+    }
+
     function renderMultiProps(list) {
       const unlocked = list.filter(function (c) { return !isPositionLocked(c); });
       const names = list.map(function (c) { return esc(c.name || ('#' + c.cabinet_id)); }).join(', ');
@@ -3172,6 +3348,7 @@
         floorUps = [];
         unplacedUps = [];
         envSensors3d = [];
+        cablePaths = [];
         propsEl.innerHTML = '<p class="text-muted">Create a room first under Data Centers.</p>';
         renderUnplacedPduPalette();
         renderUnplacedCoolingPalette();
@@ -3192,6 +3369,7 @@
         envSensors3d = data.env_sensors || [];
         roomRows = data.rows || [];
         powerZones = data.zones || [];
+        cablePaths = data.cable_paths || [];
         unlockedIds.clear(); // all placed racks load locked
         unlockedPduIds.clear();
         unlockedCoolingIds.clear();
@@ -3938,6 +4116,123 @@
       });
     }
 
+    function setRacewayUi() {
+      const fin = root.querySelector('#btnFinishRaceway');
+      const can = root.querySelector('#btnCancelRaceway');
+      const drawBtn = root.querySelector('#btnDrawRaceway');
+      if (fin) fin.hidden = !racewayDraw;
+      if (can) can.hidden = !racewayDraw;
+      if (drawBtn) {
+        drawBtn.classList.toggle('btn-primary', !!racewayDraw);
+        drawBtn.classList.toggle('btn-secondary', !racewayDraw);
+      }
+    }
+
+    function startRacewayDraw() {
+      if (!room) {
+        ColdAisle.toast('Select a room first', 'error');
+        return;
+      }
+      pendingTemplate = null;
+      pendingPdu = null;
+      pendingCooling = null;
+      pendingUps = null;
+      clearPaletteSelection();
+      racewayDraw = {
+        points: [],
+        media_class: 'fiber',
+        path_kind: 'fiber_trough',
+        feed_to: 'overhead',
+        color_hex: '#eab308',
+        name: '',
+      };
+      selectedPathId = null;
+      selectedId = null;
+      selectedPduId = null;
+      selectedCoolingId = null;
+      selectedUpsId = null;
+      setRacewayUi();
+      draw();
+      ColdAisle.toast('Click the floor to place raceway vertices', 'info');
+    }
+
+    function cancelRacewayDraw() {
+      racewayDraw = null;
+      setRacewayUi();
+      draw();
+    }
+
+    async function finishRacewayDraw() {
+      if (!racewayDraw || racewayDraw.points.length < 2) {
+        ColdAisle.toast('Add at least two points', 'error');
+        return;
+      }
+      if (!room || !room.room_id) return;
+      const name = window.prompt('Raceway name', 'Fiber trough ' + (cablePaths.length + 1));
+      if (name === null) return;
+      const media = window.prompt('Media class: copper | fiber | mixed | power', racewayDraw.media_class || 'fiber') || 'fiber';
+      const feed = window.prompt('Cabinet feed: overhead | underfloor | both | horizontal', racewayDraw.feed_to || 'overhead') || 'overhead';
+      let kind = racewayDraw.path_kind || 'fiber_trough';
+      if (media === 'fiber') kind = 'fiber_trough';
+      else if (media === 'copper') kind = 'tray';
+      else if (feed === 'underfloor') kind = 'underfloor';
+      const colorMap = { fiber: '#eab308', copper: '#2563eb', power: '#111827', mixed: '#38bdf8' };
+      try {
+        const data = await ColdAisle.api('api/floorplan.php?action=save_cable_path', {
+          method: 'POST',
+          body: {
+            room_id: room.room_id,
+            name: name.trim() || 'Raceway',
+            media_class: media,
+            path_kind: kind,
+            feed_to: feed,
+            color_hex: colorMap[media] || '#eab308',
+            waypoints: racewayDraw.points,
+          },
+        });
+        if (data.path) {
+          cablePaths.push(data.path);
+        }
+        racewayDraw = null;
+        setRacewayUi();
+        draw();
+        ColdAisle.toast('Raceway saved — assign cables under Cabling', 'success');
+      } catch (err) {
+        ColdAisle.toast((err && err.message) || 'Save failed', 'error');
+      }
+    }
+
+    const racewayToggle = root.querySelector('#toggleRaceways');
+    const btnDrawRaceway = root.querySelector('#btnDrawRaceway');
+    const btnFinishRaceway = root.querySelector('#btnFinishRaceway');
+    const btnCancelRaceway = root.querySelector('#btnCancelRaceway');
+    if (racewayToggle) {
+      racewayToggle.addEventListener('click', function () {
+        showRaceways = !showRaceways;
+        racewayToggle.textContent = 'Raceways: ' + (showRaceways ? 'On' : 'Off');
+        racewayToggle.classList.toggle('btn-primary', showRaceways);
+        racewayToggle.classList.toggle('btn-secondary', !showRaceways);
+        draw();
+      });
+    }
+    if (btnDrawRaceway) btnDrawRaceway.addEventListener('click', function () {
+      if (racewayDraw) cancelRacewayDraw();
+      else startRacewayDraw();
+    });
+    if (btnFinishRaceway) btnFinishRaceway.addEventListener('click', function () { finishRacewayDraw(); });
+    if (btnCancelRaceway) btnCancelRaceway.addEventListener('click', cancelRacewayDraw);
+
+    document.addEventListener('keydown', function (e) {
+      if (!racewayDraw) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelRacewayDraw();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        finishRacewayDraw();
+      }
+    });
+
     // --- interactions ---
     // Left-drag empty floor (or middle-button anywhere) pans the view via scroll wrap.
     // Left-drag unlocked cabinet moves the cabinet.
@@ -3958,6 +4253,44 @@
       }
 
       if (!isLeft) return;
+
+      // Raceway drawing mode (structured cable plant)
+      if (racewayDraw) {
+        e.preventDefault();
+        e.stopPropagation();
+        const w = worldFromCanvas(pt.x, pt.y);
+        let x = w.x;
+        let y = w.y;
+        if (snapToGrid) {
+          const g = gridStepM();
+          x = Math.round(x / g) * g;
+          y = Math.round(y / g) * g;
+        }
+        // Double-click finish
+        if (e.detail >= 2 && racewayDraw.points.length >= 2) {
+          finishRacewayDraw();
+          return;
+        }
+        racewayDraw.points.push({ x: x, y: y });
+        draw();
+        return;
+      }
+
+      // Select existing raceway when not hitting equipment
+      if (!hit && showRaceways) {
+        const rp = hitTestRaceway(pt.x, pt.y);
+        if (rp) {
+          selectedPathId = rp.path_id;
+          selectedId = null;
+          selectedPduId = null;
+          selectedCoolingId = null;
+          selectedUpsId = null;
+          selectedIds.clear();
+          renderRacewayProps(rp);
+          draw();
+          return;
+        }
+      }
 
       if ((pendingTemplate || pendingPdu || pendingCooling || pendingUps) && !hit) {
         const w = worldFromCanvas(pt.x, pt.y);

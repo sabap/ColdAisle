@@ -842,7 +842,7 @@ class SiteBackupService
             'snmp_v3_profiles' => 40,
             'snmp_site_oid_templates' => 41,
             'snmp_targets' => 42,
-            'cable_paths' => 50,
+            'cable_paths' => 50, // raceways / pathways (G-B1)
             'cables' => 51,
             'disposal_vendors' => 60,
             'disposals' => 61,

@@ -411,10 +411,15 @@ CREATE TABLE cable_paths (
     path_id INT IDENTITY(1,1) PRIMARY KEY,
     room_id INT NULL REFERENCES rooms(room_id),
     name NVARCHAR(100) NOT NULL,
-    path_type NVARCHAR(30) NOT NULL DEFAULT 'overhead', -- overhead, underfloor, tray, conduit
-    waypoints NVARCHAR(MAX) NULL, -- JSON array of {x,y,z}
+    path_type NVARCHAR(30) NOT NULL DEFAULT 'overhead', -- legacy: overhead, underfloor, tray, conduit
+    path_kind NVARCHAR(40) NOT NULL CONSTRAINT DF_cp_kind DEFAULT 'tray', -- tray, fiber_trough, raceway, conduit, underfloor
+    media_class NVARCHAR(20) NOT NULL CONSTRAINT DF_cp_media DEFAULT 'mixed', -- copper, fiber, mixed, power
+    feed_to NVARCHAR(20) NOT NULL CONSTRAINT DF_cp_feed DEFAULT 'overhead', -- overhead, underfloor, both, horizontal
+    width_m DECIMAL(8,3) NULL, -- visual / nominal trough width in meters
+    waypoints NVARCHAR(MAX) NULL, -- JSON array of {x,y,z} in room meters
     color_hex NVARCHAR(7) NOT NULL DEFAULT '#38bdf8',
-    notes NVARCHAR(MAX) NULL
+    notes NVARCHAR(MAX) NULL,
+    is_active BIT NOT NULL CONSTRAINT DF_cp_active DEFAULT 1
 );
 GO
 
@@ -422,9 +427,14 @@ IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'cables')
 CREATE TABLE cables (
     cable_id INT IDENTITY(1,1) PRIMARY KEY,
     cable_label NVARCHAR(100) NULL,
-    media_type NVARCHAR(50) NULL,
+    media_type NVARCHAR(50) NULL, -- Cat6, OM4, DAC, …
     length_m DECIMAL(8,2) NULL,
-    color NVARCHAR(30) NULL,
+    color NVARCHAR(30) NULL, -- legacy free-text
+    color_hex NVARCHAR(7) NULL, -- map / jacket color
+    speed NVARCHAR(30) NULL, -- 1G, 10G, 40G, 100G, …
+    cable_role NVARCHAR(30) NOT NULL CONSTRAINT DF_cables_role DEFAULT 'patch', -- patch, structured, trunk, jumper
+    circuit_id NVARCHAR(100) NULL, -- circuit / IDF pair label
+    strand_count INT NULL, -- fiber strand count when relevant
     a_port_id INT NULL REFERENCES device_ports(port_id),
     b_port_id INT NULL REFERENCES device_ports(port_id),
     path_id INT NULL REFERENCES cable_paths(path_id),

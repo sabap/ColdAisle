@@ -81,7 +81,7 @@ These are **not** free-form suggestions; they have acceptance criteria in the ba
 
 | ID | Gap | Status | vs peers | ColdAisle today | Suggested slice |
 |----|-----|--------|----------|-----------------|-----------------|
-| **G-B1** | **Structured cable plant** | Partial | Patch panels, trunks, pathways | Port–port cables, media, simple routes | Patch panels, trunk bundles, circuit IDs, bulk CSV import |
+| **G-B1** | **Structured cable plant** | **Closed (v1)** — **0.3.122** | Patch panels, trunks, pathways | Raceways on floor plan, feed OH/UF, media/speed colors, circuit IDs | Patch-panel device templates; multi-path hop list; bulk CSV |
 | **G-B2** | **Change / move work orders** | **Closed (v1)** — **0.3.116** | ITSM-linked moves, approvals | Ticket, from/to, checklist, apply inventory | External ITSM webhooks later |
 | **G-B3** | **Asset lifecycle depth** | **Closed (v1)** — **0.3.119** | PO/RMA/warranty campaigns | PO/RMA fields, custody event log, warranty digests + report | Multi-entity warranty (PDU/UPS); full ITAM campaigns later |
 | **G-B4-net** | **IPAM / network-DCIM bridge** | Gap (often intentional) | Device42, NetBox | Infra-first; interfaces on devices only | Out of default scope unless multi-homed switch inventory is requested |
@@ -122,7 +122,8 @@ Use as a **discussion default**, not a commitment.
 
 | Former gap | Delivered | Release / notes |
 |------------|-----------|-----------------|
-| **Tech mode (field tablet/phone)** | Session chrome + hub; reuses cabinets/devices/WO/audit APIs; QR → tech | **0.3.120** |
+| **G-B1 Structured cable plant** | Raceways (fiber trough / tray) on floor plan; OH vs underfloor feed; cable speed/color/circuit | **0.3.122** |
+| **Tech mode (field tablet/phone)** | Session chrome + hub; reuses cabinets/devices/WO/audit APIs; QR → tech | **0.3.120–0.3.121** |
 | **G-B3 Asset lifecycle depth** | Device PO/purchase/RMA; chain-of-custody event log; warranty email digests; warranty report polish | **0.3.119** |
 | **G-B5 Mail product flows** | Welcome email; local forgot/reset password tokens; disposal due-soon digests via poll worker | **0.3.118** |
 | **G-B2 Change / move work orders** | Work order list/detail; devices from→to; checklist; complete + apply inventory; bulk cabinet + moves this week | **0.3.116–0.3.117** |
