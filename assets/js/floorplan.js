@@ -4522,7 +4522,18 @@
         envSensors3d = data.env_sensors || [];
         roomRows = data.rows || [];
         powerZones = data.zones || [];
-        cablePaths = data.cable_paths || [];
+        cablePaths = (data.cable_paths || []).map(function (p) {
+          // Ensure elevation/width are real numbers for 3D (DECIMAL often arrives as string)
+          if (p && p.elevation_m != null && p.elevation_m !== '') {
+            var ev = parseFloat(p.elevation_m);
+            p.elevation_m = isFinite(ev) ? ev : p.elevation_m;
+          }
+          if (p && p.width_m != null && p.width_m !== '') {
+            var wv = parseFloat(p.width_m);
+            p.width_m = isFinite(wv) ? wv : p.width_m;
+          }
+          return p;
+        });
         if (!opts.keepCableRoutes && !opts.skipRouteReload) {
           // Keep routes only when reloading room for show_routes flow
         }

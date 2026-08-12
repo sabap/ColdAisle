@@ -253,6 +253,11 @@ class CablePlantService
         if (count($pts) < 2) {
             return ['ok' => false, 'path_id' => 0, 'message' => 'Source raceway needs at least two waypoints.'];
         }
+        // Plan geometry only — never inherit per-vertex z (would force clone to source height in 3D)
+        foreach ($pts as &$pt) {
+            unset($pt['z']);
+        }
+        unset($pt);
 
         $newKind = self::normalizePathKind((string)($options['path_kind'] ?? 'fiber_u_channel'));
         $media = strtolower(trim((string)($options['media_class']
@@ -325,21 +330,56 @@ class CablePlantService
         if (empty($res['ok'])) {
             return $res;
         }
+        $newId = (int)$res['path_id'];
+        // Ensure elevation stuck (upgrade fallback can drop new columns on first insert)
+        try {
+            $check = Database::fetchOne(
+                'SELECT elevation_m, path_kind FROM cable_paths WHERE path_id = ?',
+                [$newId]
+            );
+            $savedElev = isset($check['elevation_m']) && $check['elevation_m'] !== null && $check['elevation_m'] !== ''
+                ? (float)$check['elevation_m']
+                : null;
+            if ($savedElev === null || abs($savedElev - $elev) > 0.001) {
+                Database::update(
+                    'cable_paths',
+                    [
+                        'elevation_m' => $elev,
+                        'width_m' => $width,
+                        'path_kind' => $newKind,
+                        'media_class' => $media,
+                        'color_hex' => $color,
+                    ],
+                    'path_id = :id',
+                    [':id' => $newId]
+                );
+            }
+        } catch (Throwable $e) {
+            // non-fatal — row may still be usable
+        }
         $row = null;
         try {
-            $row = Database::fetchOne('SELECT * FROM cable_paths WHERE path_id = ?', [(int)$res['path_id']]);
+            $row = Database::fetchOne('SELECT * FROM cable_paths WHERE path_id = ?', [$newId]);
             if ($row) {
                 $row['waypoints_list'] = self::parseWaypoints($row['waypoints'] ?? null);
+                // Normalize numeric types for JSON/JS
+                if (isset($row['elevation_m']) && $row['elevation_m'] !== null && $row['elevation_m'] !== '') {
+                    $row['elevation_m'] = (float)$row['elevation_m'];
+                }
+                if (isset($row['width_m']) && $row['width_m'] !== null && $row['width_m'] !== '') {
+                    $row['width_m'] = (float)$row['width_m'];
+                }
             }
         } catch (Throwable $e) {
         }
         return [
             'ok' => true,
-            'path_id' => (int)$res['path_id'],
+            'path_id' => $newId,
             'message' => 'Cloned ' . ($srcCode !== '' ? $srcCode : ('#' . $sourcePathId))
                 . ' → ' . $pathCode . ' (' . (self::pathKinds()[$newKind] ?? $newKind)
                 . ', elev ' . number_format($elev, 2) . ' m AFF)',
             'path' => $row,
+            'elevation_m' => $elev,
         ];
     }
 
@@ -640,6 +680,13 @@ class CablePlantService
         foreach ($rows as &$r) {
             $r['waypoints_list'] = self::parseWaypoints($r['waypoints'] ?? null);
             $r['point_count'] = count($r['waypoints_list']);
+            // Normalize DECIMAL strings so JS Number() / 3D elev resolve correctly
+            if (isset($r['elevation_m']) && $r['elevation_m'] !== null && $r['elevation_m'] !== '') {
+                $r['elevation_m'] = (float)$r['elevation_m'];
+            }
+            if (isset($r['width_m']) && $r['width_m'] !== null && $r['width_m'] !== '') {
+                $r['width_m'] = (float)$r['width_m'];
+            }
         }
         unset($r);
         return $rows;

@@ -390,6 +390,29 @@
     return String(feed || 'overhead') === 'underfloor' ? -0.30 : 2.70;
   }
 
+  /**
+   * Path height AFF (meters) for 3D. Never treat null/'' as 0 (Number(null)===0 would
+   * pin raceways to the floor and hide real elevation differences).
+   */
+  function resolvePathElevationM(path) {
+    path = path || {};
+    var raw = path.elevation_m;
+    if (raw === undefined || raw === null || raw === '') {
+      raw = path.elev_m;
+    }
+    if (raw === undefined || raw === null || raw === '') {
+      return racewayDefaultElev(path.feed_to || path.path_type || 'overhead');
+    }
+    var elev = typeof raw === 'number' ? raw : parseFloat(String(raw).replace(',', '.').trim());
+    if (!isFinite(elev)) {
+      return racewayDefaultElev(path.feed_to || path.path_type || 'overhead');
+    }
+    // Clamp to same range as CablePlantService
+    if (elev < -2) elev = -2;
+    if (elev > 12) elev = 12;
+    return elev;
+  }
+
   function parseRacewayPoints(path) {
     var raw = path.waypoints_list || path.waypoints || [];
     if (typeof raw === 'string' && raw) {
@@ -403,10 +426,11 @@
       var x = Number(pt.x != null ? pt.x : pt[0]);
       var y = Number(pt.y != null ? pt.y : pt[1]);
       if (!isFinite(x) || !isFinite(y)) continue;
+      // Plan polyline only — path elevation_m is the single AFF height for 3D.
+      // Do not carry per-vertex z (clones of ladders must not inherit ladder Z).
       out.push({
         x: x,
         y: y,
-        z: pt.z != null ? Number(pt.z) : null,
         corner: String(pt.corner || 'sharp'),
         radius_m: Number(pt.radius_m) || 0,
       });
@@ -476,14 +500,14 @@
   }
 
   function planToScene3d(planPts, elevM, pathPts) {
-    // pathPts optional for per-vertex z override
-    var elev = isFinite(elevM) ? elevM : 2.7;
+    // Path-level elevation is authoritative. Per-vertex z only if elevM is omitted.
+    var usePathElev = elevM != null && isFinite(elevM);
+    var elev = usePathElev ? elevM : 2.7;
     var out = [];
     for (var i = 0; i < planPts.length; i++) {
       var p = planPts[i];
       var y = elev;
-      // Prefer explicit waypoint z when original points align (first/last often)
-      if (pathPts && pathPts[i] && pathPts[i].z != null && isFinite(pathPts[i].z)) {
+      if (!usePathElev && pathPts && pathPts[i] && pathPts[i].z != null && isFinite(pathPts[i].z)) {
         y = pathPts[i].z;
       }
       out.push(new THREE.Vector3(p.x, y, p.y));
@@ -708,8 +732,8 @@
     var feed = String(path.feed_to || path.path_type || 'overhead').toLowerCase();
     var width = Number(path.width_m);
     if (!isFinite(width) || width <= 0) width = racewayDefaultWidth(kind);
-    var elev = Number(path.elevation_m);
-    if (!isFinite(elev)) elev = racewayDefaultElev(feed);
+    // Always use path.elevation_m (m AFF) — ladder vs U-channel differ by this value
+    var elev = resolvePathElevationM(path);
     var plan = sampleRacewayPlan(pts);
     var centerline = planToScene3d(plan, elev, null);
     if (centerline.length < 2) return null;
@@ -725,7 +749,12 @@
       opacity: 1,
     });
     var group = new THREE.Group();
-    group.userData = { cablePath: path, kind: kind, racewayCenterline: centerline };
+    group.userData = {
+      cablePath: path,
+      kind: kind,
+      elevation_m: elev,
+      racewayCenterline: centerline,
+    };
 
     if (kind === 'conduit') {
       buildConduitRaceway(group, centerline, width, mat);
