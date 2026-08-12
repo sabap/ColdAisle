@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Raceway 90° curves:** yellow diamond on the inside of a corner — drag **inward** to pull a fillet, drag **out** to a hard stop at sharp; works on draft and saved paths (same path only, not joining two paths)
+
 ### Bug fixes
 
 ---

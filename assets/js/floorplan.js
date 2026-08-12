@@ -452,6 +452,114 @@
       return Array.isArray(p.waypoints) ? p.waypoints : [];
     }
 
+    /**
+     * Geometry at polyline corner i (interior only).
+     * bisector (bx,by) points from the corner into the angle (inward).
+     * @return {{bx:number,by:number,maxR:number,angleDeg:number}|null}
+     */
+    function cornerGeometry(pts, i) {
+      if (!pts || i <= 0 || i >= pts.length - 1) return null;
+      const A = pts[i - 1];
+      const B = pts[i];
+      const C = pts[i + 1];
+      const v1x = Number(A.x) - Number(B.x);
+      const v1y = Number(A.y) - Number(B.y);
+      const v2x = Number(C.x) - Number(B.x);
+      const v2y = Number(C.y) - Number(B.y);
+      const l1 = Math.hypot(v1x, v1y);
+      const l2 = Math.hypot(v2x, v2y);
+      if (l1 < 1e-4 || l2 < 1e-4) return null;
+      const u1x = v1x / l1;
+      const u1y = v1y / l1;
+      const u2x = v2x / l2;
+      const u2y = v2y / l2;
+      let bx = u1x + u2x;
+      let by = u1y + u2y;
+      let bl = Math.hypot(bx, by);
+      if (bl < 0.05) return null; // nearly straight
+      bx /= bl;
+      by /= bl;
+      const dot = Math.max(-1, Math.min(1, u1x * u2x + u1y * u2y));
+      const angleDeg = Math.acos(dot) * (180 / Math.PI);
+      const maxR = Math.min(l1, l2) * 0.45;
+      if (maxR < 0.08) return null;
+      return { bx: bx, by: by, maxR: maxR, angleDeg: angleDeg, l1: l1, l2: l2 };
+    }
+
+    /** World-space fillet control handle (inside the corner). */
+    function filletHandleWorld(pts, i) {
+      const g = cornerGeometry(pts, i);
+      if (!g) return null;
+      const B = pts[i];
+      const isFillet = String(B.corner || '') === 'fillet' && Number(B.radius_m) > 0.04;
+      const r = isFillet
+        ? Math.min(g.maxR, Math.max(0.05, Number(B.radius_m) || 0.3))
+        : Math.min(g.maxR * 0.35, 0.25); // preview offset for sharp corners
+      return {
+        x: Number(B.x) + g.bx * r,
+        y: Number(B.y) + g.by * r,
+        geom: g,
+        radius: isFillet ? Number(B.radius_m) || 0.3 : 0,
+        isFillet: isFillet,
+      };
+    }
+
+    function hitTestFilletHandle(mx, my) {
+      const s = scale();
+      const tol = 14;
+      // Draft interior corners
+      if (racewayDraw && racewayDraw.points && racewayDraw.points.length >= 3) {
+        const pts = racewayDraw.points;
+        for (let j = 1; j < pts.length - 1; j++) {
+          const h = filletHandleWorld(pts, j);
+          if (!h) continue;
+          const hx = ORIGIN + h.x * s;
+          const hy = ORIGIN + h.y * s;
+          if (Math.hypot(mx - hx, my - hy) <= tol) {
+            return { draft: true, path: null, pathId: 0, index: j, handle: h };
+          }
+        }
+      }
+      const ordered = cablePaths.slice().sort(function (a, b) {
+        const ap = Number(a.path_id) === Number(selectedPathId) ? 0 : 1;
+        const bp = Number(b.path_id) === Number(selectedPathId) ? 0 : 1;
+        return ap - bp;
+      });
+      for (let i = 0; i < ordered.length; i++) {
+        const p = ordered[i];
+        // Prefer selected path handles; also allow handles on any path when raceways shown
+        const pts = pathPoints(p);
+        if (pts.length < 3) continue;
+        for (let j = 1; j < pts.length - 1; j++) {
+          const h = filletHandleWorld(pts, j);
+          if (!h) continue;
+          const hx = ORIGIN + h.x * s;
+          const hy = ORIGIN + h.y * s;
+          const t = Number(p.path_id) === Number(selectedPathId) ? tol : tol - 2;
+          if (Math.hypot(mx - hx, my - hy) <= t) {
+            return { draft: false, path: p, pathId: p.path_id, index: j, handle: h };
+          }
+        }
+      }
+      return null;
+    }
+
+    function applyFilletRadius(pts, index, radiusM) {
+      if (!pts || index <= 0 || index >= pts.length - 1) return;
+      const g = cornerGeometry(pts, index);
+      if (!g) return;
+      const r = Math.max(0, Math.min(g.maxR, radiusM));
+      const pt = pts[index];
+      // Hard stop at sharp when dragged fully outward
+      if (r < 0.06) {
+        pt.corner = 'sharp';
+        delete pt.radius_m;
+      } else {
+        pt.corner = 'fillet';
+        pt.radius_m = Math.round(r * 1000) / 1000;
+      }
+    }
+
     /** Stroke polyline in canvas px; honors corner:fillet + radius_m (world meters). */
     function strokePolylineWithFillets(ptsWorld, s) {
       if (!ptsWorld || ptsWorld.length < 1) return;
@@ -470,16 +578,15 @@
         const next = px[i + 1];
         const isEnd = i === px.length - 1;
         const meta = ptsWorld[i] || {};
+        let r = Number(meta.radius_m);
         const wantFillet = !isEnd && next
-          && String(meta.corner || 'sharp') === 'fillet';
+          && String(meta.corner || 'sharp') === 'fillet'
+          && r > 0.05;
         if (!wantFillet) {
           ctx.lineTo(cur.x, cur.y);
           continue;
         }
-        // Tangent points along prev→cur and cur→next
-        let r = Number(meta.radius_m);
-        if (!(r > 0)) r = 0.30;
-        r = Math.max(0.15, Math.min(1.5, r));
+        r = Math.max(0.05, Math.min(1.5, r));
         let rPx = r * s;
         const dIn = Math.hypot(cur.x - prev.x, cur.y - prev.y);
         const dOut = Math.hypot(next.x - cur.x, next.y - cur.y);
@@ -559,7 +666,8 @@
         pts.forEach(function (pt, vi) {
           const x = ORIGIN + Number(pt.x || 0) * s;
           const y = ORIGIN + Number(pt.y || 0) * s;
-          const filleted = String(pt.corner || '') === 'fillet' && vi > 0 && vi < pts.length - 1;
+          const filleted = String(pt.corner || '') === 'fillet' && Number(pt.radius_m) > 0.04
+            && vi > 0 && vi < pts.length - 1;
           const dragging = drag && drag.kind === 'raceway_vertex' && drag.active
             && ((drag.draft && p._draft) || (!drag.draft && Number(drag.pathId) === Number(p.path_id)))
             && Number(drag.index) === vi;
@@ -573,6 +681,38 @@
             ctx.stroke();
           }
         });
+        // Curve handles: diamond on inward bisector (drag in = more curve, out = sharp stop)
+        if (selected || p._draft) {
+          for (let vi = 1; vi < pts.length - 1; vi++) {
+            const h = filletHandleWorld(pts, vi);
+            if (!h) continue;
+            const hx = ORIGIN + h.x * s;
+            const hy = ORIGIN + h.y * s;
+            const bx = ORIGIN + Number(pts[vi].x) * s;
+            const by = ORIGIN + Number(pts[vi].y) * s;
+            ctx.strokeStyle = 'rgba(251, 191, 36, 0.85)';
+            ctx.lineWidth = 1.25;
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath();
+            ctx.moveTo(bx, by);
+            ctx.lineTo(hx, hy);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            // diamond handle
+            const hs = h.isFillet ? 7 : 6;
+            ctx.fillStyle = h.isFillet ? '#fbbf24' : 'rgba(251, 191, 36, 0.55)';
+            ctx.strokeStyle = '#0f172a';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(hx, hy - hs);
+            ctx.lineTo(hx + hs, hy);
+            ctx.lineTo(hx, hy + hs);
+            ctx.lineTo(hx - hs, hy);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          }
+        }
         // label
         const label = p.path_code || p.name;
         if (pts.length >= 1 && label) {
@@ -1102,14 +1242,12 @@
         hud.innerHTML =
           '<div class="hud-title">Raceway draw · ' + n + ' point' + (n === 1 ? '' : 's') + '</div>' +
           '<ul>' +
-          '<li><strong>Add points:</strong> click empty floor (snap if Grid snap is on)</li>' +
-          '<li><strong>Move a point:</strong> drag a vertex — other ends stay put; release to anchor</li>' +
-          '<li><strong>90° curved corner:</strong> <kbd>Alt</kbd>+click an <em>interior</em> vertex ' +
-          '(not the first/last point) — toggles a smooth fillet (~0.3&nbsp;m). ' +
-          'Or select the path later and use <em>Make curved</em> in the props list.</li>' +
-          '<li><strong>Undo last point:</strong> <kbd>Backspace</kbd> or Undo point</li>' +
-          '<li><strong>Save path:</strong> Finish path · double-click empty floor · <kbd>Enter</kbd> (need 2+ points)</li>' +
-          '<li><strong>Exit draw mode:</strong> Exit draw · <kbd>Esc</kbd></li>' +
+          '<li><strong>Add points:</strong> click empty floor (need 3+ for a corner)</li>' +
+          '<li><strong>Move a point:</strong> drag a <em>round</em> vertex — other ends stay put</li>' +
+          '<li><strong>90° curve (same path only):</strong> on an L-corner, drag the <em>yellow diamond</em> ' +
+          '<strong>inward</strong> (into the angle) to pull a curve; drag <strong>out</strong> until it hard-stops at sharp 90°. ' +
+          'Not between two separate paths.</li>' +
+          '<li><strong>Undo last point:</strong> <kbd>Backspace</kbd> · <strong>Save:</strong> Finish / <kbd>Enter</kbd> · <strong>Exit:</strong> <kbd>Esc</kbd></li>' +
           '</ul>';
         return;
       }
@@ -1127,9 +1265,10 @@
         hud.innerHTML =
           '<div class="hud-title">Raceway selected</div>' +
           '<ul>' +
-          '<li><strong>Reshape:</strong> drag a vertex (others stay fixed)</li>' +
-          '<li><strong>Move whole path:</strong> drag the line between points</li>' +
-          '<li><strong>90° curve:</strong> <kbd>Alt</kbd>+click an interior vertex, or use Make curved in props</li>' +
+          '<li><strong>Reshape:</strong> drag a round vertex (others stay fixed)</li>' +
+          '<li><strong>Move whole path:</strong> drag the path line</li>' +
+          '<li><strong>90° curve:</strong> drag the <em>yellow diamond</em> <strong>into</strong> the corner; ' +
+          'drag out to a hard stop at sharp 90°. Same path only (not merging two paths).</li>' +
           '<li><strong>Delete path:</strong> Delete path button or <kbd>Delete</kbd></li>' +
           '</ul>';
         return;
@@ -2916,12 +3055,11 @@
       let vertHtml = '<ul style="margin:.35rem 0;padding-left:1.1rem;font-size:.8rem">';
       pts.forEach(function (pt, i) {
         const end = i === 0 || i === pts.length - 1;
-        const fil = String(pt.corner || '') === 'fillet';
+        const fil = String(pt.corner || '') === 'fillet' && Number(pt.radius_m) > 0.04;
         const hi = focusVertex === i ? ' style="font-weight:700;color:#7dd3fc"' : '';
         vertHtml += '<li' + hi + '>#' + (i + 1)
-          + (end ? ' end' : (fil ? ' curved r=' + (pt.radius_m || 0.3) + 'm' : ' sharp'))
-          + (!end ? ' <button type="button" class="btn btn-ghost btn-sm rw-fillet-btn" data-vi="' + i + '">'
-            + (fil ? 'Make sharp' : 'Make curved') + '</button>' : '')
+          + (end ? ' · end' : (fil ? ' · curved r=' + Number(pt.radius_m || 0).toFixed(2) + ' m' : ' · sharp'))
+          + (!end ? ' <span class="text-muted">(drag yellow ◆ on plan)</span>' : '')
           + '</li>';
       });
       vertHtml += '</ul>';
@@ -2938,7 +3076,7 @@
         '<div><dt>Vertices</dt><dd>' + pts.length + '</dd></div>' +
         '</dl>' +
         '<p class="text-muted" style="font-size:.78rem;margin:.5rem 0 0">' +
-        'Drag a <strong>vertex</strong> to reshape (other ends stay put). Drag the <strong>path line</strong> to move the whole raceway. Alt+click vertex = curve.</p>' +
+        'Drag a <strong>round vertex</strong> to reshape. Drag the <strong>yellow diamond</strong> into the corner for a 90° curve; drag out to sharp. Drag the <strong>path line</strong> to move the whole raceway.</p>' +
         vertHtml +
         '<p class="text-muted" style="font-size:.78rem">Dashed = underfloor. '
         + '<a href="' + (window.ColdAisle && window.ColdAisle.baseUrl
@@ -2964,12 +3102,6 @@
           deleteSelectedRaceway(false);
         });
       }
-      propsEl.querySelectorAll('.rw-fillet-btn').forEach(function (b) {
-        b.addEventListener('click', function () {
-          const vi = parseInt(b.getAttribute('data-vi'), 10);
-          toggleVertexFillet({ path: p, draft: false, index: vi, pathId: p.path_id });
-        });
-      });
       setRacewayUi();
     }
 
@@ -4826,9 +4958,43 @@
 
       if (!isLeft) return;
 
-      // Prefer raceway vertex / body hits over cabinets so saved paths stay editable
-      // even when vertices sit over equipment footprints.
+      // Prefer raceway handles / vertices / body over cabinets so saved paths stay editable
       if (!racewayDraw && showRaceways) {
+        // 1) Fillet curve handle (yellow diamond) — drag inward/outward
+        const filHit = hitTestFilletHandle(pt.x, pt.y);
+        if (filHit && !filHit.draft && filHit.path) {
+          e.preventDefault();
+          selectedPathId = filHit.path.path_id;
+          selectedId = null;
+          selectedPduId = null;
+          selectedCoolingId = null;
+          selectedUpsId = null;
+          selectedIds.clear();
+          const pts = pathPoints(filHit.path);
+          filHit.path.waypoints_list = pts;
+          const g = cornerGeometry(pts, filHit.index);
+          drag = {
+            kind: 'raceway_fillet',
+            draft: false,
+            pathId: Number(filHit.path.path_id),
+            index: filHit.index,
+            bx: g ? g.bx : 0,
+            by: g ? g.by : 0,
+            maxR: g ? g.maxR : 0.5,
+            cornerX: Number(pts[filHit.index].x) || 0,
+            cornerY: Number(pts[filHit.index].y) || 0,
+            startX: pt.x,
+            startY: pt.y,
+            active: false,
+            pointerId: e.pointerId,
+          };
+          renderRacewayProps(filHit.path, filHit.index);
+          setRacewayUi();
+          canvas.style.cursor = 'grabbing';
+          try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+          draw();
+          return;
+        }
         const vtxPref = hitTestRacewayVertex(pt.x, pt.y);
         if (vtxPref && !vtxPref.draft && vtxPref.path && !(e.altKey)) {
           e.preventDefault();
@@ -4855,9 +5021,9 @@
           draw();
           return;
         }
-        // Drag whole path by grabbing a segment (not a vertex)
+        // Drag whole path by grabbing a segment (not a vertex or handle)
         const segHit = hitTestRacewaySegment(pt.x, pt.y);
-        if (segHit && segHit.path && !hitTestRacewayVertex(pt.x, pt.y)) {
+        if (segHit && segHit.path && !hitTestRacewayVertex(pt.x, pt.y) && !hitTestFilletHandle(pt.x, pt.y)) {
           e.preventDefault();
           const p = segHit.path;
           selectedPathId = p.path_id;
@@ -4902,16 +5068,31 @@
       if (racewayDraw) {
         e.preventDefault();
         e.stopPropagation();
-        // Alt+click or right-click vertex → fillet toggle
+        // Curve handle first (yellow diamond)
+        const filDraft = hitTestFilletHandle(pt.x, pt.y);
+        if (filDraft && filDraft.draft) {
+          const pts = racewayDraw.points;
+          const g = cornerGeometry(pts, filDraft.index);
+          drag = {
+            kind: 'raceway_fillet',
+            draft: true,
+            pathId: 0,
+            index: filDraft.index,
+            bx: g ? g.bx : 0,
+            by: g ? g.by : 0,
+            maxR: g ? g.maxR : 0.5,
+            cornerX: Number(pts[filDraft.index].x) || 0,
+            cornerY: Number(pts[filDraft.index].y) || 0,
+            startX: pt.x,
+            startY: pt.y,
+            active: false,
+            pointerId: e.pointerId,
+          };
+          canvas.style.cursor = 'grabbing';
+          try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+          return;
+        }
         const vtx = hitTestRacewayVertex(pt.x, pt.y);
-        if (vtx && (e.altKey || e.button === 2)) {
-          toggleVertexFillet(vtx);
-          return;
-        }
-        if (vtx && e.detail >= 2 && vtx.draft && vtx.index > 0 && vtx.index < racewayDraw.points.length - 1) {
-          toggleVertexFillet(vtx);
-          return;
-        }
         // Click vertex → start drag (other vertices stay fixed)
         if (vtx && vtx.draft) {
           drag = {
@@ -4947,16 +5128,6 @@
           draw();
         }
         return;
-      }
-
-      // Vertex fillet when raceway selected
-      if (showRaceways && (e.altKey || e.button === 2)) {
-        const vtx2 = hitTestRacewayVertex(pt.x, pt.y);
-        if (vtx2 && !vtx2.draft) {
-          e.preventDefault();
-          toggleVertexFillet(vtx2);
-          return;
-        }
       }
 
       // Select raceway body when not on equipment (vertex/path drag handled above)
@@ -5165,6 +5336,10 @@
       if (!drag && !pan) {
         const pt = canvasPoint(e);
         if (racewayDraw || showRaceways) {
+          if (hitTestFilletHandle(pt.x, pt.y)) {
+            canvas.style.cursor = 'pointer';
+            return;
+          }
           const vtxH = hitTestRacewayVertex(pt.x, pt.y);
           if (vtxH) {
             canvas.style.cursor = 'grab';
@@ -5214,6 +5389,40 @@
         // Preserve corner metadata; only move this vertex
         cur.x = wpt.x;
         cur.y = wpt.y;
+        canvas.style.cursor = 'grabbing';
+        draw();
+        return;
+      }
+
+      // Drag yellow diamond: inward = more curve, outward hard-stop at sharp
+      if (drag.kind === 'raceway_fillet') {
+        const pts = drag.draft
+          ? (racewayDraw && racewayDraw.points)
+          : (function () {
+              const p = cablePaths.find(function (x) { return Number(x.path_id) === Number(drag.pathId); });
+              if (!p) return null;
+              if (!p.waypoints_list) p.waypoints_list = pathPoints(p);
+              return p.waypoints_list;
+            })();
+        if (!pts) {
+          drag = null;
+          return;
+        }
+        const wpt = racewayVertexWorldFromEvent(e);
+        if (!drag.active) {
+          const dx = wpt.canvas.x - drag.startX;
+          const dy = wpt.canvas.y - drag.startY;
+          if ((dx * dx + dy * dy) < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) return;
+          drag.active = true;
+        }
+        // Project pointer onto inward bisector from corner
+        const vx = wpt.x - drag.cornerX;
+        const vy = wpt.y - drag.cornerY;
+        let r = vx * drag.bx + vy * drag.by;
+        // Outward (negative along bisector) → hard stop at 0 (sharp)
+        if (r < 0) r = 0;
+        if (r > drag.maxR) r = drag.maxR;
+        applyFilletRadius(pts, drag.index, r);
         canvas.style.cursor = 'grabbing';
         draw();
         return;
@@ -5407,6 +5616,42 @@
         }
         updateCanvasCursor();
         persistRacewayPath(p, 'Vertex anchored');
+        return;
+      }
+
+      if (kind === 'raceway_fillet') {
+        const d = drag;
+        drag = null;
+        if (!wasActive) {
+          updateCanvasCursor();
+          draw();
+          return;
+        }
+        if (d.draft) {
+          const pt = racewayDraw && racewayDraw.points[d.index];
+          const r = pt && String(pt.corner) === 'fillet' ? (pt.radius_m || 0) : 0;
+          updateCanvasCursor();
+          draw();
+          ColdAisle.toast(
+            r > 0.05 ? ('Curve r≈' + Number(r).toFixed(2) + ' m') : 'Corner sharp (hard stop)',
+            'info'
+          );
+          return;
+        }
+        const p = cablePaths.find(function (x) { return Number(x.path_id) === Number(d.pathId); });
+        if (!p || !room) {
+          updateCanvasCursor();
+          draw();
+          return;
+        }
+        const pts = p.waypoints_list || pathPoints(p);
+        const pt = pts[d.index];
+        const r = pt && String(pt.corner) === 'fillet' ? (pt.radius_m || 0) : 0;
+        updateCanvasCursor();
+        persistRacewayPath(
+          p,
+          r > 0.05 ? ('Curve saved r≈' + Number(r).toFixed(2) + ' m') : 'Corner sharp (hard stop)'
+        );
         return;
       }
 
