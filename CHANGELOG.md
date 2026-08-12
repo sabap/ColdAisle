@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Raceway vertex drag:** click and drag a path point on the floor plan; adjacent ends stay fixed; release anchors the vertex (draft in-memory; saved paths persist via API)
+
 ### Bug fixes
 
 ---
