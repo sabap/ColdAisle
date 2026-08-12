@@ -412,11 +412,13 @@ CREATE TABLE cable_paths (
     room_id INT NULL REFERENCES rooms(room_id),
     name NVARCHAR(100) NOT NULL,
     path_type NVARCHAR(30) NOT NULL DEFAULT 'overhead', -- legacy: overhead, underfloor, tray, conduit
-    path_kind NVARCHAR(40) NOT NULL CONSTRAINT DF_cp_kind DEFAULT 'tray', -- tray, fiber_trough, raceway, conduit, underfloor
+    path_kind NVARCHAR(40) NOT NULL CONSTRAINT DF_cp_kind DEFAULT 'ladder', -- ladder, fiber_raceway, conduit, …
     media_class NVARCHAR(20) NOT NULL CONSTRAINT DF_cp_media DEFAULT 'mixed', -- copper, fiber, mixed, power
     feed_to NVARCHAR(20) NOT NULL CONSTRAINT DF_cp_feed DEFAULT 'overhead', -- overhead, underfloor, both, horizontal
+    path_code NVARCHAR(40) NULL, -- RS-A, ORC-AB.1, IRC-AB.1 (unique per room when set)
+    segment_class NVARCHAR(20) NULL, -- rs, orc, irc, custom
     width_m DECIMAL(8,3) NULL, -- visual / nominal trough width in meters
-    waypoints NVARCHAR(MAX) NULL, -- JSON array of {x,y,z} in room meters
+    waypoints NVARCHAR(MAX) NULL, -- JSON [{x,y,z?,corner?,radius_m?}] room meters
     color_hex NVARCHAR(7) NOT NULL DEFAULT '#38bdf8',
     notes NVARCHAR(MAX) NULL,
     is_active BIT NOT NULL CONSTRAINT DF_cp_active DEFAULT 1

@@ -36,6 +36,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             App::flash('success', 'Cable connection recorded.');
         }
         if ($action === 'add_path') {
+            if (trim((string)($_POST['name'] ?? '')) === '' && trim((string)($_POST['path_code'] ?? '')) !== '') {
+                $_POST['name'] = trim((string)$_POST['path_code']);
+            }
             $res = CablePlantService::savePath($_POST, null);
             if (empty($res['ok'])) {
                 throw new RuntimeException($res['message'] ?? 'Could not save path.');
@@ -280,9 +283,22 @@ layout_header('Cable plant', $user, 'cables');
                 <tr><th>Name</th><th>Kind</th><th>Media</th><th>Feed</th><th>Map</th><th>Points</th><th></th></tr>
                 </thead>
                 <tbody>
-                <?php foreach ($paths as $path): ?>
+                <?php foreach ($paths as $path):
+                    $code = trim((string)($path['path_code'] ?? ''));
+                    if ($code === '') {
+                        $code = (string)($path['name'] ?? '');
+                    }
+                    ?>
                     <tr>
-                        <td><strong><?= App::e($path['name']) ?></strong></td>
+                        <td>
+                            <strong><?= App::e($code) ?></strong>
+                            <?php if (!empty($path['name']) && (string)$path['name'] !== $code): ?>
+                                <div class="text-muted" style="font-size:.75rem"><?= App::e((string)$path['name']) ?></div>
+                            <?php endif; ?>
+                            <?php if (!empty($path['segment_class'])): ?>
+                                <span class="badge" style="margin-top:.2rem"><?= App::e(strtoupper((string)$path['segment_class'])) ?></span>
+                            <?php endif; ?>
+                        </td>
                         <td><span class="badge"><?= App::e($pathKinds[$path['path_kind'] ?? ''] ?? ($path['path_kind'] ?? $path['path_type'] ?? '—')) ?></span></td>
                         <td><?= App::e($mediaClasses[$path['media_class'] ?? ''] ?? ($path['media_class'] ?? '—')) ?></td>
                         <td><?= App::e($feedModes[$path['feed_to'] ?? ''] ?? ($path['feed_to'] ?? '—')) ?></td>
@@ -310,13 +326,33 @@ layout_header('Cable plant', $user, 'cables');
             <form method="post" class="form-grid">
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                 <input type="hidden" name="action" value="add_path">
-                <div class="form-row"><label>Name *</label>
-                    <input class="form-control" name="name" required placeholder="Fiber trough Row A"></div>
-                <div class="form-row"><label>Kind</label>
-                    <select class="form-control" name="path_kind" id="path_kind">
-                        <?php foreach ($pathKinds as $kv => $kl): ?>
-                            <option value="<?= App::e($kv) ?>" <?= $kv === 'fiber_trough' ? '' : '' ?>><?= App::e($kl) ?></option>
+                <div class="form-row"><label>Pathway code *</label>
+                    <input class="form-control" name="path_code" required placeholder="RS-A / ORC-AB.1"></div>
+                <div class="form-row"><label>Display name</label>
+                    <input class="form-control" name="name" placeholder="Defaults to code"></div>
+                <div class="form-row"><label>Segment class</label>
+                    <select class="form-control" name="segment_class">
+                        <?php foreach (CablePlantService::segmentClasses() as $sv => $sl): ?>
+                            <option value="<?= App::e($sv) ?>"><?= App::e($sl) ?></option>
                         <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row"><label>Raceway type *</label>
+                    <select class="form-control" name="path_kind" id="path_kind">
+                        <?php foreach (['ladder', 'fiber_raceway', 'conduit'] as $pk): ?>
+                            <option value="<?= App::e($pk) ?>" <?= $pk === 'fiber_raceway' ? 'selected' : '' ?>>
+                                <?= App::e($pathKinds[$pk] ?? $pk) ?>
+                            </option>
+                        <?php endforeach; ?>
+                        <optgroup label="Advanced">
+                        <?php foreach ($pathKinds as $kv => $kl):
+                            if (in_array($kv, ['ladder', 'fiber_raceway', 'conduit'], true)) {
+                                continue;
+                            }
+                            ?>
+                            <option value="<?= App::e($kv) ?>"><?= App::e($kl) ?></option>
+                        <?php endforeach; ?>
+                        </optgroup>
                     </select>
                 </div>
                 <div class="form-row"><label>Media class</label>

@@ -67,18 +67,148 @@ class CablePlantService
         ];
     }
 
-    /** @return array<string,string> */
+    public const DEFAULT_FILLET_RADIUS_M = 0.30;
+
+    /**
+     * Raceway construction type (3D-ready). Primary: ladder, fiber_raceway, conduit.
+     * @return array<string,string>
+     */
     public static function pathKinds(): array
     {
         return [
-            'tray' => 'Cable tray / ladder',
-            'fiber_trough' => 'Fiber trough (e.g. yellow PVC)',
-            'raceway' => 'Raceway / basket',
+            'ladder' => 'Ladder tray',
+            'fiber_raceway' => 'Fiber raceway',
             'conduit' => 'Conduit',
+            // Advanced / legacy
+            'tray' => 'Cable tray (generic)',
+            'fiber_trough' => 'Fiber trough (legacy)',
+            'raceway' => 'Basket raceway',
             'underfloor' => 'Underfloor channel',
             'busway' => 'Busway / power path',
             'other' => 'Other',
         ];
+    }
+
+    /** Primary kinds shown in finish UI. @return list<string> */
+    public static function primaryPathKinds(): array
+    {
+        return ['ladder', 'fiber_raceway', 'conduit'];
+    }
+
+    /** @return array<string,string> */
+    public static function segmentClasses(): array
+    {
+        return [
+            'rs' => 'RS — row span (along row / aisle)',
+            'orc' => 'ORC — outer row connector',
+            'irc' => 'IRC — inner row connector',
+            'custom' => 'Custom code',
+        ];
+    }
+
+    /** Normalize legacy kind aliases to current codes. */
+    public static function normalizePathKind(string $kind): string
+    {
+        $k = strtolower(trim($kind));
+        $map = [
+            'fiber_trough' => 'fiber_raceway',
+            'fiber' => 'fiber_raceway',
+            'tray' => 'ladder',
+            'overhead' => 'ladder',
+            'basket' => 'raceway',
+        ];
+        if (isset($map[$k])) {
+            $k = $map[$k];
+        }
+        $kinds = self::pathKinds();
+        return isset($kinds[$k]) ? $k : 'ladder';
+    }
+
+    public static function defaultColorForPathKind(string $kind): string
+    {
+        return match (self::normalizePathKind($kind)) {
+            'fiber_raceway', 'fiber_trough' => '#eab308',
+            'ladder', 'tray' => '#2563eb',
+            'conduit' => '#64748b',
+            'busway' => '#111827',
+            default => '#38bdf8',
+        };
+    }
+
+    /**
+     * Suggest next free pathway code in a room (RS-A, ORC-AB.1, IRC-AB.1, …).
+     *
+     * @param 'rs'|'orc'|'irc'|'custom' $class
+     * @param string $rowOrPair RS: "A"; ORC/IRC: "AB"
+     */
+    public static function suggestNextPathCode(int $roomId, string $class, string $rowOrPair = 'A'): string
+    {
+        $class = strtolower(trim($class));
+        $rowOrPair = strtoupper(preg_replace('/[^A-Z]/', '', $rowOrPair) ?? '');
+        if ($rowOrPair === '') {
+            $rowOrPair = 'A';
+        }
+        $existing = self::pathCodesInRoom($roomId);
+        if ($class === 'rs') {
+            $letter = $rowOrPair[0];
+            // Prefer requested letter if free; else next free A–Z
+            for ($i = 0; $i < 26; $i++) {
+                $L = chr(ord('A') + ((ord($letter) - ord('A') + $i) % 26));
+                $code = 'RS-' . $L;
+                if (!isset($existing[strtoupper($code)])) {
+                    return $code;
+                }
+            }
+            return 'RS-A' . (count($existing) + 1);
+        }
+        if ($class === 'orc' || $class === 'irc') {
+            $pair = strlen($rowOrPair) >= 2 ? substr($rowOrPair, 0, 2) : ($rowOrPair . 'B');
+            $prefix = strtoupper($class) . '-' . $pair . '.';
+            $n = 1;
+            while (isset($existing[strtoupper($prefix . $n)])) {
+                $n++;
+            }
+            return $prefix . $n;
+        }
+        return 'PATH-' . (count($existing) + 1);
+    }
+
+    /**
+     * @return array<string,true> uppercased codes present in room
+     */
+    public static function pathCodesInRoom(int $roomId): array
+    {
+        $out = [];
+        if ($roomId < 1) {
+            return $out;
+        }
+        try {
+            $rows = Database::fetchAll(
+                'SELECT path_code, name FROM cable_paths WHERE room_id = ?',
+                [$roomId]
+            );
+        } catch (Throwable $e) {
+            return $out;
+        }
+        foreach ($rows as $r) {
+            $c = trim((string)($r['path_code'] ?? ''));
+            if ($c === '') {
+                $c = trim((string)($r['name'] ?? ''));
+            }
+            if ($c !== '') {
+                $out[strtoupper($c)] = true;
+            }
+        }
+        return $out;
+    }
+
+    public static function validatePathCode(string $code): bool
+    {
+        $code = trim($code);
+        if ($code === '' || strlen($code) > 40) {
+            return false;
+        }
+        return (bool)preg_match('/^[A-Za-z0-9][A-Za-z0-9._\-]{0,39}$/', $code);
     }
 
     /** @return array<string,string> */
@@ -115,9 +245,9 @@ class CablePlantService
     }
 
     /**
-     * Normalize waypoints JSON to list of {x,y,z?} in meters.
+     * Normalize waypoints JSON to list of {x,y,z?,corner?,radius_m?} in meters.
      * @param mixed $raw string JSON or array
-     * @return list<array{x:float,y:float,z?:float}>
+     * @return list<array<string,mixed>>
      */
     public static function parseWaypoints(mixed $raw): array
     {
@@ -145,16 +275,25 @@ class CablePlantService
             if (isset($pt['z']) || isset($pt[2])) {
                 $row['z'] = (float)($pt['z'] ?? $pt[2]);
             }
+            $corner = strtolower(trim((string)($pt['corner'] ?? 'sharp')));
+            if ($corner === 'fillet' || $corner === 'curve' || $corner === 'curved') {
+                $row['corner'] = 'fillet';
+                $r = isset($pt['radius_m']) ? (float)$pt['radius_m'] : self::DEFAULT_FILLET_RADIUS_M;
+                $row['radius_m'] = max(0.15, min(1.5, $r > 0 ? $r : self::DEFAULT_FILLET_RADIUS_M));
+            } else {
+                $row['corner'] = 'sharp';
+            }
             $out[] = $row;
         }
         return $out;
     }
 
-    /** @param list<array{x:float,y:float,z?:float}> $points */
+    /** @param list<array<string,mixed>> $points */
     public static function encodeWaypoints(array $points): string
     {
         $clean = [];
-        foreach ($points as $pt) {
+        $n = count($points);
+        foreach ($points as $i => $pt) {
             if (!is_array($pt)) {
                 continue;
             }
@@ -164,6 +303,14 @@ class CablePlantService
             ];
             if (isset($pt['z'])) {
                 $row['z'] = round((float)$pt['z'], 4);
+            }
+            // Endpoints always sharp
+            $isEnd = ($i === 0 || $i === $n - 1);
+            $corner = strtolower(trim((string)($pt['corner'] ?? 'sharp')));
+            if (!$isEnd && ($corner === 'fillet' || $corner === 'curve' || $corner === 'curved')) {
+                $row['corner'] = 'fillet';
+                $r = isset($pt['radius_m']) ? (float)$pt['radius_m'] : self::DEFAULT_FILLET_RADIUS_M;
+                $row['radius_m'] = max(0.15, min(1.5, $r > 0 ? $r : self::DEFAULT_FILLET_RADIUS_M));
             }
             $clean[] = $row;
         }
@@ -216,37 +363,66 @@ class CablePlantService
      */
     public static function savePath(array $data, ?int $pathId = null): array
     {
+        $pathCode = trim((string)($data['path_code'] ?? ''));
         $name = trim((string)($data['name'] ?? ''));
+        if ($name === '' && $pathCode !== '') {
+            $name = $pathCode;
+        }
         if ($name === '') {
-            return ['ok' => false, 'path_id' => 0, 'message' => 'Path name is required.'];
+            return ['ok' => false, 'path_id' => 0, 'message' => 'Pathway code or name is required.'];
+        }
+        if ($pathCode !== '' && !self::validatePathCode($pathCode)) {
+            return ['ok' => false, 'path_id' => 0, 'message' => 'Invalid pathway code (use letters, numbers, . _ -).'];
         }
         $roomId = isset($data['room_id']) && $data['room_id'] !== '' && $data['room_id'] !== null
             ? (int)$data['room_id'] : null;
+
+        $segClass = strtolower(trim((string)($data['segment_class'] ?? '')));
+        if ($segClass !== '' && !isset(self::segmentClasses()[$segClass])) {
+            $segClass = 'custom';
+        }
+        if ($segClass === '') {
+            $segClass = null;
+        }
+
+        // Uniqueness of path_code within room
+        if ($pathCode !== '' && $roomId) {
+            $existing = self::pathCodesInRoom($roomId);
+            $up = strtoupper($pathCode);
+            // Allow same code on self when updating
+            $conflict = isset($existing[$up]);
+            if ($conflict && $pathId) {
+                try {
+                    $self = Database::fetchOne(
+                        'SELECT path_code FROM cable_paths WHERE path_id = ?',
+                        [$pathId]
+                    );
+                    if ($self && strtoupper(trim((string)($self['path_code'] ?? ''))) === $up) {
+                        $conflict = false;
+                    }
+                } catch (Throwable $e) {
+                }
+            }
+            if ($conflict) {
+                return ['ok' => false, 'path_id' => 0, 'message' => "Pathway code {$pathCode} already used in this room."];
+            }
+        }
+
         $mediaClass = strtolower(trim((string)($data['media_class'] ?? 'mixed')));
         if (!isset(self::mediaClasses()[$mediaClass])) {
             $mediaClass = 'mixed';
         }
-        $pathKind = strtolower(trim((string)($data['path_kind'] ?? $data['path_type'] ?? 'tray')));
-        // Map legacy path_type values
-        $legacyMap = [
-            'overhead' => 'tray',
-            'underfloor' => 'underfloor',
-            'tray' => 'tray',
-            'conduit' => 'conduit',
-        ];
-        if (isset($legacyMap[$pathKind])) {
-            $pathKind = $legacyMap[$pathKind];
-        }
-        if (!isset(self::pathKinds()[$pathKind])) {
-            $pathKind = 'tray';
-        }
+        $pathKind = self::normalizePathKind((string)($data['path_kind'] ?? $data['path_type'] ?? 'ladder'));
         $feed = strtolower(trim((string)($data['feed_to'] ?? 'overhead')));
         if (!isset(self::feedModes()[$feed])) {
             $feed = $pathKind === 'underfloor' ? 'underfloor' : 'overhead';
         }
         $color = trim((string)($data['color_hex'] ?? ''));
         if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $color)) {
-            $color = self::defaultColorForMediaClass($mediaClass);
+            $color = self::defaultColorForPathKind($pathKind);
+            if ($mediaClass === 'fiber' && $pathKind === 'ladder') {
+                $color = self::defaultColorForMediaClass($mediaClass);
+            }
         }
         $waypoints = null;
         if (array_key_exists('waypoints', $data)) {
@@ -262,11 +438,11 @@ class CablePlantService
         $pathType = match ($feed) {
             'underfloor' => 'underfloor',
             'both' => 'overhead',
-            default => ($pathKind === 'underfloor' ? 'underfloor' : 'overhead'),
+            default => 'overhead',
         };
         if ($pathKind === 'conduit') {
             $pathType = 'conduit';
-        } elseif ($pathKind === 'tray' || $pathKind === 'raceway' || $pathKind === 'fiber_trough') {
+        } elseif (in_array($pathKind, ['ladder', 'tray', 'raceway', 'fiber_raceway', 'fiber_trough'], true)) {
             $pathType = $feed === 'underfloor' ? 'underfloor' : 'tray';
         }
 
@@ -282,6 +458,8 @@ class CablePlantService
             'feed_to' => $feed,
             'is_active' => array_key_exists('is_active', $data)
                 ? (!empty($data['is_active']) ? 1 : 0) : 1,
+            'path_code' => $pathCode !== '' ? $pathCode : null,
+            'segment_class' => $segClass,
         ];
         if ($waypoints !== null) {
             $fields['waypoints'] = $waypoints;
