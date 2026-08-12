@@ -66,6 +66,14 @@ try {
                 App::json(['error' => 'Forbidden'], 403);
             }
             $id = (int)($_GET['id'] ?? 0);
+            $force = !empty($_GET['force']);
+            if (class_exists('CablePlantService')) {
+                $res = CablePlantService::deletePath($id, $force);
+                if (empty($res['ok'])) {
+                    App::json(['error' => $res['message'] ?? 'Delete failed'], 409);
+                }
+                App::json(['ok' => true, 'message' => $res['message'], 'unlinked' => (int)($res['unlinked'] ?? 0)]);
+            }
             $inUse = (int)Database::fetchValue('SELECT COUNT(*) FROM cables WHERE path_id = ?', [$id]);
             if ($inUse > 0) {
                 App::json(['error' => "Path used by {$inUse} cable(s)"], 409);

@@ -59,12 +59,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         }
         if ($action === 'delete_path') {
             $pid = (int)($_POST['path_id'] ?? 0);
-            $inUse = (int)Database::fetchValue('SELECT COUNT(*) FROM cables WHERE path_id = ?', [$pid]);
-            if ($inUse > 0) {
-                throw new RuntimeException("Path is used by {$inUse} cable(s). Reassign them first.");
+            $force = !empty($_POST['force']);
+            $res = CablePlantService::deletePath($pid, $force);
+            if (empty($res['ok'])) {
+                throw new RuntimeException($res['message'] ?? 'Could not delete path.');
             }
-            Database::delete('cable_paths', 'path_id = ?', [$pid]);
-            App::flash('success', 'Path removed.');
+            App::flash('success', $res['message']);
         }
     } catch (Throwable $e) {
         App::flash('error', $e->getMessage());

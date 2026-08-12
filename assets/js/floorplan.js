@@ -2845,13 +2845,24 @@
         + '<a href="' + (window.ColdAisle && window.ColdAisle.baseUrl
           ? String(window.ColdAisle.baseUrl).replace(/\/$/, '') + '/' : '') +
         'pages/cables.php">Cabling</a></p>' +
-        '<button type="button" class="btn btn-sm btn-secondary" id="btnClearPathSel">Deselect</button>';
+        '<div class="form-actions" style="flex-wrap:wrap;gap:.35rem;margin-top:.5rem">' +
+        '<button type="button" class="btn btn-sm btn-secondary" id="btnClearPathSel">Deselect</button>' +
+        '<button type="button" class="btn btn-sm btn-danger" id="btnDeletePathProp">Delete path</button>' +
+        '</div>';
       const btn = propsEl.querySelector('#btnClearPathSel');
       if (btn) {
         btn.addEventListener('click', function () {
           selectedPathId = null;
+          setRacewayUi();
           propsEl.innerHTML = '<p class="text-muted">Select a cabinet or raceway.</p>';
           draw();
+        });
+      }
+      const delBtn = propsEl.querySelector('#btnDeletePathProp');
+      if (delBtn) {
+        delBtn.addEventListener('click', function () {
+          selectedPathId = p.path_id;
+          deleteSelectedRaceway(false);
         });
       }
       propsEl.querySelectorAll('.rw-fillet-btn').forEach(function (b) {
@@ -2860,6 +2871,7 @@
           toggleVertexFillet({ path: p, draft: false, index: vi, pathId: p.path_id });
         });
       });
+      setRacewayUi();
     }
 
     function renderMultiProps(list) {
@@ -4328,12 +4340,84 @@
     function setRacewayUi() {
       const fin = root.querySelector('#btnFinishRaceway');
       const can = root.querySelector('#btnCancelRaceway');
+      const undo = root.querySelector('#btnUndoRacewayPt');
+      const clear = root.querySelector('#btnClearRacewayPts');
+      const del = root.querySelector('#btnDeleteRaceway');
       const drawBtn = root.querySelector('#btnDrawRaceway');
-      if (fin) fin.hidden = !racewayDraw;
+      const n = racewayDraw && racewayDraw.points ? racewayDraw.points.length : 0;
+      if (fin) {
+        fin.hidden = !racewayDraw;
+        fin.disabled = n < 2;
+      }
       if (can) can.hidden = !racewayDraw;
+      if (undo) {
+        undo.hidden = !racewayDraw;
+        undo.disabled = n < 1;
+      }
+      if (clear) {
+        clear.hidden = !racewayDraw;
+        clear.disabled = n < 1;
+      }
+      // Delete selected *saved* path (works in or out of draw mode)
+      if (del) {
+        del.hidden = !(selectedPathId && Number(selectedPathId) > 0);
+      }
       if (drawBtn) {
         drawBtn.classList.toggle('btn-primary', !!racewayDraw);
         drawBtn.classList.toggle('btn-secondary', !racewayDraw);
+      }
+    }
+
+    function undoRacewayPoint() {
+      if (!racewayDraw || !racewayDraw.points.length) return;
+      racewayDraw.points.pop();
+      setRacewayUi();
+      draw();
+      ColdAisle.toast('Removed last point (' + racewayDraw.points.length + ' left)', 'info');
+    }
+
+    function clearRacewayPoints() {
+      if (!racewayDraw) return;
+      racewayDraw.points = [];
+      setRacewayUi();
+      draw();
+      ColdAisle.toast('Draft cleared — still in draw mode', 'info');
+    }
+
+    async function deleteSelectedRaceway(force) {
+      const id = Number(selectedPathId);
+      if (!(id > 0)) {
+        ColdAisle.toast('Select a saved raceway first', 'error');
+        return;
+      }
+      const p = cablePaths.find(function (x) { return Number(x.path_id) === id; });
+      const label = (p && (p.path_code || p.name)) || ('#' + id);
+      if (!force && !window.confirm('Delete raceway ' + label + '?')) {
+        return;
+      }
+      try {
+        const data = await ColdAisle.api('api/floorplan.php?action=delete_cable_path', {
+          method: 'POST',
+          body: { path_id: id, force: !!force },
+        });
+        cablePaths = cablePaths.filter(function (x) { return Number(x.path_id) !== id; });
+        selectedPathId = null;
+        if (propsEl) {
+          propsEl.innerHTML = '<p class="text-muted">Raceway deleted.</p>';
+        }
+        setRacewayUi();
+        draw();
+        ColdAisle.toast((data && data.message) || ('Deleted ' + label), 'success');
+      } catch (err) {
+        const msg = (err && err.message) || 'Delete failed';
+        // Offer force if cables still linked
+        if (/cable/i.test(msg) && !force) {
+          if (window.confirm(msg + '\n\nForce delete and clear path links on those cables?')) {
+            return deleteSelectedRaceway(true);
+          }
+          return;
+        }
+        ColdAisle.toast(msg, 'error');
       }
     }
 
@@ -4526,6 +4610,9 @@
     const btnDrawRaceway = root.querySelector('#btnDrawRaceway');
     const btnFinishRaceway = root.querySelector('#btnFinishRaceway');
     const btnCancelRaceway = root.querySelector('#btnCancelRaceway');
+    const btnUndoRacewayPt = root.querySelector('#btnUndoRacewayPt');
+    const btnClearRacewayPts = root.querySelector('#btnClearRacewayPts');
+    const btnDeleteRaceway = root.querySelector('#btnDeleteRaceway');
     if (racewayToggle) {
       racewayToggle.addEventListener('click', function () {
         showRaceways = !showRaceways;
@@ -4541,6 +4628,11 @@
     });
     if (btnFinishRaceway) btnFinishRaceway.addEventListener('click', function () { finishRacewayDraw(); });
     if (btnCancelRaceway) btnCancelRaceway.addEventListener('click', cancelRacewayDraw);
+    if (btnUndoRacewayPt) btnUndoRacewayPt.addEventListener('click', undoRacewayPoint);
+    if (btnClearRacewayPts) btnClearRacewayPts.addEventListener('click', clearRacewayPoints);
+    if (btnDeleteRaceway) btnDeleteRaceway.addEventListener('click', function () {
+      deleteSelectedRaceway(false);
+    });
 
     // Finish modal wiring
     (function bindRacewayModal() {
@@ -4577,7 +4669,6 @@
     })();
 
     document.addEventListener('keydown', function (e) {
-      if (!racewayDraw) return;
       const modal = document.getElementById('racewayFinishModal');
       if (modal && !modal.hidden) {
         if (e.key === 'Escape') {
@@ -4586,12 +4677,24 @@
         }
         return;
       }
+      // Delete selected saved path (when not typing in an input)
+      const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+      const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable);
+      if (!typing && (e.key === 'Delete' || e.key === 'Del') && selectedPathId && Number(selectedPathId) > 0) {
+        e.preventDefault();
+        deleteSelectedRaceway(false);
+        return;
+      }
+      if (!racewayDraw) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         cancelRacewayDraw();
       } else if (e.key === 'Enter') {
         e.preventDefault();
         finishRacewayDraw();
+      } else if (e.key === 'Backspace' && !typing) {
+        e.preventDefault();
+        undoRacewayPoint();
       }
     });
 
@@ -4651,6 +4754,7 @@
         }
         if (!vtx) {
           racewayDraw.points.push({ x: x, y: y, corner: 'sharp' });
+          setRacewayUi();
           draw();
         }
         return;
@@ -4677,6 +4781,7 @@
           selectedUpsId = null;
           selectedIds.clear();
           renderRacewayProps(vtx3.path, vtx3.index);
+          setRacewayUi();
           draw();
           return;
         }
@@ -4689,6 +4794,7 @@
           selectedUpsId = null;
           selectedIds.clear();
           renderRacewayProps(rp);
+          setRacewayUi();
           draw();
           return;
         }

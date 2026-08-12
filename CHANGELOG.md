@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Raceway delete / undo:** while drawing — **Undo point** (Backspace) and **Clear points** without exiting overlay; select a saved path → **Delete path** (toolbar or props, or Delete key); force-unlink if cables still reference the path
+
 ### Bug fixes
 
 ---

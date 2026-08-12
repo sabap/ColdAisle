@@ -592,6 +592,34 @@ try {
         App::json(['path' => $row, 'message' => $res['message']], $pathId > 0 ? 200 : 201);
     }
 
+    // Delete raceway / pathway (shared CablePlantService)
+    if ($method === 'POST' && (($_GET['action'] ?? '') === 'delete_cable_path')) {
+        api_require_permission('edit_infrastructure');
+        api_require_csrf();
+        if (!class_exists('CablePlantService')) {
+            App::json(['error' => 'CablePlantService unavailable'], 500);
+        }
+        $data = api_read_json();
+        $pathId = (int)($data['path_id'] ?? $_GET['id'] ?? 0);
+        $force = !empty($data['force']);
+        $res = CablePlantService::deletePath($pathId, $force);
+        if (empty($res['ok'])) {
+            App::json([
+                'error' => $res['message'] ?? 'Delete failed',
+                'in_use' => true,
+            ], 409);
+        }
+        AuditService::log(
+            (int)$user['user_id'],
+            $user['username'],
+            'delete',
+            'cable_path',
+            $pathId,
+            ['force' => $force, 'unlinked' => (int)($res['unlinked'] ?? 0)]
+        );
+        App::json(['ok' => true, 'message' => $res['message'], 'unlinked' => (int)($res['unlinked'] ?? 0)]);
+    }
+
     // Default GET: floor plan payload
     $roomId = (int)($_GET['room_id'] ?? 0);
     if (!$roomId) {

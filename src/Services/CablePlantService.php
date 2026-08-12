@@ -502,6 +502,58 @@ class CablePlantService
     }
 
     /**
+     * Delete a pathway. If cables reference it: either block or clear path_id when $force.
+     *
+     * @return array{ok:bool,message:string,unlinked:int}
+     */
+    public static function deletePath(int $pathId, bool $force = false): array
+    {
+        if ($pathId < 1) {
+            return ['ok' => false, 'message' => 'Invalid path.', 'unlinked' => 0];
+        }
+        try {
+            $row = Database::fetchOne('SELECT path_id, name, path_code FROM cable_paths WHERE path_id = ?', [$pathId]);
+        } catch (Throwable $e) {
+            return ['ok' => false, 'message' => $e->getMessage(), 'unlinked' => 0];
+        }
+        if (!$row) {
+            return ['ok' => false, 'message' => 'Path not found.', 'unlinked' => 0];
+        }
+        $inUse = 0;
+        try {
+            $inUse = (int)Database::fetchValue('SELECT COUNT(*) FROM cables WHERE path_id = ?', [$pathId]);
+        } catch (Throwable $e) {
+            $inUse = 0;
+        }
+        if ($inUse > 0 && !$force) {
+            return [
+                'ok' => false,
+                'message' => "Path is used by {$inUse} cable(s). Reassign them first, or force-delete to clear the path link.",
+                'unlinked' => 0,
+            ];
+        }
+        $unlinked = 0;
+        try {
+            if ($inUse > 0 && $force) {
+                Database::query('UPDATE cables SET path_id = NULL WHERE path_id = ?', [$pathId]);
+                $unlinked = $inUse;
+            }
+            Database::delete('cable_paths', 'path_id = ?', [$pathId]);
+        } catch (Throwable $e) {
+            return ['ok' => false, 'message' => $e->getMessage(), 'unlinked' => 0];
+        }
+        $label = trim((string)($row['path_code'] ?? '')) !== ''
+            ? (string)$row['path_code']
+            : (string)($row['name'] ?? ('#' . $pathId));
+        return [
+            'ok' => true,
+            'message' => 'Deleted pathway ' . $label
+                . ($unlinked > 0 ? " (unlinked {$unlinked} cable(s))" : '') . '.',
+            'unlinked' => $unlinked,
+        ];
+    }
+
+    /**
      * Normalize cable row fields from POST/API.
      * @param array<string,mixed> $post
      * @return array<string,mixed>
