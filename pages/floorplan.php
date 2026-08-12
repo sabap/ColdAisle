@@ -126,6 +126,8 @@ layout_header('Floor Planner', $user, 'floorplan');
                 <canvas id="planner-canvas"></canvas>
             </div>
             <div id="view3d" style="display:none;flex:1;min-height:0;background:#0a0f18"></div>
+            <!-- Viewport-fixed tips (not drawn on canvas — survives pan/zoom) -->
+            <div id="plannerHud" class="planner-hud" hidden role="status" aria-live="polite"></div>
         </div>
         <div class="planner-props" id="planner-props">
             <p class="text-muted">Select a cabinet or drop one from the palette. With nothing selected you can edit room size, grid, and North.</p>
@@ -203,6 +205,37 @@ layout_header('Floor Planner', $user, 'floorplan');
 <style>
   body.raceway-draw-mode .planner-palette { opacity: 0.35; pointer-events: none; }
   body.raceway-draw-mode #planner-canvas { cursor: crosshair; }
+  .planner-stage { position: relative; }
+  .planner-hud {
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    z-index: 5;
+    pointer-events: none;
+    max-width: min(42rem, calc(100% - 20px));
+    padding: .55rem .75rem;
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.92);
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    box-shadow: 0 6px 20px rgba(0,0,0,.35);
+    color: #e2e8f0;
+    font-size: .8rem;
+    line-height: 1.45;
+  }
+  .planner-hud strong { color: #7dd3fc; }
+  .planner-hud kbd {
+    display: inline-block;
+    padding: .05rem .35rem;
+    border-radius: 4px;
+    background: rgba(148,163,184,.2);
+    border: 1px solid rgba(148,163,184,.35);
+    font-size: .72rem;
+    font-family: inherit;
+  }
+  .planner-hud .hud-title { font-weight: 700; color: #fbbf24; margin: 0 0 .3rem; font-size: .85rem; }
+  .planner-hud ul { margin: .2rem 0 0; padding-left: 1.15rem; }
+  .planner-hud li { margin: .15rem 0; }
 </style>
 
 <script>
@@ -212,7 +245,7 @@ layout_header('Floor Planner', $user, 'floorplan');
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=13"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=30"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=31"></script>
 <script>
 (function () {
   var c2 = document.getElementById('rwFinishCancel2');
