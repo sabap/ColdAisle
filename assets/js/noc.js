@@ -560,7 +560,22 @@
     });
   }
 
-  function mountScene(scene) {
+  /**
+   * Apply cabinet alert colors to the live 3D view (warn/crit yellow/red).
+   * Safe to call before mount finishes — no-ops until view3d exists.
+   */
+  function applyNocCabinetHealth(health) {
+    if (!health || !view3d || typeof view3d.setCabinetHealth !== 'function') return;
+    try {
+      view3d.setCabinetHealth(health);
+    } catch (eH) { /* ignore */ }
+  }
+
+  /**
+   * @param {object} scene
+   * @param {Array|object|null} healthSnapshot top-level cabinet_health from same poll
+   */
+  function mountScene(scene, healthSnapshot) {
     var el = $('noc3d');
     if (!el || !scene) return;
     var cabinets = scene.cabinets || [];
@@ -571,6 +586,8 @@
     var envSensors = scene.env_sensors || scene.envSensors || [];
     var cablePaths = scene.cable_paths || scene.cablePaths || [];
     var logoUrl = scene.logo_url || cfg.logoUrl || '';
+    // Prefer explicit snapshot; fall back to health embedded on scene
+    var health = healthSnapshot || scene.cabinet_health || null;
 
     function start() {
       if (!window.ColdAisle3D) {
@@ -581,23 +598,30 @@
         try { view3d.dispose(); } catch (e) { /* ignore */ }
         view3d = null;
       }
-      view3d = ColdAisle3D.mount(el, {
-        cabinets: cabinets,
-        pdus: pdus,
-        cooling: cooling,
-        ups: ups,
-        rooms: rooms,
-        envSensors: envSensors,
-        cablePaths: cablePaths,
-        logoUrl: logoUrl,
-        heatOverlay: envSensors.length > 0,
-        interactive: false,
-        autoRotate: true,
-        autoRotateSpeed: 0.0025,
-        textureFaces: 'none',
-      });
+      try {
+        view3d = ColdAisle3D.mount(el, {
+          cabinets: cabinets,
+          pdus: pdus,
+          cooling: cooling,
+          ups: ups,
+          rooms: rooms,
+          envSensors: envSensors,
+          cablePaths: cablePaths,
+          logoUrl: logoUrl,
+          heatOverlay: envSensors.length > 0,
+          interactive: false,
+          autoRotate: true,
+          autoRotateSpeed: 0.0025,
+          textureFaces: 'none',
+        });
+      } catch (eMount) {
+        view3d = null;
+        el.innerHTML = '<div style="padding:1rem;color:#94a3b8">3D mount failed</div>';
+        return;
+      }
       sceneLoadedAt = Date.now();
-      // Health may already be on cabinet rows; also accept top-level snapshot if provided later
+      // Always re-apply after mount (async script load used to skip the poll-time apply)
+      applyNocCabinetHealth(health);
     }
 
     if (window.THREE && window.ColdAisle3D) {
@@ -699,13 +723,11 @@
         showError('');
         renderAll(res.j);
         if (needScene && res.j.scene) {
-          mountScene(res.j.scene);
-        }
-        // Apply live cabinet health every poll (scene geometry only reloads rarely)
-        if (view3d && typeof view3d.setCabinetHealth === 'function' && res.j.cabinet_health) {
-          try {
-            view3d.setCabinetHealth(res.j.cabinet_health);
-          } catch (eH) { /* ignore */ }
+          // Pass cabinet_health so colors apply after mount (incl. async THREE load)
+          mountScene(res.j.scene, res.j.cabinet_health || null);
+        } else {
+          // Scene geometry kept; refresh alert tints every poll
+          applyNocCabinetHealth(res.j.cabinet_health);
         }
         setStatus(true, 'Live · every ' + Math.round(pollMs / 1000) + 's');
       })

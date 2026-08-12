@@ -454,6 +454,20 @@
     return out;
   }
 
+  /**
+   * Raceway piece material: clone so each segment can fade independently
+   * with camera-distance transparency (near cam → see-through).
+   */
+  function racewayPieceMaterial(baseMat) {
+    var m = baseMat.clone();
+    m.transparent = true;
+    m.opacity = 1;
+    m.depthWrite = true;
+    m.userData.racewayFade = true;
+    m.userData.fadeBaseOpacity = 1;
+    return m;
+  }
+
   function placeOrientedBox(group, mat, from, to, width, height, upNudge) {
     var dir = new THREE.Vector3().subVectors(to, from);
     var len = dir.length();
@@ -462,12 +476,13 @@
     var mid = new THREE.Vector3().addVectors(from, to).multiplyScalar(0.5);
     if (upNudge) mid.y += upNudge;
     var geo = new THREE.BoxGeometry(len, height, width);
-    var mesh = new THREE.Mesh(geo, mat);
+    var mesh = new THREE.Mesh(geo, racewayPieceMaterial(mat));
     // Align local +X with dir
     var quat = new THREE.Quaternion();
     quat.setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir);
     mesh.quaternion.copy(quat);
     mesh.position.copy(mid);
+    mesh.userData.racewayFade = true;
     group.add(mesh);
   }
 
@@ -587,7 +602,7 @@
       var len = a.distanceTo(b);
       if (len < 0.004) continue;
       var geo = new THREE.CylinderGeometry(r, r, len, 10, 1, false);
-      var mesh = new THREE.Mesh(geo, mat);
+      var mesh = new THREE.Mesh(geo, racewayPieceMaterial(mat));
       var mid = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
       var dir = new THREE.Vector3().subVectors(b, a).normalize();
       // Cylinder default axis is +Y
@@ -595,6 +610,7 @@
       quat.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
       mesh.quaternion.copy(quat);
       mesh.position.copy(mid);
+      mesh.userData.racewayFade = true;
       group.add(mesh);
     }
   }
@@ -620,9 +636,11 @@
       color: color,
       metalness: kind === 'conduit' ? 0.65 : 0.45,
       roughness: kind === 'conduit' ? 0.35 : 0.5,
+      transparent: true,
+      opacity: 1,
     });
     var group = new THREE.Group();
-    group.userData = { cablePath: path, kind: kind };
+    group.userData = { cablePath: path, kind: kind, racewayCenterline: centerline };
 
     if (kind === 'conduit') {
       buildConduitRaceway(group, centerline, width, mat);
@@ -633,18 +651,32 @@
       buildLadderRaceway(group, centerline, width, mat);
     }
 
-    // Soft centerline guide (helps at distance)
+    // Soft centerline guide (helps at distance); also camera-fades
     try {
       var lineGeo = new THREE.BufferGeometry().setFromPoints(centerline);
       var lineMat = new THREE.LineBasicMaterial({
         color: color,
         transparent: true,
-        opacity: 0.25,
+        opacity: 0.28,
+        depthWrite: false,
       });
-      group.add(new THREE.Line(lineGeo, lineMat));
+      lineMat.userData.racewayFade = true;
+      lineMat.userData.fadeBaseOpacity = 0.28;
+      var line = new THREE.Line(lineGeo, lineMat);
+      line.userData.racewayFade = true;
+      group.add(line);
     } catch (e) { /* ignore */ }
 
     return group;
+  }
+
+  /** smoothstep 0..1 */
+  function smoothstep01(edge0, edge1, x) {
+    if (edge1 <= edge0) return x >= edge1 ? 1 : 0;
+    var t = (x - edge0) / (edge1 - edge0);
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    return t * t * (3 - 2 * t);
   }
 
   function mount(container, options) {
@@ -660,6 +692,15 @@
     var floorUps = options.ups || options.ups_units || options.floor_ups || [];
     var envSensors = options.envSensors || options.env_sensors || [];
     var cablePaths = options.cablePaths || options.cable_paths || options.raceways || [];
+    // Near-camera raceway fade sphere (see-through so trays never block the room)
+    var racewayCamFade = options.racewayCamFade !== false && options.racewayFade !== false;
+    // Inner radius (m): fully ghosted. Outer: fully solid. Auto-scales with orbit if unset.
+    var racewayFadeNearOpt = Number(options.racewayFadeNear);
+    var racewayFadeFarOpt = Number(options.racewayFadeFar);
+    var racewayFadeMinAlpha = Number(options.racewayFadeMinAlpha);
+    if (!isFinite(racewayFadeMinAlpha)) racewayFadeMinAlpha = 0.05;
+    if (racewayFadeMinAlpha < 0) racewayFadeMinAlpha = 0;
+    if (racewayFadeMinAlpha > 0.5) racewayFadeMinAlpha = 0.5;
     var heatOverlay = options.heatOverlay !== false;
     var rooms = options.rooms || [];
     var interactive = options.interactive !== false;
@@ -1009,9 +1050,11 @@
       mesh.add(label);
 
       // Soft health glow group (shells + floor bloom + crown) — no hard outlines
+      // High renderOrder so overhead raceways (transparent) do not bury alert glows
       var glowGroup = new THREE.Group();
       glowGroup.name = 'healthGlow';
       glowGroup.visible = false;
+      glowGroup.renderOrder = 20;
       mesh.add(glowGroup);
 
       var shellMats = [];
@@ -1022,6 +1065,7 @@
           transparent: true,
           opacity: 0.08,
           depthWrite: false,
+          depthTest: true,
           blending: THREE.AdditiveBlending,
           side: THREE.DoubleSide,
         });
@@ -1030,7 +1074,7 @@
           new THREE.BoxGeometry(w * scale, h * (1 + si * 0.02), d * scale),
           shellMat
         );
-        shell.renderOrder = 1 + si;
+        shell.renderOrder = 21 + si;
         glowGroup.add(shell);
       });
 
@@ -1041,6 +1085,7 @@
         transparent: true,
         opacity: 0.45,
         depthWrite: false,
+        depthTest: true,
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
       });
@@ -1050,7 +1095,7 @@
       );
       floorGlow.rotation.x = -Math.PI / 2;
       floorGlow.position.set(0, -h / 2 + 0.02, 0);
-      floorGlow.renderOrder = 0;
+      floorGlow.renderOrder = 20;
       glowGroup.add(floorGlow);
 
       // Soft crown aura above rack (radial, not a hard sphere)
@@ -1060,6 +1105,7 @@
         transparent: true,
         opacity: 0.4,
         depthWrite: false,
+        depthTest: true,
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
       });
@@ -1070,6 +1116,7 @@
       crownMesh.rotation.x = -Math.PI / 2;
       crownMesh.position.set(0, h / 2 + 0.06, 0);
       crownMesh.visible = false;
+      crownMesh.renderOrder = 24;
       glowGroup.add(crownMesh);
 
       var cabId = Number(cab.cabinet_id) || 0;
@@ -1685,6 +1732,8 @@
     racewayGroup.name = 'raceways';
     scene.add(racewayGroup);
     var racewayCount = 0;
+    var racewayFadeMeshes = []; // meshes/lines with per-piece materials for cam fade
+    var _rwFadeWorld = new THREE.Vector3();
     (cablePaths || []).forEach(function (path) {
       if (!path) return;
       if (path.is_active === 0 || path.is_active === false) return;
@@ -1693,11 +1742,52 @@
         if (rg) {
           racewayGroup.add(rg);
           racewayCount++;
+          rg.traverse(function (obj) {
+            if ((obj.isMesh || obj.isLine) && obj.userData && obj.userData.racewayFade) {
+              racewayFadeMeshes.push(obj);
+            }
+          });
         }
       } catch (eRw) {
         // ignore bad path geometry
       }
     });
+
+    /**
+     * Dynamic camera-proximity fade: pieces inside a sphere around the camera
+     * go transparent so overhead ladders never obstruct the room as you orbit.
+     * Sphere radius scales with zoom (orbit distance) when near/far not fixed.
+     */
+    function updateRacewayCameraFade() {
+      if (!racewayCamFade || !racewayFadeMeshes.length) return;
+      var camPos = camera.position;
+      var nearR = isFinite(racewayFadeNearOpt) ? racewayFadeNearOpt : Math.max(2.2, radius * 0.22);
+      var farR = isFinite(racewayFadeFarOpt) ? racewayFadeFarOpt : Math.max(nearR + 4, radius * 0.62);
+      if (farR <= nearR) farR = nearR + 4;
+      for (var i = 0; i < racewayFadeMeshes.length; i++) {
+        var obj = racewayFadeMeshes[i];
+        if (!obj || !obj.material) continue;
+        obj.getWorldPosition(_rwFadeWorld);
+        var dist = camPos.distanceTo(_rwFadeWorld);
+        // 0 at/inside near sphere → transparent; 1 beyond far → solid
+        var solid = smoothstep01(nearR, farR, dist);
+        var base = 1;
+        var mat = obj.material;
+        if (mat.userData && mat.userData.fadeBaseOpacity != null) {
+          base = Number(mat.userData.fadeBaseOpacity);
+          if (!isFinite(base)) base = 1;
+        }
+        var op = racewayFadeMinAlpha + (base - racewayFadeMinAlpha) * solid;
+        if (op < 0) op = 0;
+        if (op > 1) op = 1;
+        mat.transparent = true;
+        mat.opacity = op;
+        // Avoid z-fight / solid blocking when mostly see-through
+        mat.depthWrite = op > 0.62;
+        // Keep raceways under health glows (glow renderOrder ≥ 20)
+        obj.renderOrder = op < 0.85 ? 2 : 0;
+      }
+    }
 
     if (!cabinets.length && !floorPdus.length && !floorCooling.length && !racewayCount) {
       var c2 = document.createElement('canvas');
@@ -1776,6 +1866,8 @@
           }
         }
       }
+      // Raceway near-camera fade sphere (updates every frame while orbiting)
+      updateRacewayCameraFade();
       renderer.render(scene, camera);
     }
     animate();
@@ -1821,8 +1913,11 @@
         if (!node) return;
         var row = map[id];
         if (!row) return; // leave unchanged if not in payload
-        var st = normalizeHealthStatus(row.status || row.health_status || 'unknown');
-        var disp = row.health_display_hex || null;
+        var st = normalizeHealthStatus(
+          row.status || row.health_status
+            || (row.health && row.health.status) || 'unknown'
+        );
+        var disp = row.health_display_hex || row.color || null;
         applyCabinetHealthVisual(node, st, disp);
       });
     }
@@ -1832,11 +1927,28 @@
       camera: camera,
       renderer: renderer,
       heatGroup: heatGroup,
+      racewayGroup: racewayGroup,
       setHeatOverlay: function (on) {
         heatGroup.visible = !!on;
       },
       setAutoRotate: function (on) {
         autoRotate = !!on;
+      },
+      setRacewayCamFade: function (on) {
+        racewayCamFade = !!on;
+        if (!racewayCamFade) {
+          // Restore solid raceways
+          for (var i = 0; i < racewayFadeMeshes.length; i++) {
+            var obj = racewayFadeMeshes[i];
+            if (!obj || !obj.material) continue;
+            var base = (obj.material.userData && obj.material.userData.fadeBaseOpacity != null)
+              ? Number(obj.material.userData.fadeBaseOpacity) : 1;
+            if (!isFinite(base)) base = 1;
+            obj.material.opacity = base;
+            obj.material.depthWrite = base > 0.5;
+            obj.renderOrder = 0;
+          }
+        }
       },
       setCabinetHealth: setCabinetHealth,
       dispose: function () {
@@ -1846,15 +1958,24 @@
         try {
           if (statusEl && statusEl.parentNode) statusEl.parentNode.removeChild(statusEl);
         } catch (e) { /* ignore */ }
+        function disposeObj(obj) {
+          if (obj.geometry) obj.geometry.dispose();
+          if (obj.material) {
+            var mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            mats.forEach(function (m) {
+              if (!m) return;
+              if (m.map) m.map.dispose();
+              m.dispose();
+            });
+          }
+        }
         try {
-          heatGroup.traverse(function (obj) {
-            if (obj.geometry) obj.geometry.dispose();
-            if (obj.material) {
-              if (obj.material.map) obj.material.map.dispose();
-              obj.material.dispose();
-            }
-          });
+          heatGroup.traverse(disposeObj);
         } catch (e2) { /* ignore */ }
+        try {
+          racewayGroup.traverse(disposeObj);
+        } catch (e3) { /* ignore */ }
+        racewayFadeMeshes.length = 0;
         renderer.dispose();
       },
     };
