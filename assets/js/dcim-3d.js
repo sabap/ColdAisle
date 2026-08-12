@@ -692,6 +692,7 @@
     var floorUps = options.ups || options.ups_units || options.floor_ups || [];
     var envSensors = options.envSensors || options.env_sensors || [];
     var cablePaths = options.cablePaths || options.cable_paths || options.raceways || [];
+    var cableRoutes = options.cableRoutes || options.cable_routes || options.connectionRoutes || [];
     var showObjectLabels = options.showObjectLabels !== false && options.objectLabels !== false;
     var showRacewaysOpt = options.showRaceways !== false && options.racewaysVisible !== false;
     if (!showRacewaysOpt) {
@@ -1763,6 +1764,77 @@
         }
       } catch (eRw) {
         // ignore bad path geometry
+      }
+    });
+
+    /**
+     * Connection cable routes (opt-in Show path): elevated tube in media color
+     * with speed-colored end spheres. Drawn above raceways so they read clearly.
+     */
+    var cableRouteGroup = new THREE.Group();
+    cableRouteGroup.name = 'cableRoutes';
+    scene.add(cableRouteGroup);
+    (cableRoutes || []).forEach(function (route) {
+      if (!route || !route.geometry || route.geometry.length < 2) return;
+      try {
+        var elev = 2.85; // slightly above typical overhead tray
+        var pts3 = [];
+        for (var ri = 0; ri < route.geometry.length; ri++) {
+          var gp = route.geometry[ri];
+          var gx = Number(gp.x);
+          var gz = Number(gp.y);
+          if (!isFinite(gx) || !isFinite(gz)) continue;
+          // Drop ends slightly toward rack height so they read as cabinet attach
+          var gy = elev;
+          if (gp.kind === 'cabinet') gy = 1.1;
+          pts3.push(new THREE.Vector3(gx, gy, gz));
+        }
+        if (pts3.length < 2) return;
+        var jacket = route.color_hex || '#38bdf8';
+        var endCol = route.end_color_hex || '#e2e8f0';
+        var curve;
+        try {
+          curve = new THREE.CatmullRomCurve3(pts3, false, 'catmullrom', 0.15);
+        } catch (eC) {
+          curve = null;
+        }
+        if (curve && THREE.TubeGeometry) {
+          var tubular = Math.max(16, pts3.length * 6);
+          var tubeGeo = new THREE.TubeGeometry(curve, tubular, 0.035, 8, false);
+          var tubeMat = new THREE.MeshStandardMaterial({
+            color: new THREE.Color(jacket),
+            metalness: 0.25,
+            roughness: 0.45,
+            emissive: new THREE.Color(jacket),
+            emissiveIntensity: 0.12,
+          });
+          var tube = new THREE.Mesh(tubeGeo, tubeMat);
+          tube.renderOrder = 8;
+          cableRouteGroup.add(tube);
+        } else {
+          var lineGeo = new THREE.BufferGeometry().setFromPoints(pts3);
+          var lineMat = new THREE.LineBasicMaterial({ color: new THREE.Color(jacket), linewidth: 2 });
+          cableRouteGroup.add(new THREE.Line(lineGeo, lineMat));
+        }
+        // End spheres (speed color)
+        var sphereGeo = new THREE.SphereGeometry(0.09, 16, 12);
+        var endMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(endCol),
+          emissive: new THREE.Color(endCol),
+          emissiveIntensity: 0.35,
+          metalness: 0.2,
+          roughness: 0.4,
+        });
+        var s0 = new THREE.Mesh(sphereGeo, endMat);
+        s0.position.copy(pts3[0]);
+        s0.renderOrder = 9;
+        cableRouteGroup.add(s0);
+        var s1 = new THREE.Mesh(sphereGeo, endMat.clone());
+        s1.position.copy(pts3[pts3.length - 1]);
+        s1.renderOrder = 9;
+        cableRouteGroup.add(s1);
+      } catch (eRoute) {
+        // ignore bad route
       }
     });
 

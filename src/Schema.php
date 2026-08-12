@@ -544,6 +544,8 @@ class Schema
             self::ensureColumn('cables', 'color_hex', 'NVARCHAR(7) NULL');
             self::ensureColumn('cables', 'cable_role', "NVARCHAR(30) NOT NULL CONSTRAINT DF_cables_role DEFAULT 'patch'");
             self::ensureColumn('cables', 'strand_count', 'INT NULL');
+            // Multi-hop raceway route: {"path_ids":[1,5,3],"source":"manual|calculated"}
+            self::ensureColumn('cables', 'path_route_json', 'NVARCHAR(MAX) NULL');
 
             // Notification active vs cleared (history kept; UI shows green check when recovered)
             self::ensureColumn('notifications', 'is_cleared', 'BIT NOT NULL CONSTRAINT DF_notif_cleared DEFAULT 0');

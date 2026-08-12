@@ -14,9 +14,12 @@ $canEdit = AuthManager::can($user, 'edit_cables')
     || AuthManager::isAdmin($user);
 
 $ports = Database::fetchAll(
-    'SELECT p.port_id, p.label, p.port_type, p.port_number, p.speed AS port_speed, d.label AS device_label
+    'SELECT p.port_id, p.label, p.port_type, p.port_number, p.speed AS port_speed,
+            d.label AS device_label, d.device_id, d.cabinet_id,
+            c.name AS cabinet_name, c.room_id
      FROM device_ports p
      INNER JOIN devices d ON d.device_id = p.device_id
+     LEFT JOIN cabinets c ON c.cabinet_id = d.cabinet_id
      WHERE d.is_active = 1
      ORDER BY d.label, p.port_type, p.port_number'
 );
@@ -57,6 +60,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             Database::delete('cables', 'cable_id = ?', [(int)$_POST['cable_id']]);
             App::flash('success', 'Cable removed.');
         }
+        if ($action === 'calculate_path' || $action === 'calculate_and_apply') {
+            $cableId = (int)($_POST['cable_id'] ?? 0);
+            if ($cableId < 1 || !class_exists('CableRouteService')) {
+                throw new RuntimeException('Cable or route service unavailable.');
+            }
+            $r0 = CableRouteService::routeForCable($cableId, false);
+            $from = (int)($r0['route']['a']['cabinet_id'] ?? 0);
+            $to = (int)($r0['route']['b']['cabinet_id'] ?? 0);
+            $calc = CableRouteService::calculateBetweenCabinets($from, $to);
+            if (empty($calc['ok'])) {
+                throw new RuntimeException($calc['message'] ?? 'No raceway route found.');
+            }
+            if ($action === 'calculate_and_apply') {
+                $apply = CableRouteService::applyRouteToCable($cableId, $calc['path_ids'] ?? [], 'calculated');
+                if (empty($apply['ok'])) {
+                    throw new RuntimeException($apply['message'] ?? 'Could not apply route.');
+                }
+                App::flash('success', ($calc['message'] ?? 'Route calculated') . ' — applied to cable.');
+            } else {
+                App::flash(
+                    'success',
+                    ($calc['message'] ?? 'Route calculated')
+                    . ' · ' . number_format((float)($calc['length_m'] ?? 0), 1) . ' m'
+                    . ' (not saved — use Apply to store multi-hop path).'
+                );
+            }
+        }
         if ($action === 'delete_path') {
             $pid = (int)($_POST['path_id'] ?? 0);
             $force = !empty($_POST['force']);
@@ -86,17 +116,35 @@ unset($p);
 $cables = Database::fetchAll(
     'SELECT c.*,
         pa.label AS a_label, da.label AS a_device, da.device_id AS a_device_id,
+        da.cabinet_id AS a_cabinet_id, ca.name AS a_cabinet_name, ca.room_id AS a_room_id,
         pb.label AS b_label, db.label AS b_device, db.device_id AS b_device_id,
-        cp.name AS path_name, cp.color_hex AS path_color, cp.media_class AS path_media,
-        cp.feed_to AS path_feed, cp.path_kind AS path_kind
+        db.cabinet_id AS b_cabinet_id, cb.name AS b_cabinet_name, cb.room_id AS b_room_id,
+        cp.name AS path_name, cp.path_code AS path_code, cp.color_hex AS path_color,
+        cp.media_class AS path_media, cp.feed_to AS path_feed, cp.path_kind AS path_kind
      FROM cables c
      LEFT JOIN device_ports pa ON pa.port_id = c.a_port_id
      LEFT JOIN devices da ON da.device_id = pa.device_id
+     LEFT JOIN cabinets ca ON ca.cabinet_id = da.cabinet_id
      LEFT JOIN device_ports pb ON pb.port_id = c.b_port_id
      LEFT JOIN devices db ON db.device_id = pb.device_id
+     LEFT JOIN cabinets cb ON cb.cabinet_id = db.cabinet_id
      LEFT JOIN cable_paths cp ON cp.path_id = c.path_id
      ORDER BY c.cable_id DESC'
 );
+
+// Map path_id → short code for multi-hop labels
+$pathCodeById = [];
+foreach ($paths as $pRow) {
+    $pid = (int)($pRow['path_id'] ?? 0);
+    if ($pid < 1) {
+        continue;
+    }
+    $code = trim((string)($pRow['path_code'] ?? ''));
+    if ($code === '') {
+        $code = trim((string)($pRow['name'] ?? ('#' . $pid)));
+    }
+    $pathCodeById[$pid] = $code;
+}
 
 $mediaPresets = CablePlantService::mediaPresets();
 $speedOpts = CablePlantService::speedOptions();
@@ -110,8 +158,10 @@ layout_header('Cable plant', $user, 'cables');
 ?>
 
 <p class="text-muted" style="margin-top:0">
-    Port-to-port connections with optional <strong>raceway / pathway</strong> (draw geometry on the
-    <a href="<?= App::e(App::url('pages/floorplan.php')) ?>">Floor planner</a>).
+    Port-to-port connections with optional multi-hop <strong>raceway routes</strong>
+    (e.g. Cabinet → RS-A → IRC → RS-B → Cabinet). Draw raceways on the
+    <a href="<?= App::e(App::url('pages/floorplan.php')) ?>">Floor planner</a>,
+    then <strong>Show path</strong> or <strong>Calculate shortest path</strong> on a connection.
     Fiber troughs, copper trays, overhead vs raised-floor feed, and speed colors live here.
 </p>
 
@@ -132,6 +182,31 @@ layout_header('Cable plant', $user, 'cables');
                     if (!$swatch && !empty($c['speed']) && isset($speedColors[$c['speed']])) {
                         $swatch = $speedColors[$c['speed']];
                     }
+                    $hopIds = class_exists('CableRouteService')
+                        ? CableRouteService::pathIdsForCable($c)
+                        : ((int)($c['path_id'] ?? 0) > 0 ? [(int)$c['path_id']] : []);
+                    $hopCodes = [];
+                    foreach ($hopIds as $hid) {
+                        $hopCodes[] = $pathCodeById[$hid] ?? ('#' . $hid);
+                    }
+                    $routeParts = [];
+                    if (!empty($c['a_cabinet_name'])) {
+                        $routeParts[] = (string)$c['a_cabinet_name'];
+                    }
+                    foreach ($hopCodes as $hc) {
+                        $routeParts[] = $hc;
+                    }
+                    if (!empty($c['b_cabinet_name'])) {
+                        $routeParts[] = (string)$c['b_cabinet_name'];
+                    }
+                    $routeLabel = $routeParts !== [] ? implode(' → ', $routeParts) : '';
+                    $roomForFp = (int)($c['a_room_id'] ?? $c['b_room_id'] ?? 0);
+                    $fpShow = App::url('pages/floorplan.php?' . http_build_query(array_filter([
+                        'room_id' => $roomForFp > 0 ? $roomForFp : null,
+                        'cable_id' => (int)$c['cable_id'],
+                        'show_routes' => 1,
+                        'calculate' => 1,
+                    ])));
                     ?>
                     <tr>
                         <td>
@@ -161,19 +236,34 @@ layout_header('Cable plant', $user, 'cables');
                         </td>
                         <td><?= App::e($c['media_type'] ?? '—') ?></td>
                         <td><?= App::e($c['speed'] ?? '—') ?></td>
-                        <td>
-                            <?php if (!empty($c['path_name'])): ?>
+                        <td style="max-width:14rem">
+                            <?php if ($hopCodes !== []): ?>
                                 <?php if (!empty($c['path_color'])): ?>
                                     <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:<?= App::e((string)$c['path_color']) ?>;margin-right:.25rem"></span>
                                 <?php endif; ?>
-                                <?= App::e((string)$c['path_name']) ?>
-                                <?php if (!empty($c['path_feed'])): ?>
+                                <span title="<?= App::e($routeLabel) ?>"><?= App::e(implode(' → ', $hopCodes)) ?></span>
+                                <?php if (count($hopCodes) > 1): ?>
+                                    <div class="text-muted" style="font-size:.7rem"><?= count($hopCodes) ?> hops</div>
+                                <?php elseif (!empty($c['path_feed'])): ?>
                                     <div class="text-muted" style="font-size:.72rem"><?= App::e((string)$c['path_feed']) ?></div>
                                 <?php endif; ?>
-                            <?php else: ?>—<?php endif; ?>
+                            <?php else: ?>
+                                <span class="text-muted">—</span>
+                            <?php endif; ?>
                         </td>
                         <td><?= App::e($c['circuit_id'] ?? '—') ?></td>
-                        <td>
+                        <td style="white-space:nowrap">
+                            <a class="btn btn-ghost btn-sm" href="<?= App::e($fpShow) ?>" title="Draw route on floor plan">Path</a>
+                            <?php if ($canEdit && !empty($c['a_cabinet_id']) && !empty($c['b_cabinet_id'])): ?>
+                            <form method="post" style="display:inline"
+                                  onsubmit="return confirm('Calculate shortest raceway route and apply it to this cable?');">
+                                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                                <input type="hidden" name="action" value="calculate_and_apply">
+                                <input type="hidden" name="cable_id" value="<?= (int)$c['cable_id'] ?>">
+                                <button class="btn btn-secondary btn-sm" type="submit"
+                                        title="Shortest multi-hop raceway path between cabinets">Calc path</button>
+                            </form>
+                            <?php endif; ?>
                             <?php if ($canEdit): ?>
                             <form method="post" style="display:inline" onsubmit="return confirm('Delete cable?')">
                                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
@@ -232,39 +322,64 @@ layout_header('Cable plant', $user, 'cables');
                 <div class="form-row"><label>Strand count</label>
                     <input class="form-control" type="number" min="1" name="strand_count" placeholder="Fiber strands"></div>
                 <div class="form-row full"><label>Port A</label>
-                    <select class="form-control" name="a_port_id">
+                    <select class="form-control" name="a_port_id" id="cable_a_port">
                         <option value="">—</option>
                         <?php foreach ($ports as $p): ?>
-                            <option value="<?= (int)$p['port_id'] ?>">
+                            <option value="<?= (int)$p['port_id'] ?>"
+                                    data-cabinet="<?= (int)($p['cabinet_id'] ?? 0) ?>"
+                                    data-cabinet-name="<?= App::e((string)($p['cabinet_name'] ?? '')) ?>">
                                 <?= App::e($p['device_label'] . ' · ' . $p['port_type'] . ' · ' . ($p['label'] ?: '#' . $p['port_number'])) ?>
+                                <?php if (!empty($p['cabinet_name'])): ?>
+                                    · <?= App::e((string)$p['cabinet_name']) ?>
+                                <?php endif; ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
                 </div>
                 <div class="form-row full"><label>Port B</label>
-                    <select class="form-control" name="b_port_id">
+                    <select class="form-control" name="b_port_id" id="cable_b_port">
                         <option value="">—</option>
                         <?php foreach ($ports as $p): ?>
-                            <option value="<?= (int)$p['port_id'] ?>">
+                            <option value="<?= (int)$p['port_id'] ?>"
+                                    data-cabinet="<?= (int)($p['cabinet_id'] ?? 0) ?>"
+                                    data-cabinet-name="<?= App::e((string)($p['cabinet_name'] ?? '')) ?>">
                                 <?= App::e($p['device_label'] . ' · ' . $p['port_type'] . ' · ' . ($p['label'] ?: '#' . $p['port_number'])) ?>
+                                <?php if (!empty($p['cabinet_name'])): ?>
+                                    · <?= App::e((string)$p['cabinet_name']) ?>
+                                <?php endif; ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="form-row"><label>Raceway / path</label>
-                    <select class="form-control" name="path_id">
-                        <option value="">— None —</option>
-                        <?php foreach ($paths as $path): ?>
+                <div class="form-row full">
+                    <label>Raceway route (multi-hop)</label>
+                    <select class="form-control" name="path_ids[]" id="cable_path_ids" multiple size="5"
+                            title="Hold Ctrl/Cmd to select multiple raceways in order A→B">
+                        <?php foreach ($paths as $path):
+                            $pc = trim((string)($path['path_code'] ?? ''));
+                            if ($pc === '') {
+                                $pc = (string)($path['name'] ?? '');
+                            }
+                            ?>
                             <option value="<?= (int)$path['path_id'] ?>">
-                                <?= App::e($path['name']) ?>
+                                <?= App::e($pc) ?>
                                 (<?= App::e((string)($path['media_class'] ?? $path['path_type'] ?? '')) ?>
                                 · <?= App::e((string)($path['feed_to'] ?? '')) ?>)
                             </option>
                         <?php endforeach; ?>
                     </select>
+                    <div class="flex gap-1" style="margin-top:.4rem;flex-wrap:wrap;align-items:center">
+                        <button type="button" class="btn btn-secondary btn-sm" id="btnCalcShortestPath">
+                            Calculate shortest path
+                        </button>
+                        <span class="text-muted" style="font-size:.78rem" id="calcPathHint">
+                            Picks the shortest raceway sequence between the two cabinets.
+                        </span>
+                    </div>
+                    <p id="calcPathResult" class="text-muted" style="font-size:.8rem;margin:.35rem 0 0;display:none"></p>
                 </div>
                 <div class="form-row"><label>Length (m)</label>
-                    <input class="form-control" type="number" step="0.1" name="length_m"></div>
+                    <input class="form-control" type="number" step="0.1" name="length_m" id="cable_length_m"></div>
                 <div class="form-row full"><label>Notes</label><input class="form-control" name="notes"></div>
                 <div class="form-row"><button class="btn btn-primary" type="submit">Add cable</button></div>
             </form>
@@ -461,6 +576,90 @@ layout_header('Cable plant', $user, 'cables');
         pathMedia.value = 'fiber';
         syncPathColor();
       }
+    });
+  }
+
+  // Calculate shortest multi-hop raceway path between Port A / Port B cabinets
+  var btnCalc = document.getElementById('btnCalcShortestPath');
+  var aPort = document.getElementById('cable_a_port');
+  var bPort = document.getElementById('cable_b_port');
+  var pathMulti = document.getElementById('cable_path_ids');
+  var calcOut = document.getElementById('calcPathResult');
+  var lenInput = document.getElementById('cable_length_m');
+  if (btnCalc && aPort && bPort && pathMulti && window.ColdAisle && ColdAisle.api) {
+    btnCalc.addEventListener('click', function () {
+      var oa = aPort.options[aPort.selectedIndex];
+      var ob = bPort.options[bPort.selectedIndex];
+      var ca = oa ? Number(oa.getAttribute('data-cabinet') || 0) : 0;
+      var cb = ob ? Number(ob.getAttribute('data-cabinet') || 0) : 0;
+      var na = oa ? (oa.getAttribute('data-cabinet-name') || 'A') : 'A';
+      var nb = ob ? (ob.getAttribute('data-cabinet-name') || 'B') : 'B';
+      if (!(ca > 0) || !(cb > 0)) {
+        if (calcOut) {
+          calcOut.style.display = 'block';
+          calcOut.textContent = 'Select ports whose devices are both in placed cabinets.';
+        }
+        ColdAisle.toast('Both ports need devices in cabinets', 'error');
+        return;
+      }
+      if (ca === cb) {
+        if (calcOut) {
+          calcOut.style.display = 'block';
+          calcOut.textContent = 'Same cabinet — no raceway route needed for intra-rack links.';
+        }
+        return;
+      }
+      btnCalc.disabled = true;
+      ColdAisle.api('api/cables.php?entity=routes', {
+        method: 'POST',
+        body: { action: 'calculate', from_cabinet_id: ca, to_cabinet_id: cb },
+      }).then(function (data) {
+        btnCalc.disabled = false;
+        var ids = data.path_ids || [];
+        // Select matching options (order of selection may not preserve hop order in multi select,
+        // but path_ids[] POST order follows option list order when using selectedOptions in some browsers;
+        // encode order via hidden fields if needed — CablePlantService accepts path_ids array.)
+        for (var i = 0; i < pathMulti.options.length; i++) {
+          pathMulti.options[i].selected = false;
+        }
+        ids.forEach(function (id) {
+          for (var j = 0; j < pathMulti.options.length; j++) {
+            if (Number(pathMulti.options[j].value) === Number(id)) {
+              pathMulti.options[j].selected = true;
+              break;
+            }
+          }
+        });
+        // Ensure path_ids[] is posted in hop order (multi-select alone is unreliable)
+        var form = document.getElementById('cableAddForm');
+        if (form) {
+          form.querySelectorAll('input[name="path_ids_ordered"]').forEach(function (el) {
+            el.parentNode.removeChild(el);
+          });
+          var hid = document.createElement('input');
+          hid.type = 'hidden';
+          hid.name = 'path_ids_ordered';
+          hid.value = ids.join(',');
+          form.appendChild(hid);
+        }
+        if (lenInput && data.length_m != null && !lenInput.value) {
+          lenInput.value = String(data.length_m);
+        }
+        if (calcOut) {
+          calcOut.style.display = 'block';
+          calcOut.textContent = (data.message || (na + ' → … → ' + nb))
+            + (data.length_m != null ? (' · ≈ ' + Number(data.length_m).toFixed(1) + ' m') : '')
+            + ' — will be saved when you add the cable.';
+        }
+        ColdAisle.toast('Shortest path selected (' + ids.length + ' hop' + (ids.length === 1 ? '' : 's') + ')', 'success');
+      }).catch(function (e) {
+        btnCalc.disabled = false;
+        if (calcOut) {
+          calcOut.style.display = 'block';
+          calcOut.textContent = (e && e.message) || 'No route found';
+        }
+        ColdAisle.toast((e && e.message) || 'No route found', 'error');
+      });
     });
   }
 })();
