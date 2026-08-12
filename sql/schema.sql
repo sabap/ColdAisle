@@ -440,7 +440,8 @@ CREATE TABLE cables (
     strand_count INT NULL, -- fiber strand count when relevant
     a_port_id INT NULL REFERENCES device_ports(port_id),
     b_port_id INT NULL REFERENCES device_ports(port_id),
-    path_id INT NULL REFERENCES cable_paths(path_id),
+    path_id INT NULL REFERENCES cable_paths(path_id), -- primary / first hop (legacy)
+    path_route_json NVARCHAR(MAX) NULL, -- multi-hop {"path_ids":[…],"source":"manual|calculated"}
     status NVARCHAR(30) NOT NULL DEFAULT 'active', -- active, planned, retired
     notes NVARCHAR(MAX) NULL,
     installed_at DATETIME2 NULL,

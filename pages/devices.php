@@ -814,6 +814,7 @@ if ($action === 'new' || $id) {
         'row_name' => '',
         'cabinet_name' => '',
         'room_name' => '',
+        'room_id' => 0,
     ];
     $cabId = (int)($_GET['cabinet_id'] ?? ($device['cabinet_id'] ?? 0));
     foreach ($cabinets as $c) {
@@ -824,6 +825,7 @@ if ($action === 'new' || $id) {
                 'row_name' => $c['row_name'] ?? '',
                 'cabinet_name' => $c['name'] ?? '',
                 'room_name' => $c['room_name'] ?? '',
+                'room_id' => (int)($c['room_id'] ?? 0),
             ];
             break;
         }
@@ -1447,8 +1449,45 @@ if ($action === 'new' || $id) {
                     </div>
                 </div>
 
+                <?php
+                $devTypeKey = strtolower((string)($device['device_type'] ?? ''));
+                $isSwitchLike = str_contains($devTypeKey, 'switch')
+                    || str_contains($devTypeKey, 'router')
+                    || $devTypeKey === 'chassis';
+                $connectedCableIds = [];
+                foreach ($dataByNum as $dpRow) {
+                    if (!empty($dpRow['cable_id'])) {
+                        $connectedCableIds[] = (int)$dpRow['cable_id'];
+                    }
+                }
+                $connectedCableIds = array_values(array_unique($connectedCableIds));
+                $roomIdForPath = (int)($loc['room_id'] ?? 0);
+                $fpBase = App::url('pages/floorplan.php');
+                ?>
                 <div class="card view-pane">
-                    <div class="card-header"><h2>Data connections</h2></div>
+                    <div class="card-header flex-between">
+                        <h2>Data connections</h2>
+                        <div class="flex gap-1" style="flex-wrap:wrap">
+                            <?php if ($connectedCableIds && !$isSwitchLike): ?>
+                                <a class="btn btn-secondary btn-sm"
+                                   href="<?= App::e($fpBase . '?' . http_build_query(array_filter([
+                                       'room_id' => $roomIdForPath > 0 ? $roomIdForPath : null,
+                                       'device_id' => (int)$device['device_id'],
+                                       'show_routes' => 1,
+                                       'calculate' => 1,
+                                   ]))) ?>"
+                                   title="Draw all connection routes on the floor plan (assigned path or shortest raceway route)">
+                                    Show cable paths
+                                </a>
+                            <?php elseif ($isSwitchLike && $connectedCableIds): ?>
+                                <span class="text-muted" style="font-size:.78rem;align-self:center"
+                                      title="Switches and routers need a path per connection">
+                                    Pick a connection to show its path
+                                </span>
+                            <?php endif; ?>
+                            <a class="btn btn-ghost btn-sm" href="<?= App::e(App::url('pages/cables.php')) ?>">Cabling</a>
+                        </div>
+                    </div>
                     <div class="card-body flush">
                         <?php if ($numData <= 0): ?>
                             <p class="text-muted" style="padding:1rem;margin:0">No data ports defined. Set “Number of Data ports” when editing.</p>
@@ -1457,7 +1496,7 @@ if ($action === 'new' || $id) {
                                 <thead>
                                 <tr>
                                     <th>#</th><th>Label</th><th>Media</th><th>Speed</th>
-                                    <th>Connected to</th><th>Cable</th>
+                                    <th>Connected to</th><th>Cable</th><th>Path</th>
                                 </tr>
                                 </thead>
                                 <tbody>
@@ -1481,6 +1520,18 @@ if ($action === 'new' || $id) {
                                             $cable .= ' <span class="text-muted">(' . App::e($dp['cable_media']) . ')</span>';
                                         }
                                     }
+                                    $pathCell = '—';
+                                    if ($dp && !empty($dp['cable_id'])) {
+                                        $cid = (int)$dp['cable_id'];
+                                        $pathHref = $fpBase . '?' . http_build_query(array_filter([
+                                            'room_id' => $roomIdForPath > 0 ? $roomIdForPath : null,
+                                            'cable_id' => $cid,
+                                            'show_routes' => 1,
+                                            'calculate' => 1,
+                                        ]));
+                                        $pathCell = '<a class="btn btn-ghost btn-sm" href="' . App::e($pathHref)
+                                            . '" title="Draw this connection on the floor plan">Show path</a>';
+                                    }
                                     ?>
                                     <tr class="<?= $dp ? '' : 'row-empty' ?>">
                                         <td><?= $i ?></td>
@@ -1489,12 +1540,16 @@ if ($action === 'new' || $id) {
                                         <td><?= $dash($dp['speed'] ?? null) ?></td>
                                         <td><?= $peer ?></td>
                                         <td><?= $cable ?></td>
+                                        <td><?= $pathCell ?></td>
                                     </tr>
                                 <?php endfor; ?>
                                 </tbody>
                             </table>
                             <p class="text-muted" style="font-size:.75rem;padding:.5rem 1rem;margin:0">
-                                Connections resolve from cabling records when present. Full cable mapping can be managed under Cabling.
+                                <strong>Show path</strong> draws the multi-hop raceway route on the floor plan
+                                (media color, speed-colored end dots). Assigned pathways are used when set;
+                                otherwise a shortest raceway route is calculated for display.
+                                Manage permanent links under Cabling.
                             </p>
                         <?php endif; ?>
                     </div>

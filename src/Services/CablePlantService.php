@@ -851,7 +851,7 @@ class CablePlantService
             $legacyColor = $colorHex;
         }
 
-        return [
+        $fields = [
             'cable_label' => ($t = trim((string)($post['cable_label'] ?? ''))) !== '' ? $t : null,
             'media_type' => $media !== '' ? $media : null,
             'length_m' => isset($post['length_m']) && $post['length_m'] !== ''
@@ -873,5 +873,39 @@ class CablePlantService
                 ? $s : 'active',
             'notes' => ($n = trim((string)($post['notes'] ?? ''))) !== '' ? $n : null,
         ];
+        // Optional multi-hop path_ids[] / path_ids_ordered / path_route_json
+        if (class_exists('CableRouteService')) {
+            $ids = [];
+            // Ordered CSV from "Calculate shortest path" (preserves hop sequence)
+            if (!empty($post['path_ids_ordered']) && is_string($post['path_ids_ordered'])) {
+                foreach (explode(',', $post['path_ids_ordered']) as $pid) {
+                    $pid = (int)trim($pid);
+                    if ($pid > 0) {
+                        $ids[] = $pid;
+                    }
+                }
+            } elseif (isset($post['path_ids']) && is_array($post['path_ids'])) {
+                foreach ($post['path_ids'] as $pid) {
+                    $pid = (int)$pid;
+                    if ($pid > 0) {
+                        $ids[] = $pid;
+                    }
+                }
+            }
+            if ($ids !== []) {
+                $fields['path_id'] = $ids[0];
+                $fields['path_route_json'] = CableRouteService::encodeRouteJson(
+                    $ids,
+                    (string)($post['route_source'] ?? (!empty($post['path_ids_ordered']) ? 'calculated' : 'manual'))
+                );
+            } elseif (isset($post['path_route_json']) && is_string($post['path_route_json']) && $post['path_route_json'] !== '') {
+                $fields['path_route_json'] = $post['path_route_json'];
+                $ids = CableRouteService::parseRouteJson($post['path_route_json']);
+                if ($ids !== [] && empty($fields['path_id'])) {
+                    $fields['path_id'] = $ids[0];
+                }
+            }
+        }
+        return $fields;
     }
 }

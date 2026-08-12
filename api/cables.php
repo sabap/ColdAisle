@@ -85,6 +85,99 @@ try {
         App::json(['error' => 'Method not allowed'], 405);
     }
 
+    // --- Multi-hop raceway routes ---
+    if ($entity === 'routes') {
+        if (!class_exists('CableRouteService')) {
+            App::json(['error' => 'CableRouteService unavailable'], 500);
+        }
+        if ($method === 'GET') {
+            $cableId = (int)($_GET['cable_id'] ?? 0);
+            $deviceId = (int)($_GET['device_id'] ?? 0);
+            $calc = !empty($_GET['calculate']);
+            if ($cableId > 0) {
+                $res = CableRouteService::routeForCable($cableId, $calc);
+                if (empty($res['ok'])) {
+                    App::json(['error' => $res['message'] ?? 'Route failed'], 400);
+                }
+                App::json($res);
+            }
+            if ($deviceId > 0) {
+                $res = CableRouteService::routesForDevice($deviceId, $calc);
+                App::json($res);
+            }
+            App::json(['error' => 'cable_id or device_id required'], 400);
+        }
+        if ($method === 'POST') {
+            api_require_csrf();
+            if (!AuthManager::can($user, 'edit_cables')
+                && !AuthManager::can($user, 'edit_infrastructure')
+                && !AuthManager::isAdmin($user)
+            ) {
+                App::json(['error' => 'Forbidden'], 403);
+            }
+            $d = api_read_json();
+            $action = (string)($d['action'] ?? 'calculate');
+            if ($action === 'calculate') {
+                $from = (int)($d['from_cabinet_id'] ?? $d['cabinet_a'] ?? 0);
+                $to = (int)($d['to_cabinet_id'] ?? $d['cabinet_b'] ?? 0);
+                $res = CableRouteService::calculateBetweenCabinets($from, $to);
+                if (empty($res['ok'])) {
+                    App::json(['error' => $res['message'] ?? 'No route'], 400);
+                }
+                App::json($res);
+            }
+            if ($action === 'apply') {
+                $cableId = (int)($d['cable_id'] ?? 0);
+                $pathIds = $d['path_ids'] ?? [];
+                if (!is_array($pathIds)) {
+                    $pathIds = [];
+                }
+                $source = (string)($d['source'] ?? 'manual');
+                $res = CableRouteService::applyRouteToCable($cableId, $pathIds, $source);
+                if (empty($res['ok'])) {
+                    App::json(['error' => $res['message'] ?? 'Apply failed'], 400);
+                }
+                App::json($res);
+            }
+            if ($action === 'calculate_and_apply') {
+                $cableId = (int)($d['cable_id'] ?? 0);
+                $from = (int)($d['from_cabinet_id'] ?? 0);
+                $to = (int)($d['to_cabinet_id'] ?? 0);
+                if ($from < 1 || $to < 1) {
+                    // Derive from cable ends
+                    $r0 = CableRouteService::routeForCable($cableId, false);
+                    if (!empty($r0['route']['a']['cabinet_id'])) {
+                        $from = (int)$r0['route']['a']['cabinet_id'];
+                    }
+                    if (!empty($r0['route']['b']['cabinet_id'])) {
+                        $to = (int)$r0['route']['b']['cabinet_id'];
+                    }
+                }
+                $calc = CableRouteService::calculateBetweenCabinets($from, $to);
+                if (empty($calc['ok'])) {
+                    App::json(['error' => $calc['message'] ?? 'No route'], 400);
+                }
+                $res = CableRouteService::applyRouteToCable(
+                    $cableId,
+                    $calc['path_ids'] ?? [],
+                    'calculated'
+                );
+                if (empty($res['ok'])) {
+                    App::json(['error' => $res['message'] ?? 'Apply failed'], 400);
+                }
+                $full = CableRouteService::routeForCable($cableId, false);
+                App::json([
+                    'ok' => true,
+                    'message' => $calc['message'] ?? 'Route applied',
+                    'path_ids' => $calc['path_ids'] ?? [],
+                    'route' => $full['route'] ?? null,
+                ]);
+            }
+            App::json(['error' => 'Unknown action'], 400);
+        }
+        App::json(['error' => 'Method not allowed'], 405);
+    }
+
     // --- Cables ---
     if ($method === 'GET') {
         App::json(['cables' => Database::fetchAll(

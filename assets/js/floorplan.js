@@ -72,6 +72,9 @@
     let showRaceways = true;
     let racewayDraw = null; // { points: [{x,y}], media_class, path_kind, name }
     let selectedPathId = null;
+    /** Multi-hop cable routes to overlay (from Show cable path). */
+    let cableRoutes = []; // list of route objects from CableRouteService
+    let cableRoutesMeta = { label: '', calculated: false };
     let selectedId = null; // primary cabinet selection (props panel focus)
     let selectedPduId = null; // selected floor PDU (exclusive with cabinets)
     let selectedCoolingId = null; // selected cooling unit
@@ -1398,8 +1401,206 @@
         drawMergeHints();
       }
 
+      // Opt-in connection routes (media jacket color + speed end dots)
+      if (cableRoutes && cableRoutes.length) {
+        drawCableRoutes();
+      }
+
       // Tips live in HTML #plannerHud (viewport-fixed — not clipped by pan/canvas size)
       updatePlannerHud();
+    }
+
+    /**
+     * Draw multi-hop cable routes: polyline in jacket/media color,
+     * end dots in speed color. Geometry is meters (room plan coords).
+     */
+    function drawCableRoutes() {
+      if (!cableRoutes || !cableRoutes.length || !room) return;
+      const s = scale();
+      cableRoutes.forEach(function (route, idx) {
+        const geom = route.geometry || [];
+        if (geom.length < 2) return;
+        const jacket = route.color_hex || '#38bdf8';
+        const endCol = route.end_color_hex || '#e2e8f0';
+        // Slight dash offset per route so parallel cables don't fully hide each other
+        const dashOff = (idx % 4) * 6;
+
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        // Soft outer glow
+        ctx.beginPath();
+        geom.forEach(function (pt, i) {
+          const x = ORIGIN + Number(pt.x) * s;
+          const y = ORIGIN + Number(pt.y) * s;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.strokeStyle = jacket;
+        ctx.globalAlpha = 0.28;
+        ctx.lineWidth = Math.max(6, 8 * Math.min(zoom, 1.6));
+        ctx.stroke();
+
+        // Main jacket stroke
+        ctx.beginPath();
+        geom.forEach(function (pt, i) {
+          const x = ORIGIN + Number(pt.x) * s;
+          const y = ORIGIN + Number(pt.y) * s;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.globalAlpha = 0.95;
+        ctx.strokeStyle = jacket;
+        ctx.lineWidth = Math.max(2.5, 3.2 * Math.min(zoom, 1.8));
+        if (route.calculated) {
+          ctx.setLineDash([8, 5]);
+          ctx.lineDashOffset = -dashOff;
+        } else {
+          ctx.setLineDash([]);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // End dots (speed color)
+        const ends = [geom[0], geom[geom.length - 1]];
+        ends.forEach(function (pt) {
+          const x = ORIGIN + Number(pt.x) * s;
+          const y = ORIGIN + Number(pt.y) * s;
+          const r = Math.max(4, 5.5 * Math.min(zoom, 1.8));
+          ctx.globalAlpha = 1;
+          ctx.beginPath();
+          ctx.arc(x, y, r + 1.5, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(15,23,42,0.85)';
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fillStyle = endCol;
+          ctx.fill();
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        });
+
+        // Short label near midpoint
+        if (route.label || route.cable_label) {
+          const mid = geom[Math.floor(geom.length / 2)];
+          const mx = ORIGIN + Number(mid.x) * s;
+          const my = ORIGIN + Number(mid.y) * s;
+          const txt = String(route.cable_label || route.media_type || 'Cable').slice(0, 18);
+          ctx.globalAlpha = 0.92;
+          ctx.font = 'bold ' + Math.max(9, Math.round(10 * Math.min(zoom, 1.4))) + 'px Segoe UI';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'bottom';
+          ctx.fillStyle = 'rgba(15,23,42,0.75)';
+          ctx.fillRect(mx - ctx.measureText(txt).width / 2 - 3, my - 16, ctx.measureText(txt).width + 6, 14);
+          ctx.fillStyle = '#f8fafc';
+          ctx.fillText(txt, mx, my - 4);
+        }
+
+        ctx.restore();
+      });
+    }
+
+    function clearCableRoutes() {
+      cableRoutes = [];
+      cableRoutesMeta = { label: '', calculated: false };
+      // Strip route params from URL without reload
+      try {
+        const u = new URL(window.location.href);
+        ['cable_id', 'device_id', 'show_routes', 'calculate'].forEach(function (k) {
+          u.searchParams.delete(k);
+        });
+        window.history.replaceState({}, '', u.pathname + u.search + u.hash);
+      } catch (e) { /* ignore */ }
+      const btn = root.querySelector('#btnClearCableRoutes');
+      if (btn) btn.hidden = true;
+      draw();
+      refresh3d();
+      ColdAisle.toast('Cable path overlay cleared', 'info');
+    }
+
+    /**
+     * Load drawable routes from ?cable_id= / ?device_id= (+ optional calculate=1).
+     * Called after room load so coordinates match.
+     */
+    async function loadCableRoutesFromQuery() {
+      let params;
+      try {
+        params = new URLSearchParams(window.location.search || '');
+      } catch (e) {
+        return;
+      }
+      const show = params.get('show_routes') === '1' || params.get('show_routes') === 'true'
+        || params.has('cable_id') || (params.has('device_id') && params.get('show_routes'));
+      const cableId = Number(params.get('cable_id') || 0);
+      const deviceId = Number(params.get('device_id') || 0);
+      if (!show && cableId < 1 && deviceId < 1) return;
+      if (cableId < 1 && deviceId < 1) return;
+
+      const calculate = params.get('calculate') === '1' || params.get('calculate') === 'true';
+      let url = 'api/cables.php?entity=routes';
+      if (cableId > 0) url += '&cable_id=' + encodeURIComponent(cableId);
+      else url += '&device_id=' + encodeURIComponent(deviceId);
+      if (calculate) url += '&calculate=1';
+
+      try {
+        const data = await ColdAisle.api(url);
+        if (data.route) {
+          cableRoutes = [data.route];
+          cableRoutesMeta = {
+            label: data.route.label || data.message || 'Cable route',
+            calculated: !!data.route.calculated,
+          };
+        } else if (data.routes && data.routes.length) {
+          // Switches: still draw if explicitly requested via URL, but toast a note
+          if (data.is_switch && deviceId > 0) {
+            ColdAisle.toast(
+              'Switch/router: showing ' + data.routes.length + ' connection path(s). Prefer per-port Show path.',
+              'info'
+            );
+          }
+          cableRoutes = data.routes.filter(function (r) {
+            return r && r.geometry && r.geometry.length >= 2;
+          });
+          cableRoutesMeta = {
+            label: data.device_label
+              ? (data.device_label + ' · ' + cableRoutes.length + ' path(s)')
+              : (data.message || (cableRoutes.length + ' path(s)')),
+            calculated: cableRoutes.some(function (r) { return r.calculated; }),
+          };
+        } else {
+          cableRoutes = [];
+          ColdAisle.toast(data.message || 'No drawable cable path for this selection', 'info');
+        }
+
+        // If API returned a room and our select differs, switch room once then re-draw
+        const wantRoom = Number(
+          (data.route && data.route.room_id) || data.room_id || params.get('room_id') || 0
+        );
+        if (wantRoom > 0 && roomId() !== wantRoom && roomSelect) {
+          const opt = roomSelect.querySelector('option[value="' + wantRoom + '"]');
+          if (opt) {
+            roomSelect.value = String(wantRoom);
+            await loadRoom(wantRoom, { skipRouteReload: true, keepCableRoutes: true });
+          }
+        }
+
+        const btn = root.querySelector('#btnClearCableRoutes');
+        if (btn) btn.hidden = !(cableRoutes && cableRoutes.length);
+        if (cableRoutes.length) {
+          const n = cableRoutes.length;
+          const calcNote = cableRoutesMeta.calculated ? ' (dashed = calculated)' : '';
+          ColdAisle.toast(
+            'Showing ' + n + ' cable path' + (n === 1 ? '' : 's') + calcNote,
+            'success'
+          );
+        }
+        draw();
+        if (show3d) refresh3d();
+      } catch (e) {
+        ColdAisle.toast((e && e.message) || 'Could not load cable path', 'error');
+      }
     }
 
     function updatePlannerHud() {
@@ -1417,6 +1618,26 @@
           '<strong>inward</strong> (into the angle) to pull a curve; drag <strong>out</strong> until it hard-stops at sharp 90°. ' +
           'Not between two separate paths.</li>' +
           '<li><strong>Undo last point:</strong> <kbd>Backspace</kbd> · <strong>Save:</strong> Finish / <kbd>Enter</kbd> · <strong>Exit:</strong> <kbd>Esc</kbd></li>' +
+          '</ul>';
+        return;
+      }
+      if (cableRoutes && cableRoutes.length) {
+        hud.hidden = false;
+        const n = cableRoutes.length;
+        const labels = cableRoutes.slice(0, 4).map(function (r) {
+          return r.label || r.cable_label || ('Cable #' + (r.cable_id || '?'));
+        });
+        let extra = labels.map(function (t) { return '<li>' + t + '</li>'; }).join('');
+        if (n > 4) extra += '<li class="text-muted">…and ' + (n - 4) + ' more</li>';
+        hud.innerHTML =
+          '<div class="hud-title">Cable path' + (n === 1 ? '' : 's') + ' · ' + n + '</div>' +
+          '<ul>' +
+          '<li><strong>Line</strong> = media / jacket color' +
+          (cableRoutesMeta.calculated ? ' · <em>dashed</em> = calculated (not saved)' : '') + '</li>' +
+          '<li><strong>End dots</strong> = connection speed color</li>' +
+          extra +
+          '<li>Toggle <strong>3D View</strong> to see the same path elevated · ' +
+          '<strong>Clear cable paths</strong> hides the overlay</li>' +
           '</ul>';
         return;
       }
@@ -4094,7 +4315,8 @@
       }
     }
 
-    async function loadRoom(id) {
+    async function loadRoom(id, opts) {
+      opts = opts || {};
       if (!id) {
         room = null;
         cabinets = [];
@@ -4106,6 +4328,7 @@
         unplacedUps = [];
         envSensors3d = [];
         cablePaths = [];
+        if (!opts.keepCableRoutes) cableRoutes = [];
         propsEl.innerHTML = '<p class="text-muted">Create a room first under Data Centers.</p>';
         renderUnplacedPduPalette();
         renderUnplacedCoolingPalette();
@@ -4127,6 +4350,9 @@
         roomRows = data.rows || [];
         powerZones = data.zones || [];
         cablePaths = data.cable_paths || [];
+        if (!opts.keepCableRoutes && !opts.skipRouteReload) {
+          // Keep routes only when reloading room for show_routes flow
+        }
         unlockedIds.clear(); // all placed racks load locked
         unlockedPduIds.clear();
         unlockedCoolingIds.clear();
@@ -4209,6 +4435,9 @@
         renderUpsPalette();
         renderProps();
         resizeCanvas();
+        if (!opts.skipRouteReload) {
+          await loadCableRoutesFromQuery();
+        }
         refresh3d();
       } catch (e) {
         ColdAisle.toast(e.message || 'Failed to load room', 'error');
@@ -4867,6 +5096,7 @@
         envSensors: envSensors3d,
         heatOverlay: true,
         cablePaths: showRaceways ? cablePaths : [],
+        cableRoutes: cableRoutes || [],
         rooms: room ? [room] : [],
         interactive: true,
         textureFaces: 'both',
@@ -6370,8 +6600,22 @@
       nudgeSelected(d[0], d[1]);
     });
 
-    // Init
+    // Init — honor ?room_id= from Show cable path / deep links
     updateToolbarButtons();
+    try {
+      const bootParams = new URLSearchParams(window.location.search || '');
+      const bootRoom = Number(bootParams.get('room_id') || 0);
+      if (bootRoom > 0 && roomSelect) {
+        const opt = roomSelect.querySelector('option[value="' + bootRoom + '"]');
+        if (opt) roomSelect.value = String(bootRoom);
+      }
+    } catch (eBoot) { /* ignore */ }
+
+    const clearRoutesBtn = root.querySelector('#btnClearCableRoutes');
+    if (clearRoutesBtn) {
+      clearRoutesBtn.addEventListener('click', function () { clearCableRoutes(); });
+    }
+
     if (roomSelect && roomSelect.value) {
       loadRoom(roomSelect.value);
     } else {

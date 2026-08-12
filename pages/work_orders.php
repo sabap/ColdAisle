@@ -845,6 +845,166 @@ if ($id > 0) {
         </div>
         <?php endif; ?>
     </div>
+
+    <?php
+    // Cable pathways for devices on this WO (calculate / show raceway routes)
+    $woCables = [];
+    $deviceIdsOnWo = array_values(array_unique(array_map(
+        static fn($it) => (int)($it['device_id'] ?? 0),
+        $items
+    )));
+    $deviceIdsOnWo = array_values(array_filter($deviceIdsOnWo, static fn($d) => $d > 0));
+    if ($deviceIdsOnWo !== [] && class_exists('CableRouteService')) {
+        try {
+            $ph = implode(',', array_fill(0, count($deviceIdsOnWo), '?'));
+            $woCables = Database::fetchAll(
+                "SELECT c.cable_id, c.cable_label, c.media_type, c.speed, c.path_id, c.path_route_json,
+                        da.device_id AS a_device_id, da.label AS a_device, da.cabinet_id AS a_cabinet_id,
+                        ca.name AS a_cabinet_name, ca.room_id AS a_room_id,
+                        db.device_id AS b_device_id, db.label AS b_device, db.cabinet_id AS b_cabinet_id,
+                        cb.name AS b_cabinet_name, cb.room_id AS b_room_id,
+                        cp.path_code, cp.name AS path_name
+                 FROM cables c
+                 LEFT JOIN device_ports pa ON pa.port_id = c.a_port_id
+                 LEFT JOIN devices da ON da.device_id = pa.device_id
+                 LEFT JOIN cabinets ca ON ca.cabinet_id = da.cabinet_id
+                 LEFT JOIN device_ports pb ON pb.port_id = c.b_port_id
+                 LEFT JOIN devices db ON db.device_id = pb.device_id
+                 LEFT JOIN cabinets cb ON cb.cabinet_id = db.cabinet_id
+                 LEFT JOIN cable_paths cp ON cp.path_id = c.path_id
+                 WHERE (c.status IS NULL OR c.status <> 'retired')
+                   AND (pa.device_id IN ($ph) OR pb.device_id IN ($ph))
+                 ORDER BY c.cable_id",
+                array_merge($deviceIdsOnWo, $deviceIdsOnWo)
+            );
+        } catch (Throwable $e) {
+            $woCables = [];
+        }
+    }
+    $canEditCables = AuthManager::can($user, 'edit_cables')
+        || AuthManager::can($user, 'edit_infrastructure')
+        || AuthManager::isAdmin($user);
+    ?>
+    <div class="card mb-2" id="cable-paths">
+        <div class="card-header flex-between">
+            <h2>Cable pathways</h2>
+            <a class="btn btn-ghost btn-sm" href="<?= App::e(App::url('pages/cables.php')) ?>">Cabling</a>
+        </div>
+        <div class="card-body flush">
+            <?php if (!$items): ?>
+                <p class="text-muted" style="padding:1rem;margin:0">Add devices to this work order first.</p>
+            <?php elseif (!$woCables): ?>
+                <p class="text-muted" style="padding:1rem;margin:0">
+                    No cable connections recorded for devices on this work order yet.
+                    Record port-to-port links under Cabling, then use
+                    <strong>Calculate shortest path</strong> to suggest a multi-hop raceway route
+                    (e.g. Cabinet → RS-A → IRC → RS-B → Cabinet).
+                </p>
+            <?php else: ?>
+                <table class="data">
+                    <thead>
+                    <tr>
+                        <th>Cable</th>
+                        <th>A</th>
+                        <th>B</th>
+                        <th>Route</th>
+                        <th></th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($woCables as $wc):
+                        $hops = CableRouteService::pathIdsForCable($wc);
+                        $roomFp = (int)($wc['a_room_id'] ?? $wc['b_room_id'] ?? 0);
+                        $showUrl = App::url('pages/floorplan.php?' . http_build_query(array_filter([
+                            'room_id' => $roomFp > 0 ? $roomFp : null,
+                            'cable_id' => (int)$wc['cable_id'],
+                            'show_routes' => 1,
+                            'calculate' => 1,
+                        ])));
+                        $routeTxt = $hops !== []
+                            ? (count($hops) . ' hop(s)' . (!empty($wc['path_code']) || !empty($wc['path_name'])
+                                ? ' · ' . ($wc['path_code'] ?: $wc['path_name'])
+                                : ''))
+                            : '— no path —';
+                        ?>
+                        <tr>
+                            <td>
+                                <?= App::e($wc['cable_label'] ?: ('#' . $wc['cable_id'])) ?>
+                                <?php if (!empty($wc['media_type'])): ?>
+                                    <span class="text-muted" style="font-size:.75rem">(<?= App::e((string)$wc['media_type']) ?>)</span>
+                                <?php endif; ?>
+                            </td>
+                            <td style="font-size:.85rem">
+                                <a href="<?= App::e(App::url('pages/devices.php?id=' . (int)$wc['a_device_id'])) ?>">
+                                    <?= App::e((string)($wc['a_device'] ?? '—')) ?>
+                                </a>
+                                <?php if (!empty($wc['a_cabinet_name'])): ?>
+                                    <div class="text-muted" style="font-size:.72rem"><?= App::e((string)$wc['a_cabinet_name']) ?></div>
+                                <?php endif; ?>
+                            </td>
+                            <td style="font-size:.85rem">
+                                <a href="<?= App::e(App::url('pages/devices.php?id=' . (int)$wc['b_device_id'])) ?>">
+                                    <?= App::e((string)($wc['b_device'] ?? '—')) ?>
+                                </a>
+                                <?php if (!empty($wc['b_cabinet_name'])): ?>
+                                    <div class="text-muted" style="font-size:.72rem"><?= App::e((string)$wc['b_cabinet_name']) ?></div>
+                                <?php endif; ?>
+                            </td>
+                            <td style="font-size:.85rem"><?= App::e($routeTxt) ?></td>
+                            <td style="white-space:nowrap">
+                                <a class="btn btn-ghost btn-sm" href="<?= App::e($showUrl) ?>">Show path</a>
+                                <?php if ($canEditCables && !empty($wc['a_cabinet_id']) && !empty($wc['b_cabinet_id'])): ?>
+                                <button type="button" class="btn btn-secondary btn-sm wo-calc-path"
+                                        data-cable-id="<?= (int)$wc['cable_id'] ?>"
+                                        data-from="<?= (int)$wc['a_cabinet_id'] ?>"
+                                        data-to="<?= (int)$wc['b_cabinet_id'] ?>">
+                                    Calculate shortest path
+                                </button>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <p class="text-muted" style="font-size:.75rem;padding:.5rem 1rem;margin:0">
+                    <strong>Calculate shortest path</strong> finds the shortest multi-hop raceway sequence
+                    between cabinets and applies it to the cable. <strong>Show path</strong> draws it on the floor plan
+                    (media color + speed end dots). Dashed lines are calculated previews when no path is saved yet.
+                </p>
+            <?php endif; ?>
+        </div>
+    </div>
+    <?php if ($canEditCables && $woCables): ?>
+    <script>
+    (function () {
+      if (!window.ColdAisle || !ColdAisle.api) return;
+      document.querySelectorAll('.wo-calc-path').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var cableId = Number(btn.getAttribute('data-cable-id') || 0);
+          if (!(cableId > 0)) return;
+          if (!confirm('Calculate shortest raceway route and apply it to this cable?')) return;
+          btn.disabled = true;
+          ColdAisle.api('api/cables.php?entity=routes', {
+            method: 'POST',
+            body: {
+              action: 'calculate_and_apply',
+              cable_id: cableId,
+              from_cabinet_id: Number(btn.getAttribute('data-from') || 0),
+              to_cabinet_id: Number(btn.getAttribute('data-to') || 0),
+            },
+          }).then(function (data) {
+            btn.disabled = false;
+            ColdAisle.toast(data.message || 'Route applied', 'success');
+            window.location.reload();
+          }).catch(function (e) {
+            btn.disabled = false;
+            ColdAisle.toast((e && e.message) || 'Route failed', 'error');
+          });
+        });
+      });
+    })();
+    </script>
+    <?php endif; ?>
     <?php
     layout_footer();
     return;
