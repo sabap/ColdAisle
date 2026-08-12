@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **NOC 1080p TV layout:** wall display tuned for 1920×1080 — overscan-safe padding, fixed ~720px left 3D column, denser metrics, compact 2×3 alert block so the 3D stage keeps most of the height
-
 ### Bug fixes
 
 ---
 
+## [0.3.138] - 2026-08-12
+
+### Enhancements
+
+- **NOC 1080p TV layout:** wall display tuned for 1920×1080 — overscan-safe padding, fixed ~720px left 3D column, denser metrics, compact 2×3 alert block so the 3D stage keeps most of the height
+
+---
 ## [0.3.137] - 2026-08-12
 
 ### New features
