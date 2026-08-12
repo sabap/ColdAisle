@@ -78,17 +78,25 @@ class CablePlantService
     /** Default tray widths (m). */
     public const DEFAULT_WIDTH_LADDER_M = 0.30;
     public const DEFAULT_WIDTH_FIBER_M = 0.15;
+    public const DEFAULT_WIDTH_U_CHANNEL_M = 0.10;
     public const DEFAULT_WIDTH_CONDUIT_M = 0.05;
 
     /**
-     * Raceway construction type (3D-ready). Primary: ladder, fiber_raceway, conduit.
+     * Typical mount: fiber U-channel brackets on ladder, ~10 in above ladder rails.
+     * Used as elevation offset when cloning ladder → U-channel.
+     */
+    public const DEFAULT_U_CHANNEL_ELEV_OFFSET_M = 0.254;
+
+    /**
+     * Raceway construction type (3D-ready). Primary: ladder, fiber_u_channel, fiber_raceway, conduit.
      * @return array<string,string>
      */
     public static function pathKinds(): array
     {
         return [
             'ladder' => 'Ladder tray',
-            'fiber_raceway' => 'Fiber raceway',
+            'fiber_u_channel' => 'Fiber U-channel',
+            'fiber_raceway' => 'Fiber raceway / trough',
             'conduit' => 'Conduit',
             // Advanced / legacy
             'tray' => 'Cable tray (generic)',
@@ -114,6 +122,7 @@ class CablePlantService
     {
         return match (self::normalizePathKind($kind)) {
             'conduit' => self::DEFAULT_WIDTH_CONDUIT_M,
+            'fiber_u_channel' => self::DEFAULT_WIDTH_U_CHANNEL_M,
             'fiber_raceway', 'fiber_trough' => self::DEFAULT_WIDTH_FIBER_M,
             default => self::DEFAULT_WIDTH_LADDER_M,
         };
@@ -122,7 +131,52 @@ class CablePlantService
     /** Primary kinds shown in finish UI. @return list<string> */
     public static function primaryPathKinds(): array
     {
-        return ['ladder', 'fiber_raceway', 'conduit'];
+        return ['ladder', 'fiber_u_channel', 'fiber_raceway', 'conduit'];
+    }
+
+    /**
+     * Networks for routing / 3D visibility filters.
+     * @return array<string,array{label:string,path_kinds:list<string>,media_class:?string}>
+     */
+    public static function racewayNetworks(): array
+    {
+        return [
+            'all' => [
+                'label' => 'All raceways',
+                'path_kinds' => [],
+                'media_class' => null,
+            ],
+            'ladder' => [
+                'label' => 'Ladder tray',
+                'path_kinds' => ['ladder', 'tray'],
+                'media_class' => null,
+            ],
+            'fiber' => [
+                'label' => 'Fiber (U-channel + trough)',
+                'path_kinds' => ['fiber_u_channel', 'fiber_raceway', 'fiber_trough'],
+                'media_class' => 'fiber',
+            ],
+            'fiber_u_channel' => [
+                'label' => 'Fiber U-channel only',
+                'path_kinds' => ['fiber_u_channel'],
+                'media_class' => 'fiber',
+            ],
+            'fiber_raceway' => [
+                'label' => 'Fiber trough only',
+                'path_kinds' => ['fiber_raceway', 'fiber_trough'],
+                'media_class' => 'fiber',
+            ],
+            'conduit' => [
+                'label' => 'Conduit',
+                'path_kinds' => ['conduit'],
+                'media_class' => null,
+            ],
+            'copper' => [
+                'label' => 'Copper / mixed trays',
+                'path_kinds' => ['ladder', 'tray', 'raceway'],
+                'media_class' => 'copper',
+            ],
+        ];
     }
 
     /** @return array<string,string> */
@@ -143,6 +197,11 @@ class CablePlantService
         $map = [
             'fiber_trough' => 'fiber_raceway',
             'fiber' => 'fiber_raceway',
+            'u_channel' => 'fiber_u_channel',
+            'uchannel' => 'fiber_u_channel',
+            'fiber_u' => 'fiber_u_channel',
+            'fiber-u-channel' => 'fiber_u_channel',
+            'u-channel' => 'fiber_u_channel',
             'tray' => 'ladder',
             'overhead' => 'ladder',
             'basket' => 'raceway',
@@ -157,12 +216,212 @@ class CablePlantService
     public static function defaultColorForPathKind(string $kind): string
     {
         return match (self::normalizePathKind($kind)) {
-            'fiber_raceway', 'fiber_trough' => '#eab308',
+            'fiber_u_channel', 'fiber_raceway', 'fiber_trough' => '#eab308',
             'ladder', 'tray' => '#2563eb',
             'conduit' => '#64748b',
             'busway' => '#111827',
             default => '#38bdf8',
         };
+    }
+
+    /**
+     * Clone a raceway: same plan geometry (centerline + 90° fillets), new type/elev/code.
+     * U-channel on ladder brackets: same XY routing, typically +10 in elevation.
+     *
+     * @param array{
+     *   path_kind?:string,media_class?:string,path_code?:string,name?:string,
+     *   elevation_m?:float|string|null,elevation_offset_m?:float|string|null,
+     *   width_m?:float|string|null,color_hex?:string,feed_to?:string,
+     *   code_prefix?:string,code_suffix?:string
+     * } $options
+     * @return array{ok:bool,path_id:int,message:string,path?:array<string,mixed>}
+     */
+    public static function clonePath(int $sourcePathId, array $options = []): array
+    {
+        if ($sourcePathId < 1) {
+            return ['ok' => false, 'path_id' => 0, 'message' => 'Source path required.'];
+        }
+        try {
+            $src = Database::fetchOne('SELECT * FROM cable_paths WHERE path_id = ?', [$sourcePathId]);
+        } catch (Throwable $e) {
+            return ['ok' => false, 'path_id' => 0, 'message' => $e->getMessage()];
+        }
+        if (!$src) {
+            return ['ok' => false, 'path_id' => 0, 'message' => 'Source raceway not found.'];
+        }
+        $pts = self::parseWaypoints($src['waypoints'] ?? null);
+        if (count($pts) < 2) {
+            return ['ok' => false, 'path_id' => 0, 'message' => 'Source raceway needs at least two waypoints.'];
+        }
+
+        $newKind = self::normalizePathKind((string)($options['path_kind'] ?? 'fiber_u_channel'));
+        $media = strtolower(trim((string)($options['media_class']
+            ?? (in_array($newKind, ['fiber_u_channel', 'fiber_raceway', 'fiber_trough'], true) ? 'fiber' : ($src['media_class'] ?? 'mixed')))));
+        if (!isset(self::mediaClasses()[$media])) {
+            $media = 'fiber';
+        }
+        $feed = strtolower(trim((string)($options['feed_to'] ?? $src['feed_to'] ?? 'overhead')));
+        if (!isset(self::feedModes()[$feed])) {
+            $feed = 'overhead';
+        }
+
+        $srcElev = isset($src['elevation_m']) && $src['elevation_m'] !== null && $src['elevation_m'] !== ''
+            ? (float)$src['elevation_m']
+            : self::defaultElevationForFeed($feed);
+        if (array_key_exists('elevation_m', $options) && $options['elevation_m'] !== '' && $options['elevation_m'] !== null) {
+            $elev = (float)$options['elevation_m'];
+        } else {
+            $offset = array_key_exists('elevation_offset_m', $options) && $options['elevation_offset_m'] !== '' && $options['elevation_offset_m'] !== null
+                ? (float)$options['elevation_offset_m']
+                : ($newKind === 'fiber_u_channel' ? self::DEFAULT_U_CHANNEL_ELEV_OFFSET_M : 0.0);
+            $elev = $srcElev + $offset;
+        }
+        $elev = max(-2.0, min(12.0, $elev));
+
+        $width = array_key_exists('width_m', $options) && $options['width_m'] !== '' && $options['width_m'] !== null
+            ? (float)$options['width_m']
+            : self::defaultWidthForKind($newKind);
+        $width = max(0.03, min(5.0, $width));
+
+        $color = trim((string)($options['color_hex'] ?? ''));
+        if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $color)) {
+            $color = self::defaultColorForPathKind($newKind);
+        }
+
+        $srcCode = trim((string)($src['path_code'] ?? $src['name'] ?? ''));
+        $pathCode = trim((string)($options['path_code'] ?? ''));
+        if ($pathCode === '') {
+            $prefix = trim((string)($options['code_prefix'] ?? ''));
+            $suffix = trim((string)($options['code_suffix'] ?? ''));
+            if ($prefix === '' && $suffix === '') {
+                // Default: F- prefix for fiber clones of ladder codes
+                $prefix = ($newKind === 'fiber_u_channel' || $newKind === 'fiber_raceway') ? 'F-' : 'C-';
+            }
+            $pathCode = $prefix . $srcCode . $suffix;
+        }
+        $pathCode = self::uniquePathCodeInRoom((int)($src['room_id'] ?? 0), $pathCode);
+        $name = trim((string)($options['name'] ?? ''));
+        if ($name === '') {
+            $name = $pathCode;
+        }
+
+        $data = [
+            'room_id' => (int)($src['room_id'] ?? 0),
+            'path_code' => $pathCode,
+            'name' => $name,
+            'path_kind' => $newKind,
+            'media_class' => $media,
+            'feed_to' => $feed,
+            'color_hex' => $color,
+            'width_m' => $width,
+            'elevation_m' => $elev,
+            'segment_class' => $src['segment_class'] ?? null,
+            'waypoints_list' => $pts, // exact centerline + fillets (auto-centered on source)
+            'notes' => 'Cloned from ' . ($srcCode !== '' ? $srcCode : ('#' . $sourcePathId))
+                . ' (path_id ' . $sourcePathId . ')',
+            'is_active' => 1,
+        ];
+        $res = self::savePath($data, null);
+        if (empty($res['ok'])) {
+            return $res;
+        }
+        $row = null;
+        try {
+            $row = Database::fetchOne('SELECT * FROM cable_paths WHERE path_id = ?', [(int)$res['path_id']]);
+            if ($row) {
+                $row['waypoints_list'] = self::parseWaypoints($row['waypoints'] ?? null);
+            }
+        } catch (Throwable $e) {
+        }
+        return [
+            'ok' => true,
+            'path_id' => (int)$res['path_id'],
+            'message' => 'Cloned ' . ($srcCode !== '' ? $srcCode : ('#' . $sourcePathId))
+                . ' → ' . $pathCode . ' (' . (self::pathKinds()[$newKind] ?? $newKind)
+                . ', elev ' . number_format($elev, 2) . ' m AFF)',
+            'path' => $row,
+        ];
+    }
+
+    /**
+     * Clone every raceway of a given kind in a room (e.g. all ladders → U-channel).
+     *
+     * @param array<string,mixed> $options passed to clonePath
+     * @return array{ok:bool,message:string,created:list<array>,skipped:int}
+     */
+    public static function clonePathsByKindInRoom(int $roomId, string $sourceKind = 'ladder', array $options = []): array
+    {
+        if ($roomId < 1) {
+            return ['ok' => false, 'message' => 'Room required.', 'created' => [], 'skipped' => 0];
+        }
+        $sourceKind = self::normalizePathKind($sourceKind);
+        $paths = self::pathsForRoom($roomId, true);
+        $created = [];
+        $skipped = 0;
+        $errors = [];
+        foreach ($paths as $p) {
+            $k = self::normalizePathKind((string)($p['path_kind'] ?? 'ladder'));
+            $aliases = match ($sourceKind) {
+                'ladder' => ['ladder', 'tray'],
+                'fiber_raceway' => ['fiber_raceway', 'fiber_trough'],
+                default => [$sourceKind],
+            };
+            if (!in_array($k, $aliases, true)) {
+                continue;
+            }
+            $res = self::clonePath((int)$p['path_id'], $options);
+            if (!empty($res['ok'])) {
+                $created[] = [
+                    'path_id' => (int)$res['path_id'],
+                    'path_code' => $res['path']['path_code'] ?? null,
+                    'source_path_id' => (int)$p['path_id'],
+                    'message' => $res['message'],
+                ];
+            } else {
+                $skipped++;
+                $errors[] = $res['message'] ?? 'clone failed';
+            }
+        }
+        if ($created === [] && $skipped === 0) {
+            return [
+                'ok' => false,
+                'message' => 'No ' . (self::pathKinds()[$sourceKind] ?? $sourceKind) . ' raceways in this room to clone.',
+                'created' => [],
+                'skipped' => 0,
+            ];
+        }
+        return [
+            'ok' => $created !== [],
+            'message' => count($created) . ' raceway(s) cloned'
+                . ($skipped > 0 ? (', ' . $skipped . ' skipped') : '')
+                . ($errors !== [] ? (': ' . $errors[0]) : ''),
+            'created' => $created,
+            'skipped' => $skipped,
+        ];
+    }
+
+    /** Ensure path_code is unique in room by appending -2, -3, … */
+    public static function uniquePathCodeInRoom(int $roomId, string $code): string
+    {
+        $code = trim($code);
+        if ($code === '') {
+            $code = 'PATH';
+        }
+        if ($roomId < 1) {
+            return $code;
+        }
+        $existing = self::pathCodesInRoom($roomId);
+        $base = $code;
+        $n = 2;
+        while (isset($existing[strtoupper($code)])) {
+            $code = $base . '-' . $n;
+            $n++;
+            if ($n > 500) {
+                $code = $base . '-' . time();
+                break;
+            }
+        }
+        return $code;
     }
 
     /**
@@ -473,7 +732,7 @@ class CablePlantService
         };
         if ($pathKind === 'conduit') {
             $pathType = 'conduit';
-        } elseif (in_array($pathKind, ['ladder', 'tray', 'raceway', 'fiber_raceway', 'fiber_trough'], true)) {
+        } elseif (in_array($pathKind, ['ladder', 'tray', 'raceway', 'fiber_raceway', 'fiber_trough', 'fiber_u_channel'], true)) {
             $pathType = $feed === 'underfloor' ? 'underfloor' : 'tray';
         }
 

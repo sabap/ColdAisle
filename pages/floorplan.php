@@ -60,9 +60,21 @@ layout_header('Floor Planner', $user, 'floorplan');
         <button type="button" class="btn btn-secondary btn-sm" id="btnZoomReset" title="Reset zoom">Reset</button>
         <button type="button" class="btn btn-secondary btn-sm" id="toggle3d">3D View</button>
         <button type="button" class="btn btn-secondary btn-sm" id="toggleRaceways" title="Show cable raceways / fiber troughs">Raceways: On</button>
+        <label class="text-muted" style="font-size:.78rem;margin:0 0 0 .25rem" for="racewayFilterSelect" title="Which raceway types to show in 2D and 3D">Show</label>
+        <select id="racewayFilterSelect" class="form-control" style="width:auto;min-width:9.5rem;padding:.2rem .35rem;font-size:.8rem"
+                title="Render filter for 2D plan and 3D view">
+            <option value="all" selected>All raceways</option>
+            <option value="ladder">Ladder only</option>
+            <option value="fiber">Fiber (U-ch + trough)</option>
+            <option value="fiber_u_channel">Fiber U-channel</option>
+            <option value="fiber_raceway">Fiber trough</option>
+            <option value="conduit">Conduit only</option>
+        </select>
         <button type="button" class="btn btn-ghost btn-sm" id="btnClearCableRoutes" hidden
                 title="Hide cable path overlay from Show path">Clear cable paths</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnDrawRaceway" title="Click points on the floor; double-click or Finish to save">Draw raceway</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btnBulkCloneUChannel"
+                title="Clone every ladder in this room as yellow fiber U-channel (+10&quot;, same routes)">Clone ladders → U-channel</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnUndoRacewayPt" hidden title="Remove last vertex (Backspace)">Undo point</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnClearRacewayPts" hidden title="Clear all draft vertices; stay in draw mode">Clear points</button>
         <button type="button" class="btn btn-primary btn-sm" id="btnFinishRaceway" hidden title="Save polyline">Finish path</button>
@@ -167,7 +179,8 @@ layout_header('Floor Planner', $user, 'floorplan');
                 <label for="rwPathKind">Raceway type *</label>
                 <select class="form-control" id="rwPathKind">
                     <option value="ladder">Ladder tray</option>
-                    <option value="fiber_raceway" selected>Fiber raceway</option>
+                    <option value="fiber_u_channel">Fiber U-channel</option>
+                    <option value="fiber_raceway" selected>Fiber raceway / trough</option>
                     <option value="conduit">Conduit</option>
                 </select>
             </div>
@@ -213,6 +226,45 @@ layout_header('Floor Planner', $user, 'floorplan');
         </div>
     </div>
 </div>
+
+<div class="modal-overlay" id="racewayCloneModal" hidden>
+    <div class="modal-panel" style="max-width:28rem">
+        <div class="modal-header">
+            <h2 style="margin:0;font-size:1.05rem">Clone raceway</h2>
+            <button type="button" class="modal-close" id="rcCancel" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="text-muted" style="font-size:.85rem;margin-top:0">
+                Source: <strong id="rcSourceLabel">—</strong>. Copies the exact plan route
+                (centerline + 90° curves), auto-centered on the source. Adjust elevation after if needed.
+            </p>
+            <div class="form-grid">
+                <div class="form-row full">
+                    <label for="rcPathKind">New raceway type</label>
+                    <select class="form-control" id="rcPathKind">
+                        <option value="fiber_u_channel" selected>Fiber U-channel (yellow)</option>
+                        <option value="fiber_raceway">Fiber raceway / trough</option>
+                        <option value="ladder">Ladder tray</option>
+                        <option value="conduit">Conduit</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label for="rcElevOffset">Elev. offset <span class="text-muted" id="rcOffUnit">(m)</span></label>
+                    <input class="form-control" type="number" step="0.01" id="rcElevOffset" value="0.254"
+                           title="Added to source elevation (default 10 in for U-channel)">
+                </div>
+                <div class="form-row">
+                    <label for="rcCodePrefix">Code prefix</label>
+                    <input class="form-control" id="rcCodePrefix" value="F-" placeholder="F-">
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" id="rcCancel2">Cancel</button>
+            <button type="button" class="btn btn-primary" id="rcSave">Clone</button>
+        </div>
+    </div>
+</div>
 <style>
   body.raceway-draw-mode .planner-palette { opacity: 0.35; pointer-events: none; }
   body.raceway-draw-mode #planner-canvas { cursor: crosshair; }
@@ -254,9 +306,9 @@ layout_header('Floor Planner', $user, 'floorplan');
   window.ColdAisle.lengthUnits = <?= json_encode($units) ?>;
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=19"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=20"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=35"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=36"></script>
 <script>
 (function () {
   var c2 = document.getElementById('rwFinishCancel2');

@@ -369,11 +369,20 @@ layout_header('Cable plant', $user, 'cables');
                         <?php endforeach; ?>
                     </select>
                     <div class="flex gap-1" style="margin-top:.4rem;flex-wrap:wrap;align-items:center">
+                        <label class="text-muted" style="font-size:.78rem;margin:0" for="cable_route_network">Network</label>
+                        <select class="form-control" id="cable_route_network" style="width:auto;min-width:10rem;font-size:.85rem">
+                            <option value="all">All raceways</option>
+                            <option value="fiber_u_channel" selected>Fiber U-channel</option>
+                            <option value="fiber">Fiber (U-ch + trough)</option>
+                            <option value="fiber_raceway">Fiber trough</option>
+                            <option value="ladder">Ladder</option>
+                            <option value="conduit">Conduit</option>
+                        </select>
                         <button type="button" class="btn btn-secondary btn-sm" id="btnCalcShortestPath">
                             Calculate shortest path
                         </button>
                         <span class="text-muted" style="font-size:.78rem" id="calcPathHint">
-                            Picks the shortest raceway sequence between the two cabinets.
+                            Shortest sequence on the selected raceway network.
                         </span>
                     </div>
                     <p id="calcPathResult" class="text-muted" style="font-size:.8rem;margin:.35rem 0 0;display:none"></p>
@@ -461,14 +470,14 @@ layout_header('Cable plant', $user, 'cables');
                 </div>
                 <div class="form-row"><label>Raceway type *</label>
                     <select class="form-control" name="path_kind" id="path_kind">
-                        <?php foreach (['ladder', 'fiber_raceway', 'conduit'] as $pk): ?>
-                            <option value="<?= App::e($pk) ?>" <?= $pk === 'fiber_raceway' ? 'selected' : '' ?>>
+                        <?php foreach (['ladder', 'fiber_u_channel', 'fiber_raceway', 'conduit'] as $pk): ?>
+                            <option value="<?= App::e($pk) ?>" <?= $pk === 'fiber_u_channel' ? 'selected' : '' ?>>
                                 <?= App::e($pathKinds[$pk] ?? $pk) ?>
                             </option>
                         <?php endforeach; ?>
                         <optgroup label="Advanced">
                         <?php foreach ($pathKinds as $kv => $kl):
-                            if (in_array($kv, ['ladder', 'fiber_raceway', 'conduit'], true)) {
+                            if (in_array($kv, ['ladder', 'fiber_u_channel', 'fiber_raceway', 'conduit'], true)) {
                                 continue;
                             }
                             ?>
@@ -610,9 +619,11 @@ layout_header('Cable plant', $user, 'cables');
         return;
       }
       btnCalc.disabled = true;
+      var netEl = document.getElementById('cable_route_network');
+      var net = netEl ? netEl.value : 'all';
       ColdAisle.api('api/cables.php?entity=routes', {
         method: 'POST',
-        body: { action: 'calculate', from_cabinet_id: ca, to_cabinet_id: cb },
+        body: { action: 'calculate', from_cabinet_id: ca, to_cabinet_id: cb, network: net },
       }).then(function (data) {
         btnCalc.disabled = false;
         var ids = data.path_ids || [];

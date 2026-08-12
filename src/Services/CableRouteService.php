@@ -87,12 +87,17 @@ class CableRouteService
     /**
      * Shortest multi-hop raceway route between two cabinets in a room.
      *
+     * @param array{
+     *   path_kinds?:list<string>,media_class?:string,network?:string,
+     *   raceway_network?:string
+     * } $options network = all|ladder|fiber|fiber_u_channel|fiber_raceway|conduit|copper
      * @return array{
      *   ok:bool,message:string,path_ids:list<int>,path_codes:list<string>,
-     *   length_m:float,hops:list<array<string,mixed>>,geometry:list<array{x:float,y:float}>
+     *   length_m:float,hops:list<array<string,mixed>>,geometry:list<array{x:float,y:float}>,
+     *   network?:string,path_kinds_used?:list<string>
      * }
      */
-    public static function calculateBetweenCabinets(int $fromCabinetId, int $toCabinetId): array
+    public static function calculateBetweenCabinets(int $fromCabinetId, int $toCabinetId, array $options = []): array
     {
         if ($fromCabinetId < 1 || $toCabinetId < 1 || $fromCabinetId === $toCabinetId) {
             return self::fail('Select two different cabinets.');
@@ -126,6 +131,58 @@ class CableRouteService
             : [];
         if ($paths === []) {
             return self::fail('No raceways drawn in this room yet — draw pathways on the floor plan first.');
+        }
+
+        $network = strtolower(trim((string)($options['network'] ?? $options['raceway_network'] ?? 'all')));
+        if ($network === '') {
+            $network = 'all';
+        }
+        $kindFilter = [];
+        $mediaFilter = null;
+        if (isset($options['path_kinds']) && is_array($options['path_kinds'])) {
+            foreach ($options['path_kinds'] as $pk) {
+                $pk = class_exists('CablePlantService')
+                    ? CablePlantService::normalizePathKind((string)$pk)
+                    : strtolower(trim((string)$pk));
+                if ($pk !== '') {
+                    $kindFilter[] = $pk;
+                }
+            }
+        } elseif ($network !== 'all' && class_exists('CablePlantService')) {
+            $nets = CablePlantService::racewayNetworks();
+            if (isset($nets[$network])) {
+                $kindFilter = $nets[$network]['path_kinds'] ?? [];
+                $mediaFilter = $nets[$network]['media_class'] ?? null;
+            }
+        }
+        if (isset($options['media_class']) && is_string($options['media_class']) && $options['media_class'] !== '') {
+            $mediaFilter = strtolower(trim($options['media_class']));
+        }
+        if ($kindFilter !== [] || $mediaFilter !== null) {
+            $paths = array_values(array_filter($paths, static function ($p) use ($kindFilter, $mediaFilter) {
+                $k = class_exists('CablePlantService')
+                    ? CablePlantService::normalizePathKind((string)($p['path_kind'] ?? 'ladder'))
+                    : strtolower((string)($p['path_kind'] ?? 'ladder'));
+                if ($kindFilter !== [] && !in_array($k, $kindFilter, true)) {
+                    // Also accept raw aliases already normalized
+                    return false;
+                }
+                if ($mediaFilter !== null && $mediaFilter !== '') {
+                    $m = strtolower((string)($p['media_class'] ?? ''));
+                    // Fiber U-channel paths are fiber; allow empty media on fiber kinds
+                    if ($m !== '' && $m !== $mediaFilter && $m !== 'mixed') {
+                        return false;
+                    }
+                }
+                return true;
+            }));
+        }
+        if ($paths === []) {
+            $netLabel = $network !== 'all' ? $network : 'selected';
+            return self::fail(
+                'No raceways match the ' . $netLabel
+                . ' network in this room. Draw or clone those paths first.'
+            );
         }
 
         $centerA = self::cabinetCenter($a);
@@ -194,9 +251,10 @@ class CableRouteService
 
         $geometry = self::buildGeometryAlongRoute($graph, $result['nodePath'], $result['edgePath']);
 
+        $netNote = ($network !== 'all' && $network !== '') ? (' [' . $network . ']') : '';
         return [
             'ok' => true,
-            'message' => 'Route: ' . implode(' → ', array_merge(
+            'message' => 'Route' . $netNote . ': ' . implode(' → ', array_merge(
                 [(string)($a['name'] ?? 'A')],
                 $codes,
                 [(string)($b['name'] ?? 'B')]
@@ -206,6 +264,8 @@ class CableRouteService
             'length_m' => round($result['distance'], 3),
             'hops' => $hops,
             'geometry' => $geometry,
+            'network' => $network,
+            'path_kinds_used' => $kindFilter,
             'from_cabinet' => [
                 'cabinet_id' => $fromCabinetId,
                 'name' => (string)($a['name'] ?? ''),
@@ -227,7 +287,10 @@ class CableRouteService
      *
      * @return array{ok:bool,message:string,route?:array<string,mixed>}
      */
-    public static function routeForCable(int $cableId, bool $calculateIfMissing = false): array
+    /**
+     * @param array<string,mixed> $routeOptions passed to calculateBetweenCabinets when calculating
+     */
+    public static function routeForCable(int $cableId, bool $calculateIfMissing = false, array $routeOptions = []): array
     {
         try {
             $cable = Database::fetchOne(
@@ -264,7 +327,7 @@ class CableRouteService
             $ca = (int)($cable['a_cabinet_id'] ?? 0);
             $cb = (int)($cable['b_cabinet_id'] ?? 0);
             if ($ca > 0 && $cb > 0) {
-                $calc = self::calculateBetweenCabinets($ca, $cb);
+                $calc = self::calculateBetweenCabinets($ca, $cb, $routeOptions);
                 if (!empty($calc['ok'])) {
                     $pathIds = $calc['path_ids'];
                     $calculated = true;
@@ -401,7 +464,10 @@ class CableRouteService
      *
      * @return array{ok:bool,message:string,routes:list<array>,room_id:int,is_switch:bool}
      */
-    public static function routesForDevice(int $deviceId, bool $calculateIfMissing = false): array
+    /**
+     * @param array<string,mixed> $routeOptions passed when calculating missing routes
+     */
+    public static function routesForDevice(int $deviceId, bool $calculateIfMissing = false, array $routeOptions = []): array
     {
         if ($deviceId < 1) {
             return ['ok' => false, 'message' => 'Invalid device.', 'routes' => [], 'room_id' => 0, 'is_switch' => false];
@@ -436,7 +502,7 @@ class CableRouteService
         $routes = [];
         $roomId = 0;
         foreach ($cables as $c) {
-            $r = self::routeForCable((int)$c['cable_id'], $calculateIfMissing);
+            $r = self::routeForCable((int)$c['cable_id'], $calculateIfMissing, $routeOptions);
             if (!empty($r['ok']) && !empty($r['route'])) {
                 $routes[] = $r['route'];
                 if ($roomId < 1) {

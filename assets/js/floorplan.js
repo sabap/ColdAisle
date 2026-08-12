@@ -70,6 +70,8 @@
     let powerZones = []; // zones for DC (row → zone)
     let cablePaths = []; // raceways / fiber troughs for room
     let showRaceways = true;
+    /** 2D/3D raceway visibility: all | ladder | fiber | fiber_u_channel | fiber_raceway | conduit */
+    let racewayFilter = 'all';
     let racewayDraw = null; // { points: [{x,y}], media_class, path_kind, name }
     let selectedPathId = null;
     /** Multi-hop cable routes to overlay (from Show cable path). */
@@ -630,6 +632,7 @@
         });
       }
       list.forEach(function (p) {
+        if (!p._draft && !racewayMatchesFilter2d(p)) return;
         const pts = pathPoints(p);
         if (pts.length < 1) return;
         const col = p.color_hex || '#38bdf8';
@@ -644,6 +647,9 @@
         ctx.lineWidth = selected ? Math.max(4, 5 * zoom) : Math.max(2.5, 3.5 * zoom);
         if (kind === 'ladder' || kind === 'tray') {
           ctx.lineWidth += 1;
+        }
+        if (kind === 'fiber_u_channel') {
+          ctx.lineWidth = selected ? Math.max(3.5, 4.5 * zoom) : Math.max(2.2, 3 * zoom);
         }
         if (dashed) ctx.setLineDash([8 * zoom, 5 * zoom]);
         ctx.globalAlpha = p._draft ? 0.95 : 0.92;
@@ -726,14 +732,33 @@
           ctx.fillStyle = '#e2e8f0';
           ctx.font = (selected ? 'bold ' : '') + Math.max(10, 11 * zoom) + 'px Segoe UI';
           ctx.textAlign = 'left';
-          const kindMark = kind === 'fiber_raceway' || kind === 'fiber_trough' ? '◆ '
-            : kind === 'conduit' ? '○ ' : '■ ';
+          const kindMark = kind === 'fiber_u_channel' ? '⊐ '
+            : (kind === 'fiber_raceway' || kind === 'fiber_trough' ? '◆ '
+            : kind === 'conduit' ? '○ ' : '■ ');
           const tag = kindMark + label
             + (feed === 'underfloor' ? ' ↓' : feed === 'overhead' ? ' ↑' : '');
           ctx.fillText(tag, lx, ly);
         }
         ctx.restore();
       });
+    }
+
+    function racewayNetworkKey2d(kind) {
+      var k = String(kind || 'ladder').toLowerCase();
+      if (k === 'fiber_trough') k = 'fiber_raceway';
+      if (k === 'u_channel' || k === 'uchannel') k = 'fiber_u_channel';
+      if (k === 'tray') k = 'ladder';
+      return k;
+    }
+
+    function racewayMatchesFilter2d(p) {
+      if (!showRaceways) return false;
+      if (!racewayFilter || racewayFilter === 'all') return true;
+      var net = racewayNetworkKey2d(p.path_kind || p.path_type || 'ladder');
+      var f = String(racewayFilter).toLowerCase();
+      if (f === 'fiber') return net === 'fiber_u_channel' || net === 'fiber_raceway';
+      if (f === 'ladder') return net === 'ladder' || net === 'raceway';
+      return net === f;
     }
 
     function hitTestRacewayVertex(mx, my, preferPathId) {
@@ -922,8 +947,9 @@
     }
 
     function defaultRacewayWidthM(kind) {
-      const k = String(kind || 'ladder');
+      const k = String(kind || 'ladder').toLowerCase();
       if (k === 'conduit') return 0.05;
+      if (k === 'fiber_u_channel' || k === 'u_channel') return 0.10;
       if (k === 'fiber_raceway' || k === 'fiber_trough') return 0.15;
       return 0.30;
     }
@@ -3428,7 +3454,8 @@
       const pts = pathPoints(p);
       const kinds = {
         ladder: 'Ladder tray',
-        fiber_raceway: 'Fiber raceway',
+        fiber_u_channel: 'Fiber U-channel',
+        fiber_raceway: 'Fiber raceway / trough',
         fiber_trough: 'Fiber raceway (legacy)',
         tray: 'Cable tray',
         raceway: 'Basket raceway',
@@ -3504,6 +3531,10 @@
           ? '<button type="button" class="btn btn-sm btn-secondary" id="btnApplyWidthAll" title="Set this width on every raceway in this room">' +
             'Apply width to all</button>'
           : '') +
+        '<button type="button" class="btn btn-sm btn-primary" id="btnCloneAsUChannel" title="Copy this centerline + curves as fiber U-channel (+10&quot; elev)">' +
+          'Clone as U-channel</button>' +
+        '<button type="button" class="btn btn-sm btn-secondary" id="btnCloneRaceway" title="Clone as another raceway type">' +
+          'Clone path…</button>' +
         '<button type="button" class="btn btn-sm btn-secondary" id="btnClearPathSel">Deselect</button>' +
         (canMerge
           ? '<button type="button" class="btn btn-sm btn-primary" id="btnMergePathProp">Merge nearby endpoint</button>'
@@ -3512,7 +3543,10 @@
         '</div>' +
         (canMerge
           ? '<p class="text-muted" style="font-size:.75rem;margin:.4rem 0 0">Green rings mark endpoints ready to join at ~90°.</p>'
-          : '<p class="text-muted" style="font-size:.75rem;margin:.4rem 0 0">To merge: drag this path’s end near another path’s end at roughly 90°.</p>');
+          : '<p class="text-muted" style="font-size:.75rem;margin:.4rem 0 0">To merge: drag this path’s end near another path’s end at roughly 90°.</p>') +
+        '<p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">' +
+        '<strong>Clone as U-channel</strong> copies the exact plan route (incl. 90° curves), centered on this path, '
+        + 'yellow fiber U-channel ~10″ higher — then tweak elevation if needed.</p>';
 
       function readPropDims() {
         const wEl = propsEl.querySelector('#rwPropWidth');
@@ -3568,7 +3602,146 @@
           deleteSelectedRaceway(false);
         });
       }
+      const cloneU = propsEl.querySelector('#btnCloneAsUChannel');
+      if (cloneU) {
+        cloneU.addEventListener('click', function () {
+          cloneRacewayPath(p, {
+            path_kind: 'fiber_u_channel',
+            media_class: 'fiber',
+            elevation_offset_m: 0.254,
+            color_hex: '#eab308',
+            code_prefix: 'F-',
+          });
+        });
+      }
+      const cloneAny = propsEl.querySelector('#btnCloneRaceway');
+      if (cloneAny) {
+        cloneAny.addEventListener('click', function () {
+          openCloneRacewayModal(p);
+        });
+      }
       setRacewayUi();
+    }
+
+    /**
+     * Clone a raceway with same plan geometry (centerline + fillets).
+     * @param {object} sourcePath
+     * @param {object} opts API body fields
+     */
+    async function cloneRacewayPath(sourcePath, opts) {
+      opts = opts || {};
+      const id = Number(sourcePath && sourcePath.path_id);
+      if (!(id > 0)) {
+        ColdAisle.toast('Select a saved raceway first', 'error');
+        return;
+      }
+      try {
+        const body = Object.assign({
+          path_id: id,
+          path_kind: 'fiber_u_channel',
+          media_class: 'fiber',
+          elevation_offset_m: 0.254,
+          color_hex: '#eab308',
+        }, opts);
+        const data = await ColdAisle.api('api/floorplan.php?action=clone_cable_path', {
+          method: 'POST',
+          body: body,
+        });
+        if (data.path) {
+          cablePaths.push(data.path);
+          selectedPathId = data.path.path_id;
+          renderRacewayProps(data.path);
+        }
+        draw();
+        refresh3d();
+        ColdAisle.toast(data.message || 'Raceway cloned', 'success');
+      } catch (e) {
+        ColdAisle.toast((e && e.message) || 'Clone failed', 'error');
+      }
+    }
+
+    function openCloneRacewayModal(sourcePath) {
+      const modal = document.getElementById('racewayCloneModal');
+      if (!modal) {
+        // Fallback prompt
+        const kind = window.prompt(
+          'Clone as type: fiber_u_channel | fiber_raceway | ladder | conduit',
+          'fiber_u_channel'
+        );
+        if (!kind) return;
+        cloneRacewayPath(sourcePath, { path_kind: kind });
+        return;
+      }
+      modal.dataset.sourcePathId = String(sourcePath.path_id || '');
+      const kindEl = document.getElementById('rcPathKind');
+      const offEl = document.getElementById('rcElevOffset');
+      const preEl = document.getElementById('rcCodePrefix');
+      if (kindEl) kindEl.value = 'fiber_u_channel';
+      if (offEl) {
+        // 10 in in current display units
+        const offM = 0.254;
+        offEl.value = String(fmtLen(offM, 3));
+        offEl.dataset.meters = String(offM);
+      }
+      if (preEl) preEl.value = 'F-';
+      const srcLab = document.getElementById('rcSourceLabel');
+      if (srcLab) {
+        srcLab.textContent = sourcePath.path_code || sourcePath.name || ('#' + sourcePath.path_id);
+      }
+      modal.hidden = false;
+    }
+
+    async function bulkCloneLaddersAsUChannel() {
+      if (!room || !room.room_id) {
+        ColdAisle.toast('Select a room first', 'error');
+        return;
+      }
+      const n = cablePaths.filter(function (p) {
+        const k = String(p.path_kind || '').toLowerCase();
+        return k === 'ladder' || k === 'tray';
+      }).length;
+      if (n < 1) {
+        ColdAisle.toast('No ladder raceways in this room to clone', 'info');
+        return;
+      }
+      if (!window.confirm(
+        'Clone all ' + n + ' ladder raceway(s) as yellow fiber U-channel?\n'
+        + 'Same plan routes + 90° curves, +10″ elevation, F- path codes.'
+      )) {
+        return;
+      }
+      try {
+        const data = await ColdAisle.api('api/floorplan.php?action=clone_cable_path', {
+          method: 'POST',
+          body: {
+            bulk: true,
+            room_id: room.room_id,
+            source_kind: 'ladder',
+            path_kind: 'fiber_u_channel',
+            media_class: 'fiber',
+            elevation_offset_m: 0.254,
+            color_hex: '#eab308',
+            code_prefix: 'F-',
+          },
+        });
+        (data.created || []).forEach(function (c) {
+          // Reload room for full path objects
+        });
+        await loadRoom(room.room_id, { skipRouteReload: true });
+        ColdAisle.toast(data.message || 'Cloned', 'success');
+        draw();
+        refresh3d();
+      } catch (e) {
+        ColdAisle.toast((e && e.message) || 'Bulk clone failed', 'error');
+      }
+    }
+
+    function setRacewayFilter(f) {
+      racewayFilter = f || 'all';
+      const sel = root.querySelector('#racewayFilterSelect');
+      if (sel && sel.value !== racewayFilter) sel.value = racewayFilter;
+      draw();
+      refresh3d();
     }
 
     /**
@@ -5096,6 +5269,7 @@
         envSensors: envSensors3d,
         heatOverlay: true,
         cablePaths: showRaceways ? cablePaths : [],
+        racewayFilter: racewayFilter || 'all',
         cableRoutes: cableRoutes || [],
         rooms: room ? [room] : [],
         interactive: true,
@@ -5361,6 +5535,7 @@
       const kind = (kindEl && kindEl.value) || 'fiber_raceway';
       const feed = (feedEl && feedEl.value) || 'overhead';
       const colorMap = {
+        fiber_u_channel: '#eab308',
         fiber_raceway: '#eab308',
         ladder: '#2563eb',
         conduit: '#64748b',
@@ -6614,6 +6789,57 @@
     const clearRoutesBtn = root.querySelector('#btnClearCableRoutes');
     if (clearRoutesBtn) {
       clearRoutesBtn.addEventListener('click', function () { clearCableRoutes(); });
+    }
+
+    const racewayFilterSel = root.querySelector('#racewayFilterSelect');
+    if (racewayFilterSel) {
+      racewayFilterSel.addEventListener('change', function () {
+        setRacewayFilter(racewayFilterSel.value || 'all');
+      });
+    }
+    const bulkU = root.querySelector('#btnBulkCloneUChannel');
+    if (bulkU) {
+      bulkU.addEventListener('click', function () { bulkCloneLaddersAsUChannel(); });
+    }
+
+    // Clone modal
+    const cloneModal = document.getElementById('racewayCloneModal');
+    function closeCloneModal() {
+      if (cloneModal) cloneModal.hidden = true;
+    }
+    const rcCancel = document.getElementById('rcCancel');
+    const rcCancel2 = document.getElementById('rcCancel2');
+    if (rcCancel) rcCancel.addEventListener('click', closeCloneModal);
+    if (rcCancel2) rcCancel2.addEventListener('click', closeCloneModal);
+    if (cloneModal) {
+      cloneModal.addEventListener('click', function (e) {
+        if (e.target === cloneModal) closeCloneModal();
+      });
+    }
+    const rcSave = document.getElementById('rcSave');
+    if (rcSave) {
+      rcSave.addEventListener('click', function () {
+        const sid = Number((cloneModal && cloneModal.dataset.sourcePathId) || 0);
+        const src = cablePaths.find(function (x) { return Number(x.path_id) === sid; });
+        if (!src) {
+          ColdAisle.toast('Source raceway not found', 'error');
+          return;
+        }
+        const kindEl = document.getElementById('rcPathKind');
+        const offEl = document.getElementById('rcElevOffset');
+        const preEl = document.getElementById('rcCodePrefix');
+        const kind = (kindEl && kindEl.value) || 'fiber_u_channel';
+        let offM = offEl ? displayToM(offEl.value) : 0.254;
+        if (!isFinite(offM)) offM = 0.254;
+        closeCloneModal();
+        cloneRacewayPath(src, {
+          path_kind: kind,
+          media_class: (kind === 'fiber_u_channel' || kind === 'fiber_raceway') ? 'fiber' : undefined,
+          elevation_offset_m: offM,
+          color_hex: (kind === 'fiber_u_channel' || kind === 'fiber_raceway') ? '#eab308' : undefined,
+          code_prefix: (preEl && preEl.value) || 'F-',
+        });
+      });
     }
 
     if (roomSelect && roomSelect.value) {
