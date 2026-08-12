@@ -673,28 +673,70 @@ if ($includeScene) {
     }
     $cablePaths3d = [];
     try {
+        // Slim columns for wall display (avoid huge notes / dual waypoint payloads)
         $cablePaths3d = Database::fetchAll(
-            'SELECT * FROM cable_paths WHERE (is_active IS NULL OR is_active = 1) ORDER BY name'
+            'SELECT path_id, room_id, name, path_code, path_type, path_kind, media_class, feed_to,
+                    width_m, elevation_m, color_hex, waypoints, is_active
+             FROM cable_paths
+             WHERE (is_active IS NULL OR is_active = 1)
+             ORDER BY name'
         );
-        if (class_exists('CablePlantService')) {
-            foreach ($cablePaths3d as &$cp) {
-                $cp['waypoints_list'] = CablePlantService::parseWaypoints($cp['waypoints'] ?? null);
-            }
-            unset($cp);
-        }
     } catch (Throwable $e) {
         try {
-            $cablePaths3d = Database::fetchAll('SELECT * FROM cable_paths ORDER BY name');
-            if (class_exists('CablePlantService')) {
-                foreach ($cablePaths3d as &$cp) {
-                    $cp['waypoints_list'] = CablePlantService::parseWaypoints($cp['waypoints'] ?? null);
-                }
-                unset($cp);
-            }
+            $cablePaths3d = Database::fetchAll(
+                'SELECT path_id, room_id, name, path_type, path_kind, feed_to, width_m, color_hex, waypoints
+                 FROM cable_paths ORDER BY name'
+            );
         } catch (Throwable $e2) {
-            $cablePaths3d = [];
+            try {
+                $cablePaths3d = Database::fetchAll('SELECT * FROM cable_paths ORDER BY name');
+            } catch (Throwable $e3) {
+                $cablePaths3d = [];
+            }
         }
     }
+    if ($cablePaths3d && class_exists('CablePlantService')) {
+        foreach ($cablePaths3d as &$cp) {
+            $cp['waypoints_list'] = CablePlantService::parseWaypoints($cp['waypoints'] ?? null);
+            // Drop raw JSON string — list is enough for 3D (smaller NOC payload)
+            unset($cp['waypoints']);
+        }
+        unset($cp);
+    }
+
+    // Ensure every scene cabinet carries health (NOC wall depends on this + live poll)
+    if ($cabinets3d && $cabinetHealth) {
+        $hById = [];
+        foreach ($cabinetHealth as $hr) {
+            $hid = (int)($hr['cabinet_id'] ?? 0);
+            if ($hid > 0) {
+                $hById[$hid] = $hr;
+            }
+        }
+        foreach ($cabinets3d as &$cabRow) {
+            $cid = (int)($cabRow['cabinet_id'] ?? 0);
+            if ($cid < 1 || !isset($hById[$cid])) {
+                continue;
+            }
+            $hr = $hById[$cid];
+            $st = (string)($hr['status'] ?? 'unknown');
+            $cabRow['health_status'] = $st;
+            $cabRow['health_display_hex'] = (string)($hr['health_display_hex']
+                ?? ($hr['color'] ?? ''));
+            if (empty($cabRow['health']) || !is_array($cabRow['health'])) {
+                $cabRow['health'] = [
+                    'status' => $st,
+                    'label' => (string)($hr['label'] ?? ''),
+                    'color' => (string)($hr['color'] ?? ''),
+                    'reasons' => $hr['reasons'] ?? [],
+                ];
+            } else {
+                $cabRow['health']['status'] = $st;
+            }
+        }
+        unset($cabRow);
+    }
+
     $out['scene'] = [
         'cabinets' => $cabinets3d,
         'pdus' => $pdus3d,
@@ -703,6 +745,7 @@ if ($includeScene) {
         'rooms' => $rooms,
         'env_sensors' => $envSensors3d,
         'cable_paths' => $cablePaths3d,
+        'cabinet_health' => $cabinetHealth,
         'logo_url' => App::url('assets/img/logo.svg'),
     ];
 }
