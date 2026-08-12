@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **Structured cable plant (G-B1):** raceways/pathways with media class (copper/fiber/mixed/power), kind (tray, fiber trough, conduit, underfloor…), and cabinet feed (overhead vs raised floor); draw polylines on Floor planner (**Draw raceway**, dashed = underfloor); cables gain role, speed, color map, circuit ID, strand count; media/speed presets and speed color guide on Cabling page (`CablePlantService` shared with floorplan API)
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.122] - 2026-08-12
+
+### New features
+
+- **Structured cable plant (G-B1):** raceways/pathways with media class (copper/fiber/mixed/power), kind (tray, fiber trough, conduit, underfloor…), and cabinet feed (overhead vs raised floor); draw polylines on Floor planner (**Draw raceway**, dashed = underfloor); cables gain role, speed, color map, circuit ID, strand count; media/speed presets and speed color guide on Cabling page (`CablePlantService` shared with floorplan API)
+
+---
 ## [0.3.121] - 2026-08-11
 
 ### Enhancements
