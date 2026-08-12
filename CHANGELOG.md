@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.3.130] - 2026-08-12
+
+### New features
+
+- **Raceway elevation & 3D ladders:** set **elevation AFF** and **width** when finishing a raceway or from the props panel; 3D view draws **ladder trays** as a real ladder pattern (rails + rungs) using path width, fiber troughs as U-channels, and conduits as tubes; **Apply elev./width to all** updates every raceway in the room at once
+
+---
 ## [0.3.129] - 2026-08-12
 
 ### New features
