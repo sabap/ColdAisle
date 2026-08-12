@@ -7,8 +7,13 @@
   var cfg = window.ColdAisleNoc || {};
   var apiBase = cfg.apiUrl || 'api/noc.php';
   var pollMs = Math.max(5000, Number(cfg.pollMs) || 20000);
-  var panelRotateMs = Math.max(8000, Number(cfg.panelRotateMs) || 18000);
+  var panelRotateMs = Math.max(5000, Number(cfg.panelRotateMs) || 20000);
   var sceneReloadMs = Math.max(60000, Number(cfg.sceneReloadMs) || 300000);
+  var nocShowLabels = cfg.showLabels !== false;
+  var nocShowRaceways = cfg.showRaceways !== false;
+  var nocAutoRotate = cfg.autoRotate !== false;
+  var nocClearedTtlSec = Number(cfg.clearedAlertTtlSec);
+  if (!isFinite(nocClearedTtlSec)) nocClearedTtlSec = 120;
   /** Version of HTML/JS this tab loaded; API version change triggers full reload */
   var bootVersion = cfg.appVersion ? String(cfg.appVersion) : null;
   var reloadingForUpdate = false;
@@ -20,6 +25,7 @@
   var panelIdx = 0;
   var panelTimer = null;
   var userPinned = false;
+  var ALERT_SLOTS = 6; // 2 columns × 3 rows
 
   function $(id) { return document.getElementById(id); }
 
@@ -449,19 +455,54 @@
     }
   }
 
-  /** Glass toast stack — outside rotating panels; survives tab changes. */
+  function alertChipHtml(a, isNew) {
+    if (!a) {
+      return '<div class="noc-alert-chip is-empty" aria-hidden="true"></div>';
+    }
+    var id = Number(a.id) || 0;
+    var sev = (a.severity || 'info').toLowerCase();
+    if (sev !== 'crit' && sev !== 'warn' && sev !== 'ok') sev = 'info';
+    var cleared = !!(a.is_cleared || a.alert_state === 'cleared' || sev === 'ok');
+    var stateLabel = cleared
+      ? (a.alert_state_label || 'Cleared')
+      : (sev === 'info' ? '' : (a.alert_state_label || 'Active'));
+    var chipClass = 'noc-alert-chip sev-' + sev
+      + (cleared ? ' is-cleared' : (sev === 'info' ? '' : ' is-active'))
+      + (isNew ? ' is-new' : '');
+    var marker = cleared
+      ? '<span class="noc-alert-check" title="Cleared" aria-label="Cleared">✓</span>'
+      : '<span class="noc-alert-pulse" aria-hidden="true"></span>';
+    return '<div class="' + chipClass + '" data-id="' + id + '">' +
+      marker +
+      '<div class="noc-alert-body">' +
+      '<div class="noc-alert-title">' + esc(a.title || 'Alert') +
+      (stateLabel
+        ? ' <span class="noc-alert-state' + (cleared ? ' state-cleared' : ' state-active') + '">' +
+          esc(stateLabel) + '</span>'
+        : '') +
+      '</div>' +
+      (a.message ? '<p class="noc-alert-msg">' + esc(a.message) + '</p>' : '') +
+      '<p class="noc-alert-when">' + esc(formatAlertWhen(a.created_at)) +
+      (cleared && a.cleared_at ? ' · cleared' : '') +
+      '</p>' +
+      '</div></div>';
+  }
+
+  /**
+   * Recent alerts under 3D: fixed 2×3 grid (6 slots), no scroll.
+   * Newest top-left, then right, then next row; older fall off.
+   */
   function renderRecentAlerts(data) {
     var host = $('nocAlertsGlass');
     var list = $('nocAlertsList');
     var countEl = $('nocAlertsCount');
     if (!host || !list) return;
     var items = Array.isArray(data.recent_alerts) ? data.recent_alerts : [];
-    // Prefer warn/crit first for wall visibility, keep chronological within
+    // Newest first (id DESC)
     var sorted = items.slice().sort(function (a, b) {
       return (Number(b.id) || 0) - (Number(a.id) || 0);
     });
-    // Cap display
-    sorted = sorted.slice(0, 8);
+    sorted = sorted.slice(0, ALERT_SLOTS);
 
     if (!sorted.length) {
       host.hidden = true;
@@ -474,44 +515,65 @@
     if (countEl) countEl.textContent = String(sorted.length);
 
     var html = '';
-    sorted.forEach(function (a) {
-      var id = Number(a.id) || 0;
-      var isNew = alertsBootstrapped && id > 0 && !knownAlertIds[id];
-      var sev = (a.severity || 'info').toLowerCase();
-      if (sev !== 'crit' && sev !== 'warn' && sev !== 'ok') sev = 'info';
-      var cleared = !!(a.is_cleared || a.alert_state === 'cleared' || sev === 'ok');
-      var stateLabel = cleared
-        ? (a.alert_state_label || 'Cleared')
-        : (sev === 'info' ? '' : (a.alert_state_label || 'Active'));
-      var chipClass = 'noc-alert-chip sev-' + sev
-        + (cleared ? ' is-cleared' : (sev === 'info' ? '' : ' is-active'))
-        + (isNew ? ' is-new' : '');
-      // Marker: green check when cleared; pulse when still active
-      var marker = cleared
-        ? '<span class="noc-alert-check" title="Cleared" aria-label="Cleared">✓</span>'
-        : '<span class="noc-alert-pulse" aria-hidden="true"></span>';
-      html += '<div class="' + chipClass + '" data-id="' + id + '">' +
-        marker +
-        '<div class="noc-alert-body">' +
-        '<div class="noc-alert-title">' + esc(a.title || 'Alert') +
-        (stateLabel
-          ? ' <span class="noc-alert-state' + (cleared ? ' state-cleared' : ' state-active') + '">' +
-            esc(stateLabel) + '</span>'
-          : '') +
-        '</div>' +
-        (a.message ? '<p class="noc-alert-msg">' + esc(a.message) + '</p>' : '') +
-        '<p class="noc-alert-when">' + esc(formatAlertWhen(a.created_at)) +
-        (cleared && a.cleared_at ? ' · cleared' : '') +
-        '</p>' +
-        '</div></div>';
+    for (var i = 0; i < ALERT_SLOTS; i++) {
+      var a = sorted[i] || null;
+      var id = a ? (Number(a.id) || 0) : 0;
+      var isNew = !!(a && alertsBootstrapped && id > 0 && !knownAlertIds[id]);
+      html += alertChipHtml(a, isNew);
       if (id > 0) knownAlertIds[id] = true;
-    });
+    }
     list.innerHTML = html;
     alertsBootstrapped = true;
   }
 
+  function applyNocDisplaySettings(nocCfg) {
+    if (!nocCfg || typeof nocCfg !== 'object') return;
+    var prevRaceways = nocShowRaceways;
+    var prevPanel = panelRotateMs;
+    if (typeof nocCfg.show_labels === 'boolean') nocShowLabels = nocCfg.show_labels;
+    if (typeof nocCfg.show_raceways === 'boolean') nocShowRaceways = nocCfg.show_raceways;
+    if (typeof nocCfg.auto_rotate === 'boolean') nocAutoRotate = nocCfg.auto_rotate;
+    if (nocCfg.panel_rotate_ms != null) {
+      var ms = Number(nocCfg.panel_rotate_ms);
+      if (isFinite(ms) && ms >= 5000) panelRotateMs = ms;
+    } else if (nocCfg.panel_rotate_sec != null) {
+      var sec = Number(nocCfg.panel_rotate_sec);
+      if (isFinite(sec) && sec >= 5) panelRotateMs = sec * 1000;
+    }
+    if (nocCfg.cleared_alert_ttl_sec != null) {
+      nocClearedTtlSec = Number(nocCfg.cleared_alert_ttl_sec);
+    }
+    // Raceways on after off needs geometry reload (mount used empty list)
+    if (prevRaceways !== nocShowRaceways) {
+      sceneLoadedAt = 0;
+    }
+    if (view3d) {
+      if (typeof view3d.setObjectLabels === 'function') {
+        view3d.setObjectLabels(nocShowLabels);
+      }
+      if (typeof view3d.setRacewaysVisible === 'function') {
+        view3d.setRacewaysVisible(nocShowRaceways);
+      }
+      if (typeof view3d.setAutoRotate === 'function') {
+        view3d.setAutoRotate(nocAutoRotate);
+      }
+    }
+    // Restart panel timer if interval changed
+    if (panelTimer && prevPanel !== panelRotateMs) {
+      clearInterval(panelTimer);
+      panelTimer = setInterval(nextPanel, panelRotateMs);
+      restartRotateProgress();
+    }
+    var hint = $('nocPanelHint');
+    if (hint) {
+      hint.textContent = 'Panel every ' + Math.round(panelRotateMs / 1000) + 's'
+        + (nocAutoRotate ? ' · 3D orbit on' : ' · 3D orbit off');
+    }
+  }
+
   function renderAll(data) {
     lastData = data;
+    if (data.noc) applyNocDisplaySettings(data.noc);
     var o = $('panel-overview');
     var p = $('panel-power');
     var z = $('panel-zones');
@@ -624,11 +686,13 @@
           ups: ups,
           rooms: rooms,
           envSensors: envSensors,
-          cablePaths: cablePaths,
+          cablePaths: nocShowRaceways ? cablePaths : [],
+          showRaceways: nocShowRaceways,
+          showObjectLabels: nocShowLabels,
           logoUrl: logoUrl,
           heatOverlay: envSensors.length > 0,
           interactive: false,
-          autoRotate: true,
+          autoRotate: nocAutoRotate,
           autoRotateSpeed: 0.0025,
           textureFaces: 'none',
         });
@@ -640,6 +704,15 @@
       sceneLoadedAt = Date.now();
       // Always re-apply after mount (async script load used to skip the poll-time apply)
       applyNocCabinetHealth(health);
+      if (view3d) {
+        if (typeof view3d.setObjectLabels === 'function') view3d.setObjectLabels(nocShowLabels);
+        if (typeof view3d.setRacewaysVisible === 'function') view3d.setRacewaysVisible(nocShowRaceways);
+        if (typeof view3d.setAutoRotate === 'function') view3d.setAutoRotate(nocAutoRotate);
+      }
+      // Reflow after flex layout (3D stage + alert grid)
+      try {
+        window.dispatchEvent(new Event('resize'));
+      } catch (eR) { /* ignore */ }
     }
 
     if (window.THREE && window.ColdAisle3D) {

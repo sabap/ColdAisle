@@ -86,9 +86,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             }
             // Empty = open wall (no token). Non-empty requires ?token= on page + API.
             SettingsService::set('noc_access_token', $tok, 'noc');
+            SettingsService::set('noc_show_labels', !empty($_POST['noc_show_labels']) ? '1' : '0', 'noc');
+            SettingsService::set('noc_show_raceways', !empty($_POST['noc_show_raceways']) ? '1' : '0', 'noc');
+            SettingsService::set('noc_auto_rotate', !empty($_POST['noc_auto_rotate']) ? '1' : '0', 'noc');
+            $panelSec = (int)($_POST['noc_panel_rotate_sec'] ?? 20);
+            $allowedPanel = [5, 10, 20, 30, 40, 50, 60];
+            if (!in_array($panelSec, $allowedPanel, true)) {
+                $panelSec = 20;
+            }
+            SettingsService::set('noc_panel_rotate_sec', (string)$panelSec, 'noc');
+            // Cleared alert visibility on NOC (seconds); 0 = hide immediately; -1 = keep until drop off
+            $clearedTtl = (int)($_POST['noc_cleared_alert_ttl_sec'] ?? 120);
+            $allowedTtl = [0, 30, 60, 120, 300, 600, 1800, -1];
+            if (!in_array($clearedTtl, $allowedTtl, true)) {
+                $clearedTtl = 120;
+            }
+            SettingsService::set('noc_cleared_alert_ttl_sec', (string)$clearedTtl, 'noc');
             App::flash('success', $tok === ''
-                ? 'NOC wall is open (no access token).'
-                : 'NOC access token saved. Use the URL below on TVs.');
+                ? 'NOC wall settings saved (open access — no token).'
+                : 'NOC wall settings saved. Use the URL below on TVs.');
             App::redirect('pages/settings.php#noc');
         }
 
@@ -1033,13 +1049,24 @@ $nocUrl = App::url('pages/noc.php');
 if ($nocToken !== '') {
     $nocUrl .= (str_contains($nocUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($nocToken);
 }
+$nocShowLabels = SettingsService::get('noc_show_labels', '1') === '1';
+$nocShowRaceways = SettingsService::get('noc_show_raceways', '1') === '1';
+$nocAutoRotate = SettingsService::get('noc_auto_rotate', '1') === '1';
+$nocPanelSec = (int)SettingsService::get('noc_panel_rotate_sec', '20');
+if (!in_array($nocPanelSec, [5, 10, 20, 30, 40, 50, 60], true)) {
+    $nocPanelSec = 20;
+}
+$nocClearedTtl = (int)SettingsService::get('noc_cleared_alert_ttl_sec', '120');
+if (!in_array($nocClearedTtl, [0, 30, 60, 120, 300, 600, 1800, -1], true)) {
+    $nocClearedTtl = 120;
+}
 ?>
 <div class="card" id="noc">
     <div class="card-header"><h2>NOC wall display</h2></div>
     <div class="card-body">
         <p class="text-muted" style="font-size:.9rem;margin-top:0">
-            Full-screen ops board for TVs: live metrics and a slowly spinning 3D floor (no login, no session timeout).
-            Metrics refresh in place every ~20s.
+            Full-screen ops board for TVs: live metrics and a 3D floor (no login, no session timeout).
+            Metrics refresh in place every ~20s. Display options below apply on the next NOC poll after save.
         </p>
         <p style="margin:.5rem 0">
             <a class="btn btn-primary" href="<?= App::e($nocUrl) ?>" target="_blank" rel="noopener">Open NOC wall</a>
@@ -1063,6 +1090,85 @@ if ($nocToken !== '') {
                 <input type="checkbox" name="noc_token_regenerate" value="1">
                 Generate a new random token on save
             </label></div>
+
+            <div class="form-row full" style="margin-top:.75rem">
+                <strong style="font-size:.9rem">3D view</strong>
+            </div>
+            <div class="form-row full"><label class="toggle-row" style="display:flex;align-items:center;gap:.55rem;cursor:pointer">
+                <input type="checkbox" name="noc_show_labels" value="1" <?= $nocShowLabels ? 'checked' : '' ?>>
+                <span>Show object labels</span>
+            </label>
+                <span class="text-muted" style="font-size:.75rem;margin-left:1.6rem">Name plates on cabinets, PDUs, cooling, UPS in the NOC 3D view.</span>
+            </div>
+            <div class="form-row full"><label class="toggle-row" style="display:flex;align-items:center;gap:.55rem;cursor:pointer">
+                <input type="checkbox" name="noc_show_raceways" value="1" <?= $nocShowRaceways ? 'checked' : '' ?>>
+                <span>Show raceways (ladder / fiber / conduit)</span>
+            </label>
+                <span class="text-muted" style="font-size:.75rem;margin-left:1.6rem">Cable plant paths in the NOC 3D scene.</span>
+            </div>
+            <div class="form-row full"><label class="toggle-row" style="display:flex;align-items:center;gap:.55rem;cursor:pointer">
+                <input type="checkbox" name="noc_auto_rotate" value="1" <?= $nocAutoRotate ? 'checked' : '' ?>>
+                <span>Auto-rotate 3D view</span>
+            </label>
+                <span class="text-muted" style="font-size:.75rem;margin-left:1.6rem">Slow orbit of the floor model on the wall display.</span>
+            </div>
+
+            <div class="form-row full" style="margin-top:.75rem">
+                <strong style="font-size:.9rem">Panels &amp; alerts</strong>
+            </div>
+            <div class="form-row full">
+                <label for="noc_panel_rotate_slider">Panel slide timer</label>
+                <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+                    <input type="range" id="noc_panel_rotate_slider"
+                           min="0" max="6" step="1"
+                           value="<?= (int)array_search($nocPanelSec, [5, 10, 20, 30, 40, 50, 60], true) ?>"
+                           list="noc_panel_ticks"
+                           style="flex:1;min-width:12rem">
+                    <output id="noc_panel_sec_out" style="font-weight:700;min-width:2.5rem"><?= (int)$nocPanelSec ?>s</output>
+                </div>
+                <div class="text-muted" style="font-size:.72rem;display:flex;justify-content:space-between;max-width:28rem;margin-top:.15rem">
+                    <span>5s</span><span>10</span><span>20</span><span>30</span><span>40</span><span>50</span><span>60s</span>
+                </div>
+                <datalist id="noc_panel_ticks">
+                    <option value="0"></option><option value="1"></option><option value="2"></option>
+                    <option value="3"></option><option value="4"></option><option value="5"></option><option value="6"></option>
+                </datalist>
+                <span class="text-muted" style="font-size:.75rem">How long Overview / Power / Zones / Cooling stay on screen before sliding.</span>
+                <input type="hidden" name="noc_panel_rotate_sec" id="noc_panel_rotate_sec_val" value="<?= (int)$nocPanelSec ?>">
+                <script>
+                (function () {
+                  var r = document.getElementById('noc_panel_rotate_slider');
+                  var h = document.getElementById('noc_panel_rotate_sec_val');
+                  var secs = [5, 10, 20, 30, 40, 50, 60];
+                  if (!r || !h) return;
+                  function sync() {
+                    var v = secs[parseInt(r.value, 10)] || 20;
+                    h.value = String(v);
+                    var o = document.getElementById('noc_panel_sec_out');
+                    if (o) o.textContent = v + 's';
+                  }
+                  r.addEventListener('input', sync);
+                  if (r.form) r.form.addEventListener('submit', sync);
+                })();
+                </script>
+            </div>
+            <div class="form-row full">
+                <label for="noc_cleared_alert_ttl_sec">Cleared alerts visible for</label>
+                <select class="form-control" name="noc_cleared_alert_ttl_sec" id="noc_cleared_alert_ttl_sec">
+                    <option value="0" <?= $nocClearedTtl === 0 ? 'selected' : '' ?>>Hide as soon as cleared</option>
+                    <option value="30" <?= $nocClearedTtl === 30 ? 'selected' : '' ?>>30 seconds</option>
+                    <option value="60" <?= $nocClearedTtl === 60 ? 'selected' : '' ?>>1 minute</option>
+                    <option value="120" <?= $nocClearedTtl === 120 ? 'selected' : '' ?>>2 minutes</option>
+                    <option value="300" <?= $nocClearedTtl === 300 ? 'selected' : '' ?>>5 minutes</option>
+                    <option value="600" <?= $nocClearedTtl === 600 ? 'selected' : '' ?>>10 minutes</option>
+                    <option value="1800" <?= $nocClearedTtl === 1800 ? 'selected' : '' ?>>30 minutes</option>
+                    <option value="-1" <?= $nocClearedTtl === -1 ? 'selected' : '' ?>>Until they fall off the grid</option>
+                </select>
+                <span class="text-muted" style="font-size:.75rem">
+                    After a warn/crit recovers, how long the green-check toast stays on the NOC (max 6 alerts in the grid).
+                </span>
+            </div>
+
             <div class="form-row full">
                 <button class="btn btn-primary" type="submit">Save NOC settings</button>
             </div>

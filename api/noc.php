@@ -559,6 +559,57 @@ try {
     $recentAlerts = [];
 }
 
+// NOC wall display options (Settings → NOC wall display)
+$nocShowLabels = true;
+$nocShowRaceways = true;
+$nocAutoRotate = true;
+$nocPanelSec = 20;
+$nocClearedTtl = 120;
+try {
+    $nocShowLabels = SettingsService::get('noc_show_labels', '1') === '1';
+    $nocShowRaceways = SettingsService::get('noc_show_raceways', '1') === '1';
+    $nocAutoRotate = SettingsService::get('noc_auto_rotate', '1') === '1';
+    $nocPanelSec = (int)SettingsService::get('noc_panel_rotate_sec', '20');
+    if (!in_array($nocPanelSec, [5, 10, 20, 30, 40, 50, 60], true)) {
+        $nocPanelSec = 20;
+    }
+    $nocClearedTtl = (int)SettingsService::get('noc_cleared_alert_ttl_sec', '120');
+    if (!in_array($nocClearedTtl, [0, 30, 60, 120, 300, 600, 1800, -1], true)) {
+        $nocClearedTtl = 120;
+    }
+} catch (Throwable $e) {
+}
+
+// Filter cleared alerts by TTL for wall display
+if ($recentAlerts !== []) {
+    $nowTs = time();
+    $filtered = [];
+    foreach ($recentAlerts as $a) {
+        $isCleared = !empty($a['is_cleared']) || (($a['alert_state'] ?? '') === 'cleared')
+            || (($a['severity'] ?? '') === 'ok');
+        if ($isCleared) {
+            if ($nocClearedTtl === 0) {
+                continue; // hide immediately
+            }
+            if ($nocClearedTtl > 0) {
+                $clearedAt = null;
+                if (!empty($a['cleared_at'])) {
+                    $clearedAt = strtotime((string)$a['cleared_at']);
+                }
+                if ($clearedAt === false || $clearedAt === null) {
+                    $clearedAt = !empty($a['created_at']) ? strtotime((string)$a['created_at']) : $nowTs;
+                }
+                if ($clearedAt !== false && ($nowTs - (int)$clearedAt) > $nocClearedTtl) {
+                    continue;
+                }
+            }
+            // -1 = keep until grid drop-off
+        }
+        $filtered[] = $a;
+    }
+    $recentAlerts = $filtered;
+}
+
 $out = [
     'ok' => true,
     'updated_at' => gmdate('c'),
@@ -566,6 +617,14 @@ $out = [
     'version' => App::VERSION,
     'temp_unit' => class_exists('TempUnitService') ? TempUnitService::siteUnit() : 'C',
     'temp_symbol' => class_exists('TempUnitService') ? TempUnitService::symbol() : '°C',
+    'noc' => [
+        'show_labels' => $nocShowLabels,
+        'show_raceways' => $nocShowRaceways,
+        'auto_rotate' => $nocAutoRotate,
+        'panel_rotate_sec' => $nocPanelSec,
+        'panel_rotate_ms' => $nocPanelSec * 1000,
+        'cleared_alert_ttl_sec' => $nocClearedTtl,
+    ],
     'metrics' => $metrics,
     'env' => $env,
     'power' => $power,

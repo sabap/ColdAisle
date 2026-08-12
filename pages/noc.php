@@ -36,13 +36,26 @@ $apiUrl = App::url('api/noc.php');
 if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
-$cssUrl = App::url('assets/css/noc.css') . '?v=7';
-$jsUrl = App::url('assets/js/noc.js') . '?v=12';
+$cssUrl = App::url('assets/css/noc.css') . '?v=8';
+$jsUrl = App::url('assets/js/noc.js') . '?v=13';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=17';
+$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=18';
 $org = '';
+$nocPanelSec = 20;
+$nocShowLabels = true;
+$nocShowRaceways = true;
+$nocAutoRotate = true;
+$nocClearedTtl = 120;
 try {
     $org = (string)SettingsService::get('org_name', '');
+    $nocPanelSec = (int)SettingsService::get('noc_panel_rotate_sec', '20');
+    if (!in_array($nocPanelSec, [5, 10, 20, 30, 40, 50, 60], true)) {
+        $nocPanelSec = 20;
+    }
+    $nocShowLabels = SettingsService::get('noc_show_labels', '1') === '1';
+    $nocShowRaceways = SettingsService::get('noc_show_raceways', '1') === '1';
+    $nocAutoRotate = SettingsService::get('noc_auto_rotate', '1') === '1';
+    $nocClearedTtl = (int)SettingsService::get('noc_cleared_alert_ttl_sec', '120');
 } catch (Throwable $e) {
 }
 $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
@@ -62,8 +75,12 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
       token: <?= json_encode($gotToken, JSON_UNESCAPED_SLASHES) ?>,
       appVersion: <?= json_encode(App::VERSION, JSON_UNESCAPED_SLASHES) ?>,
       pollMs: 20000,
-      panelRotateMs: 18000,
+      panelRotateMs: <?= (int)($nocPanelSec * 1000) ?>,
       sceneReloadMs: 300000,
+      showLabels: <?= $nocShowLabels ? 'true' : 'false' ?>,
+      showRaceways: <?= $nocShowRaceways ? 'true' : 'false' ?>,
+      autoRotate: <?= $nocAutoRotate ? 'true' : 'false' ?>,
+      clearedAlertTtlSec: <?= (int)$nocClearedTtl ?>,
       threeUrl: <?= json_encode($threeUrl, JSON_UNESCAPED_SLASHES) ?>,
       dcim3dUrl: <?= json_encode($dcim3dUrl, JSON_UNESCAPED_SLASHES) ?>
     };
@@ -82,9 +99,11 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
     <div class="noc-error" id="nocError" role="alert"></div>
 
     <div class="noc-3d-wrap">
-      <div class="noc-3d-label">Data center · 3D</div>
-      <div class="noc-3d" id="noc3d" aria-label="3D floor overview"></div>
-      <!-- Glass alerts overlay the 3D view (left column) -->
+      <div class="noc-3d-stage">
+        <div class="noc-3d-label">Data center · 3D</div>
+        <div class="noc-3d" id="noc3d" aria-label="3D floor overview"></div>
+      </div>
+      <!-- Alerts under 3D: 2 columns × 3 rows (no scroll) -->
       <aside class="noc-alerts-glass" id="nocAlertsGlass" aria-live="polite" aria-label="Recent alerts" hidden>
         <div class="noc-alerts-glass-head">
           <span class="noc-alerts-glass-title">Recent alerts</span>
