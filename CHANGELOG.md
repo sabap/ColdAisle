@@ -19,6 +19,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [0.3.131] - 2026-08-12
+
+### New features
+
+- **3D raceway camera fade:** raceway pieces near the camera become transparent (smooth sphere falloff that tracks orbit/zoom) so ladders never block the room view while spinning
+
+### Bug fixes
+
+- **NOC 3D alert colors:** cabinet warn/crit tints and glows re-applied after every scene remount (including when raceways load); health embedded on scene cabinets; glow draws above raceways so yellow/red alerts show again on the wall display
+
+---
 ## [0.3.130] - 2026-08-12
 
 ### New features
