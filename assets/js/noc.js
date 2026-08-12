@@ -569,6 +569,7 @@
     var ups = scene.ups || scene.ups_units || [];
     var rooms = scene.rooms || [];
     var envSensors = scene.env_sensors || scene.envSensors || [];
+    var cablePaths = scene.cable_paths || scene.cablePaths || [];
     var logoUrl = scene.logo_url || cfg.logoUrl || '';
 
     function start() {
@@ -587,6 +588,7 @@
         ups: ups,
         rooms: rooms,
         envSensors: envSensors,
+        cablePaths: cablePaths,
         logoUrl: logoUrl,
         heatOverlay: envSensors.length > 0,
         interactive: false,

@@ -280,7 +280,7 @@ layout_header('Cable plant', $user, 'cables');
         <div class="card-body flush">
             <table class="data">
                 <thead>
-                <tr><th>Name</th><th>Kind</th><th>Media</th><th>Feed</th><th>Map</th><th>Points</th><th></th></tr>
+                <tr><th>Name</th><th>Kind</th><th>Media</th><th>Feed</th><th>W / elev</th><th>Map</th><th>Points</th><th></th></tr>
                 </thead>
                 <tbody>
                 <?php foreach ($paths as $path):
@@ -288,6 +288,12 @@ layout_header('Cable plant', $user, 'cables');
                     if ($code === '') {
                         $code = (string)($path['name'] ?? '');
                     }
+                    $wShow = isset($path['width_m']) && $path['width_m'] !== null && $path['width_m'] !== ''
+                        ? number_format((float)$path['width_m'], 2) . ' m'
+                        : '—';
+                    $eShow = isset($path['elevation_m']) && $path['elevation_m'] !== null && $path['elevation_m'] !== ''
+                        ? number_format((float)$path['elevation_m'], 2) . ' m'
+                        : '—';
                     ?>
                     <tr>
                         <td>
@@ -302,6 +308,7 @@ layout_header('Cable plant', $user, 'cables');
                         <td><span class="badge"><?= App::e($pathKinds[$path['path_kind'] ?? ''] ?? ($path['path_kind'] ?? $path['path_type'] ?? '—')) ?></span></td>
                         <td><?= App::e($mediaClasses[$path['media_class'] ?? ''] ?? ($path['media_class'] ?? '—')) ?></td>
                         <td><?= App::e($feedModes[$path['feed_to'] ?? ''] ?? ($path['feed_to'] ?? '—')) ?></td>
+                        <td style="font-size:.8rem;white-space:nowrap"><?= App::e($wShow) ?> / <?= App::e($eShow) ?></td>
                         <td><span style="display:inline-block;width:16px;height:16px;border-radius:3px;background:<?= App::e($path['color_hex'] ?? '#38bdf8') ?>;border:1px solid var(--border)"></span></td>
                         <td><?= (int)($path['point_count'] ?? 0) ?></td>
                         <td>
@@ -316,7 +323,7 @@ layout_header('Cable plant', $user, 'cables');
                         </td>
                     </tr>
                 <?php endforeach; ?>
-                <?php if (!$paths): ?><tr><td colspan="7" class="text-muted">No raceways yet — add one below or draw on the floor plan.</td></tr><?php endif; ?>
+                <?php if (!$paths): ?><tr><td colspan="8" class="text-muted">No raceways yet — add one below or draw on the floor plan.</td></tr><?php endif; ?>
                 </tbody>
             </table>
         </div>
@@ -380,7 +387,9 @@ layout_header('Cable plant', $user, 'cables');
                 <div class="form-row"><label>Map color</label>
                     <input class="form-control" type="color" name="color_hex" id="path_color" value="#eab308"></div>
                 <div class="form-row"><label>Nominal width (m)</label>
-                    <input class="form-control" type="number" step="0.05" min="0.05" name="width_m" placeholder="0.30"></div>
+                    <input class="form-control" type="number" step="0.05" min="0.03" name="width_m" placeholder="0.30" title="Tray / trough width for 3D"></div>
+                <div class="form-row"><label>Elevation AFF (m)</label>
+                    <input class="form-control" type="number" step="0.05" name="elevation_m" placeholder="2.70" title="Height above finished floor for 3D (underfloor: negative)"></div>
                 <div class="form-row full"><label>Notes</label>
                     <input class="form-control" name="notes" placeholder="e.g. yellow FiberGuide over cold aisle"></div>
                 <div class="form-row">

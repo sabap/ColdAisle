@@ -340,6 +340,313 @@
     });
   }
 
+  // --- Raceway / cable path geometry (plan X,Y → scene X,Z; elevation → Y) ---
+
+  function racewayDefaultWidth(kind) {
+    var k = String(kind || 'ladder');
+    if (k === 'conduit') return 0.05;
+    if (k === 'fiber_raceway' || k === 'fiber_trough') return 0.15;
+    return 0.30;
+  }
+
+  function racewayDefaultElev(feed) {
+    return String(feed || 'overhead') === 'underfloor' ? -0.30 : 2.70;
+  }
+
+  function parseRacewayPoints(path) {
+    var raw = path.waypoints_list || path.waypoints || [];
+    if (typeof raw === 'string' && raw) {
+      try { raw = JSON.parse(raw); } catch (e) { raw = []; }
+    }
+    if (!Array.isArray(raw)) return [];
+    var out = [];
+    for (var i = 0; i < raw.length; i++) {
+      var pt = raw[i];
+      if (!pt) continue;
+      var x = Number(pt.x != null ? pt.x : pt[0]);
+      var y = Number(pt.y != null ? pt.y : pt[1]);
+      if (!isFinite(x) || !isFinite(y)) continue;
+      out.push({
+        x: x,
+        y: y,
+        z: pt.z != null ? Number(pt.z) : null,
+        corner: String(pt.corner || 'sharp'),
+        radius_m: Number(pt.radius_m) || 0,
+      });
+    }
+    return out;
+  }
+
+  /** Sample plan polyline with fillets → list of {x,y} plan meters. */
+  function sampleRacewayPlan(pts) {
+    if (!pts || pts.length < 1) return [];
+    if (pts.length === 1) return [{ x: pts[0].x, y: pts[0].y }];
+    var out = [];
+    out.push({ x: pts[0].x, y: pts[0].y });
+    for (var i = 1; i < pts.length; i++) {
+      var prev = pts[i - 1];
+      var cur = pts[i];
+      var next = pts[i + 1];
+      var isEnd = i === pts.length - 1;
+      var r = Number(cur.radius_m) || 0;
+      var wantFillet = !isEnd && next
+        && String(cur.corner || 'sharp') === 'fillet'
+        && r > 0.05;
+      if (!wantFillet) {
+        out.push({ x: cur.x, y: cur.y });
+        continue;
+      }
+      var dIn = Math.hypot(cur.x - prev.x, cur.y - prev.y);
+      var dOut = Math.hypot(next.x - cur.x, next.y - cur.y);
+      if (dIn < 1e-4 || dOut < 1e-4) {
+        out.push({ x: cur.x, y: cur.y });
+        continue;
+      }
+      var maxR = Math.min(dIn, dOut) * 0.45;
+      r = Math.min(Math.max(0.05, r), maxR);
+      var uxIn = (cur.x - prev.x) / dIn;
+      var uyIn = (cur.y - prev.y) / dIn;
+      var uxOut = (next.x - cur.x) / dOut;
+      var uyOut = (next.y - cur.y) / dOut;
+      var t1x = cur.x - uxIn * r;
+      var t1y = cur.y - uyIn * r;
+      var t2x = cur.x + uxOut * r;
+      var t2y = cur.y + uyOut * r;
+      // Approach to fillet start
+      out.push({ x: t1x, y: t1y });
+      // Sample quadratic curve (control = corner)
+      var steps = Math.max(4, Math.min(16, Math.ceil(r * 20)));
+      for (var s = 1; s <= steps; s++) {
+        var t = s / steps;
+        var omt = 1 - t;
+        var qx = omt * omt * t1x + 2 * omt * t * cur.x + t * t * t2x;
+        var qy = omt * omt * t1y + 2 * omt * t * cur.y + t * t * t2y;
+        out.push({ x: qx, y: qy });
+      }
+    }
+    // Dedup nearly coincident samples
+    var clean = [];
+    for (var j = 0; j < out.length; j++) {
+      var p = out[j];
+      if (!clean.length) {
+        clean.push(p);
+        continue;
+      }
+      var last = clean[clean.length - 1];
+      if (Math.hypot(p.x - last.x, p.y - last.y) > 0.008) clean.push(p);
+    }
+    return clean;
+  }
+
+  function planToScene3d(planPts, elevM, pathPts) {
+    // pathPts optional for per-vertex z override
+    var elev = isFinite(elevM) ? elevM : 2.7;
+    var out = [];
+    for (var i = 0; i < planPts.length; i++) {
+      var p = planPts[i];
+      var y = elev;
+      // Prefer explicit waypoint z when original points align (first/last often)
+      if (pathPts && pathPts[i] && pathPts[i].z != null && isFinite(pathPts[i].z)) {
+        y = pathPts[i].z;
+      }
+      out.push(new THREE.Vector3(p.x, y, p.y));
+    }
+    return out;
+  }
+
+  function placeOrientedBox(group, mat, from, to, width, height, upNudge) {
+    var dir = new THREE.Vector3().subVectors(to, from);
+    var len = dir.length();
+    if (len < 0.004) return;
+    dir.normalize();
+    var mid = new THREE.Vector3().addVectors(from, to).multiplyScalar(0.5);
+    if (upNudge) mid.y += upNudge;
+    var geo = new THREE.BoxGeometry(len, height, width);
+    var mesh = new THREE.Mesh(geo, mat);
+    // Align local +X with dir
+    var quat = new THREE.Quaternion();
+    quat.setFromUnitVectors(new THREE.Vector3(1, 0, 0), dir);
+    mesh.quaternion.copy(quat);
+    mesh.position.copy(mid);
+    group.add(mesh);
+  }
+
+  function buildLadderRaceway(group, centerline, width, mat) {
+    if (!centerline || centerline.length < 2) return;
+    var halfW = Math.max(0.04, width / 2);
+    var railH = 0.055;
+    var railT = 0.022;
+    var rungPitch = 0.28;
+    var rungH = 0.02;
+    var rungT = 0.02;
+    // Side rails follow offset polylines
+    var left = [];
+    var right = [];
+    var i;
+    for (i = 0; i < centerline.length; i++) {
+      var p = centerline[i];
+      var tangent;
+      if (i < centerline.length - 1) {
+        tangent = new THREE.Vector3().subVectors(centerline[i + 1], p);
+      } else {
+        tangent = new THREE.Vector3().subVectors(p, centerline[i - 1]);
+      }
+      // Horizontal right vector (plan)
+      var flat = new THREE.Vector3(tangent.x, 0, tangent.z);
+      if (flat.lengthSq() < 1e-8) flat.set(1, 0, 0);
+      else flat.normalize();
+      var rightV = new THREE.Vector3().crossVectors(flat, new THREE.Vector3(0, 1, 0)).normalize();
+      // If degenerate (vertical), skip offset
+      if (!isFinite(rightV.x)) rightV.set(0, 0, 1);
+      left.push(new THREE.Vector3(
+        p.x - rightV.x * halfW,
+        p.y,
+        p.z - rightV.z * halfW
+      ));
+      right.push(new THREE.Vector3(
+        p.x + rightV.x * halfW,
+        p.y,
+        p.z + rightV.z * halfW
+      ));
+    }
+    for (i = 0; i < left.length - 1; i++) {
+      placeOrientedBox(group, mat, left[i], left[i + 1], railT, railH, railH / 2);
+      placeOrientedBox(group, mat, right[i], right[i + 1], railT, railH, railH / 2);
+    }
+    // Rungs along cumulative length
+    var cum = 0;
+    var nextRung = rungPitch * 0.5;
+    for (i = 0; i < centerline.length - 1; i++) {
+      var a = centerline[i];
+      var b = centerline[i + 1];
+      var segLen = a.distanceTo(b);
+      if (segLen < 1e-4) continue;
+      var dir = new THREE.Vector3().subVectors(b, a).normalize();
+      var flatT = new THREE.Vector3(dir.x, 0, dir.z);
+      if (flatT.lengthSq() < 1e-8) flatT.set(1, 0, 0);
+      else flatT.normalize();
+      var rightV2 = new THREE.Vector3().crossVectors(flatT, new THREE.Vector3(0, 1, 0)).normalize();
+      if (!isFinite(rightV2.x)) rightV2.set(0, 0, 1);
+      var segStart = cum;
+      var segEnd = cum + segLen;
+      while (nextRung <= segEnd + 1e-6) {
+        var t = (nextRung - segStart) / segLen;
+        if (t >= 0 && t <= 1.0001) {
+          var c = new THREE.Vector3().lerpVectors(a, b, Math.min(1, t));
+          var L = new THREE.Vector3(
+            c.x - rightV2.x * halfW,
+            c.y + railH * 0.35,
+            c.z - rightV2.z * halfW
+          );
+          var R = new THREE.Vector3(
+            c.x + rightV2.x * halfW,
+            c.y + railH * 0.35,
+            c.z + rightV2.z * halfW
+          );
+          placeOrientedBox(group, mat, L, R, rungT, rungH, 0);
+        }
+        nextRung += rungPitch;
+      }
+      cum = segEnd;
+    }
+  }
+
+  function buildTroughRaceway(group, centerline, width, mat) {
+    if (!centerline || centerline.length < 2) return;
+    var floorT = 0.018;
+    var sideH = 0.06;
+    var sideT = 0.012;
+    var halfW = Math.max(0.03, width / 2);
+    var i;
+    for (i = 0; i < centerline.length - 1; i++) {
+      var a = centerline[i];
+      var b = centerline[i + 1];
+      placeOrientedBox(group, mat, a, b, width, floorT, floorT / 2);
+      var dir = new THREE.Vector3().subVectors(b, a);
+      if (dir.lengthSq() < 1e-8) continue;
+      dir.normalize();
+      var flat = new THREE.Vector3(dir.x, 0, dir.z);
+      if (flat.lengthSq() < 1e-8) flat.set(1, 0, 0);
+      else flat.normalize();
+      var rightV = new THREE.Vector3().crossVectors(flat, new THREE.Vector3(0, 1, 0)).normalize();
+      var aL = a.clone().addScaledVector(rightV, -halfW);
+      var bL = b.clone().addScaledVector(rightV, -halfW);
+      var aR = a.clone().addScaledVector(rightV, halfW);
+      var bR = b.clone().addScaledVector(rightV, halfW);
+      placeOrientedBox(group, mat, aL, bL, sideT, sideH, sideH / 2);
+      placeOrientedBox(group, mat, aR, bR, sideT, sideH, sideH / 2);
+    }
+  }
+
+  function buildConduitRaceway(group, centerline, diameter, mat) {
+    if (!centerline || centerline.length < 2) return;
+    var r = Math.max(0.015, diameter / 2);
+    for (var i = 0; i < centerline.length - 1; i++) {
+      var a = centerline[i];
+      var b = centerline[i + 1];
+      var len = a.distanceTo(b);
+      if (len < 0.004) continue;
+      var geo = new THREE.CylinderGeometry(r, r, len, 10, 1, false);
+      var mesh = new THREE.Mesh(geo, mat);
+      var mid = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
+      var dir = new THREE.Vector3().subVectors(b, a).normalize();
+      // Cylinder default axis is +Y
+      var quat = new THREE.Quaternion();
+      quat.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      mesh.quaternion.copy(quat);
+      mesh.position.copy(mid);
+      group.add(mesh);
+    }
+  }
+
+  function buildRacewayGroup(path) {
+    var pts = parseRacewayPoints(path);
+    if (pts.length < 2) return null;
+    var kind = String(path.path_kind || path.path_type || 'ladder').toLowerCase();
+    if (kind === 'fiber_trough') kind = 'fiber_raceway';
+    if (kind === 'tray') kind = 'ladder';
+    var feed = String(path.feed_to || path.path_type || 'overhead').toLowerCase();
+    var width = Number(path.width_m);
+    if (!isFinite(width) || width <= 0) width = racewayDefaultWidth(kind);
+    var elev = Number(path.elevation_m);
+    if (!isFinite(elev)) elev = racewayDefaultElev(feed);
+    var plan = sampleRacewayPlan(pts);
+    var centerline = planToScene3d(plan, elev, null);
+    if (centerline.length < 2) return null;
+
+    var hex = path.color_hex || '#2563eb';
+    var color = new THREE.Color(hex);
+    var mat = new THREE.MeshStandardMaterial({
+      color: color,
+      metalness: kind === 'conduit' ? 0.65 : 0.45,
+      roughness: kind === 'conduit' ? 0.35 : 0.5,
+    });
+    var group = new THREE.Group();
+    group.userData = { cablePath: path, kind: kind };
+
+    if (kind === 'conduit') {
+      buildConduitRaceway(group, centerline, width, mat);
+    } else if (kind === 'fiber_raceway' || kind === 'raceway' || kind === 'underfloor') {
+      buildTroughRaceway(group, centerline, width, mat);
+    } else {
+      // ladder (default) — actual ladder pattern with adjustable width
+      buildLadderRaceway(group, centerline, width, mat);
+    }
+
+    // Soft centerline guide (helps at distance)
+    try {
+      var lineGeo = new THREE.BufferGeometry().setFromPoints(centerline);
+      var lineMat = new THREE.LineBasicMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.25,
+      });
+      group.add(new THREE.Line(lineGeo, lineMat));
+    } catch (e) { /* ignore */ }
+
+    return group;
+  }
+
   function mount(container, options) {
     if (!global.THREE) {
       container.innerHTML = '<div class="empty-state"><p>Three.js failed to load.</p></div>';
@@ -352,6 +659,7 @@
     var floorCooling = options.cooling || options.cooling_units || options.floor_cooling || [];
     var floorUps = options.ups || options.ups_units || options.floor_ups || [];
     var envSensors = options.envSensors || options.env_sensors || [];
+    var cablePaths = options.cablePaths || options.cable_paths || options.raceways || [];
     var heatOverlay = options.heatOverlay !== false;
     var rooms = options.rooms || [];
     var interactive = options.interactive !== false;
@@ -1372,7 +1680,26 @@
       }
     }
 
-    if (!cabinets.length && !floorPdus.length && !floorCooling.length) {
+    // Cable raceways (ladder / fiber trough / conduit) at path elevation
+    var racewayGroup = new THREE.Group();
+    racewayGroup.name = 'raceways';
+    scene.add(racewayGroup);
+    var racewayCount = 0;
+    (cablePaths || []).forEach(function (path) {
+      if (!path) return;
+      if (path.is_active === 0 || path.is_active === false) return;
+      try {
+        var rg = buildRacewayGroup(path);
+        if (rg) {
+          racewayGroup.add(rg);
+          racewayCount++;
+        }
+      } catch (eRw) {
+        // ignore bad path geometry
+      }
+    });
+
+    if (!cabinets.length && !floorPdus.length && !floorCooling.length && !racewayCount) {
       var c2 = document.createElement('canvas');
       c2.width = 512;
       c2.height = 128;

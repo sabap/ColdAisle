@@ -671,6 +671,30 @@ if ($includeScene) {
     } catch (Throwable $e) {
         $ups3d = [];
     }
+    $cablePaths3d = [];
+    try {
+        $cablePaths3d = Database::fetchAll(
+            'SELECT * FROM cable_paths WHERE (is_active IS NULL OR is_active = 1) ORDER BY name'
+        );
+        if (class_exists('CablePlantService')) {
+            foreach ($cablePaths3d as &$cp) {
+                $cp['waypoints_list'] = CablePlantService::parseWaypoints($cp['waypoints'] ?? null);
+            }
+            unset($cp);
+        }
+    } catch (Throwable $e) {
+        try {
+            $cablePaths3d = Database::fetchAll('SELECT * FROM cable_paths ORDER BY name');
+            if (class_exists('CablePlantService')) {
+                foreach ($cablePaths3d as &$cp) {
+                    $cp['waypoints_list'] = CablePlantService::parseWaypoints($cp['waypoints'] ?? null);
+                }
+                unset($cp);
+            }
+        } catch (Throwable $e2) {
+            $cablePaths3d = [];
+        }
+    }
     $out['scene'] = [
         'cabinets' => $cabinets3d,
         'pdus' => $pdus3d,
@@ -678,6 +702,7 @@ if ($includeScene) {
         'ups' => $ups3d,
         'rooms' => $rooms,
         'env_sensors' => $envSensors3d,
+        'cable_paths' => $cablePaths3d,
         'logo_url' => App::url('assets/img/logo.svg'),
     ];
 }

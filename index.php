@@ -168,6 +168,32 @@ try {
     App::log('Dashboard env 3d: ' . $e->getMessage(), 'warning');
 }
 
+// Raceways for dashboard 3D (elevation + ladder geometry)
+$cablePaths3d = [];
+try {
+    if (class_exists('CablePlantService')) {
+        $cablePaths3d = Database::fetchAll(
+            'SELECT * FROM cable_paths WHERE (is_active IS NULL OR is_active = 1) ORDER BY name'
+        );
+        foreach ($cablePaths3d as &$cp) {
+            $cp['waypoints_list'] = CablePlantService::parseWaypoints($cp['waypoints'] ?? null);
+        }
+        unset($cp);
+    }
+} catch (Throwable $e) {
+    try {
+        $cablePaths3d = Database::fetchAll('SELECT * FROM cable_paths ORDER BY name');
+        if (class_exists('CablePlantService')) {
+            foreach ($cablePaths3d as &$cp) {
+                $cp['waypoints_list'] = CablePlantService::parseWaypoints($cp['waypoints'] ?? null);
+            }
+            unset($cp);
+        }
+    } catch (Throwable $e2) {
+        $cablePaths3d = [];
+    }
+}
+
 $rooms = Database::fetchAll(
     'SELECT r.room_id, r.name, r.width_m, r.depth_m, dc.name AS dc_name
      FROM rooms r
@@ -332,6 +358,7 @@ layout_header('Dashboard', $user, 'dashboard');
              data-ups='<?= App::e(json_encode($ups3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-rooms='<?= App::e(json_encode($rooms, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-env-sensors='<?= App::e(json_encode($envSensors3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
+             data-cable-paths='<?= App::e(json_encode($cablePaths3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-logo-url='<?= App::e(App::url('assets/img/logo.svg')) ?>'></div>
     </div>
 
@@ -410,7 +437,7 @@ layout_header('Dashboard', $user, 'dashboard');
     if (!el) return;
     el.classList.add('dash-3d-loading');
     var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=13') ?>;
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=14') ?>;
     loadScript(threeUrl)
       .then(function () { return loadScript(app3d); })
       .then(function () {
@@ -421,6 +448,8 @@ layout_header('Dashboard', $user, 'dashboard');
         var ups = JSON.parse(el.dataset.ups || '[]');
         var rooms = JSON.parse(el.dataset.rooms || '[]');
         var envSensors = JSON.parse(el.dataset.envSensors || '[]');
+        var cablePaths = [];
+        try { cablePaths = JSON.parse(el.dataset.cablePaths || '[]'); } catch (eCp) { cablePaths = []; }
         var logoUrl = el.dataset.logoUrl || '';
         var heatOn = true;
         var tog = document.getElementById('dash3dHeatToggle');
@@ -432,6 +461,7 @@ layout_header('Dashboard', $user, 'dashboard');
           ups: ups,
           rooms: rooms,
           envSensors: envSensors,
+          cablePaths: cablePaths,
           logoUrl: logoUrl,
           heatOverlay: heatOn,
           interactive: true,

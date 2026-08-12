@@ -883,6 +883,7 @@
         }
         setRacewayUi();
         draw();
+        if (typeof refresh3d === 'function') refresh3d();
         ColdAisle.toast(data.message || 'Merged — drag yellow ◆ into the corner for the curve', 'success');
       }).catch(function (err) {
         ColdAisle.toast((err && err.message) || 'Merge failed', 'error');
@@ -917,10 +918,33 @@
       });
     }
 
-    function persistRacewayPath(p, toastMsg) {
-      if (!p || !room || !room.room_id) return Promise.resolve();
+    function defaultRacewayWidthM(kind) {
+      const k = String(kind || 'ladder');
+      if (k === 'conduit') return 0.05;
+      if (k === 'fiber_raceway' || k === 'fiber_trough') return 0.15;
+      return 0.30;
+    }
+
+    function defaultRacewayElevM(feed) {
+      return String(feed || 'overhead') === 'underfloor' ? -0.30 : 2.70;
+    }
+
+    /**
+     * @param {object} p path row
+     * @param {string|null} toastMsg optional success toast
+     * @param {{silent?:boolean,skipSelect?:boolean,skip3d?:boolean}|null} opts
+     */
+    function persistRacewayPath(p, toastMsg, opts) {
+      opts = opts || {};
+      if (!p || !room || !room.room_id) return Promise.resolve(null);
       const pts = p.waypoints_list || pathPoints(p);
       p.waypoints_list = pts;
+      const kind = p.path_kind || 'ladder';
+      const feed = p.feed_to || 'overhead';
+      let widthM = p.width_m != null && p.width_m !== '' ? Number(p.width_m) : defaultRacewayWidthM(kind);
+      let elevM = p.elevation_m != null && p.elevation_m !== '' ? Number(p.elevation_m) : defaultRacewayElevM(feed);
+      if (!(widthM > 0)) widthM = defaultRacewayWidthM(kind);
+      if (!isFinite(elevM)) elevM = defaultRacewayElevM(feed);
       return ColdAisle.api('api/floorplan.php?action=save_cable_path', {
         method: 'POST',
         body: {
@@ -930,10 +954,12 @@
           path_code: p.path_code || p.name,
           segment_class: p.segment_class || '',
           media_class: p.media_class || 'mixed',
-          path_kind: p.path_kind || 'ladder',
-          feed_to: p.feed_to || 'overhead',
+          path_kind: kind,
+          feed_to: feed,
           color_hex: p.color_hex,
           notes: p.notes || '',
+          width_m: widthM,
+          elevation_m: elevM,
           waypoints: pts,
         },
       }).then(function (data) {
@@ -942,15 +968,30 @@
             return Number(x.path_id) === Number(data.path.path_id);
           });
           if (idx >= 0) cablePaths[idx] = data.path;
-          selectedPathId = data.path.path_id;
-          renderRacewayProps(data.path);
+          if (!opts.skipSelect) {
+            selectedPathId = data.path.path_id;
+            renderRacewayProps(data.path);
+          } else {
+            // Keep local dims in sync when bulk-updating without reselect
+            if (idx >= 0) {
+              if (p.width_m != null) cablePaths[idx].width_m = p.width_m;
+              if (p.elevation_m != null) cablePaths[idx].elevation_m = p.elevation_m;
+            }
+          }
         }
-        setRacewayUi();
-        draw();
+        if (!opts.silent) {
+          setRacewayUi();
+          draw();
+          if (!opts.skip3d && typeof refresh3d === 'function') refresh3d();
+        }
         if (toastMsg) ColdAisle.toast(toastMsg, 'success');
+        return data;
       }).catch(function (err) {
-        ColdAisle.toast((err && err.message) || 'Could not save path', 'error');
-        draw();
+        if (!opts.silent) {
+          ColdAisle.toast((err && err.message) || 'Could not save path', 'error');
+          draw();
+        }
+        throw err;
       });
     }
 
@@ -3183,6 +3224,15 @@
       };
       const code = p.path_code || p.name || 'Path';
       const canMerge = !!(findEndpointMergeCandidate(p, 0) || findEndpointMergeCandidate(p, 1));
+      const kind = p.path_kind || 'ladder';
+      const feed = p.feed_to || 'overhead';
+      const widthM = p.width_m != null && p.width_m !== ''
+        ? Number(p.width_m)
+        : defaultRacewayWidthM(kind);
+      const elevM = p.elevation_m != null && p.elevation_m !== ''
+        ? Number(p.elevation_m)
+        : defaultRacewayElevM(feed);
+      const lenU = lengthLabel();
       let vertHtml = '<ul style="margin:.35rem 0;padding-left:1.1rem;font-size:.8rem">';
       pts.forEach(function (pt, i) {
         const end = i === 0 || i === pts.length - 1;
@@ -3200,12 +3250,22 @@
         + (p.name && p.name !== code ? ' <span class="text-muted">(' + esc(p.name) + ')</span>' : '')
         + '</p>' +
         '<dl class="prop-dl">' +
-        '<div><dt>Type</dt><dd>' + esc(kinds[p.path_kind] || p.path_kind || '—') + '</dd></div>' +
+        '<div><dt>Type</dt><dd>' + esc(kinds[kind] || kind || '—') + '</dd></div>' +
         '<div><dt>Class</dt><dd>' + esc(p.segment_class || '—') + '</dd></div>' +
         '<div><dt>Media</dt><dd>' + esc(p.media_class || '—') + '</dd></div>' +
-        '<div><dt>Cabinet feed</dt><dd>' + esc(feeds[p.feed_to] || p.feed_to || '—') + '</dd></div>' +
+        '<div><dt>Cabinet feed</dt><dd>' + esc(feeds[feed] || feed || '—') + '</dd></div>' +
         '<div><dt>Vertices</dt><dd>' + pts.length + '</dd></div>' +
         '</dl>' +
+        '<div class="form-grid" style="gap:.45rem;margin-top:.55rem">' +
+        '<div class="form-row"><label for="rwPropWidth">Width (' + lenU + ')</label>' +
+        '<input class="form-control" type="number" step="0.01" id="rwPropWidth" value="' +
+        esc(String(fmtLen(widthM, 3))) + '"></div>' +
+        '<div class="form-row"><label for="rwPropElev">Elevation AFF (' + lenU + ')</label>' +
+        '<input class="form-control" type="number" step="0.05" id="rwPropElev" value="' +
+        esc(String(fmtLen(elevM, 3))) + '">' +
+        '<p class="text-muted" style="font-size:.72rem;margin:.15rem 0 0">' +
+        'One height for this <strong>entire path</strong> (all vertices / corners together) in 3D. Underfloor: negative.</p></div>' +
+        '</div>' +
         '<p class="text-muted" style="font-size:.78rem;margin:.5rem 0 0">' +
         'Drag a <strong>round vertex</strong> to reshape. Drag the <strong>yellow diamond</strong> into the corner for a 90° curve; drag out to sharp. Drag the <strong>path line</strong> to move the whole raceway.</p>' +
         vertHtml +
@@ -3214,6 +3274,15 @@
           ? String(window.ColdAisle.baseUrl).replace(/\/$/, '') + '/' : '') +
         'pages/cables.php">Cabling</a></p>' +
         '<div class="form-actions" style="flex-wrap:wrap;gap:.35rem;margin-top:.5rem">' +
+        '<button type="button" class="btn btn-sm btn-primary" id="btnSavePathProps">Save this path</button>' +
+        (cablePaths.length > 1
+          ? '<button type="button" class="btn btn-sm btn-secondary" id="btnApplyElevAll" title="Set this elevation on every raceway in this room">' +
+            'Apply elev. to all (' + cablePaths.length + ')</button>'
+          : '') +
+        (cablePaths.length > 1
+          ? '<button type="button" class="btn btn-sm btn-secondary" id="btnApplyWidthAll" title="Set this width on every raceway in this room">' +
+            'Apply width to all</button>'
+          : '') +
         '<button type="button" class="btn btn-sm btn-secondary" id="btnClearPathSel">Deselect</button>' +
         (canMerge
           ? '<button type="button" class="btn btn-sm btn-primary" id="btnMergePathProp">Merge nearby endpoint</button>'
@@ -3223,6 +3292,39 @@
         (canMerge
           ? '<p class="text-muted" style="font-size:.75rem;margin:.4rem 0 0">Green rings mark endpoints ready to join at ~90°.</p>'
           : '<p class="text-muted" style="font-size:.75rem;margin:.4rem 0 0">To merge: drag this path’s end near another path’s end at roughly 90°.</p>');
+
+      function readPropDims() {
+        const wEl = propsEl.querySelector('#rwPropWidth');
+        const eEl = propsEl.querySelector('#rwPropElev');
+        return {
+          width_m: Math.max(0.03, Math.min(5, displayToM((wEl && wEl.value) || widthM))),
+          elevation_m: Math.max(-2, Math.min(12, displayToM((eEl && eEl.value) || elevM))),
+        };
+      }
+
+      const saveProps = propsEl.querySelector('#btnSavePathProps');
+      if (saveProps) {
+        saveProps.addEventListener('click', function () {
+          const d = readPropDims();
+          p.width_m = d.width_m;
+          p.elevation_m = d.elevation_m;
+          persistRacewayPath(p, 'Raceway elevation/width saved');
+        });
+      }
+      const elevAllBtn = propsEl.querySelector('#btnApplyElevAll');
+      if (elevAllBtn) {
+        elevAllBtn.addEventListener('click', function () {
+          const d = readPropDims();
+          applyRacewayDimsToRoom({ elevation_m: d.elevation_m }, 'elevation');
+        });
+      }
+      const widthAllBtn = propsEl.querySelector('#btnApplyWidthAll');
+      if (widthAllBtn) {
+        widthAllBtn.addEventListener('click', function () {
+          const d = readPropDims();
+          applyRacewayDimsToRoom({ width_m: d.width_m }, 'width');
+        });
+      }
       const btn = propsEl.querySelector('#btnClearPathSel');
       if (btn) {
         btn.addEventListener('click', function () {
@@ -3246,6 +3348,66 @@
         });
       }
       setRacewayUi();
+    }
+
+    /**
+     * Apply elevation and/or width to every raceway in the current room.
+     * @param {{elevation_m?:number,width_m?:number}} dims
+     * @param {string} label short name for toast
+     */
+    async function applyRacewayDimsToRoom(dims, label) {
+      if (!room || !room.room_id) return;
+      const list = cablePaths.slice();
+      if (!list.length) {
+        ColdAisle.toast('No raceways in this room', 'info');
+        return;
+      }
+      const n = list.length;
+      const elevPart = dims.elevation_m != null
+        ? ('elevation ' + fmtLen(dims.elevation_m, 3) + ' ' + lengthLabel())
+        : '';
+      const widthPart = dims.width_m != null
+        ? ('width ' + fmtLen(dims.width_m, 3) + ' ' + lengthLabel())
+        : '';
+      const what = [elevPart, widthPart].filter(Boolean).join(' and ');
+      if (!window.confirm(
+        'Apply ' + (what || label) + ' to all ' + n + ' raceway(s) in this room?\n\n'
+        + 'Each path keeps its geometry; only the 3D ' + (label || 'dimension') + ' is updated.'
+      )) {
+        return;
+      }
+      ColdAisle.toast('Updating ' + n + ' raceway(s)…', 'info');
+      let ok = 0;
+      let fail = 0;
+      for (let i = 0; i < list.length; i++) {
+        const path = list[i];
+        if (dims.elevation_m != null) path.elevation_m = dims.elevation_m;
+        if (dims.width_m != null) path.width_m = dims.width_m;
+        try {
+          await persistRacewayPath(path, null, { silent: true, skipSelect: true, skip3d: true });
+          ok++;
+        } catch (e) {
+          fail++;
+        }
+      }
+      if (selectedPathId) {
+        const sel = cablePaths.find(function (x) {
+          return Number(x.path_id) === Number(selectedPathId);
+        });
+        if (sel) {
+          if (dims.elevation_m != null) sel.elevation_m = dims.elevation_m;
+          if (dims.width_m != null) sel.width_m = dims.width_m;
+          renderRacewayProps(sel);
+        }
+      }
+      setRacewayUi();
+      if (typeof refresh3d === 'function') refresh3d();
+      draw();
+      if (fail) {
+        ColdAisle.toast('Updated ' + ok + ' · failed ' + fail, 'error');
+      } else {
+        ColdAisle.toast('Applied ' + (label || 'dims') + ' to ' + ok + ' raceway(s)', 'success');
+      }
     }
 
     function renderMultiProps(list) {
@@ -4704,6 +4866,7 @@
         ups: floorUps,
         envSensors: envSensors3d,
         heatOverlay: true,
+        cablePaths: showRaceways ? cablePaths : [],
         rooms: room ? [room] : [],
         interactive: true,
         textureFaces: 'both',
@@ -4867,6 +5030,26 @@
       return 'PATH-' + n;
     }
 
+    function syncRwFinishDimDefaults(force) {
+      const kindEl = document.getElementById('rwPathKind');
+      const feedEl = document.getElementById('rwFeed');
+      const widthEl = document.getElementById('rwWidth');
+      const elevEl = document.getElementById('rwElev');
+      const wUnit = document.getElementById('rwWidthUnit');
+      const eUnit = document.getElementById('rwElevUnit');
+      const kind = (kindEl && kindEl.value) || 'fiber_raceway';
+      const feed = (feedEl && feedEl.value) || 'overhead';
+      const u = lengthLabel();
+      if (wUnit) wUnit.textContent = '(' + u + ')';
+      if (eUnit) eUnit.textContent = '(' + u + ')';
+      if (widthEl && (force || widthEl.dataset.userEdited !== '1')) {
+        widthEl.value = fmtLen(defaultRacewayWidthM(kind), 3);
+      }
+      if (elevEl && (force || elevEl.dataset.userEdited !== '1')) {
+        elevEl.value = fmtLen(defaultRacewayElevM(feed), 3);
+      }
+    }
+
     function openRacewayFinishModal() {
       if (!racewayDraw || racewayDraw.points.length < 2) {
         ColdAisle.toast('Add at least two points', 'error');
@@ -4883,15 +5066,20 @@
       const kind = document.getElementById('rwPathKind');
       const feed = document.getElementById('rwFeed');
       const media = document.getElementById('rwMedia');
+      const widthEl = document.getElementById('rwWidth');
+      const elevEl = document.getElementById('rwElev');
       if (seg) seg.value = racewayDraw.segment_class || 'rs';
       if (row) row.value = 'A';
       if (kind) kind.value = racewayDraw.path_kind || 'fiber_raceway';
       if (feed) feed.value = racewayDraw.feed_to || 'overhead';
       if (media) media.value = racewayDraw.media_class || 'fiber';
+      if (widthEl) widthEl.dataset.userEdited = '';
+      if (elevEl) elevEl.dataset.userEdited = '';
       if (code) {
         code.value = suggestCodeClient(seg ? seg.value : 'rs', row ? row.value : 'A');
       }
       syncRwRowVisibility();
+      syncRwFinishDimDefaults(true);
       modal.hidden = false;
     }
 
@@ -4932,6 +5120,8 @@
       const mediaEl = document.getElementById('rwMedia');
       const nameEl = document.getElementById('rwDisplayName');
       const notesEl = document.getElementById('rwNotes');
+      const widthEl = document.getElementById('rwWidth');
+      const elevEl = document.getElementById('rwElev');
       const pathCode = (codeEl && codeEl.value || '').trim();
       if (!pathCode) {
         ColdAisle.toast('Pathway code is required', 'error');
@@ -4951,6 +5141,12 @@
       };
       const color = colorMap[kind] || colorMap[media] || '#eab308';
       const display = (nameEl && nameEl.value.trim()) || pathCode;
+      let widthM = displayToM(widthEl ? widthEl.value : defaultRacewayWidthM(kind));
+      let elevM = displayToM(elevEl ? elevEl.value : defaultRacewayElevM(feed));
+      if (!(widthM > 0)) widthM = defaultRacewayWidthM(kind);
+      if (!isFinite(elevM)) elevM = defaultRacewayElevM(feed);
+      widthM = Math.max(0.03, Math.min(5, widthM));
+      elevM = Math.max(-2, Math.min(12, elevM));
       try {
         const data = await ColdAisle.api('api/floorplan.php?action=save_cable_path', {
           method: 'POST',
@@ -4964,6 +5160,8 @@
             feed_to: feed,
             color_hex: color,
             notes: notesEl ? notesEl.value : '',
+            width_m: widthM,
+            elevation_m: elevM,
             waypoints: racewayDraw.points,
           },
         });
@@ -4976,6 +5174,7 @@
         document.body.classList.remove('raceway-draw-mode');
         setRacewayUi();
         draw();
+        if (typeof refresh3d === 'function') refresh3d();
         ColdAisle.toast('Raceway ' + pathCode + ' saved', 'success');
       } catch (err) {
         ColdAisle.toast((err && err.message) || 'Save failed', 'error');
@@ -4996,6 +5195,7 @@
         racewayToggle.classList.toggle('btn-primary', showRaceways);
         racewayToggle.classList.toggle('btn-secondary', !showRaceways);
         draw();
+        if (typeof refresh3d === 'function') refresh3d();
       });
     }
     if (btnDrawRaceway) btnDrawRaceway.addEventListener('click', function () {
@@ -5015,6 +5215,10 @@
       const seg = document.getElementById('rwSegClass');
       const row = document.getElementById('rwRowPair');
       const code = document.getElementById('rwPathCode');
+      const kind = document.getElementById('rwPathKind');
+      const feed = document.getElementById('rwFeed');
+      const widthEl = document.getElementById('rwWidth');
+      const elevEl = document.getElementById('rwElev');
       const save = document.getElementById('rwFinishSave');
       const cancel = document.getElementById('rwFinishCancel');
       if (seg) {
@@ -5034,6 +5238,18 @@
         code.addEventListener('input', function () {
           code.dataset.userEdited = '1';
         });
+      }
+      if (kind) {
+        kind.addEventListener('change', function () { syncRwFinishDimDefaults(false); });
+      }
+      if (feed) {
+        feed.addEventListener('change', function () { syncRwFinishDimDefaults(false); });
+      }
+      if (widthEl) {
+        widthEl.addEventListener('input', function () { widthEl.dataset.userEdited = '1'; });
+      }
+      if (elevEl) {
+        elevEl.addEventListener('input', function () { elevEl.dataset.userEdited = '1'; });
       }
       if (save) save.addEventListener('click', function () { submitRacewayFinish(); });
       if (cancel) {

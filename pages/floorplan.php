@@ -187,6 +187,15 @@ layout_header('Floor Planner', $user, 'floorplan');
                     <option value="power">Power</option>
                 </select>
             </div>
+            <div class="form-row">
+                <label for="rwWidth">Width <span class="text-muted" id="rwWidthUnit">(m)</span></label>
+                <input class="form-control" type="number" step="0.01" min="0.03" id="rwWidth" value="0.30" title="Tray / trough width for 3D">
+            </div>
+            <div class="form-row">
+                <label for="rwElev">Elevation AFF <span class="text-muted" id="rwElevUnit">(m)</span></label>
+                <input class="form-control" type="number" step="0.05" id="rwElev" value="2.70" title="Height above finished floor for 3D (underfloor: negative)">
+                <p class="text-muted" style="font-size:.72rem;margin:.2rem 0 0">Typical overhead tray ~2.7 m; underfloor ~−0.3 m.</p>
+            </div>
             <div class="form-row full">
                 <label for="rwDisplayName">Display name (optional)</label>
                 <input class="form-control" id="rwDisplayName" placeholder="Defaults to pathway code">
@@ -243,9 +252,9 @@ layout_header('Floor Planner', $user, 'floorplan');
   window.ColdAisle.lengthUnits = <?= json_encode($units) ?>;
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=13"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=14"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=33"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=35"></script>
 <script>
 (function () {
   var c2 = document.getElementById('rwFinishCancel2');

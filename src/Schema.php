@@ -518,6 +518,7 @@ class Schema
             self::ensureColumn('cable_paths', 'path_kind', "NVARCHAR(40) NOT NULL CONSTRAINT DF_cp_kind DEFAULT 'ladder'");
             self::ensureColumn('cable_paths', 'feed_to', "NVARCHAR(20) NOT NULL CONSTRAINT DF_cp_feed DEFAULT 'overhead'");
             self::ensureColumn('cable_paths', 'width_m', 'DECIMAL(8,3) NULL');
+            self::ensureColumn('cable_paths', 'elevation_m', 'DECIMAL(8,3) NULL'); // path height AFF for 3D (m)
             self::ensureColumn('cable_paths', 'is_active', 'BIT NOT NULL CONSTRAINT DF_cp_active DEFAULT 1');
             self::ensureColumn('cable_paths', 'path_code', 'NVARCHAR(40) NULL');
             self::ensureColumn('cable_paths', 'segment_class', 'NVARCHAR(20) NULL');
@@ -995,7 +996,7 @@ class Schema
             'asset_events' => ['event_id', 'device_id', 'event_type', 'summary', 'occurred_at'],
             'cable_paths' => [
                 'path_id', 'room_id', 'name', 'path_type', 'waypoints', 'color_hex',
-                'media_class', 'path_kind', 'feed_to', 'width_m', 'is_active',
+                'media_class', 'path_kind', 'feed_to', 'width_m', 'elevation_m', 'is_active',
                 'path_code', 'segment_class',
             ],
             'cables' => [
