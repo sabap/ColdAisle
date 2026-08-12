@@ -41,7 +41,7 @@ require_once __DIR__ . '/Services/StorageHousekeepingService.php';
 class App
 {
     /** App semver — keep in sync with /VERSION */
-    public const VERSION = '0.3.131';
+    public const VERSION = '0.3.132';
     /** Product name is fixed (not user-configurable). */
     public const APP_NAME = 'ColdAisle';
     public const ROOT = __DIR__ . '/..';
