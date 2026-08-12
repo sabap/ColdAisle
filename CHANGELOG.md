@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **NOC live indicator:** footer shows **Live** (no interval text); amber while refreshing; red **Stale** if no successful poll for 2× the data interval (TV freeze cue)
-
 ### Bug fixes
 
 ---
 
+## [0.3.141] - 2026-08-12
+
+### Enhancements
+
+- **NOC live indicator:** footer shows **Live** (no interval text); amber while refreshing; red **Stale** if no successful poll for 2× the data interval (TV freeze cue)
+
+---
 ## [0.3.140] - 2026-08-12
 
 ### Bug fixes
