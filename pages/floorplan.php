@@ -306,9 +306,9 @@ layout_header('Floor Planner', $user, 'floorplan');
   window.ColdAisle.lengthUnits = <?= json_encode($units) ?>;
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=20"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=21"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=36"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=37"></script>
 <script>
 (function () {
   var c2 = document.getElementById('rwFinishCancel2');

@@ -334,6 +334,9 @@ class Database
             'rated_amps' => 2,
             'rated_kw' => 2,
             'length_m' => 2,
+            // cable_paths tray dimensions (DECIMAL 8,3 / similar)
+            'elevation_m' => 3,
+            'width_m' => 3,
         ];
 
         $col = strtolower($column);
