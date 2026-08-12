@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **NOC panel slide timer labels:** time marks under the slider align with each snap (5s–60s)
+
 ---
 
 ## [0.3.134] - 2026-08-12
