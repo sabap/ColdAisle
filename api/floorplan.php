@@ -561,6 +561,37 @@ try {
         }
     }
 
+    // Raceway geometry save (shared CablePlantService — same as Cabling page)
+    if ($method === 'POST' && (($_GET['action'] ?? '') === 'save_cable_path')) {
+        api_require_permission('edit_infrastructure');
+        api_require_csrf();
+        if (!class_exists('CablePlantService')) {
+            App::json(['error' => 'CablePlantService unavailable'], 500);
+        }
+        $data = api_read_json();
+        $pathId = (int)($data['path_id'] ?? 0);
+        $roomId = (int)($data['room_id'] ?? $_GET['room_id'] ?? 0);
+        if ($roomId > 0) {
+            $data['room_id'] = $roomId;
+        }
+        $res = CablePlantService::savePath($data, $pathId > 0 ? $pathId : null);
+        if (empty($res['ok'])) {
+            App::json(['error' => $res['message'] ?? 'Save failed'], 400);
+        }
+        $row = Database::fetchOne('SELECT * FROM cable_paths WHERE path_id = ?', [(int)$res['path_id']]);
+        if ($row) {
+            $row['waypoints_list'] = CablePlantService::parseWaypoints($row['waypoints'] ?? null);
+        }
+        AuditService::log(
+            (int)$user['user_id'],
+            $user['username'],
+            $pathId > 0 ? 'update' : 'create',
+            'cable_path',
+            (int)$res['path_id']
+        );
+        App::json(['path' => $row, 'message' => $res['message']], $pathId > 0 ? 200 : 201);
+    }
+
     // Default GET: floor plan payload
     $roomId = (int)($_GET['room_id'] ?? 0);
     if (!$roomId) {
@@ -739,7 +770,16 @@ try {
         App::log('floorplan UPS query: ' . $e->getMessage(), 'warning');
     }
 
-    $paths = Database::fetchAll('SELECT * FROM cable_paths WHERE room_id = ?', [$roomId]);
+    $paths = [];
+    try {
+        if (class_exists('CablePlantService')) {
+            $paths = CablePlantService::pathsForRoom($roomId, true);
+        } else {
+            $paths = Database::fetchAll('SELECT * FROM cable_paths WHERE room_id = ?', [$roomId]);
+        }
+    } catch (Throwable $e) {
+        $paths = [];
+    }
     $units = SettingsService::get('length_units', 'metric');
 
     $envSensors3d = [];

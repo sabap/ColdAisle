@@ -59,6 +59,10 @@ layout_header('Floor Planner', $user, 'floorplan');
         <button type="button" class="btn btn-secondary btn-sm" id="btnZoomIn" title="Zoom in">+</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnZoomReset" title="Reset zoom">Reset</button>
         <button type="button" class="btn btn-secondary btn-sm" id="toggle3d">3D View</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="toggleRaceways" title="Show cable raceways / fiber troughs">Raceways: On</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btnDrawRaceway" title="Click points on the floor; double-click or Finish to save">Draw raceway</button>
+        <button type="button" class="btn btn-primary btn-sm" id="btnFinishRaceway" hidden title="Save polyline">Finish path</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btnCancelRaceway" hidden>Cancel</button>
         <span class="text-muted" style="font-size:.8rem;margin-left:auto">
             SHIFT+click multi-select · Arrows nudge · Drag floor to pan · Scroll zoom
         </span>
@@ -133,5 +137,5 @@ layout_header('Floor Planner', $user, 'floorplan');
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=13"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=25"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=26"></script>
 <?php layout_footer(); ?>

@@ -501,6 +501,47 @@ class Schema
             self::ensureColumn('disposals', 'notification_sent', 'BIT NOT NULL CONSTRAINT DF_disposals_notif DEFAULT 0');
             self::ensureColumn('disposals', 'notification_sent_at', 'DATETIME2 NULL');
 
+            // Structured cable plant / raceways (G-B1)
+            self::ensureTable(
+                'cable_paths',
+                "CREATE TABLE cable_paths (
+                    path_id INT IDENTITY(1,1) PRIMARY KEY,
+                    room_id INT NULL,
+                    name NVARCHAR(100) NOT NULL,
+                    path_type NVARCHAR(30) NOT NULL CONSTRAINT DF_cp_type DEFAULT 'overhead',
+                    waypoints NVARCHAR(MAX) NULL,
+                    color_hex NVARCHAR(7) NOT NULL CONSTRAINT DF_cp_color DEFAULT '#38bdf8',
+                    notes NVARCHAR(MAX) NULL
+                )"
+            );
+            self::ensureColumn('cable_paths', 'media_class', "NVARCHAR(20) NOT NULL CONSTRAINT DF_cp_media DEFAULT 'mixed'");
+            self::ensureColumn('cable_paths', 'path_kind', "NVARCHAR(40) NOT NULL CONSTRAINT DF_cp_kind DEFAULT 'tray'");
+            self::ensureColumn('cable_paths', 'feed_to', "NVARCHAR(20) NOT NULL CONSTRAINT DF_cp_feed DEFAULT 'overhead'");
+            self::ensureColumn('cable_paths', 'width_m', 'DECIMAL(8,3) NULL');
+            self::ensureColumn('cable_paths', 'is_active', 'BIT NOT NULL CONSTRAINT DF_cp_active DEFAULT 1');
+            self::ensureTable(
+                'cables',
+                "CREATE TABLE cables (
+                    cable_id INT IDENTITY(1,1) PRIMARY KEY,
+                    cable_label NVARCHAR(100) NULL,
+                    media_type NVARCHAR(50) NULL,
+                    length_m DECIMAL(8,2) NULL,
+                    color NVARCHAR(30) NULL,
+                    a_port_id INT NULL,
+                    b_port_id INT NULL,
+                    path_id INT NULL,
+                    status NVARCHAR(30) NOT NULL CONSTRAINT DF_cables_status DEFAULT 'active',
+                    notes NVARCHAR(MAX) NULL,
+                    installed_at DATETIME2 NULL,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_cables_created DEFAULT SYSUTCDATETIME()
+                )"
+            );
+            self::ensureColumn('cables', 'circuit_id', 'NVARCHAR(100) NULL');
+            self::ensureColumn('cables', 'speed', 'NVARCHAR(30) NULL');
+            self::ensureColumn('cables', 'color_hex', 'NVARCHAR(7) NULL');
+            self::ensureColumn('cables', 'cable_role', "NVARCHAR(30) NOT NULL CONSTRAINT DF_cables_role DEFAULT 'patch'");
+            self::ensureColumn('cables', 'strand_count', 'INT NULL');
+
             // Password reset tokens (G-B5 forgot-password)
             self::ensureTable(
                 'password_reset_tokens',
@@ -950,6 +991,14 @@ class Schema
             'disposals' => ['stage', 'vendor_id', 'change_ticket', 'notification_sent', 'notification_sent_at'],
             'password_reset_tokens' => ['token_id', 'user_id', 'token_hash', 'expires_at'],
             'asset_events' => ['event_id', 'device_id', 'event_type', 'summary', 'occurred_at'],
+            'cable_paths' => [
+                'path_id', 'room_id', 'name', 'path_type', 'waypoints', 'color_hex',
+                'media_class', 'path_kind', 'feed_to', 'width_m', 'is_active',
+            ],
+            'cables' => [
+                'cable_id', 'cable_label', 'media_type', 'path_id', 'circuit_id', 'speed',
+                'color_hex', 'cable_role', 'strand_count',
+            ],
             'work_orders' => [
                 'work_order_id', 'title', 'work_type', 'status', 'change_ticket', 'checklist_json',
             ],

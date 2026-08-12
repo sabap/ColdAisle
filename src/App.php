@@ -26,6 +26,7 @@ require_once __DIR__ . '/Services/MailService.php';
 require_once __DIR__ . '/Services/ProductMailService.php';
 require_once __DIR__ . '/Services/AssetLifecycleService.php';
 require_once __DIR__ . '/Services/TechMode.php';
+require_once __DIR__ . '/Services/CablePlantService.php';
 require_once __DIR__ . '/Services/MibService.php';
 require_once __DIR__ . '/Services/PowerAlertService.php';
 require_once __DIR__ . '/Services/AlertService.php';
