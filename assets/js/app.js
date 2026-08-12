@@ -106,6 +106,10 @@
     toast: function (message, type, opts) {
       type = type || 'info';
       opts = opts || {};
+      const cleared = !!(opts.cleared || opts.is_cleared);
+      if (cleared && (type === 'error' || type === 'warning' || type === 'danger')) {
+        type = 'success';
+      }
       let host = document.getElementById('toast-host');
       if (!host) {
         host = document.createElement('div');
@@ -114,16 +118,25 @@
         document.body.appendChild(host);
       }
       const el = document.createElement('div');
-      el.className = 'ca-toast ca-toast-' + type;
+      el.className = 'ca-toast ca-toast-' + type + (cleared ? ' ca-toast-cleared' : '');
       el.setAttribute('role', 'status');
 
-      const pulse = document.createElement('span');
-      pulse.className = 'health-pulse health-pulse-' + (
-        type === 'success' ? 'ok' :
-        type === 'warning' ? 'warn' :
-        (type === 'error' || type === 'danger') ? 'crit' : 'info'
-      );
-      pulse.setAttribute('aria-hidden', 'true');
+      let marker;
+      if (cleared) {
+        marker = document.createElement('span');
+        marker.className = 'ca-toast-check';
+        marker.setAttribute('aria-label', 'Cleared');
+        marker.title = 'Cleared';
+        marker.textContent = '✓';
+      } else {
+        marker = document.createElement('span');
+        marker.className = 'health-pulse health-pulse-' + (
+          type === 'success' ? 'ok' :
+          type === 'warning' ? 'warn' :
+          (type === 'error' || type === 'danger') ? 'crit' : 'info'
+        );
+        marker.setAttribute('aria-hidden', 'true');
+      }
 
       const body = document.createElement('div');
       body.style.flex = '1';
@@ -132,6 +145,13 @@
         const t = document.createElement('div');
         t.className = 'ca-toast-title';
         t.textContent = opts.title;
+        if (cleared) {
+          const badge = document.createElement('span');
+          badge.className = 'ca-toast-cleared-badge';
+          badge.textContent = 'Cleared';
+          t.appendChild(document.createTextNode(' '));
+          t.appendChild(badge);
+        }
         body.appendChild(t);
       }
       const m = document.createElement('p');
@@ -151,7 +171,7 @@
       };
       close.addEventListener('click', dismiss);
 
-      el.appendChild(pulse);
+      el.appendChild(marker);
       el.appendChild(body);
       el.appendChild(close);
       host.appendChild(el);
@@ -236,6 +256,7 @@
             api.toast(msg || it.title || 'Notification', it.toast_type || 'info', {
               title: it.title || 'Alert',
               duration: 7000,
+              cleared: !!(it.is_cleared || it.alert_state === 'cleared'),
             });
           });
           if ((data.max_id || 0) > sinceId) {

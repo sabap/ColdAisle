@@ -498,12 +498,25 @@ try {
 // Recent broadcast notifications for NOC glass toast (no auth — site-wide only)
 $recentAlerts = [];
 try {
-    $rows = Database::fetchAll(
-        "SELECT TOP 12 notification_id, title, message, category, entity_type, entity_id, created_at
-         FROM notifications
-         WHERE user_id IS NULL
-         ORDER BY notification_id DESC"
-    );
+    try {
+        $rows = Database::fetchAll(
+            "SELECT TOP 12 notification_id, title, message, category, entity_type, entity_id,
+                    is_cleared, cleared_at, created_at
+             FROM notifications
+             WHERE user_id IS NULL
+             ORDER BY notification_id DESC"
+        );
+    } catch (Throwable $eCols) {
+        $rows = Database::fetchAll(
+            "SELECT TOP 12 notification_id, title, message, category, entity_type, entity_id, created_at
+             FROM notifications
+             WHERE user_id IS NULL
+             ORDER BY notification_id DESC"
+        );
+    }
+    if (class_exists('NotificationAlertStatus')) {
+        $rows = NotificationAlertStatus::enrich($rows);
+    }
     foreach ($rows as $n) {
         $cat = strtolower((string)($n['category'] ?? 'info'));
         $title = (string)($n['title'] ?? 'Alert');
@@ -521,15 +534,25 @@ try {
         if (stripos($title, 'recovered') !== false || stripos($title, '[TEST]') !== false && stripos($title, 'recovered') !== false) {
             $sev = 'ok';
         }
+        $alertState = (string)($n['alert_state'] ?? '');
+        $isCleared = !empty($n['is_cleared']) || $alertState === 'cleared' || $sev === 'ok';
+        if ($isCleared && $sev !== 'info') {
+            // Keep original severity for border tint but flag cleared for green check UI
+            // (sev-ok styling still used for recovery-only events)
+        }
         $recentAlerts[] = [
             'id' => (int)$n['notification_id'],
             'title' => $title,
             'message' => mb_substr(preg_replace('/\s+/', ' ', (string)($n['message'] ?? '')) ?? '', 0, 180),
             'category' => $cat,
             'severity' => $sev,
+            'is_cleared' => $isCleared,
+            'alert_state' => $isCleared ? 'cleared' : ($alertState !== '' ? $alertState : 'active'),
+            'alert_state_label' => $isCleared ? 'Cleared' : (string)($n['alert_state_label'] ?? 'Active'),
             'entity_type' => $n['entity_type'] ?? null,
             'entity_id' => isset($n['entity_id']) ? (int)$n['entity_id'] : null,
             'created_at' => (string)($n['created_at'] ?? ''),
+            'cleared_at' => isset($n['cleared_at']) ? (string)$n['cleared_at'] : null,
         ];
     }
 } catch (Throwable $e) {

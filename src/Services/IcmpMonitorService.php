@@ -567,6 +567,10 @@ class IcmpMonitorService
                     'entity_id' => $id,
                     'event' => $event,
                 ]);
+                // Mark prior DOWN / warn notices for this host as cleared (history kept)
+                if ($event !== 'down' && class_exists('NotificationAlertStatus')) {
+                    NotificationAlertStatus::markEntityCleared($kind, $id);
+                }
                 return;
             } catch (Throwable $e) {
                 App::log('ICMP AlertService emit: ' . $e->getMessage(), 'error');

@@ -950,6 +950,8 @@ CREATE TABLE notifications (
     entity_type NVARCHAR(50) NULL,
     entity_id INT NULL,
     is_read BIT NOT NULL DEFAULT 0,
+    is_cleared BIT NOT NULL CONSTRAINT DF_notif_cleared DEFAULT 0, -- condition recovered (history retained)
+    cleared_at DATETIME2 NULL,
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );
 GO
