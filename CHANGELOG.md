@@ -13,17 +13,22 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **Fiber U-channel raceway:** new path kind (yellow PVC U-profile in 3D); mounts above ladder with same plan route
-- **Quick clone raceway:** clone selected path (or all ladders in room) with exact centerline + 90° curves; default +10″ elev, `F-` codes — then tweak height
-- **Raceway render filter:** floor plan 2D/3D Show dropdown — All / Ladder / Fiber / U-channel / Trough / Conduit
-- **Route by raceway network:** Calculate shortest path can use Fiber U-channel, ladder, trough, etc. (device Connect + Cabling)
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.144] - 2026-08-12
+
+### New features
+
+- **Fiber U-channel raceway:** new path kind (yellow PVC U-profile in 3D); mounts above ladder with same plan route
+- **Quick clone raceway:** clone selected path (or all ladders in room) with exact centerline + 90° curves; default +10″ elev, `F-` codes — then tweak height
+- **Raceway render filter:** floor plan 2D/3D Show dropdown — All / Ladder / Fiber / U-channel / Trough / Conduit
+- **Route by raceway network:** Calculate shortest path can use Fiber U-channel, ladder, trough, etc. (device Connect + Cabling)
+
+---
 ## [0.3.143] - 2026-08-12
 
 ### New features
