@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.145] - 2026-08-12
+
+### Bug fixes
+
 - **3D raceway elevation:** fiber U-channel (and all raceways) honor `elevation_m` in 3D — fixed null elev treated as 0 m; clones no longer inherit ladder vertex Z; elevation normalized on load/clone
 
 ---
-
 ## [0.3.144] - 2026-08-12
 
 ### New features
