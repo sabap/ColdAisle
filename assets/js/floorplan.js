@@ -1089,24 +1089,53 @@
         drawCablePaths();
       }
 
+      // Tips live in HTML #plannerHud (viewport-fixed — not clipped by pan/canvas size)
+      updatePlannerHud();
+    }
+
+    function updatePlannerHud() {
+      const hud = document.getElementById('plannerHud');
+      if (!hud) return;
       if (racewayDraw) {
-        ctx.fillStyle = '#eab308';
-        ctx.font = '11px Segoe UI';
-        ctx.fillText(
-          'Raceway draw: click points · Alt+click vertex = curve · Finish / double-click / Enter · Esc (' +
-            racewayDraw.points.length + ' pt)',
-          ORIGIN,
-          canvas.height - 10
-        );
-      } else if (pendingTemplate || pendingPdu || pendingCooling || pendingUps) {
-        ctx.fillStyle = pendingUps ? '#a78bfa' : (pendingCooling ? '#0ea5e9' : (pendingPdu ? '#f59e0b' : '#3b82f6'));
-        ctx.font = '11px Segoe UI';
+        const n = racewayDraw.points ? racewayDraw.points.length : 0;
+        hud.hidden = false;
+        hud.innerHTML =
+          '<div class="hud-title">Raceway draw · ' + n + ' point' + (n === 1 ? '' : 's') + '</div>' +
+          '<ul>' +
+          '<li><strong>Add points:</strong> click empty floor (snap if Grid snap is on)</li>' +
+          '<li><strong>Move a point:</strong> drag a vertex — other ends stay put; release to anchor</li>' +
+          '<li><strong>90° curved corner:</strong> <kbd>Alt</kbd>+click an <em>interior</em> vertex ' +
+          '(not the first/last point) — toggles a smooth fillet (~0.3&nbsp;m). ' +
+          'Or select the path later and use <em>Make curved</em> in the props list.</li>' +
+          '<li><strong>Undo last point:</strong> <kbd>Backspace</kbd> or Undo point</li>' +
+          '<li><strong>Save path:</strong> Finish path · double-click empty floor · <kbd>Enter</kbd> (need 2+ points)</li>' +
+          '<li><strong>Exit draw mode:</strong> Exit draw · <kbd>Esc</kbd></li>' +
+          '</ul>';
+        return;
+      }
+      if (pendingTemplate || pendingPdu || pendingCooling || pendingUps) {
         let msg = 'Click on the floor to place the selected template…';
         if (pendingUps) msg = 'Click on the floor to place: ' + (pendingUps.name || 'UPS');
         else if (pendingCooling) msg = 'Click on the floor to place: ' + (pendingCooling.name || 'Cooling');
         else if (pendingPdu) msg = 'Click on the floor to place: ' + (pendingPdu.name || 'PDU');
-        ctx.fillText(msg, ORIGIN, canvas.height - 10);
+        hud.hidden = false;
+        hud.innerHTML = '<div class="hud-title">Place on plan</div><div>' + msg + '</div>';
+        return;
       }
+      if (selectedPathId && Number(selectedPathId) > 0) {
+        hud.hidden = false;
+        hud.innerHTML =
+          '<div class="hud-title">Raceway selected</div>' +
+          '<ul>' +
+          '<li><strong>Reshape:</strong> drag a vertex (others stay fixed)</li>' +
+          '<li><strong>Move whole path:</strong> drag the line between points</li>' +
+          '<li><strong>90° curve:</strong> <kbd>Alt</kbd>+click an interior vertex, or use Make curved in props</li>' +
+          '<li><strong>Delete path:</strong> Delete path button or <kbd>Delete</kbd></li>' +
+          '</ul>';
+        return;
+      }
+      hud.hidden = true;
+      hud.innerHTML = '';
     }
 
     function pduRect(p) {
@@ -4520,7 +4549,8 @@
       document.body.classList.add('raceway-draw-mode');
       setRacewayUi();
       draw();
-      ColdAisle.toast('Raceway mode: inventory dimmed · click floor for vertices', 'info');
+      updatePlannerHud();
+      ColdAisle.toast('Raceway mode: inventory dimmed · see tip panel for 90° curves', 'info');
     }
 
     function cancelRacewayDraw() {
@@ -4530,6 +4560,7 @@
       if (modal) modal.hidden = true;
       setRacewayUi();
       draw();
+      updatePlannerHud();
     }
 
     function suggestCodeClient(segClass, rowPair) {
