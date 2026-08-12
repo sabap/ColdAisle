@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **NOC alert grid motion:** polls no longer flash alert cards; new alerts slide in while existing cards FLIP-slide over/down
+
 ### Bug fixes
 
 ---

@@ -500,18 +500,48 @@ html, body {
   border-radius: 8px;
   border: 1px solid rgba(148, 163, 184, 0.18);
   background: rgba(8, 12, 22, 0.55);
-  animation: noc-alert-in 0.35s ease-out;
   min-height: 0;
   overflow: hidden;
+  /* No default enter animation — polls must not flash; FLIP handles motion */
+  will-change: transform, opacity;
+  transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1),
+              opacity 0.35s ease,
+              border-color 0.25s ease,
+              box-shadow 0.25s ease,
+              background 0.25s ease;
 }
 .noc-alert-chip.is-empty {
   visibility: hidden;
   border: 0;
   background: transparent;
   pointer-events: none;
+  transition: none;
 }
-.noc-alert-chip.is-new {
-  animation: noc-alert-pop 0.45s ease-out;
+.noc-alert-chip.noc-alert-enter {
+  opacity: 0;
+  transform: translate(-28%, -18%) scale(0.92);
+  z-index: 3;
+  box-shadow: 0 0 0 0 transparent;
+}
+.noc-alert-chip.noc-alert-enter-active {
+  opacity: 1;
+  transform: translate(0, 0) scale(1);
+  box-shadow: 0 8px 28px rgba(56, 189, 248, 0.18);
+}
+.noc-alert-chip.noc-alert-moving {
+  z-index: 2;
+}
+.noc-alert-leave {
+  border-radius: 8px;
+  opacity: 1;
+  transform: translate(0, 0) scale(1);
+  transition: transform 0.38s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.35s ease;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+}
+.noc-alert-leave.noc-alert-leave-active {
+  opacity: 0;
+  transform: translate(12%, 28%) scale(0.88);
 }
 .noc-alert-chip.sev-crit {
   border-color: rgba(239, 68, 68, 0.4);
@@ -611,15 +641,6 @@ html, body {
   font-size: 0.65rem;
   color: #64748b;
   font-variant-numeric: tabular-nums;
-}
-@keyframes noc-alert-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-@keyframes noc-alert-pop {
-  0% { opacity: 0; transform: scale(0.96) translateY(6px); }
-  60% { transform: scale(1.02); }
-  100% { opacity: 1; transform: scale(1) translateY(0); }
 }
 @keyframes noc-pulse-crit {
   0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55); }

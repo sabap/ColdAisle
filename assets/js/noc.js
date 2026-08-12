@@ -455,75 +455,281 @@
     }
   }
 
-  function alertChipHtml(a, isNew) {
-    if (!a) {
-      return '<div class="noc-alert-chip is-empty" aria-hidden="true"></div>';
-    }
-    var id = Number(a.id) || 0;
-    var sev = (a.severity || 'info').toLowerCase();
+  /** Live alert chip elements (id → DOM) — patched on poll, no full re-render flash. */
+  var alertChipEls = Object.create(null);
+  var alertOrderIds = [];
+  var alertAnimLock = false;
+
+  function chipSignature(a) {
+    if (!a) return '';
+    return [
+      Number(a.id) || 0,
+      a.severity || '',
+      a.is_cleared ? 1 : 0,
+      a.alert_state || '',
+      a.title || '',
+      a.message || '',
+      a.cleared_at || '',
+      a.created_at || '',
+    ].join('\u0001');
+  }
+
+  function alertMeta(a) {
+    var sev = String(a.severity || 'info').toLowerCase();
     if (sev !== 'crit' && sev !== 'warn' && sev !== 'ok') sev = 'info';
     var cleared = !!(a.is_cleared || a.alert_state === 'cleared' || sev === 'ok');
     var stateLabel = cleared
       ? (a.alert_state_label || 'Cleared')
       : (sev === 'info' ? '' : (a.alert_state_label || 'Active'));
-    var chipClass = 'noc-alert-chip sev-' + sev
-      + (cleared ? ' is-cleared' : (sev === 'info' ? '' : ' is-active'))
-      + (isNew ? ' is-new' : '');
-    var marker = cleared
+    return { sev: sev, cleared: cleared, stateLabel: stateLabel };
+  }
+
+  function fillChipEl(el, a) {
+    var id = Number(a.id) || 0;
+    var m = alertMeta(a);
+    var sig = chipSignature(a);
+    if (el.dataset.sig === sig) return false;
+    el.dataset.sig = sig;
+    el.dataset.id = String(id);
+    el.className = 'noc-alert-chip sev-' + m.sev
+      + (m.cleared ? ' is-cleared' : (m.sev === 'info' ? '' : ' is-active'));
+    el.removeAttribute('aria-hidden');
+
+    var markerHtml = m.cleared
       ? '<span class="noc-alert-check" title="Cleared" aria-label="Cleared">✓</span>'
       : '<span class="noc-alert-pulse" aria-hidden="true"></span>';
-    return '<div class="' + chipClass + '" data-id="' + id + '">' +
-      marker +
+    var stateHtml = m.stateLabel
+      ? ' <span class="noc-alert-state' + (m.cleared ? ' state-cleared' : ' state-active') + '">' +
+        esc(m.stateLabel) + '</span>'
+      : '';
+    el.innerHTML =
+      markerHtml +
       '<div class="noc-alert-body">' +
-      '<div class="noc-alert-title">' + esc(a.title || 'Alert') +
-      (stateLabel
-        ? ' <span class="noc-alert-state' + (cleared ? ' state-cleared' : ' state-active') + '">' +
-          esc(stateLabel) + '</span>'
-        : '') +
-      '</div>' +
+      '<div class="noc-alert-title">' + esc(a.title || 'Alert') + stateHtml + '</div>' +
       (a.message ? '<p class="noc-alert-msg">' + esc(a.message) + '</p>' : '') +
       '<p class="noc-alert-when">' + esc(formatAlertWhen(a.created_at)) +
-      (cleared && a.cleared_at ? ' · cleared' : '') +
-      '</p>' +
-      '</div></div>';
+      (m.cleared && a.cleared_at ? ' · cleared' : '') +
+      '</p></div>';
+    return true;
+  }
+
+  function createChipEl(a) {
+    var el = document.createElement('div');
+    fillChipEl(el, a);
+    return el;
+  }
+
+  function idsEqual(a, b) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (Number(a[i]) !== Number(b[i])) return false;
+    }
+    return true;
   }
 
   /**
    * Recent alerts under 3D: fixed 2×3 grid (6 slots), no scroll.
-   * Newest top-left, then right, then next row; older fall off.
+   * Polls patch content in place (no flash). New alerts FLIP-slide others over/down.
    */
   function renderRecentAlerts(data) {
     var host = $('nocAlertsGlass');
     var list = $('nocAlertsList');
     var countEl = $('nocAlertsCount');
     if (!host || !list) return;
+
     var items = Array.isArray(data.recent_alerts) ? data.recent_alerts : [];
-    // Newest first (id DESC)
     var sorted = items.slice().sort(function (a, b) {
       return (Number(b.id) || 0) - (Number(a.id) || 0);
-    });
-    sorted = sorted.slice(0, ALERT_SLOTS);
+    }).slice(0, ALERT_SLOTS);
 
-    if (!sorted.length) {
-      host.hidden = true;
-      list.innerHTML = '';
+    var newIds = sorted.map(function (a) { return Number(a.id) || 0; }).filter(function (id) {
+      return id > 0;
+    });
+    var byId = Object.create(null);
+    sorted.forEach(function (a) {
+      var id = Number(a.id) || 0;
+      if (id) byId[id] = a;
+    });
+
+    if (!newIds.length) {
+      if (!host.hidden) {
+        // Soft clear without hard flash
+        Object.keys(alertChipEls).forEach(function (k) {
+          var el = alertChipEls[k];
+          if (el && el.parentNode) el.parentNode.removeChild(el);
+          delete alertChipEls[k];
+        });
+        list.innerHTML = '';
+        alertOrderIds = [];
+        host.hidden = true;
+      }
       if (countEl) countEl.textContent = '';
+      alertsBootstrapped = true;
       return;
     }
 
     host.hidden = false;
-    if (countEl) countEl.textContent = String(sorted.length);
+    if (countEl) countEl.textContent = String(newIds.length);
 
-    var html = '';
-    for (var i = 0; i < ALERT_SLOTS; i++) {
-      var a = sorted[i] || null;
-      var id = a ? (Number(a.id) || 0) : 0;
-      var isNew = !!(a && alertsBootstrapped && id > 0 && !knownAlertIds[id]);
-      html += alertChipHtml(a, isNew);
-      if (id > 0) knownAlertIds[id] = true;
+    // First paint: place quietly, no enter animation
+    if (!alertsBootstrapped) {
+      list.innerHTML = '';
+      alertChipEls = Object.create(null);
+      newIds.forEach(function (id) {
+        var el = createChipEl(byId[id]);
+        alertChipEls[id] = el;
+        list.appendChild(el);
+        knownAlertIds[id] = true;
+      });
+      // Pad empty slots for stable grid footprint
+      for (var e = newIds.length; e < ALERT_SLOTS; e++) {
+        var empty = document.createElement('div');
+        empty.className = 'noc-alert-chip is-empty';
+        empty.setAttribute('aria-hidden', 'true');
+        empty.dataset.empty = '1';
+        list.appendChild(empty);
+      }
+      alertOrderIds = newIds.slice();
+      alertsBootstrapped = true;
+      return;
     }
-    list.innerHTML = html;
-    alertsBootstrapped = true;
+
+    // Same order: patch signatures only (cleared/status/time) — no DOM thrash
+    if (idsEqual(alertOrderIds, newIds)) {
+      newIds.forEach(function (id) {
+        var el = alertChipEls[id];
+        if (el) fillChipEl(el, byId[id]);
+      });
+      return;
+    }
+
+    if (alertAnimLock) {
+      // Coalesce: still patch what we can; full layout next free frame
+      newIds.forEach(function (id) {
+        if (alertChipEls[id]) fillChipEl(alertChipEls[id], byId[id]);
+      });
+    }
+
+    // FLIP: record first positions of existing chips
+    var firstRects = Object.create(null);
+    alertOrderIds.forEach(function (id) {
+      var el = alertChipEls[id];
+      if (el && el.getBoundingClientRect) {
+        firstRects[id] = el.getBoundingClientRect();
+      }
+    });
+
+    var newIdSet = Object.create(null);
+    newIds.forEach(function (id) { newIdSet[id] = true; });
+
+    // Chips falling off the grid
+    var leaving = [];
+    alertOrderIds.forEach(function (id) {
+      if (!newIdSet[id] && alertChipEls[id]) {
+        leaving.push({ id: id, el: alertChipEls[id], rect: firstRects[id] });
+      }
+    });
+
+    // Ensure elements exist / updated
+    var entering = [];
+    newIds.forEach(function (id) {
+      if (!alertChipEls[id]) {
+        alertChipEls[id] = createChipEl(byId[id]);
+        entering.push(id);
+        knownAlertIds[id] = true;
+      } else {
+        fillChipEl(alertChipEls[id], byId[id]);
+      }
+    });
+
+    // Rebuild list order (chips only + empty pads)
+    list.innerHTML = '';
+    newIds.forEach(function (id) {
+      list.appendChild(alertChipEls[id]);
+    });
+    for (var p = newIds.length; p < ALERT_SLOTS; p++) {
+      var pad = document.createElement('div');
+      pad.className = 'noc-alert-chip is-empty';
+      pad.setAttribute('aria-hidden', 'true');
+      pad.dataset.empty = '1';
+      list.appendChild(pad);
+    }
+
+    // Invert: put movers back under old pixels
+    newIds.forEach(function (id) {
+      var el = alertChipEls[id];
+      var first = firstRects[id];
+      if (!el) return;
+      if (entering.indexOf(id) >= 0) {
+        el.classList.add('noc-alert-enter');
+        el.style.transition = 'none';
+        el.style.opacity = '0';
+        el.style.transform = 'translate(-28%, -18%) scale(0.92)';
+        return;
+      }
+      if (!first) return;
+      var last = el.getBoundingClientRect();
+      var dx = first.left - last.left;
+      var dy = first.top - last.top;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+      el.classList.add('noc-alert-moving');
+      el.style.transition = 'none';
+      el.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+    });
+
+    // Play leave animations (absolute clone so grid layout stays clean)
+    leaving.forEach(function (item) {
+      var el = item.el;
+      var rect = item.rect;
+      delete alertChipEls[item.id];
+      if (!rect || !list.parentNode) return;
+      var ghost = el.cloneNode(true);
+      ghost.classList.add('noc-alert-leave');
+      ghost.style.position = 'fixed';
+      ghost.style.left = rect.left + 'px';
+      ghost.style.top = rect.top + 'px';
+      ghost.style.width = rect.width + 'px';
+      ghost.style.height = rect.height + 'px';
+      ghost.style.margin = '0';
+      ghost.style.zIndex = '20';
+      ghost.style.pointerEvents = 'none';
+      document.body.appendChild(ghost);
+      requestAnimationFrame(function () {
+        ghost.classList.add('noc-alert-leave-active');
+      });
+      setTimeout(function () {
+        if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+      }, 420);
+    });
+
+    alertOrderIds = newIds.slice();
+    alertAnimLock = true;
+
+    // Play: slide to new grid cells + enter new card
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        newIds.forEach(function (id) {
+          var el = alertChipEls[id];
+          if (!el) return;
+          el.style.transition = '';
+          el.style.transform = '';
+          el.style.opacity = '';
+          if (entering.indexOf(id) >= 0) {
+            el.classList.add('noc-alert-enter-active');
+            el.classList.remove('noc-alert-enter');
+          }
+          el.classList.remove('noc-alert-moving');
+        });
+        setTimeout(function () {
+          newIds.forEach(function (id) {
+            var el = alertChipEls[id];
+            if (!el) return;
+            el.classList.remove('noc-alert-enter-active');
+          });
+          alertAnimLock = false;
+        }, 480);
+      });
+    });
   }
 
   function applyNocDisplaySettings(nocCfg) {
