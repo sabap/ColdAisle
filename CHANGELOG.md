@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **About ColdAisle:** footer **About** opens a glass card with version, MIT license, website ([coldaisle.app](https://coldaisle.app)), and GitHub; **Website** link also in the footer
-
 ### Bug fixes
 
 ---
 
+## [0.3.148] - 2026-08-14
+
+### Enhancements
+
+- **About ColdAisle:** footer **About** opens a glass card with version, MIT license, website ([coldaisle.app](https://coldaisle.app)), and GitHub; **Website** link also in the footer
+
+---
 ## [0.3.147] - 2026-08-12
 
 ### Bug fixes
