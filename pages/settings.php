@@ -605,6 +605,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             exit;
         }
 
+        if ($section === 'restore_site_backup') {
+            @set_time_limit(600);
+            if (!class_exists('SiteBackupService')) {
+                throw new RuntimeException('SiteBackupService unavailable.');
+            }
+            $confirm = strtoupper(trim((string)($_POST['confirm_restore'] ?? '')));
+            if ($confirm !== 'RESTORE') {
+                throw new RuntimeException('Type RESTORE in the confirmation box to proceed.');
+            }
+
+            $packagePath = null;
+            $staged = null;
+            $source = (string)($_POST['restore_source'] ?? 'upload');
+
+            if ($source === 'local') {
+                $localName = basename((string)($_POST['local_backup'] ?? ''));
+                if ($localName === '' || preg_match('/[\\\\\\/]/', $localName)) {
+                    throw new RuntimeException('Select a backup file from storage/backups/.');
+                }
+                $candidate = App::ROOT . '/storage/backups/' . $localName;
+                if (!is_file($candidate)) {
+                    throw new RuntimeException('Selected backup file was not found.');
+                }
+                $packagePath = $candidate;
+            } else {
+                if (empty($_FILES['restore_file']['tmp_name']) || !is_uploaded_file($_FILES['restore_file']['tmp_name'])) {
+                    throw new RuntimeException('Choose a site backup ZIP or .caisle file to upload.');
+                }
+                $orig = (string)($_FILES['restore_file']['name'] ?? 'upload.zip');
+                $ext = str_ends_with(strtolower($orig), '.caisle') ? 'caisle' : 'zip';
+                $stageDir = App::ROOT . '/storage/backups';
+                if (!is_dir($stageDir) && !@mkdir($stageDir, 0775, true)) {
+                    throw new RuntimeException('Cannot write storage/backups for restore staging.');
+                }
+                $staged = $stageDir . '/restore_upload_' . date('Ymd_His') . '.' . $ext;
+                if (!@move_uploaded_file($_FILES['restore_file']['tmp_name'], $staged)) {
+                    throw new RuntimeException('Could not store uploaded backup file.');
+                }
+                $packagePath = $staged;
+            }
+
+            $backupPassword = (string)($_POST['restore_password'] ?? '');
+            $inspect = SiteBackupService::inspect(
+                $packagePath,
+                $backupPassword !== '' ? $backupPassword : null
+            );
+            if (!empty($inspect['encrypted']) && $backupPassword === '') {
+                throw new RuntimeException('This backup is encrypted — enter the encryption password.');
+            }
+            if (($inspect['format'] ?? '') !== 'coldaisle-site-backup' && empty($inspect['encrypted'])) {
+                // Pre-update recovery zips are not full site packages
+                if (str_starts_with(basename($packagePath), 'backup_')) {
+                    throw new RuntimeException(
+                        'That file looks like a pre-update recovery zip, not a full site backup. '
+                        . 'Use a coldaisle-site_… package from “Download site backup”.'
+                    );
+                }
+            }
+
+            $result = SiteBackupService::restoreLive($packagePath, [
+                'password' => $backupPassword,
+                'create_pre_backup' => !empty($_POST['create_pre_backup']),
+                'restore_config_overlay' => !empty($_POST['restore_config_overlay']),
+            ]);
+
+            AuditService::log((int)$user['user_id'], $user['username'], 'site_backup_restore_live', 'system', null, [
+                'ok' => !empty($result['ok']),
+                'source' => $source,
+                'file' => basename($packagePath),
+                'tables' => $result['tables'] ?? null,
+                'rows' => $result['rows'] ?? null,
+                'pre_backup' => isset($result['pre_backup']) ? basename((string)$result['pre_backup']) : null,
+            ]);
+
+            // Session is invalid after user table replace — force re-login (keep flash in a new session)
+            $restoreMsg = (string)($result['message'] ?? 'Site restored from backup. Sign in with a restored account.');
+            try {
+                AuthManager::logout();
+            } catch (Throwable $e) {
+                if (session_status() === PHP_SESSION_ACTIVE) {
+                    $_SESSION = [];
+                    session_destroy();
+                }
+            }
+            if (session_status() !== PHP_SESSION_ACTIVE) {
+                session_start();
+            }
+            App::flash('success', $restoreMsg);
+            App::redirect('login.php');
+        }
+
         if ($section === 'smb_backup_save') {
             if (!class_exists('SmbBackupService')) {
                 require_once dirname(__DIR__) . '/src/Services/SmbBackupService.php';
@@ -749,7 +840,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         // Write config.php (for general / auth / updates / security / mail)
         // power_alerts / snmp_schedule use settings table only (redirect earlier or no config.php)
         if (!in_array($section, [
-            'update_check', 'update_apply', 'update_backup_now', 'install_ca_bundle', 'export_site_backup', 'test_ldaps', 'test_mail',
+            'update_check', 'update_apply', 'update_backup_now', 'install_ca_bundle', 'export_site_backup', 'restore_site_backup', 'test_ldaps', 'test_mail',
             'power_alerts', 'env_alerts', 'alerts_hub', 'alert_subscription_save', 'alert_subscription_delete',
             'snmp_threshold_save', 'snmp_threshold_delete',
             'noc', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
@@ -775,7 +866,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#diagnostics';
     } elseif ($secPost === 'schema_ensure') {
         $redirHash = '#schema';
-    } elseif ($secPost === 'export_site_backup' || $secPost === 'smb_backup_save' || $secPost === 'smb_backup_test') {
+    } elseif ($secPost === 'export_site_backup' || $secPost === 'restore_site_backup' || $secPost === 'smb_backup_save' || $secPost === 'smb_backup_test') {
         $redirHash = '#backup';
     } elseif ($secPost === 'snmp_schedule') {
         $redirHash = '#snmp-schedule';
@@ -3079,9 +3170,10 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
     <div class="card-header"><h2>Site backup &amp; migration</h2></div>
     <div class="card-body">
         <p class="text-muted" style="margin-top:0;font-size:.9rem">
-            Export a portable package of this site (database rows, uploads, and <code>app_key</code>)
-            to restore on a new web/SQL pair via <strong>setup.php → Restore from backup</strong>.
-            The package does <em>not</em> include the SQL password — you enter connection details on the new server.
+            Export a portable package of this site (database rows, uploads, and <code>app_key</code>).
+            Restore on a <strong>new</strong> server via <strong>setup.php → Restore from backup</strong>,
+            or on <strong>this running site</strong> with the restore form below.
+            Packages do <em>not</em> include the SQL password.
         </p>
         <form method="post" class="form-grid">
             <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
@@ -3178,6 +3270,141 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
             Retention is controlled under <a href="#housekeeping">Storage housekeeping</a>.
             <?= extension_loaded('zip') ? '' : ' PHP <code>zip</code> extension recommended (PowerShell Compress-Archive used as fallback).' ?>
         </p>
+
+        <hr style="border:none;border-top:1px solid var(--border,#334155);margin:1.5rem 0">
+        <h3 style="margin:0 0 .5rem;font-size:1rem">Restore on this running site</h3>
+        <p class="text-muted" style="font-size:.88rem;margin:0 0 1rem">
+            Roll this install back to a prior <strong>site backup</strong> package without reinstalling.
+            Replaces database inventory and uploads; keeps <strong>this server’s SQL connection</strong> and base URL.
+            You will be signed out and must log in with an account from the backup.
+            Use a <code>coldaisle-site_…</code> package (not a short pre-update <code>backup_…</code> recovery zip).
+        </p>
+        <?php
+        $localPackages = class_exists('SiteBackupService')
+            ? array_values(array_filter(
+                SiteBackupService::listLocalPackages(),
+                static fn($p) => ($p['kind'] ?? '') === 'site'
+            ))
+            : [];
+        ?>
+        <form method="post" class="form-grid" id="restoreSiteForm" enctype="multipart/form-data">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="restore_site_backup">
+            <div class="form-row full">
+                <label class="text-muted" style="font-size:.85rem">Backup source</label>
+                <div class="flex gap-1" style="flex-wrap:wrap;margin-top:.35rem">
+                    <label style="margin-right:1rem">
+                        <input type="radio" name="restore_source" value="upload" id="restore_src_upload" checked>
+                        Upload file
+                    </label>
+                    <label>
+                        <input type="radio" name="restore_source" value="local" id="restore_src_local"
+                            <?= $localPackages === [] ? 'disabled' : '' ?>>
+                        From <code>storage/backups/</code>
+                    </label>
+                </div>
+            </div>
+            <div class="form-row full" id="restore_upload_wrap">
+                <label>Site backup file (.zip or .caisle)</label>
+                <input class="form-control" type="file" name="restore_file" id="restore_file"
+                       accept=".zip,.caisle,application/zip">
+            </div>
+            <div class="form-row full" id="restore_local_wrap" style="display:none">
+                <label>Local package</label>
+                <select class="form-control" name="local_backup" id="local_backup">
+                    <option value="">— select —</option>
+                    <?php foreach ($localPackages as $pkg):
+                        $sz = class_exists('StorageHousekeepingService')
+                            ? StorageHousekeepingService::formatBytes((int)$pkg['bytes'])
+                            : ((int)$pkg['bytes'] . ' B');
+                        $when = !empty($pkg['mtime']) ? date('Y-m-d H:i', (int)$pkg['mtime']) : '';
+                        ?>
+                        <option value="<?= App::e($pkg['name']) ?>">
+                            <?= App::e($pkg['name']) ?>
+                            (<?= App::e($sz) ?><?= $when !== '' ? ' · ' . App::e($when) : '' ?><?= !empty($pkg['encrypted']) ? ' · encrypted' : '' ?>)
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <?php if ($localPackages === []): ?>
+                    <p class="text-muted" style="font-size:.78rem;margin:.35rem 0 0">No <code>coldaisle-site_…</code> packages found yet — download one above first.</p>
+                <?php endif; ?>
+            </div>
+            <div class="form-row full">
+                <label>Encryption password (if .caisle)</label>
+                <input class="form-control" type="password" name="restore_password" autocomplete="off"
+                       placeholder="Leave blank for unencrypted ZIP">
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="create_pre_backup" value="1" checked>
+                Create a safety site backup of the <em>current</em> state first (recommended)
+            </label></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="restore_config_overlay" value="1" checked>
+                Restore app settings from backup (auth, mail, org name, etc.)
+            </label>
+                <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                    SQL connection and this site’s base URL are always kept for the running server.
+                    <code>app_key</code> always comes from the backup so sealed secrets decrypt.
+                </p>
+            </div>
+            <div class="form-row full">
+                <label>Type <strong>RESTORE</strong> to confirm</label>
+                <input class="form-control" name="confirm_restore" id="confirm_restore"
+                       autocomplete="off" placeholder="RESTORE" style="max-width:12rem;text-transform:uppercase">
+            </div>
+            <div class="form-row full">
+                <div class="alert alert-warning" style="margin:0">
+                    <strong>Destructive.</strong> This overwrites live inventory data and uploads with the backup.
+                    Active sessions will end. Prefer a quiet maintenance window.
+                </div>
+            </div>
+            <div class="form-row">
+                <button class="btn btn-danger" type="submit" id="btn_restore_site">
+                    Restore site from backup
+                </button>
+            </div>
+        </form>
+        <script>
+        (function () {
+            var up = document.getElementById('restore_src_upload');
+            var loc = document.getElementById('restore_src_local');
+            var upWrap = document.getElementById('restore_upload_wrap');
+            var locWrap = document.getElementById('restore_local_wrap');
+            var form = document.getElementById('restoreSiteForm');
+            function syncSrc() {
+                var isLocal = loc && loc.checked;
+                if (upWrap) upWrap.style.display = isLocal ? 'none' : '';
+                if (locWrap) locWrap.style.display = isLocal ? '' : 'none';
+            }
+            if (up) up.addEventListener('change', syncSrc);
+            if (loc) loc.addEventListener('change', syncSrc);
+            syncSrc();
+            if (form) {
+                form.addEventListener('submit', function (e) {
+                    var conf = document.getElementById('confirm_restore');
+                    if (!conf || String(conf.value || '').toUpperCase().trim() !== 'RESTORE') {
+                        e.preventDefault();
+                        alert('Type RESTORE (all caps) to confirm.');
+                        return false;
+                    }
+                    if (!confirm(
+                        'Restore this running site from the selected backup?\n\n'
+                        + 'Current inventory will be replaced. You will be signed out.\n\n'
+                        + 'Continue?'
+                    )) {
+                        e.preventDefault();
+                        return false;
+                    }
+                    var btn = document.getElementById('btn_restore_site');
+                    if (btn) {
+                        btn.disabled = true;
+                        btn.textContent = 'Restoring…';
+                    }
+                    return true;
+                });
+            }
+        })();
+        </script>
 
         <?php
         $smb = class_exists('SmbBackupService') ? SmbBackupService::settings() : null;

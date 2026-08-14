@@ -177,10 +177,124 @@ class SiteBackupService
     }
 
     /**
+     * Restore a site package into the **currently running** install (same SQL DB + site folder).
+     * Use when the site is already up and you want to roll back to a prior backup point.
+     *
+     * @param array{
+     *   password?:string,
+     *   create_pre_backup?:bool,
+     *   restore_config_overlay?:bool
+     * } $options
+     * @return array{ok:bool,message:string,tables:int,rows:int,pre_backup:?string}
+     */
+    public static function restoreLive(string $packagePath, array $options = []): array
+    {
+        if (!App::isInstalled()) {
+            throw new RuntimeException('Site is not installed — use setup.php → Restore from backup instead.');
+        }
+        if (!is_file($packagePath)) {
+            throw new RuntimeException('Backup file not found.');
+        }
+
+        $createPre = array_key_exists('create_pre_backup', $options)
+            ? (bool)$options['create_pre_backup']
+            : true;
+        $preBackup = null;
+        if ($createPre) {
+            try {
+                $preBackup = self::export([
+                    'include_audit' => true,
+                    'include_readings' => true,
+                    'encrypt' => false,
+                ]);
+                App::log('Live restore: pre-restore backup ' . basename($preBackup), 'info');
+            } catch (Throwable $e) {
+                throw new RuntimeException(
+                    'Could not create a pre-restore safety backup (restore aborted): ' . $e->getMessage()
+                );
+            }
+        }
+
+        $live = App::config();
+        $db = is_array($live['database'] ?? null) ? $live['database'] : [];
+        if (trim((string)($db['database'] ?? '')) === '') {
+            throw new RuntimeException('Current database configuration is incomplete.');
+        }
+
+        $result = self::import($packagePath, $db, [
+            'create_database' => false,
+            'password' => (string)($options['password'] ?? ''),
+            'preserve_live_database' => true,
+            'preserve_live_base_url' => true,
+            'replace_uploads' => true,
+            'restore_config_overlay' => array_key_exists('restore_config_overlay', $options)
+                ? (bool)$options['restore_config_overlay']
+                : true,
+            'timezone' => (string)($live['timezone'] ?? 'UTC'),
+            'base_url' => (string)($live['base_url'] ?? ''),
+            'live_config' => $live,
+        ]);
+
+        $msg = (string)($result['message'] ?? 'Restore complete.');
+        if ($preBackup) {
+            $msg .= ' Pre-restore safety backup: ' . basename($preBackup) . '.';
+        }
+        $msg .= ' Sign in again with an account from the restored backup.';
+        $result['message'] = $msg;
+        $result['pre_backup'] = $preBackup;
+
+        return $result;
+    }
+
+    /**
+     * List site backup packages under storage/backups/ (newest first).
+     *
+     * @return list<array{name:string,path:string,bytes:int,mtime:int,encrypted:bool}>
+     */
+    public static function listLocalPackages(): array
+    {
+        $dir = App::ROOT . '/storage/backups';
+        if (!is_dir($dir)) {
+            return [];
+        }
+        $out = [];
+        foreach (scandir($dir) ?: [] as $name) {
+            if ($name === '.' || $name === '..') {
+                continue;
+            }
+            $lower = strtolower($name);
+            if (!str_ends_with($lower, '.zip') && !str_ends_with($lower, '.caisle')) {
+                continue;
+            }
+            // Prefer full site packages; also allow pre-update recovery zips for power users
+            $path = $dir . DIRECTORY_SEPARATOR . $name;
+            if (!is_file($path)) {
+                continue;
+            }
+            $out[] = [
+                'name' => $name,
+                'path' => $path,
+                'bytes' => (int)@filesize($path),
+                'mtime' => (int)@filemtime($path),
+                'encrypted' => str_ends_with($lower, '.caisle') || self::isEncryptedPackage($path),
+                'kind' => str_starts_with($name, self::PACKAGE_PREFIX)
+                    ? 'site'
+                    : (str_starts_with($name, 'backup_') ? 'pre_update' : 'other'),
+            ];
+        }
+        usort($out, static fn($a, $b) => ($b['mtime'] <=> $a['mtime']));
+        return $out;
+    }
+
+    /**
      * Restore a site package into the given SQL database and write config.php.
      *
      * @param array<string,mixed> $dbCfg host/port/database/username/password/encrypt/trust/odbc_driver
-     * @param array{create_database?:bool,base_url?:string,timezone?:string} $options
+     * @param array{
+     *   create_database?:bool,base_url?:string,timezone?:string,password?:string,
+     *   preserve_live_database?:bool,preserve_live_base_url?:bool,replace_uploads?:bool,
+     *   restore_config_overlay?:bool,live_config?:array<string,mixed>
+     * } $options
      * @return array{ok:bool,message:string,tables:int,rows:int}
      */
     public static function import(string $zipPath, array $dbCfg, array $options = []): array
@@ -303,6 +417,9 @@ class SiteBackupService
             // Uploads
             $uploadsSrc = $root . '/uploads';
             $uploadsDst = App::ROOT . '/storage/uploads';
+            if (!empty($options['replace_uploads']) && is_dir($uploadsDst)) {
+                self::clearDirectoryContents($uploadsDst);
+            }
             if (is_dir($uploadsSrc)) {
                 if (!is_dir($uploadsDst)) {
                     @mkdir($uploadsDst, 0775, true);
@@ -320,7 +437,7 @@ class SiteBackupService
                 self::copyTree($mibsSrc, $mibsDst);
             }
 
-            // Config: merge overlay + new DB + preserved app_key
+            // Config: merge overlay + DB + app_key
             $appKey = trim((string)@file_get_contents($root . '/meta/app_key.txt'));
             if ($appKey === '') {
                 $appKey = Crypto::generateAppKey();
@@ -335,62 +452,124 @@ class SiteBackupService
                 }
             }
 
+            $liveCfg = is_array($options['live_config'] ?? null) ? $options['live_config'] : [];
+            $preserveDb = !empty($options['preserve_live_database']);
+            $preserveUrl = !empty($options['preserve_live_base_url']);
+            $applyOverlay = array_key_exists('restore_config_overlay', $options)
+                ? (bool)$options['restore_config_overlay']
+                : true;
+
+            // Live restore: keep this server's SQL credentials / base_url so the site keeps working here
+            $dbHost = $preserveDb ? (string)($liveCfg['database']['host'] ?? $dbCfg['host'] ?? '') : (string)($dbCfg['host'] ?? '');
+            $dbPort = $preserveDb
+                ? (int)($liveCfg['database']['port'] ?? $dbCfg['port'] ?? 1433)
+                : (int)($dbCfg['port'] ?? 1433);
+            $dbUser = $preserveDb
+                ? (string)($liveCfg['database']['username'] ?? $dbCfg['username'] ?? '')
+                : (string)($dbCfg['username'] ?? '');
+            $dbPass = $preserveDb
+                ? (string)($liveCfg['database']['password'] ?? $dbCfg['password'] ?? '')
+                : (string)($dbCfg['password'] ?? '');
+            $dbEnc = $preserveDb
+                ? !empty($liveCfg['database']['encrypt'] ?? $dbCfg['encrypt'] ?? false)
+                : !empty($dbCfg['encrypt']);
+            $dbTrust = $preserveDb
+                ? !empty($liveCfg['database']['trust_server_certificate'] ?? $dbCfg['trust_server_certificate'] ?? false)
+                : !empty($dbCfg['trust_server_certificate']);
+            $dbOdbc = $preserveDb
+                ? (string)($liveCfg['database']['odbc_driver'] ?? $dbCfg['odbc_driver'] ?? 'ODBC Driver 18 for SQL Server')
+                : (string)($dbCfg['odbc_driver'] ?? 'ODBC Driver 18 for SQL Server');
+
+            $baseUrl = $preserveUrl
+                ? (string)($options['base_url'] ?? $liveCfg['base_url'] ?? '')
+                : (string)($options['base_url'] ?? ($overlay['base_url'] ?? ''));
+
+            $authDefault = [
+                'local' => ['enabled' => true],
+                'ldaps' => ['enabled' => false],
+                'entra' => ['enabled' => false],
+            ];
+            $securityDefault = [
+                'force_https' => false,
+                'hsts' => false,
+                'hsts_max_age' => 31536000,
+                'cookie_secure' => 'auto',
+                'cookie_samesite' => 'Lax',
+                'session_idle_minutes' => 480,
+                'session_absolute_minutes' => 1440,
+                'bind_user_agent' => true,
+            ];
+            $updatesDefault = [
+                'enabled' => true,
+                'auto_check' => true,
+                'check_interval_hours' => 24,
+                'ssl_verify' => true,
+            ];
+            $mailDefault = [
+                'enabled' => false,
+                'host' => '',
+                'port' => 587,
+                'encryption' => 'tls',
+                'auth' => true,
+                'auth_mode' => 'login',
+                'username' => '',
+                'password' => '',
+                'from_email' => '',
+                'from_name' => 'ColdAisle',
+                'reply_to' => '',
+                'timeout' => 30,
+                'verify_peer' => true,
+            ];
+
+            if ($applyOverlay) {
+                $auth = is_array($overlay['auth'] ?? null) ? $overlay['auth'] : $authDefault;
+                $security = is_array($overlay['security'] ?? null) ? $overlay['security'] : $securityDefault;
+                $updates = is_array($overlay['updates'] ?? null) ? $overlay['updates'] : $updatesDefault;
+                $mail = is_array($overlay['mail'] ?? null) ? $overlay['mail'] : $mailDefault;
+                $orgName = $overlay['org_name'] ?? '';
+                $tz = $options['timezone'] ?? ($overlay['timezone'] ?? 'UTC');
+            } else {
+                // Keep live non-DB config; still take app_key from backup so secrets decrypt
+                $auth = is_array($liveCfg['auth'] ?? null) ? $liveCfg['auth'] : $authDefault;
+                $security = is_array($liveCfg['security'] ?? null) ? $liveCfg['security'] : $securityDefault;
+                $updates = is_array($liveCfg['updates'] ?? null) ? $liveCfg['updates'] : $updatesDefault;
+                $mail = is_array($liveCfg['mail'] ?? null) ? $liveCfg['mail'] : $mailDefault;
+                $orgName = $liveCfg['org_name'] ?? '';
+                $tz = $options['timezone'] ?? ($liveCfg['timezone'] ?? 'UTC');
+            }
+
             $config = [
                 'app_name' => App::APP_NAME,
                 'version' => App::VERSION,
                 'app_key' => $appKey,
-                'timezone' => $options['timezone'] ?? ($overlay['timezone'] ?? 'UTC'),
-                'base_url' => $options['base_url'] ?? ($overlay['base_url'] ?? ''),
-                'org_name' => $overlay['org_name'] ?? '',
+                'timezone' => $tz,
+                'base_url' => $baseUrl,
+                'org_name' => $orgName,
                 'database' => [
-                    'host' => $dbCfg['host'],
-                    'port' => (int)($dbCfg['port'] ?? 1433),
+                    'host' => $dbHost,
+                    'port' => $dbPort,
                     'database' => $dbName,
-                    'username' => $dbCfg['username'],
-                    'password' => $dbCfg['password'],
-                    'encrypt' => !empty($dbCfg['encrypt']),
-                    'trust_server_certificate' => !empty($dbCfg['trust_server_certificate']),
-                    'odbc_driver' => $dbCfg['odbc_driver'] ?? 'ODBC Driver 18 for SQL Server',
+                    'username' => $dbUser,
+                    'password' => $dbPass,
+                    'encrypt' => $dbEnc,
+                    'trust_server_certificate' => $dbTrust,
+                    'odbc_driver' => $dbOdbc,
                 ],
-                'auth' => is_array($overlay['auth'] ?? null) ? $overlay['auth'] : [
-                    'local' => ['enabled' => true],
-                    'ldaps' => ['enabled' => false],
-                    'entra' => ['enabled' => false],
-                ],
-                'security' => is_array($overlay['security'] ?? null) ? $overlay['security'] : [
-                    'force_https' => false,
-                    'hsts' => false,
-                    'hsts_max_age' => 31536000,
-                    'cookie_secure' => 'auto',
-                    'cookie_samesite' => 'Lax',
-                    'session_idle_minutes' => 480,
-                    'session_absolute_minutes' => 1440,
-                    'bind_user_agent' => true,
-                ],
-                'updates' => is_array($overlay['updates'] ?? null) ? $overlay['updates'] : [
-                    'enabled' => true,
-                    'auto_check' => true,
-                    'check_interval_hours' => 24,
-                    'ssl_verify' => true,
-                ],
-                'mail' => is_array($overlay['mail'] ?? null) ? $overlay['mail'] : [
-                    'enabled' => false,
-                    'host' => '',
-                    'port' => 587,
-                    'encryption' => 'tls',
-                    'auth' => true,
-                    'auth_mode' => 'login',
-                    'username' => '',
-                    'password' => '',
-                    'from_email' => '',
-                    'from_name' => 'ColdAisle',
-                    'reply_to' => '',
-                    'timeout' => 30,
-                    'verify_peer' => true,
-                ],
+                'auth' => $auth,
+                'security' => $security,
+                'updates' => $updates,
+                'mail' => $mail,
                 'restored_at' => date('c'),
                 'restored_from_version' => $manifest['app_version'] ?? null,
             ];
+            // Preserve other live config keys (noc, debug, etc.) when restoring live
+            if ($preserveDb && $liveCfg !== []) {
+                foreach ($liveCfg as $k => $v) {
+                    if (!array_key_exists($k, $config)) {
+                        $config[$k] = $v;
+                    }
+                }
+            }
 
             $configDir = App::ROOT . '/config';
             if (!is_dir($configDir) && !@mkdir($configDir, 0775, true)) {
@@ -409,6 +588,29 @@ class SiteBackupService
             return ['ok' => true, 'message' => $msg, 'tables' => $tablesOk, 'rows' => $rowsOk];
         } finally {
             self::rrmdir($work);
+        }
+    }
+
+    /** Delete files/subdirs inside a directory without removing the directory itself. */
+    private static function clearDirectoryContents(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        $items = scandir($dir);
+        if ($items === false) {
+            return;
+        }
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+            $path = $dir . DIRECTORY_SEPARATOR . $item;
+            if (is_dir($path) && !is_link($path)) {
+                self::rrmdir($path);
+            } else {
+                @unlink($path);
+            }
         }
     }
 

@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Live site restore:** Settings → Site backup can restore a `coldaisle-site_…` package onto the running install (rollback), with optional pre-restore safety backup and RESTORE confirmation
+
 ### Enhancements
 
 ### Bug fixes
