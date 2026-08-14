@@ -499,16 +499,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
 
         if ($section === 'update_apply') {
             @set_time_limit(600);
-            $result = UpdateService::applyUpdate(null);
-            AuditService::log((int)$user['user_id'], $user['username'], 'update_apply', 'system', null, [
-                'version' => $result['version'] ?? null,
-                'ok' => !empty($result['ok']),
-                'backup' => isset($result['backup']) ? basename((string)$result['backup']) : null,
-            ]);
-            if (!empty($result['ok'])) {
-                App::flash('success', $result['message'] ?? 'Update applied.');
-            } else {
-                App::flash('error', $result['message'] ?? 'Update failed.');
+            @ignore_user_abort(true);
+            try {
+                $result = UpdateService::applyUpdate(null);
+                AuditService::log((int)$user['user_id'], $user['username'], 'update_apply', 'system', null, [
+                    'version' => $result['version'] ?? null,
+                    'ok' => !empty($result['ok']),
+                    'backup' => isset($result['backup']) ? basename((string)$result['backup']) : null,
+                ]);
+                if (!empty($result['ok'])) {
+                    App::flash('success', $result['message'] ?? 'Update applied.');
+                } else {
+                    App::flash('error', $result['message'] ?? 'Update failed.');
+                }
+            } catch (Throwable $e) {
+                App::log('Settings update_apply: ' . $e->getMessage(), 'error');
+                AuditService::log((int)$user['user_id'], $user['username'], 'update_apply', 'system', null, [
+                    'ok' => false,
+                    'error' => $e->getMessage(),
+                ]);
+                App::flash(
+                    'error',
+                    'Update failed: ' . $e->getMessage()
+                    . ' If this keeps happening on IIS, run the update from an elevated PowerShell on the server (see docs) or check storage/logs/app.log.'
+                );
             }
             App::redirect('pages/settings.php#updates');
         }
@@ -3364,6 +3378,35 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
                 </button>
             </div>
         </form>
+
+        <!-- Blocking progress while live restore POST is in flight (can take minutes) -->
+        <div id="restore_working_modal" class="ldaps-modal restore-working-modal" hidden aria-hidden="true">
+            <div class="ldaps-modal-backdrop" aria-hidden="true"></div>
+            <div class="ldaps-modal-panel ldaps-pending restore-working-panel" role="dialog"
+                 aria-modal="true" aria-labelledby="restore_working_title" aria-busy="true"
+                 aria-describedby="restore_working_phase restore_working_sub">
+                <div class="ldaps-modal-head">
+                    <h3 id="restore_working_title">Restoring site…</h3>
+                </div>
+                <div class="ldaps-modal-body restore-working-body">
+                    <div class="restore-working-visual" aria-hidden="true">
+                        <div class="restore-working-ring"></div>
+                        <div class="restore-working-icon">💾</div>
+                    </div>
+                    <p class="restore-working-phase" id="restore_working_phase">Starting restore…</p>
+                    <p class="restore-working-sub" id="restore_working_sub">
+                        Do not close, refresh, or navigate away from this tab.
+                        Large packages can take several minutes. The page will reload when restore finishes.
+                    </p>
+                    <div class="restore-working-bar" role="progressbar" aria-valuetext="Working"
+                         aria-label="Restore in progress">
+                        <div class="restore-working-bar-fill"></div>
+                    </div>
+                    <p class="restore-working-elapsed" id="restore_working_elapsed">Elapsed: 0s</p>
+                </div>
+            </div>
+        </div>
+
         <script>
         (function () {
             var up = document.getElementById('restore_src_upload');
@@ -3371,6 +3414,28 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
             var upWrap = document.getElementById('restore_upload_wrap');
             var locWrap = document.getElementById('restore_local_wrap');
             var form = document.getElementById('restoreSiteForm');
+            var modal = document.getElementById('restore_working_modal');
+            var phaseEl = document.getElementById('restore_working_phase');
+            var elapsedEl = document.getElementById('restore_working_elapsed');
+            var restoreActive = false;
+            var phaseTimer = null;
+            var elapsedTimer = null;
+            var startedAt = 0;
+
+            // Approximate phases (server work is not streamed); keeps the UI feeling alive.
+            var phases = [
+                'Preparing restore…',
+                'Creating safety backup of current site…',
+                'Uploading / opening backup package…',
+                'Validating package and decrypting if needed…',
+                'Rebuilding database schema…',
+                'Importing tables and rows…',
+                'Restoring uploads and media…',
+                'Restoring SNMP MIB files…',
+                'Writing configuration…',
+                'Finalizing — almost done…'
+            ];
+
             function syncSrc() {
                 var isLocal = loc && loc.checked;
                 if (upWrap) upWrap.style.display = isLocal ? 'none' : '';
@@ -3379,27 +3444,115 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
             if (up) up.addEventListener('change', syncSrc);
             if (loc) loc.addEventListener('change', syncSrc);
             syncSrc();
+
+            function formatElapsed(sec) {
+                sec = Math.max(0, sec | 0);
+                if (sec < 60) return 'Elapsed: ' + sec + 's';
+                var m = Math.floor(sec / 60);
+                var s = sec % 60;
+                return 'Elapsed: ' + m + 'm ' + (s < 10 ? '0' : '') + s + 's';
+            }
+
+            function showRestoreWorking() {
+                restoreActive = true;
+                startedAt = Date.now();
+                var phaseIdx = 0;
+                if (phaseEl) phaseEl.textContent = phases[0];
+                if (elapsedEl) elapsedEl.textContent = formatElapsed(0);
+
+                if (modal) {
+                    modal.hidden = false;
+                    modal.setAttribute('aria-hidden', 'false');
+                }
+                document.body.classList.add('modal-open', 'restore-working-open');
+
+                if (phaseTimer) clearInterval(phaseTimer);
+                phaseTimer = setInterval(function () {
+                    phaseIdx = Math.min(phaseIdx + 1, phases.length - 1);
+                    if (phaseEl) phaseEl.textContent = phases[phaseIdx];
+                }, 4500);
+
+                if (elapsedTimer) clearInterval(elapsedTimer);
+                elapsedTimer = setInterval(function () {
+                    if (elapsedEl) {
+                        elapsedEl.textContent = formatElapsed(Math.floor((Date.now() - startedAt) / 1000));
+                    }
+                }, 1000);
+
+                var btn = document.getElementById('btn_restore_site');
+                if (btn) {
+                    // Keep enabled until after the browser queues the POST (disabled fields are omitted).
+                    btn.textContent = 'Restoring…';
+                }
+                // Lock controls on the next tick so this submit still includes all values.
+                setTimeout(function () {
+                    if (!restoreActive) return;
+                    if (btn) btn.disabled = true;
+                    if (form) {
+                        form.querySelectorAll('input, select, button, textarea').forEach(function (el) {
+                            if (el.type === 'hidden') return;
+                            el.disabled = true;
+                        });
+                    }
+                }, 0);
+            }
+
+            function onBeforeUnload(e) {
+                if (!restoreActive) return;
+                e.preventDefault();
+                e.returnValue = 'A site restore is still running. Leaving this page may interrupt it.';
+                return e.returnValue;
+            }
+            window.addEventListener('beforeunload', onBeforeUnload);
+
+            // Block Escape / accidental focus-away while restore modal is open
+            document.addEventListener('keydown', function (e) {
+                if (!restoreActive) return;
+                if (e.key === 'Escape' || e.key === 'F5' || (e.key === 'r' && (e.ctrlKey || e.metaKey))) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            }, true);
+
             if (form) {
                 form.addEventListener('submit', function (e) {
+                    if (restoreActive) {
+                        // Already submitted — block double POST
+                        e.preventDefault();
+                        return false;
+                    }
                     var conf = document.getElementById('confirm_restore');
                     if (!conf || String(conf.value || '').toUpperCase().trim() !== 'RESTORE') {
                         e.preventDefault();
                         alert('Type RESTORE (all caps) to confirm.');
                         return false;
                     }
+                    var isLocal = loc && loc.checked;
+                    if (isLocal) {
+                        var sel = document.getElementById('local_backup');
+                        if (!sel || !sel.value) {
+                            e.preventDefault();
+                            alert('Select a local backup package.');
+                            return false;
+                        }
+                    } else {
+                        var file = document.getElementById('restore_file');
+                        if (!file || !file.files || !file.files.length) {
+                            e.preventDefault();
+                            alert('Choose a site backup file to upload.');
+                            return false;
+                        }
+                    }
                     if (!confirm(
                         'Restore this running site from the selected backup?\n\n'
                         + 'Current inventory will be replaced. You will be signed out.\n\n'
+                        + 'A progress window will stay open — do not refresh the page.\n\n'
                         + 'Continue?'
                     )) {
                         e.preventDefault();
                         return false;
                     }
-                    var btn = document.getElementById('btn_restore_site');
-                    if (btn) {
-                        btn.disabled = true;
-                        btn.textContent = 'Restoring…';
-                    }
+                    showRestoreWorking();
                     return true;
                 });
             }

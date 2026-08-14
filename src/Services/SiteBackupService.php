@@ -538,6 +538,19 @@ class SiteBackupService
                 $tz = $options['timezone'] ?? ($liveCfg['timezone'] ?? 'UTC');
             }
 
+            // Live restore onto another host (lab/IIS): never import transport TLS policy from the
+            // package. Production force_https/HSTS will 301-loop or hang a plain-HTTP demo site.
+            if ($preserveDb && is_array($liveCfg['security'] ?? null)) {
+                foreach (['force_https', 'hsts', 'hsts_max_age', 'cookie_secure', 'cookie_samesite'] as $sk) {
+                    if (array_key_exists($sk, $liveCfg['security'])) {
+                        $security[$sk] = $liveCfg['security'][$sk];
+                    }
+                }
+            } elseif ($preserveDb) {
+                $security['force_https'] = false;
+                $security['hsts'] = false;
+            }
+
             $config = [
                 'app_name' => App::APP_NAME,
                 'version' => App::VERSION,
