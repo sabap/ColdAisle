@@ -15,6 +15,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+### Bug fixes
+
+---
+
+## [0.3.150] - 2026-08-14
+
+### Enhancements
+
 - **Live restore progress modal:** Settings → Site backup shows a blocking “Restoring…” dialog with spinner, status phases, elapsed time, and no-refresh guidance so long restores are not abandoned mid-flight
 
 ### Bug fixes
@@ -23,7 +31,6 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **Live restore on lab/HTTP hosts:** keep this server’s TLS policy (`force_https`, HSTS, cookie flags) instead of importing production HTTPS settings that break plain-HTTP IIS demos
 
 ---
-
 ## [0.3.149] - 2026-08-14
 
 ### New features
