@@ -15,7 +15,12 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Live restore progress modal:** Settings → Site backup shows a blocking “Restoring…” dialog with spinner, status phases, elapsed time, and no-refresh guidance so long restores are not abandoned mid-flight
+
 ### Bug fixes
+
+- **IIS in-app updates:** keep FastCGI connection alive during apply, log progress/failures, and always flash a clear error if the update aborts (progress bar no longer “disappears with no message”)
+- **Live restore on lab/HTTP hosts:** keep this server’s TLS policy (`force_https`, HSTS, cookie flags) instead of importing production HTTPS settings that break plain-HTTP IIS demos
 
 ---
 

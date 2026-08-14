@@ -343,6 +343,15 @@ class UpdateService
     {
         @ini_set('max_execution_time', '600');
         @set_time_limit(600);
+        // IIS FastCGI can kill "silent" long requests; keep connection alive and finish even if client disconnects
+        if (PHP_SAPI !== 'cli') {
+            @ignore_user_abort(true);
+            @ini_set('zlib.output_compression', '0');
+            while (ob_get_level() > 0) {
+                @ob_end_flush();
+            }
+            @ob_implicit_flush(true);
+        }
 
         $cfg = self::config();
         if (empty($cfg['enabled'])) {
@@ -370,7 +379,10 @@ class UpdateService
         $repo = (string)$cfg['github_repo'];
         $token = trim((string)$cfg['github_token']);
 
+        App::log("Update apply starting: {$current} → {$version}", 'info');
+        self::keepalive('backup');
         $backupPath = self::createBackup();
+        self::keepalive('download');
         $tmpDir = self::makeWorkDir('upd');
 
         try {
@@ -379,9 +391,11 @@ class UpdateService
             $url = "https://api.github.com/repos/" . rawurlencode($owner) . '/' . rawurlencode($repo)
                 . '/zipball/v' . rawurlencode($version);
             self::githubDownload($url, $zipFile, $token);
+            self::keepalive('extract');
 
             $extractDir = $tmpDir . DIRECTORY_SEPARATOR . 'extract';
             self::extractZip($zipFile, $extractDir);
+            self::keepalive('apply');
 
             $sourceRoot = self::findExtractedRoot($extractDir);
             if ($sourceRoot === null) {
@@ -390,6 +404,7 @@ class UpdateService
 
             self::$pendingCreated = [];
             $stats = self::applyTree($sourceRoot, App::ROOT);
+            self::keepalive('finalize');
 
             // Ensure VERSION file matches applied tag
             if (!self::copyFileRobust(
@@ -463,14 +478,36 @@ class UpdateService
                 }
             }
 
+            App::log("Update apply finished: {$current} → {$version} ({$stats['copied']} files)", 'info');
             return [
                 'ok' => true,
                 'message' => $msg,
                 'backup' => $backupPath,
                 'version' => $version,
             ];
+        } catch (Throwable $e) {
+            App::log('Update apply failed: ' . $e->getMessage(), 'error');
+            throw $e;
         } finally {
             self::rrmdir($tmpDir);
+        }
+    }
+
+    /**
+     * Nudge IIS FastCGI activity timer so long updates are not killed while PHP is busy.
+     */
+    private static function keepalive(string $phase = ''): void
+    {
+        if (PHP_SAPI === 'cli') {
+            return;
+        }
+        // Whitespace is ignored in HTML redirects/flashes if anything leaks; prefer flush only
+        echo ' ';
+        if (function_exists('flush')) {
+            @flush();
+        }
+        if ($phase !== '') {
+            App::log('Update progress: ' . $phase, 'info');
         }
     }
 

@@ -2131,6 +2131,100 @@ body.modal-open { overflow: hidden; }
   to { transform: rotate(360deg); }
 }
 
+/* Live site restore — blocking progress modal */
+.restore-working-modal {
+  z-index: 2600;
+}
+.restore-working-panel {
+  width: min(26rem, 100%);
+  max-height: none;
+  pointer-events: auto;
+  user-select: none;
+}
+.restore-working-body {
+  text-align: center;
+  padding: 1.25rem 1.25rem 1.5rem;
+}
+.restore-working-visual {
+  position: relative;
+  width: 5.5rem;
+  height: 5.5rem;
+  margin: .25rem auto 1.15rem;
+}
+.restore-working-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid rgba(148, 163, 184, 0.22);
+  border-top-color: #93c5fd;
+  border-right-color: #60a5fa;
+  animation: restore-working-spin 0.9s linear infinite;
+}
+.restore-working-icon {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.65rem;
+  line-height: 1;
+  filter: drop-shadow(0 0 10px rgba(96, 165, 250, 0.35));
+  animation: restore-working-pulse 1.6s ease-in-out infinite;
+}
+.restore-working-phase {
+  margin: 0 0 .45rem;
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: #f8fafc;
+  min-height: 1.4em;
+}
+.restore-working-sub {
+  margin: 0 0 1rem;
+  font-size: .82rem;
+  color: rgba(226, 232, 240, 0.78);
+  line-height: 1.45;
+}
+.restore-working-bar {
+  height: 7px;
+  margin: 0 auto .85rem;
+  max-width: 18rem;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+.restore-working-bar-fill {
+  height: 100%;
+  width: 38%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa, #93c5fd);
+  animation: restore-working-indeterminate 1.35s ease-in-out infinite;
+}
+.restore-working-elapsed {
+  margin: 0;
+  font-size: .78rem;
+  font-variant-numeric: tabular-nums;
+  color: rgba(148, 163, 184, 0.95);
+}
+body.restore-working-open {
+  overflow: hidden;
+}
+body.restore-working-open .ldaps-modal:not(.restore-working-modal) {
+  pointer-events: none;
+}
+@keyframes restore-working-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes restore-working-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.92; }
+  50% { transform: scale(1.06); opacity: 1; }
+}
+@keyframes restore-working-indeterminate {
+  0% { transform: translateX(-120%); width: 35%; }
+  50% { width: 55%; }
+  100% { transform: translateX(280%); width: 35%; }
+}
+
 /* OpenDCIM migration — file-transfer activity indicator (not a progress %) */
 .od-xfer {
   display: flex;
