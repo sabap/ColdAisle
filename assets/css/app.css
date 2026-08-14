@@ -294,8 +294,95 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
   padding: .75rem 1.5rem; color: var(--muted); font-size: .8rem;
   border-top: 1px solid var(--border);
 }
-.app-footer a { color: #38bdf8; text-decoration: none; }
-.app-footer a:hover { text-decoration: underline; color: #7dd3fc; }
+.app-footer a,
+.app-footer .footer-link-btn {
+  color: #38bdf8;
+  text-decoration: none;
+  font: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.app-footer a:hover,
+.app-footer .footer-link-btn:hover {
+  text-decoration: underline;
+  color: #7dd3fc;
+}
+
+/* About ColdAisle card (footer) */
+.about-coldaisle-panel {
+  width: min(420px, 100%);
+}
+.about-coldaisle-body {
+  padding-top: 1.1rem;
+}
+.about-coldaisle-brand {
+  display: flex;
+  align-items: center;
+  gap: .85rem;
+  margin-bottom: .85rem;
+}
+.about-coldaisle-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.28);
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+}
+.about-coldaisle-name {
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: .01em;
+}
+.about-coldaisle-tag {
+  color: var(--muted);
+  font-size: .82rem;
+}
+.about-coldaisle-blurb {
+  margin: 0 0 1rem;
+  color: var(--muted);
+  font-size: .9rem;
+  line-height: 1.55;
+}
+.about-coldaisle-meta {
+  display: grid;
+  gap: .65rem .85rem;
+  margin: 0 0 1.1rem;
+  padding: .85rem 1rem;
+  border-radius: var(--radius);
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+.about-coldaisle-meta > div {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  gap: .5rem;
+  align-items: baseline;
+  font-size: .88rem;
+}
+.about-coldaisle-meta dt {
+  margin: 0;
+  color: var(--muted);
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-weight: 600;
+}
+.about-coldaisle-meta dd {
+  margin: 0;
+  word-break: break-word;
+}
+.about-coldaisle-meta code {
+  font-size: .9em;
+  color: #93c5fd;
+}
+.about-coldaisle-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+}
 
 /* Dev-only request timing (debug.request_timer / COLDAISLE_DEBUG) */
 .dev-request-timer {

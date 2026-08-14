@@ -113,7 +113,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     // Flashes already read; free session lock so media.php / parallel requests are not blocked
     App::releaseSessionLock();
 
-    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '47';
+    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '48';
     ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -322,9 +322,15 @@ function layout_footer(): void
     $user = is_array($ctx) ? ($ctx['user'] ?? []) : [];
     $active = is_array($ctx) ? (string)($ctx['active'] ?? '') : '';
     $donateUrl = 'https://paypal.me/mattelsberry';
+    $siteUrl = 'https://coldaisle.app';
+    $githubUrl = class_exists('UpdateService', false)
+        ? UpdateService::githubUrl()
+        : 'https://github.com/sabap/ColdAisle';
+    $licenseName = 'MIT License';
+    $licenseUrl = $githubUrl . '/blob/main/LICENSE';
     $timerOn = class_exists('App', false) && App::requestTimerEnabled();
     $timing = $timerOn ? App::requestTimingSnapshot() : null;
-    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '9';
+    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '10';
 
     if ($tech):
         $nav = (class_exists('TechMode') && $user)
@@ -362,8 +368,11 @@ function layout_footer(): void
         </main>
         <footer class="app-footer">
             ColdAisle v<?= App::VERSION ?> · <?= date('Y') ?>
+            · <button type="button" class="footer-link-btn" data-ca-modal-open="aboutColdAisle"
+                    title="About ColdAisle">About</button>
+            · <a href="<?= App::e($siteUrl) ?>" target="_blank" rel="noopener noreferrer">Website</a>
             · <a href="<?= App::e($donateUrl) ?>" target="_blank" rel="noopener noreferrer">Donate</a>
-            · <a href="https://github.com/sabap/ColdAisle" target="_blank" rel="noopener noreferrer">GitHub</a>
+            · <a href="<?= App::e($githubUrl) ?>" target="_blank" rel="noopener noreferrer">GitHub</a>
             <?php if ($timing): ?>
                 <span class="dev-request-timer"
                       id="devRequestTimer"
@@ -396,6 +405,63 @@ function layout_footer(): void
         </footer>
     </div>
 </div>
+
+<div class="modal-overlay modal-overlay-glass" id="aboutColdAisle" hidden>
+    <div class="modal-panel modal-panel-glass about-coldaisle-panel" role="dialog" aria-modal="true"
+         aria-labelledby="aboutColdAisleTitle">
+        <div class="modal-header">
+            <h2 id="aboutColdAisleTitle">About ColdAisle</h2>
+            <button type="button" class="modal-close" data-ca-modal-close="aboutColdAisle" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body about-coldaisle-body">
+            <div class="about-coldaisle-brand">
+                <img class="about-coldaisle-logo" src="<?= App::e(App::url('assets/img/logo.svg')) ?>"
+                     width="48" height="48" alt="" onerror="this.style.display='none'">
+                <div>
+                    <div class="about-coldaisle-name">ColdAisle</div>
+                    <div class="about-coldaisle-tag">Data Center Infrastructure Management</div>
+                </div>
+            </div>
+            <p class="about-coldaisle-blurb">
+                Modern DCIM for Windows — floor plans, 3D racks, power, cabling raceways, SNMP,
+                and one-click updates. Free and open source.
+            </p>
+            <dl class="about-coldaisle-meta">
+                <div>
+                    <dt>Version</dt>
+                    <dd><code>v<?= App::e((string)App::VERSION) ?></code></dd>
+                </div>
+                <div>
+                    <dt>License</dt>
+                    <dd>
+                        <a href="<?= App::e($licenseUrl) ?>" target="_blank" rel="noopener noreferrer"><?= App::e($licenseName) ?></a>
+                    </dd>
+                </div>
+                <div>
+                    <dt>Website</dt>
+                    <dd>
+                        <a href="<?= App::e($siteUrl) ?>" target="_blank" rel="noopener noreferrer">coldaisle.app</a>
+                    </dd>
+                </div>
+                <div>
+                    <dt>Source</dt>
+                    <dd>
+                        <a href="<?= App::e($githubUrl) ?>" target="_blank" rel="noopener noreferrer">github.com/sabap/ColdAisle</a>
+                    </dd>
+                </div>
+            </dl>
+            <div class="about-coldaisle-actions">
+                <a class="btn btn-primary btn-sm" href="<?= App::e($siteUrl) ?>" target="_blank" rel="noopener noreferrer">Open website</a>
+                <a class="btn btn-secondary btn-sm" href="<?= App::e($githubUrl) ?>" target="_blank" rel="noopener noreferrer">GitHub</a>
+                <a class="btn btn-ghost btn-sm" href="<?= App::e($licenseUrl) ?>" target="_blank" rel="noopener noreferrer">License</a>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary btn-sm" data-ca-modal-close="aboutColdAisle">Close</button>
+        </div>
+    </div>
+</div>
+
 <script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=<?= App::e($jsV) ?>"></script>
 <script>
 (function () {
