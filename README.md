@@ -120,7 +120,14 @@ On a **new** install:
 3. Enter the **new** SQL connection details and upload the ZIP
 4. Sign in with an account from the backup (not a new setup admin)
 
-The package includes database rows, `storage/uploads`, config overlay (auth/security), and `app_key`. It does **not** include the old SQL password.
+On a **running** install (rollback):
+
+1. **Settings → Site backup & migration → Restore on this running site**
+2. Upload a `coldaisle-site_…` package (or pick one from `storage/backups/`)
+3. Type **RESTORE** to confirm (optional: safety backup of current state first)
+4. Sign in again with an account from the restored package
+
+The package includes database rows, `storage/uploads`, config overlay (auth/security), and `app_key`. It does **not** include the old SQL password. Live restore keeps this server’s SQL connection and base URL.
 
 ## Quick install
 
