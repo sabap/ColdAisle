@@ -113,7 +113,25 @@ function layout_header(string $title, array $user, string $active = ''): void
     // Flashes already read; free session lock so media.php / parallel requests are not blocked
     App::releaseSessionLock();
 
-    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '49';
+    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '54';
+    $wizAuto = false;
+    $wizRisk = ['warn' => false, 'message' => '', 'counts' => []];
+    $tourActive = false;
+    if (class_exists('SetupWizardService') && AuthManager::can($user, 'manage_settings')) {
+        try {
+            $wizAuto = SetupWizardService::shouldAutoOpen($user);
+            $wizRisk = SetupWizardService::riskAssessment();
+        } catch (Throwable $e) {
+            $wizAuto = false;
+        }
+    }
+    if (class_exists('SiteTourService') && !$wizAuto && !$tech) {
+        try {
+            $tourActive = SiteTourService::isActive();
+        } catch (Throwable $e) {
+            $tourActive = false;
+        }
+    }
     ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -136,7 +154,10 @@ function layout_header(string $title, array $user, string $active = ''): void
       tempUnit: <?= json_encode(class_exists('TempUnitService') ? TempUnitService::siteUnit() : 'C') ?>,
       tempSymbol: <?= json_encode(class_exists('TempUnitService') ? TempUnitService::symbol() : '°C') ?>,
       liveToasts: true,
-      techMode: <?= $tech ? 'true' : 'false' ?>
+      techMode: <?= $tech ? 'true' : 'false' ?>,
+      setupWizardAuto: <?= $wizAuto ? 'true' : 'false' ?>,
+      setupWizardRisk: <?= json_encode($wizRisk, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>,
+      siteTourActive: <?= (!empty($tourActive) ? 'true' : 'false') ?>
     };
     window.WINDCIM = window.ColdAisle; // legacy alias
     </script>
@@ -156,7 +177,7 @@ function layout_header(string $title, array $user, string $active = ''): void
         Links currently use HTTP so the UI keeps working.
     </div>
     <?php endif; ?>
-    <aside class="sidebar" id="sidebar">
+    <aside class="sidebar" id="sidebar" data-tour="sidebar">
         <div class="sidebar-brand">
             <img class="brand-logo" src="<?= App::e(App::url('assets/img/logo.svg')) ?>" width="36" height="36" alt="">
             <div>
@@ -167,26 +188,26 @@ function layout_header(string $title, array $user, string $active = ''): void
         <nav class="sidebar-nav">
             <?php
             $nav = [
-                'dashboard' => ['Dashboard', 'index.php', '▣'],
-                'floorplan' => ['Floor Planner', 'pages/floorplan.php', '▦'],
-                'datacenters' => ['Data Centers', 'pages/datacenters.php', '🏛'],
-                'cabinets' => ['Cabinets', 'pages/cabinets.php', '▤'],
-                'devices' => ['Devices', 'pages/devices.php', '🖥'],
-                'power' => ['Power', 'pages/power.php', '⚡'],
-                'cooling' => ['Cooling', 'pages/cooling.php', '❄'],
-                'cables' => ['Cabling', 'pages/cables.php', '🔌'],
-                'snmp' => ['SNMP', 'pages/snmp.php', '📡'],
-                'work_orders' => ['Work orders', 'pages/work_orders.php', '📋'],
-                'disposals' => ['Decommission', 'pages/disposals.php', '🗑'],
-                'audits' => ['Audits', 'pages/audits.php', '✓'],
-                'reports' => ['Reports', 'pages/reports.php', '📊'],
-                'users' => ['Users & Depts', 'pages/users.php', '👤'],
-                'settings' => ['Settings', 'pages/settings.php', '⚙'],
+                'dashboard' => ['Dashboard', 'index.php', '▣', 'nav-dashboard'],
+                'floorplan' => ['Floor Planner', 'pages/floorplan.php', '▦', 'nav-floorplan'],
+                'datacenters' => ['Data Centers', 'pages/datacenters.php', '🏛', 'nav-datacenters'],
+                'cabinets' => ['Cabinets', 'pages/cabinets.php', '▤', 'nav-cabinets'],
+                'devices' => ['Devices', 'pages/devices.php', '🖥', 'nav-devices'],
+                'power' => ['Power', 'pages/power.php', '⚡', 'nav-power'],
+                'cooling' => ['Cooling', 'pages/cooling.php', '❄', 'nav-cooling'],
+                'cables' => ['Cabling', 'pages/cables.php', '🔌', 'nav-cables'],
+                'snmp' => ['SNMP', 'pages/snmp.php', '📡', 'nav-snmp'],
+                'work_orders' => ['Work orders', 'pages/work_orders.php', '📋', 'nav-work-orders'],
+                'disposals' => ['Decommission', 'pages/disposals.php', '🗑', 'nav-disposals'],
+                'audits' => ['Audits', 'pages/audits.php', '✓', 'nav-audits'],
+                'reports' => ['Reports', 'pages/reports.php', '📊', 'nav-reports'],
+                'users' => ['Users & Depts', 'pages/users.php', '👤', 'nav-users'],
+                'settings' => ['Settings', 'pages/settings.php', '⚙', 'nav-settings'],
             ];
             $devicesActive = in_array($active, ['devices', 'device_templates'], true);
             $powerActive = in_array($active, ['power', 'power_zones', 'power_pdus', 'power_pdu_templates', 'power_templates', 'power_ups'], true);
             $coolingActive = in_array($active, ['cooling', 'cooling_units', 'env_sensors'], true);
-            foreach ($nav as $key => [$label, $href, $icon]):
+            foreach ($nav as $key => [$label, $href, $icon, $tourId]):
                 if (!AuthManager::canViewNav($user, $key)) {
                     continue;
                 }
@@ -195,7 +216,8 @@ function layout_header(string $title, array $user, string $active = ''): void
                     || ($key === 'power' && $powerActive)
                     || ($key === 'cooling' && $coolingActive)) ? 'active' : '';
             ?>
-                <a class="nav-item <?= $cls ?>" href="<?= App::e(App::url($href)) ?>">
+                <a class="nav-item <?= $cls ?>" href="<?= App::e(App::url($href)) ?>"
+                   data-tour="<?= App::e((string)$tourId) ?>">
                     <span class="nav-icon"><?= $icon ?></span>
                     <span><?= App::e($label) ?></span>
                 </a>
@@ -205,7 +227,8 @@ function layout_header(string $title, array $user, string $active = ''): void
                         <span class="nav-icon"></span><span>All devices</span>
                     </a>
                     <a class="nav-item nav-sub <?= $active === 'device_templates' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/device_templates.php')) ?>">
+                       href="<?= App::e(App::url('pages/device_templates.php')) ?>"
+                       data-tour="nav-device-templates">
                         <span class="nav-icon"></span><span>Templates</span>
                     </a>
                 <?php endif; ?>
@@ -215,15 +238,18 @@ function layout_header(string $title, array $user, string $active = ''): void
                         <span class="nav-icon"></span><span>Dashboard</span>
                     </a>
                     <a class="nav-item nav-sub <?= $active === 'power_zones' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/power_zones.php')) ?>">
+                       href="<?= App::e(App::url('pages/power_zones.php')) ?>"
+                       data-tour="nav-power-zones">
                         <span class="nav-icon"></span><span>Zones</span>
                     </a>
                     <a class="nav-item nav-sub <?= $active === 'power_pdus' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/power_pdus.php')) ?>">
+                       href="<?= App::e(App::url('pages/power_pdus.php')) ?>"
+                       data-tour="nav-power-pdus">
                         <span class="nav-icon"></span><span>PDUs</span>
                     </a>
                     <a class="nav-item nav-sub <?= $active === 'power_ups' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/power_ups.php')) ?>">
+                       href="<?= App::e(App::url('pages/power_ups.php')) ?>"
+                       data-tour="nav-power-ups">
                         <span class="nav-icon"></span><span>UPS</span>
                     </a>
                     <a class="nav-item nav-sub <?= in_array($active, ['power_pdu_templates', 'power_templates'], true) ? 'active' : '' ?>"
@@ -263,10 +289,12 @@ function layout_header(string $title, array $user, string $active = ''): void
             <button type="button" class="btn btn-ghost btn-icon" id="sidebarToggle" aria-label="Toggle menu">☰</button>
             <h1 class="page-title"><?= App::e($title) ?></h1>
             <div class="topbar-actions">
-                <?php layout_tech_mode_toggle(false); ?>
+                <span data-tour="tech-mode"><?php layout_tech_mode_toggle(false); ?></span>
+                <span data-tour="notifications">
                 <a class="notif-badge" href="<?= App::e(App::url('pages/notifications.php')) ?>"
                    title="Notifications"
                    <?= $unread < 1 ? 'hidden' : '' ?>><?= (int)$unread ?></a>
+                </span>
             </div>
         </header>
         <main class="content">
@@ -330,7 +358,7 @@ function layout_footer(): void
     $licenseUrl = $githubUrl . '/blob/main/LICENSE';
     $timerOn = class_exists('App', false) && App::requestTimerEnabled();
     $timing = $timerOn ? App::requestTimingSnapshot() : null;
-    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '10';
+    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '18';
 
     if ($tech):
         $nav = (class_exists('TechMode') && $user)
@@ -352,6 +380,10 @@ function layout_footer(): void
     </nav>
 </div>
 <script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=<?= App::e($jsV) ?>"></script>
+<?php if (class_exists('SetupWizardService') && !empty($user) && AuthManager::can($user, 'manage_settings')): ?>
+<script src="<?= App::e(App::url('assets/js/setup-wizard.js')) ?>?v=<?= App::e($jsV) ?>"></script>
+<script src="<?= App::e(App::url('assets/js/site-tour.js')) ?>?v=<?= App::e($jsV) ?>"></script>
+<?php endif; ?>
 <script>
 (function () {
   if (window.ColdAisle && ColdAisle.liveToasts && typeof ColdAisle.initLiveToasts === 'function') {
@@ -463,6 +495,10 @@ function layout_footer(): void
 </div>
 
 <script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=<?= App::e($jsV) ?>"></script>
+<?php if (class_exists('SetupWizardService') && !empty($user) && AuthManager::can($user, 'manage_settings')): ?>
+<script src="<?= App::e(App::url('assets/js/setup-wizard.js')) ?>?v=<?= App::e($jsV) ?>"></script>
+<script src="<?= App::e(App::url('assets/js/site-tour.js')) ?>?v=<?= App::e($jsV) ?>"></script>
+<?php endif; ?>
 <script>
 (function () {
   if (window.ColdAisle && ColdAisle.liveToasts && typeof ColdAisle.initLiveToasts === 'function') {
