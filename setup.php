@@ -152,6 +152,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ]);
             $success[] = $result['message'] ?? 'Restore complete.';
             $success[] = 'Sign in with an account from the backup (not a new setup admin).';
+            if (class_exists('SetupWizardService')) {
+                try {
+                    SetupWizardService::markCompleted('restore');
+                } catch (Throwable $e) {
+                    App::log('Setup wizard restore complete: ' . $e->getMessage(), 'warning');
+                }
+            }
             @unlink($stagePath);
             $step = 4;
             $mode = 'restore';
@@ -330,6 +337,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 @chmod($configPath, 0640);
 
                 $success[] = 'Configuration written to config/config.php';
+                if (class_exists('SetupWizardService')) {
+                    try {
+                        SetupWizardService::markPending('install');
+                    } catch (Throwable $e) {
+                        App::log('Setup wizard pending flag: ' . $e->getMessage(), 'warning');
+                    }
+                }
                 $step = 4;
             } catch (Throwable $e) {
                 $errors[] = 'Installation failed: ' . $e->getMessage();

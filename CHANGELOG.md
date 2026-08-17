@@ -13,9 +13,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Setup wizard:** first admin login after a fresh install opens a short Next/Previous modal (org, optional security/LDAP/mail with tests, site + hall dimensions, skip unused areas). Progress is saved; resume on the last step. Skip the wizard to stop auto-open. Settings → Setup wizard relaunches it (warns if data already exists).
+- **Site tour:** Settings → Site tour (or wizard finish) walks the live UI with flag markers — sidebar, dashboard, floor planner, inventory, power, cooling, cabling, SNMP, and operations. Exit anytime; restart from Settings. Chapter pills jump ahead. Floor-plan steps can require clicking + Cabinet / Grid / 3D. Dashboard shows “Next useful clicks” when cabinets, devices, PDUs, or SNMP are still missing.
+
 ### Enhancements
 
 ### Bug fixes
+
+- **In-app updates:** GitHub 502/503/504 during zip download are retried and shown as a short timeout message (no more raw HTML error page dumped into the Settings flash)
+- **Setup wizard hall size:** uses the room’s stored meters (what the floor plan draws), not leftover datacenter 40×25 defaults; feet/meters is display-only and does not drift the canvas
 
 ---
 

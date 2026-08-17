@@ -250,7 +250,35 @@ layout_header('Dashboard', $user, 'dashboard');
 </div>
 <?php endif; ?>
 
-<div class="metrics">
+<?php
+$dashQuests = [];
+if (class_exists('SiteTourService')) {
+    try {
+        $dashQuests = SiteTourService::dashboardQuests($user, $metrics);
+    } catch (Throwable $e) {
+        $dashQuests = [];
+    }
+}
+?>
+<?php if ($dashQuests): ?>
+<div class="dash-quests" data-tour="dash-quests">
+    <div class="dash-quests-head">
+        <strong>Next useful clicks</strong>
+        <span class="text-muted">The tour and wizard pointed here — pick one and go.</span>
+    </div>
+    <div class="dash-quests-grid">
+        <?php foreach ($dashQuests as $q): ?>
+            <a class="dash-quest" href="<?= App::e(App::url((string)$q['href'])) ?>">
+                <strong><?= App::e((string)$q['title']) ?></strong>
+                <span><?= App::e((string)$q['detail']) ?></span>
+                <em><?= App::e((string)$q['cta']) ?> →</em>
+            </a>
+        <?php endforeach; ?>
+    </div>
+</div>
+<?php endif; ?>
+
+<div class="metrics" data-tour="dash-metrics">
     <div class="metric-card accent">
         <div class="label">Cabinets</div>
         <div class="value"><?= $metrics['cabinets'] ?></div>
@@ -351,7 +379,7 @@ layout_header('Dashboard', $user, 'dashboard');
                 <?php endif; ?>
             </span>
         </div>
-        <div class="panel-3d" id="dashboard-3d"
+        <div class="panel-3d" id="dashboard-3d" data-tour="dash-3d"
              data-cabinets='<?= App::e(json_encode($cabinets3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-pdus='<?= App::e(json_encode($pdus3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-cooling='<?= App::e(json_encode($cooling3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'

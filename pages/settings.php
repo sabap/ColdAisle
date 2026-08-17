@@ -518,9 +518,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                     'ok' => false,
                     'error' => $e->getMessage(),
                 ]);
+                $brief = class_exists('UpdateService')
+                    ? UpdateService::briefError($e->getMessage())
+                    : $e->getMessage();
                 App::flash(
                     'error',
-                    'Update failed: ' . $e->getMessage()
+                    'Update failed: ' . $brief
                     . ' If this keeps happening on IIS, run the update from an elevated PowerShell on the server (see docs) or check storage/logs/app.log.'
                 );
             }
@@ -1052,6 +1055,56 @@ layout_header('Settings', $user, 'settings');
                 GitHub
             </a>
         </p>
+    </div>
+</div>
+
+<div class="card" id="setup-wizard">
+    <div class="card-header"><h2>Setup wizard</h2></div>
+    <div class="card-body">
+        <p class="text-muted" style="margin-top:0;font-size:.9rem">
+            Guided first-time setup: organization, optional directory and email, then your first hall.
+            Progress is saved so a closed browser or idle timeout resumes on the same step.
+        </p>
+        <?php
+        $wizState = class_exists('SetupWizardService') ? SetupWizardService::loadState() : [];
+        $wizStatus = (string)($wizState['status'] ?? 'not started');
+        $wizStep = (string)($wizState['current_step'] ?? '');
+        ?>
+        <p style="margin:.25rem 0 .75rem;font-size:.85rem">
+            Status:
+            <strong><?= App::e($wizStatus === '' ? 'not started' : $wizStatus) ?></strong>
+            <?php if ($wizStep !== ''): ?>
+                · last step <code><?= App::e($wizStep) ?></code>
+            <?php endif; ?>
+        </p>
+        <button type="button" class="btn btn-primary" data-setup-wizard-launch>
+            Launch setup wizard
+        </button>
+        <p class="text-muted" style="font-size:.75rem;margin:.55rem 0 0">
+            If this site already has data or settings, you will be asked to confirm.
+            The wizard does not delete cabinets or devices.
+        </p>
+    </div>
+</div>
+
+<div class="card" id="site-tour" data-tour="settings-help">
+    <div class="card-header"><h2>Site tour</h2></div>
+    <div class="card-body">
+        <p class="text-muted" style="margin-top:0;font-size:.9rem">
+            A walkthrough with flags on the live UI: sidebar, dashboard, floor planner,
+            inventory, power, cooling, cabling, SNMP, and operations. Exit anytime
+            (Esc). Restart here whenever you onboard someone.
+        </p>
+        <?php
+        $tourState = class_exists('SiteTourService') ? SiteTourService::loadState() : [];
+        $tourStatus = (string)($tourState['status'] ?? 'idle');
+        ?>
+        <p style="margin:.25rem 0 .75rem;font-size:.85rem">
+            Status: <strong><?= App::e($tourStatus) ?></strong>
+        </p>
+        <button type="button" class="btn btn-primary" data-site-tour-launch>
+            Start site tour
+        </button>
     </div>
 </div>
 

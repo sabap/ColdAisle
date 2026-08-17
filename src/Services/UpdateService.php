@@ -962,13 +962,52 @@ class UpdateService
 
     private static function githubDownload(string $url, string $dest, string $token): void
     {
-        $body = self::httpRequest($url, $token, true, false);
-        if ($body === null || $body === '' || strlen($body) < 100) {
-            throw new RuntimeException('Downloaded release archive is empty or too small.');
+        $last = null;
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
+            try {
+                $body = self::httpRequest($url, $token, true, false);
+                if ($body === null || $body === '' || strlen($body) < 100) {
+                    throw new RuntimeException('Downloaded release archive is empty or too small.');
+                }
+                if (file_put_contents($dest, $body) === false) {
+                    throw new RuntimeException('Could not write release archive to temp path.');
+                }
+                return;
+            } catch (Throwable $e) {
+                $last = $e;
+                if ($attempt < 3 && self::isTransientGithubError($e)) {
+                    App::log('GitHub download retry ' . $attempt . '/3: ' . self::briefError($e->getMessage()), 'warning');
+                    self::keepalive('download-retry-' . $attempt);
+                    sleep(2 * $attempt);
+                    continue;
+                }
+                throw $e;
+            }
         }
-        if (file_put_contents($dest, $body) === false) {
-            throw new RuntimeException('Could not write release archive to temp path.');
+        throw $last ?? new RuntimeException('GitHub download failed.');
+    }
+
+    private static function isTransientGithubError(Throwable $e): bool
+    {
+        $m = $e->getMessage();
+        return (bool)preg_match('/HTTP 429|HTTP 502|HTTP 503|HTTP 504|timed out|temporarily unavailable|Could not resolve/i', $m);
+    }
+
+    /** Safe one-line error for flashes / logs (never dump GitHub HTML). */
+    public static function briefError(string $message): string
+    {
+        $message = trim($message);
+        if (preg_match('/<!DOCTYPE|<html[\s>]/i', $message) || str_contains($message, 'Hello future GitHubber')) {
+            if (preg_match('/GitHub HTTP (\d{3})/i', $message, $m)) {
+                return 'GitHub timed out or is temporarily unavailable (HTTP ' . $m[1] . '). Wait a minute and try again.';
+            }
+            return 'GitHub returned an HTML error page instead of the release zip. Wait a minute and try again.';
         }
+        $message = trim(preg_replace('/\s+/', ' ', strip_tags($message)) ?? $message);
+        if (strlen($message) > 240) {
+            $message = substr($message, 0, 237) . '...';
+        }
+        return $message;
     }
 
     /**
@@ -1043,11 +1082,30 @@ class UpdateService
                 'GitHub resource not found (HTTP 404). The release tag may not exist yet on sabap/ColdAisle.'
             );
         }
+        if ($code === 429 || $code === 502 || $code === 503 || $code === 504) {
+            App::log('GitHub HTTP ' . $code . ' (transient) for ' . $url, 'warning');
+            throw new RuntimeException(
+                'GitHub timed out or is temporarily unavailable (HTTP ' . $code . '). Wait a minute and try again.'
+            );
+        }
         if ($code < 200 || $code >= 300) {
-            $snippet = substr((string)$body, 0, 200);
-            throw new RuntimeException("GitHub HTTP {$code}: {$snippet}");
+            $snippet = self::briefHttpBody((string)$body);
+            throw new RuntimeException('GitHub HTTP ' . $code . ($snippet !== '' ? ': ' . $snippet : ''));
         }
         return (string)$body;
+    }
+
+    private static function briefHttpBody(string $body): string
+    {
+        $trim = ltrim($body);
+        if ($trim === '') {
+            return '';
+        }
+        if (preg_match('/<!DOCTYPE|<html[\s>]/i', $trim)) {
+            return 'GitHub returned an HTML error page (not a release archive).';
+        }
+        $plain = trim(preg_replace('/\s+/', ' ', strip_tags($trim)) ?? $trim);
+        return strlen($plain) > 160 ? substr($plain, 0, 157) . '...' : $plain;
     }
 
     private static function extractZip(string $zipFile, string $destDir): void

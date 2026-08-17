@@ -598,6 +598,13 @@ class SiteBackupService
             $msg = "Restored {$tablesOk} table(s), {$rowsOk} row(s) from backup"
                 . (isset($manifest['app_version']) ? " (source v{$manifest['app_version']})" : '') . '.';
             App::log($msg, 'info');
+            if (class_exists('SetupWizardService')) {
+                try {
+                    SetupWizardService::markCompleted('restore');
+                } catch (Throwable $e) {
+                    App::log('Setup wizard after restore: ' . $e->getMessage(), 'warning');
+                }
+            }
             return ['ok' => true, 'message' => $msg, 'tables' => $tablesOk, 'rows' => $rowsOk];
         } finally {
             self::rrmdir($work);

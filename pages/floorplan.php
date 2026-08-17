@@ -26,7 +26,7 @@ layout_header('Floor Planner', $user, 'floorplan');
 <div class="card" id="floorplanner">
     <div class="planner-toolbar">
         <label class="text-muted" style="font-size:.85rem">Room</label>
-        <select id="roomSelect" class="form-control" style="width:auto;min-width:220px">
+        <select id="roomSelect" class="form-control" style="width:auto;min-width:220px" data-tour="fp-room">
             <?php if (!$rooms): ?>
                 <option value="">No rooms — create one under Data Centers</option>
             <?php endif; ?>
@@ -36,12 +36,12 @@ layout_header('Floor Planner', $user, 'floorplan');
                 </option>
             <?php endforeach; ?>
         </select>
-        <button type="button" class="btn btn-primary btn-sm" id="btnAddCab">+ Cabinet</button>
+        <button type="button" class="btn btn-primary btn-sm" id="btnAddCab" data-tour="fp-add">+ Cabinet</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnEditRoom" title="Edit room size, grid, and North">Edit Room / North</button>
         <button type="button" class="btn btn-secondary btn-sm" id="toggleUnits" title="Toggle metric / standard (imperial)">
             <?= $units === 'imperial' ? 'Units: ft / in' : 'Units: m / mm' ?>
         </button>
-        <button type="button" class="btn btn-primary btn-sm" id="toggleGrid" title="Show 1 ft grid on the floor">Grid: On</button>
+        <button type="button" class="btn btn-primary btn-sm" id="toggleGrid" title="Show 1 ft grid on the floor" data-tour="fp-grid">Grid: On</button>
         <button type="button" class="btn btn-primary btn-sm" id="toggleSnap" title="Snap cabinets to grid when placing or moving">Snap: On</button>
         <span class="nudge-controls" title="Arrow keys nudge selected (unlocked) cabinets, PDUs, UPS, or cooling units">
             <label class="text-muted" style="font-size:.8rem;margin:0">Nudge</label>
@@ -58,7 +58,7 @@ layout_header('Floor Planner', $user, 'floorplan');
         <span id="zoomLabel" class="text-muted" style="font-size:.8rem;min-width:2.5rem;text-align:center">100%</span>
         <button type="button" class="btn btn-secondary btn-sm" id="btnZoomIn" title="Zoom in">+</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnZoomReset" title="Reset zoom">Reset</button>
-        <button type="button" class="btn btn-secondary btn-sm" id="toggle3d">3D View</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="toggle3d" data-tour="fp-3d">3D View</button>
         <button type="button" class="btn btn-secondary btn-sm" id="toggleRaceways" title="Show cable raceways / fiber troughs">Raceways: On</button>
         <label class="text-muted" style="font-size:.78rem;margin:0 0 0 .25rem" for="racewayFilterSelect" title="Which raceway types to show in 2D and 3D">Show</label>
         <select id="racewayFilterSelect" class="form-control" style="width:auto;min-width:9.5rem;padding:.2rem .35rem;font-size:.8rem"
