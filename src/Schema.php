@@ -618,6 +618,20 @@ class Schema
             );
             // Per-cabinet audit cadence override (NULL = use site default)
             self::ensureColumn('cabinets', 'audit_interval_days', 'INT NULL');
+            self::ensureColumn('cabinet_audits', 'snapshot_json', 'NVARCHAR(MAX) NULL');
+            self::ensureTable(
+                'cabinet_audit_photos',
+                "CREATE TABLE cabinet_audit_photos (
+                    photo_id INT IDENTITY(1,1) PRIMARY KEY,
+                    cabinet_audit_id INT NOT NULL,
+                    cabinet_id INT NOT NULL,
+                    position_u INT NULL,
+                    face NVARCHAR(10) NULL,
+                    rel_path NVARCHAR(400) NOT NULL,
+                    caption NVARCHAR(200) NULL,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_cab_aud_photo_at DEFAULT SYSUTCDATETIME()
+                )"
+            );
 
             // RBAC: system roles + LDAP/Entra role maps
             self::ensureRoles();
@@ -1016,7 +1030,8 @@ class Schema
             'work_order_items' => [
                 'item_id', 'work_order_id', 'device_id', 'from_cabinet_id', 'to_cabinet_id', 'item_status',
             ],
-            'cabinet_audits' => ['cabinet_audit_id', 'cabinet_id', 'audited_at'],
+            'cabinet_audits' => ['cabinet_audit_id', 'cabinet_id', 'audited_at', 'snapshot_json'],
+            'cabinet_audit_photos' => ['photo_id', 'cabinet_audit_id', 'cabinet_id', 'rel_path'],
             'cabinets' => ['audit_interval_days'],
             'role_group_maps' => ['map_id', 'role_id', 'auth_source', 'group_id'],
             'auth_sessions' => ['session_id', 'user_id', 'last_seen_at', 'expires_at'],

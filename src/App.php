@@ -41,6 +41,7 @@ require_once __DIR__ . '/Services/SnmpPollPool.php';
 require_once __DIR__ . '/Services/StorageHousekeepingService.php';
 require_once __DIR__ . '/Services/SetupWizardService.php';
 require_once __DIR__ . '/Services/SiteTourService.php';
+require_once __DIR__ . '/Services/FieldAuditService.php';
 
 class App
 {

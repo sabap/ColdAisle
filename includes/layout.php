@@ -113,7 +113,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     // Flashes already read; free session lock so media.php / parallel requests are not blocked
     App::releaseSessionLock();
 
-    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '54';
+    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '55';
     $wizAuto = false;
     $wizRisk = ['warn' => false, 'message' => '', 'counts' => []];
     $tourActive = false;
@@ -141,6 +141,8 @@ function layout_header(string $title, array $user, string $active = ''): void
     <meta name="csrf-token" content="<?= App::e($csrf) ?>">
     <meta name="theme-color" content="#0f172a">
     <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <link rel="manifest" href="<?= App::e(App::url('manifest.php')) ?>">
     <title><?= App::e($title) ?> · <?= App::e($appName) ?><?= $tech ? ' · Tech' : '' ?></title>
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon.svg')) ?>" type="image/svg+xml">
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon-32.png')) ?>" type="image/png" sizes="32x32">
@@ -380,6 +382,11 @@ function layout_footer(): void
     </nav>
 </div>
 <script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=<?= App::e($jsV) ?>"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register(<?= json_encode(App::url('sw.js')) ?>, { scope: <?= json_encode(rtrim(App::baseUrl(), '/') . '/') ?> }).catch(function () {});
+}
+</script>
 <?php if (class_exists('SetupWizardService') && !empty($user) && AuthManager::can($user, 'manage_settings')): ?>
 <script src="<?= App::e(App::url('assets/js/setup-wizard.js')) ?>?v=<?= App::e($jsV) ?>"></script>
 <script src="<?= App::e(App::url('assets/js/site-tour.js')) ?>?v=<?= App::e($jsV) ?>"></script>
@@ -495,6 +502,11 @@ function layout_footer(): void
 </div>
 
 <script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=<?= App::e($jsV) ?>"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register(<?= json_encode(App::url('sw.js')) ?>, { scope: <?= json_encode(rtrim(App::baseUrl(), '/') . '/') ?> }).catch(function () {});
+}
+</script>
 <?php if (class_exists('SetupWizardService') && !empty($user) && AuthManager::can($user, 'manage_settings')): ?>
 <script src="<?= App::e(App::url('assets/js/setup-wizard.js')) ?>?v=<?= App::e($jsV) ?>"></script>
 <script src="<?= App::e(App::url('assets/js/site-tour.js')) ?>?v=<?= App::e($jsV) ?>"></script>
