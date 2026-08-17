@@ -13,16 +13,21 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **Field kit:** installable PWA (Add to Home Screen → Field hub), last cabinet pages cached for offline read
-- **Audit photos + rack snapshot:** logging a cabinet audit stores occupancy and optional phone photos
-- **Rack diff:** cabinet page shows added / removed / moved / changed devices since the last snapshotted audit
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.152] - 2026-08-17
+
+### New features
+
+- **Field kit:** installable PWA (Add to Home Screen → Field hub), last cabinet pages cached for offline read
+- **Audit photos + rack snapshot:** logging a cabinet audit stores occupancy and optional phone photos
+- **Rack diff:** cabinet page shows added / removed / moved / changed devices since the last snapshotted audit
+
+---
 ## [0.3.151] - 2026-08-17
 
 ### New features
