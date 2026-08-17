@@ -34,6 +34,9 @@ package-lock.json
 # Local smoke / temp scripts
 /scripts/_*.php
 
+# Vendor/site screenshots (not app assets; may contain private site data)
+/DC_UPS/
+
 # TLS CA bundle (downloaded locally; not required in git)
 /config/cacert.pem
 /config/ldap-ca.pem
