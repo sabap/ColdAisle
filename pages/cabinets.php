@@ -322,6 +322,22 @@ if ($id) {
         $cabinetAudits = [];
     }
     $lastCabinetAudit = $cabinetAudits[0] ?? null;
+    $cabAuditDiff = null;
+    $cabAuditPhotos = [];
+    if (class_exists('FieldAuditService')) {
+        try {
+            $cabAuditDiff = FieldAuditService::diffCabinet((int)$id);
+        } catch (Throwable $e) {
+            $cabAuditDiff = null;
+        }
+        if ($lastCabinetAudit) {
+            try {
+                $cabAuditPhotos = FieldAuditService::photosForAudit((int)$lastCabinetAudit['cabinet_audit_id']);
+            } catch (Throwable $e) {
+                $cabAuditPhotos = [];
+            }
+        }
+    }
     require_once dirname(__DIR__) . '/includes/audit_helpers.php';
     $cabAuditInterval = audit_cabinet_interval_days($cab);
     $cabAuditSchedule = audit_cabinet_schedule(
@@ -446,6 +462,60 @@ if ($id) {
             <a class="btn btn-primary" href="<?= App::e(App::url('pages/devices.php?action=new&cabinet_id=' . $id)) ?>">+ Device</a>
             <?php else: ?>
             <a class="btn btn-primary" href="<?= App::e(App::url('pages/devices.php?action=new&cabinet_id=' . $id)) ?>">+ Device</a>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <div class="card cab-audit-diff" id="cabAuditDiffCard" <?= ($cabAuditDiff && !empty($cabAuditDiff['has_snapshot'])) || $cabAuditPhotos ? '' : 'hidden' ?>>
+        <div class="card-header">
+            <h2>Since last audit</h2>
+            <?php if ($cabAuditDiff && !empty($cabAuditDiff['previous_at'])): ?>
+                <span class="text-muted" style="font-size:.82rem">
+                    Snapshot <?= App::e(date('Y-m-d H:i', strtotime((string)$cabAuditDiff['previous_at']))) ?>
+                </span>
+            <?php endif; ?>
+        </div>
+        <div class="card-body" id="cabAuditDiffBody">
+            <?php if ($cabAuditDiff && !empty($cabAuditDiff['has_snapshot'])): ?>
+                <?php if ((int)($cabAuditDiff['change_count'] ?? 0) < 1): ?>
+                    <p class="text-muted" style="margin:0">Matches last audit (<?= (int)$cabAuditDiff['same'] ?> device(s) unchanged).</p>
+                <?php else: ?>
+                    <ul class="cab-audit-diff-list">
+                        <?php
+                        $groups = [
+                            'added' => 'Added',
+                            'removed' => 'Removed',
+                            'moved' => 'Moved',
+                            'changed' => 'Changed',
+                        ];
+                        foreach ($groups as $gk => $glabel):
+                            foreach ($cabAuditDiff[$gk] ?? [] as $row):
+                        ?>
+                            <li class="is-<?= App::e($gk) ?>">
+                                <strong><?= App::e($glabel) ?></strong>
+                                <?= App::e((string)($row['label'] ?? 'Device')) ?>
+                                <?php if (!empty($row['position_u'])): ?>
+                                    · U<?= (int)$row['position_u'] ?> <?= App::e((string)($row['face'] ?? '')) ?>
+                                <?php endif; ?>
+                                <span class="text-muted"><?= App::e((string)($row['note'] ?? '')) ?></span>
+                            </li>
+                        <?php
+                            endforeach;
+                        endforeach;
+                        ?>
+                    </ul>
+                <?php endif; ?>
+            <?php elseif ($lastCabinetAudit): ?>
+                <p class="text-muted" style="margin:0">Older audits have no occupancy snapshot. The next log will include one so future visits can show a rack diff.</p>
+            <?php endif; ?>
+            <?php if ($cabAuditPhotos): ?>
+                <div class="cab-audit-thumbs" style="margin-top:.75rem">
+                    <?php foreach ($cabAuditPhotos as $ph): ?>
+                        <a href="<?= App::e((string)$ph['url']) ?>" target="_blank" rel="noopener">
+                            <img src="<?= App::e((string)$ph['url']) ?>" alt="<?= App::e((string)($ph['caption'] ?? 'Audit photo')) ?>">
+                        </a>
+                    <?php endforeach; ?>
+                </div>
             <?php endif; ?>
         </div>
     </div>
@@ -1239,6 +1309,7 @@ if ($id) {
             d.setDate(d.getDate() + days);
             next.innerHTML = '· Next due <strong>' + d.toISOString().slice(0, 10) + '</strong> (every ' + days + 'd)';
         }
+        setTimeout(function () { location.reload(); }, 700);
     };
     <?php if ($openAudit && $cabinetAuditCanLog): ?>
     document.addEventListener('DOMContentLoaded', function () {

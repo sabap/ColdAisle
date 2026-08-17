@@ -35,8 +35,16 @@ if (!isset($cabinetAuditCanLog)) {
                           placeholder="Optional: missing assets, cable issues, labeling, airflow, empty U slots…"
                           style="min-height:4.5rem;font-size:1rem"></textarea>
             </div>
+            <div class="form-row" style="margin-top:1rem">
+                <label>Photos (optional, up to 8)</label>
+                <input class="form-control" type="file" id="cabAuditPhotos" accept="image/*" capture="environment" multiple>
+                <p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">
+                    Phone camera or library. Stored with this audit. Live inventory is snapshotted when you log.
+                </p>
+                <div id="cabAuditPhotoPreview" class="cab-audit-thumbs" hidden></div>
+            </div>
             <p class="text-muted" style="font-size:.75rem;margin:.75rem 0 0">
-                Saved with auditor, date/time, and comments for compliance reports.
+                Saved with auditor, date/time, rack snapshot, comments, and photos.
             </p>
             <div id="cabAuditError" class="alert alert-error" hidden style="margin-top:.75rem"></div>
         </div>
@@ -87,6 +95,10 @@ if (!isset($cabinetAuditCanLog)) {
         }
         if (certEl) certEl.checked = false;
         if (commentsEl) commentsEl.value = '';
+        var photoIn = document.getElementById('cabAuditPhotos');
+        if (photoIn) photoIn.value = '';
+        var prev = document.getElementById('cabAuditPhotoPreview');
+        if (prev) { prev.innerHTML = ''; prev.hidden = true; }
         if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
         if (submitBtn) submitBtn.disabled = true;
         modal.hidden = false;
@@ -107,6 +119,22 @@ if (!isset($cabinetAuditCanLog)) {
     window.ColdAisle = window.ColdAisle || {};
     window.ColdAisle.openCabinetAudit = openAuditModal;
 
+    var photoInBind = document.getElementById('cabAuditPhotos');
+    if (photoInBind) {
+        photoInBind.addEventListener('change', function () {
+            var box = document.getElementById('cabAuditPhotoPreview');
+            if (!box) return;
+            box.innerHTML = '';
+            var files = photoInBind.files ? Array.prototype.slice.call(photoInBind.files, 0, 8) : [];
+            box.hidden = files.length < 1;
+            files.forEach(function (f) {
+                var img = document.createElement('img');
+                img.alt = f.name;
+                img.src = URL.createObjectURL(f);
+                box.appendChild(img);
+            });
+        });
+    }
     if (certEl) certEl.addEventListener('change', syncSubmit);
     document.getElementById('cabAuditClose').addEventListener('click', closeAuditModal);
     document.getElementById('cabAuditCancel').addEventListener('click', closeAuditModal);
@@ -130,7 +158,30 @@ if (!isset($cabinetAuditCanLog)) {
                     comments: commentsEl ? commentsEl.value : ''
                 }
             });
-            ColdAisle.toast('Audit logged for ' + currentName, 'success');
+            var auditId = res && res.audit && res.audit.cabinet_audit_id;
+            var photoIn = document.getElementById('cabAuditPhotos');
+            var files = photoIn && photoIn.files ? Array.prototype.slice.call(photoIn.files, 0, 8) : [];
+            var uploaded = 0;
+            if (auditId && files.length) {
+                var base = (window.ColdAisle && ColdAisle.baseUrl) || '';
+                var csrf = (window.ColdAisle && ColdAisle.csrf) || '';
+                for (var i = 0; i < files.length; i++) {
+                    var fd = new FormData();
+                    fd.append('cabinet_audit_id', String(auditId));
+                    fd.append('photo', files[i]);
+                    var pr = await fetch(base.replace(/\/$/, '') + '/api/cabinet_audit_photos.php', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { 'Accept': 'application/json', 'X-CSRF-Token': csrf },
+                        body: fd
+                    });
+                    if (pr.ok) uploaded++;
+                }
+            }
+            ColdAisle.toast(
+                'Audit logged for ' + currentName + (uploaded ? (' · ' + uploaded + ' photo(s)') : ''),
+                'success'
+            );
             closeAuditModal();
             // Refresh history list if present on page
             if (typeof window.ColdAisle.refreshCabinetAuditHistory === 'function') {
@@ -180,6 +231,19 @@ if (!isset($cabinetAuditCanLog)) {
 #cabAuditSubmit:not(:disabled) {
   min-height: 2.5rem;
   font-weight: 600;
+}
+.cab-audit-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  margin-top: .5rem;
+}
+.cab-audit-thumbs img {
+  width: 4.2rem;
+  height: 4.2rem;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid rgba(148,163,184,.3);
 }
 </style>
 <?php endif; ?>

@@ -53,9 +53,14 @@ try {
             App::json(['error' => 'cabinet_id required'], 400);
         }
 
+        $hasSnap = class_exists('FieldAuditService') && FieldAuditService::snapshotColumnReady();
+        $cols = 'a.cabinet_audit_id, a.cabinet_id, a.audited_by,
+                    a.audited_by_name, a.certified, a.comments, a.audited_at, a.created_at';
+        if ($hasSnap) {
+            $cols .= ', CASE WHEN a.snapshot_json IS NULL OR LTRIM(RTRIM(a.snapshot_json)) = \'\' THEN 0 ELSE 1 END AS has_snapshot';
+        }
         $rows = Database::fetchAll(
-            'SELECT TOP ' . $limit . ' a.cabinet_audit_id, a.cabinet_id, a.audited_by,
-                    a.audited_by_name, a.certified, a.comments, a.audited_at, a.created_at
+            'SELECT TOP ' . $limit . ' ' . $cols . '
              FROM cabinet_audits a
              WHERE a.cabinet_id = ?
              ORDER BY a.audited_at DESC',
@@ -63,10 +68,20 @@ try {
         );
 
         $last = $rows[0] ?? null;
+        $diff = null;
+        if (!empty($_GET['diff']) && class_exists('FieldAuditService')) {
+            $diff = FieldAuditService::diffCabinet($cabinetId);
+        }
+        $photos = [];
+        if ($last && class_exists('FieldAuditService')) {
+            $photos = FieldAuditService::photosForAudit((int)$last['cabinet_audit_id']);
+        }
         App::json([
             'audits' => $rows,
             'last_audit' => $last,
             'can_log' => cabinet_audit_can_log($user),
+            'diff' => $diff,
+            'photos' => $photos,
         ]);
     }
 
@@ -102,13 +117,20 @@ try {
             $display = (string)($user['username'] ?? 'User');
         }
 
-        $newId = Database::insert('cabinet_audits', [
+        $row = [
             'cabinet_id' => $cabinetId,
             'audited_by' => (int)($user['user_id'] ?? 0) ?: null,
             'audited_by_name' => $display,
             'certified' => 1,
             'comments' => $comments !== '' ? $comments : null,
-        ]);
+        ];
+        if (class_exists('FieldAuditService') && FieldAuditService::snapshotColumnReady()) {
+            $row['snapshot_json'] = json_encode(
+                FieldAuditService::snapshotCabinet($cabinetId),
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+            );
+        }
+        $newId = Database::insert('cabinet_audits', $row);
 
         AuditService::log(
             (int)($user['user_id'] ?? 0) ?: null,
