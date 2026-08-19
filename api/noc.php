@@ -671,6 +671,8 @@ if ($includeScene) {
                     foreach ($cab['devices'] as &$dev) {
                         $dev['front_image'] = null;
                         $dev['rear_image'] = null;
+                        $dev['front_image_md'] = null;
+                        $dev['rear_image_md'] = null;
                     }
                     unset($dev);
                 }

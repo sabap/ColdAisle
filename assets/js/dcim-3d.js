@@ -102,24 +102,44 @@
     return face === 'rear' ? rear : !rear;
   }
 
-  function faceDims(cab) {
+  function faceDims(cab, quality) {
     var units = Math.max(1, Number(cab.u_height) || 42);
-    // Modest texels — room-scale racks don't need sharp faceplates
-    var pxPerU = 12;
+    // Orbit: tiny thumbs. Walk: cabinet-elevation density (md).
+    var pxPerU = quality === 'md' ? 32 : 12;
     var h = Math.max(48, Math.round(units * pxPerU));
+    if (h > 1536) h = 1536;
     var w = Math.max(40, Math.round(h * (19 / (units * 1.75))));
+    if (quality === 'md' && w < 160) w = 160;
+    if (w > 512) w = 512;
     return { units: units, w: w, h: h };
   }
 
-  function faceSignature(cab, face) {
+  function deviceFaceUrl(d, face, quality) {
+    var sm = face === 'rear' ? (d.rear_image || d.front_image) : (d.front_image || d.rear_image);
+    if (quality !== 'md') return sm || '';
+    var md = face === 'rear' ? (d.rear_image_md || d.front_image_md) : (d.front_image_md || d.rear_image_md);
+    if (md) return md;
+    return upgradeMediaUrl(sm, 'md');
+  }
+
+  function upgradeMediaUrl(url, variant) {
+    if (!url) return '';
+    var next = String(url).replace(/\.sm\.jpe?g/gi, '.' + variant + '.jpg');
+    next = next.replace(/\.thumb\.jpe?g/gi, '.' + variant + '.jpg');
+    return next;
+  }
+
+  function faceSignature(cab, face, quality) {
+    var q = quality === 'md' ? 'md' : 'sm';
     var parts = [
       String(cab.cabinet_id || ''),
       face,
+      q,
       String(cab.u_height || 42),
     ];
     (cab.devices || []).forEach(function (d) {
       if (d.position_u == null || !deviceOnFace(d, face)) return;
-      var url = face === 'rear' ? (d.rear_image || d.front_image) : (d.front_image || d.rear_image);
+      var url = deviceFaceUrl(d, face, q);
       parts.push([
         d.device_id || '',
         d.position_u || '',
@@ -135,7 +155,7 @@
       h ^= s.charCodeAt(i);
       h = Math.imul(h, 16777619);
     }
-    return 'ca3d-v1-' + (h >>> 0).toString(36);
+    return 'ca3d-v2-' + (h >>> 0).toString(36);
   }
 
   function faceCacheGet(sig) {
@@ -153,12 +173,12 @@
     try {
       if (!global.sessionStorage || !dataUrl) return;
       // Cap ~2.5MB of face cache entries; drop oldest keys with our prefix
-      var budget = 2.5 * 1024 * 1024;
+      var budget = 6 * 1024 * 1024;
       var used = 0;
       var keys = [];
       for (var i = 0; i < sessionStorage.length; i++) {
         var k = sessionStorage.key(i);
-        if (k && k.indexOf('ca3d-v1-') === 0) {
+        if (k && (k.indexOf('ca3d-v2-') === 0 || k.indexOf('ca3d-v1-') === 0)) {
           keys.push(k);
           used += (sessionStorage.getItem(k) || '').length;
         }
@@ -254,7 +274,7 @@
 
   /** Instant type-color face (no network) — first paint. */
   function buildFaceTextureSolid(cab, face) {
-    var dim = faceDims(cab);
+    var dim = faceDims(cab, 'sm');
     var canvas = document.createElement('canvas');
     canvas.width = dim.w;
     canvas.height = dim.h;
@@ -268,17 +288,19 @@
   }
 
   /**
-   * Full face with small faceplate images (or session cache).
+   * Full face with faceplate images (or session cache).
+   * quality 'sm' = orbit thumbs; 'md' = walk / close-up.
    * Y maps U1 at bottom of texture (matches rack elevation).
    */
-  function buildFaceTexture(cab, face) {
-    var sig = faceSignature(cab, face);
+  function buildFaceTexture(cab, face, quality) {
+    var q = quality === 'md' ? 'md' : 'sm';
+    var sig = faceSignature(cab, face, q);
     var cached = faceCacheGet(sig);
     if (cached) {
       return texFromDataUrl(cached);
     }
 
-    var dim = faceDims(cab);
+    var dim = faceDims(cab, q);
     var canvas = document.createElement('canvas');
     canvas.width = dim.w;
     canvas.height = dim.h;
@@ -290,7 +312,7 @@
     });
 
     var loaders = devices.map(function (d) {
-      var url = face === 'rear' ? (d.rear_image || d.front_image) : (d.front_image || d.rear_image);
+      var url = deviceFaceUrl(d, face, q);
       return loadImage(url).then(function (img) {
         return { d: d, img: img };
       });
@@ -302,7 +324,7 @@
       });
       try {
         // JPEG data URL is much smaller than PNG for sessionStorage
-        faceCacheSet(sig, canvas.toDataURL('image/jpeg', 0.72));
+        faceCacheSet(sig, canvas.toDataURL('image/jpeg', q === 'md' ? 0.84 : 0.72));
       } catch (e) { /* ignore */ }
       return texFromCanvas(canvas);
     });
@@ -1344,6 +1366,7 @@
 
     // Stream faceplate textures after the scene is interactive (fronts first, limited concurrency)
     var cancelled = false;
+    var walkFacesReady = false;
     var totalJobs = faceJobs.length;
     var doneJobs = 0;
     if (totalJobs === 0) {
@@ -1356,12 +1379,9 @@
         if (cancelled) return;
         mapPool(faceJobs, textureConcurrency, function (job) {
           if (cancelled) return null;
-          return buildFaceTexture(job.cab, job.face).then(function (tex) {
+          return buildFaceTexture(job.cab, job.face, 'sm').then(function (tex) {
             if (cancelled || !tex) return;
-            var old = job.mat.map;
-            job.mat.map = tex;
-            job.mat.needsUpdate = true;
-            if (old && old.dispose) old.dispose();
+            applyFaceMap(job.mat, tex);
             doneJobs++;
             statusEl.textContent = 'Loading faceplates ' + doneJobs + '/' + totalJobs + '…';
           });
@@ -1373,6 +1393,47 @@
           }, 900);
         });
       }, 40);
+    }
+
+    function applyFaceMap(mat, tex) {
+      if (!mat || !tex) return;
+      var old = mat.map;
+      if (renderer && renderer.capabilities && typeof renderer.capabilities.getMaxAnisotropy === 'function') {
+        try {
+          var aniso = renderer.capabilities.getMaxAnisotropy();
+          if (aniso > 1) tex.anisotropy = Math.min(8, aniso);
+        } catch (eA) { /* ignore */ }
+      }
+      mat.map = tex;
+      mat.needsUpdate = true;
+      if (old && old.dispose) old.dispose();
+    }
+
+    function ensureWalkFaceplates() {
+      if (walkFacesReady || cancelled || textureFaces === 'none' || !faceJobs.length) return;
+      walkFacesReady = true;
+      if (statusEl) {
+        statusEl.style.display = '';
+        statusEl.textContent = 'Loading sharp faceplates…';
+      }
+      var doneHi = 0;
+      mapPool(faceJobs, textureConcurrency, function (job) {
+        if (cancelled) return null;
+        return buildFaceTexture(job.cab, job.face, 'md').then(function (tex) {
+          if (cancelled || !tex) return;
+          applyFaceMap(job.mat, tex);
+          doneHi++;
+          if (statusEl) {
+            statusEl.textContent = 'Loading sharp faceplates ' + doneHi + '/' + faceJobs.length + '…';
+          }
+        });
+      }).then(function () {
+        if (cancelled || !statusEl) return;
+        statusEl.textContent = 'Ready';
+        setTimeout(function () {
+          if (statusEl && statusEl.parentNode) statusEl.style.display = 'none';
+        }, 700);
+      });
     }
 
     // Row / room floor PDUs — translucent zone-colored body + wireframe edges
@@ -2265,6 +2326,7 @@
         camera.fov = 70;
         try { renderer.domElement.focus(); } catch (eF) { /* ignore */ }
         walkFocused = true;
+        ensureWalkFaceplates();
       } else {
         camera.fov = 45;
         walkKeys = Object.create(null);
