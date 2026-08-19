@@ -1006,6 +1006,7 @@
           logoUrl: logoUrl,
           heatOverlay: envSensors.length > 0,
           interactive: false,
+          walkEnabled: false,
           autoRotate: nocAutoRotate,
           autoRotateSpeed: 0.0025,
           textureFaces: 'none',

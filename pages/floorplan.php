@@ -59,6 +59,7 @@ layout_header('Floor Planner', $user, 'floorplan');
         <button type="button" class="btn btn-secondary btn-sm" id="btnZoomIn" title="Zoom in">+</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnZoomReset" title="Reset zoom">Reset</button>
         <button type="button" class="btn btn-secondary btn-sm" id="toggle3d" data-tour="fp-3d">3D View</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="toggleWalk" hidden title="Walk the hall (WASD / arrows)">Walk</button>
         <button type="button" class="btn btn-secondary btn-sm" id="toggleRaceways" title="Show cable raceways / fiber troughs">Raceways: On</button>
         <label class="text-muted" style="font-size:.78rem;margin:0 0 0 .25rem" for="racewayFilterSelect" title="Which raceway types to show in 2D and 3D">Show</label>
         <select id="racewayFilterSelect" class="form-control" style="width:auto;min-width:9.5rem;padding:.2rem .35rem;font-size:.8rem"
@@ -308,9 +309,9 @@ layout_header('Floor Planner', $user, 'floorplan');
   window.ColdAisle.lengthUnits = <?= json_encode($units) ?>;
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=23"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=27"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=38"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=39"></script>
 <script>
 (function () {
   var c2 = document.getElementById('rwFinishCancel2');

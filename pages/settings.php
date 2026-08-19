@@ -1506,7 +1506,7 @@ try {
     </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=19"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=27"></script>
 <script>
 (function () {
   var el = document.getElementById('nocCamPreview');
@@ -1548,6 +1548,7 @@ try {
       envSensors: [],
       heatOverlay: false,
       interactive: false,
+      walkEnabled: false,
       autoRotate: !!(rotEl && rotEl.checked),
       autoRotateSpeed: 0.0035,
       textureFaces: 'none',

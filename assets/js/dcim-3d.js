@@ -858,6 +858,9 @@
     var heatOverlay = options.heatOverlay !== false;
     var rooms = options.rooms || [];
     var interactive = options.interactive !== false;
+    var walkEnabled = options.walkEnabled !== false && interactive;
+    var onModeChange = typeof options.onModeChange === 'function' ? options.onModeChange : null;
+    var camMode = 'orbit';
     var logoUrl = options.logoUrl || (mediaBase() ? mediaBase() + '/assets/img/logo.svg' : 'assets/img/logo.svg');
     var autoRotate = !!options.autoRotate;
     var autoRotateSpeed = Number(options.autoRotateSpeed);
@@ -885,6 +888,10 @@
     var renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.domElement.tabIndex = walkEnabled ? 0 : -1;
+    renderer.domElement.style.outline = 'none';
+    renderer.domElement.style.touchAction = 'none';
+    renderer.domElement.style.display = 'block';
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
@@ -907,6 +914,33 @@
     }
     var fw = Number(room.width_m) || 30;
     var fd = Number(room.depth_m) || 20;
+    var walkColliders = [];
+    var playerR = 0.22;
+    var roomMargin = 0.25;
+
+    /** Axis-aligned footprint of a (possibly yawed) floor box, for aisle collision. */
+    function addWalkCollider(x, z, w, d, rot) {
+      var cx = x + w / 2;
+      var cz = z + d / 2;
+      var hw = w / 2;
+      var hd = d / 2;
+      var c = Math.cos(rot || 0);
+      var s = Math.sin(rot || 0);
+      var pts = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]];
+      var minX = Infinity;
+      var maxX = -Infinity;
+      var minZ = Infinity;
+      var maxZ = -Infinity;
+      for (var i = 0; i < 4; i++) {
+        var rx = cx + pts[i][0] * c - pts[i][1] * s;
+        var rz = cz + pts[i][0] * s + pts[i][1] * c;
+        if (rx < minX) minX = rx;
+        if (rx > maxX) maxX = rx;
+        if (rz < minZ) minZ = rz;
+        if (rz > maxZ) maxZ = rz;
+      }
+      walkColliders.push({ minX: minX, maxX: maxX, minZ: minZ, maxZ: maxZ });
+    }
 
     var floorGeo = new THREE.PlaneGeometry(fw, fd);
     var floorMat = new THREE.MeshStandardMaterial({
@@ -944,6 +978,16 @@
       container.style.position = 'relative';
     }
     container.appendChild(statusEl);
+
+    var walkHud = null;
+    if (walkEnabled) {
+      walkHud = document.createElement('div');
+      walkHud.className = 'dcim-3d-walk-hud';
+      walkHud.hidden = true;
+      walkHud.style.cssText = 'position:absolute;left:50%;bottom:10px;transform:translateX(-50%);z-index:2;font:12px/1.35 Segoe UI,sans-serif;color:#e2e8f0;background:rgba(15,23,42,.78);padding:5px 10px;border-radius:6px;pointer-events:none;white-space:nowrap;letter-spacing:.01em';
+      walkHud.textContent = 'Walk  ·  W/S move  ·  A/D turn  ·  drag look  ·  Esc orbit';
+      container.appendChild(walkHud);
+    }
 
     var faceJobs = []; // { cab, face, mat }
 
@@ -1137,6 +1181,7 @@
       mesh.position.set(x + w / 2, h / 2, z + d / 2);
       mesh.rotation.y = rot;
       mesh.userData = { cabinet: cab, health: healthSt };
+      addWalkCollider(x, z, w, d, rot);
 
       // Front / rear face planes — solid first (instant), images upgrade async
       var faceW = w * 0.98;
@@ -1373,6 +1418,7 @@
       mesh.position.set(x + w / 2, h / 2, z + d / 2);
       mesh.rotation.y = rot;
       mesh.userData = { pdu: pdu, health: pduH };
+      addWalkCollider(x, z, w, d, rot);
 
       // Solid wireframe outline in zone/health color
       var edges = new THREE.LineSegments(
@@ -1533,6 +1579,7 @@
       mesh.position.set(x + w / 2, h / 2, z + d / 2);
       mesh.rotation.y = rot;
       mesh.userData = { cooling: cu };
+      addWalkCollider(x, z, w, d, rot);
 
       var edgeMat = new THREE.LineBasicMaterial({
         color: color,
@@ -1653,6 +1700,7 @@
       mesh.position.set(x + w / 2, h / 2, z + d / 2);
       mesh.rotation.y = rot;
       mesh.userData = { ups: uu, health: healthSt };
+      addWalkCollider(x, z, w, d, rot);
 
       // Soft additive shells on warn/crit
       if (healthSt === 'crit' || healthSt === 'warn') {
@@ -2000,14 +2048,20 @@
       var dTarget = camPos.distanceTo(target);
       if (!isFinite(dTarget) || dTarget < 1) dTarget = Math.max(radius, 12);
       // Fully ghost inside nearR; fully solid past farR.
-      // Defaults reach well past the room center so front-of-scene trays clear at
-      // typical wall / dashboard zoom (no need to nose-dive into the aisle).
-      var nearR = isFinite(racewayFadeNearOpt)
-        ? racewayFadeNearOpt
-        : Math.max(8, dTarget * 0.72);
-      var farR = isFinite(racewayFadeFarOpt)
-        ? racewayFadeFarOpt
-        : Math.max(nearR + 10, dTarget * 1.45);
+      // Orbit: scale with camera→look-at. Walk: a fixed bubble around the player.
+      var nearR;
+      var farR;
+      if (camMode === 'walk') {
+        nearR = isFinite(racewayFadeNearOpt) ? racewayFadeNearOpt : 6;
+        farR = isFinite(racewayFadeFarOpt) ? racewayFadeFarOpt : 14;
+      } else {
+        nearR = isFinite(racewayFadeNearOpt)
+          ? racewayFadeNearOpt
+          : Math.max(8, dTarget * 0.72);
+        farR = isFinite(racewayFadeFarOpt)
+          ? racewayFadeFarOpt
+          : Math.max(nearR + 10, dTarget * 1.45);
+      }
       if (farR <= nearR) farR = nearR + 10;
       for (var i = 0; i < racewayFadeMeshes.length; i++) {
         var obj = racewayFadeMeshes[i];
@@ -2066,7 +2120,124 @@
     radius = Math.max(5, Math.min(80, radius));
     var target = new THREE.Vector3(fw / 2, 0.5, fd / 2);
 
+    var walkX = fw / 2;
+    var walkZ = fd / 2;
+    var walkYaw = 0;
+    var walkPitch = 0;
+    var walkPeek = 0;
+    var walkEye = 1.65;
+    var walkHover = false;
+    var walkFocused = false;
+    var walkKeys = Object.create(null);
+    var walkLastT = 0;
+
+    function walkTypingTarget(el) {
+      if (!el) return false;
+      var tag = (el.tagName || '').toLowerCase();
+      return tag === 'input' || tag === 'textarea' || tag === 'select' || !!el.isContentEditable;
+    }
+
+    function walkWantsKeys() {
+      return camMode === 'walk' && walkEnabled && (walkFocused || walkHover);
+    }
+
+    function circleHitsBox(x, z, r, box) {
+      var qx = Math.max(box.minX, Math.min(x, box.maxX));
+      var qz = Math.max(box.minZ, Math.min(z, box.maxZ));
+      var dx = x - qx;
+      var dz = z - qz;
+      return (dx * dx + dz * dz) < (r * r);
+    }
+
+    function walkBlocked(x, z, r) {
+      if (x < roomMargin + r || x > fw - roomMargin - r) return true;
+      if (z < roomMargin + r || z > fd - roomMargin - r) return true;
+      for (var i = 0; i < walkColliders.length; i++) {
+        if (circleHitsBox(x, z, r, walkColliders[i])) return true;
+      }
+      return false;
+    }
+
+    function resolveWalk(x, z) {
+      var r = playerR;
+      var minC = roomMargin + r;
+      if (x < minC) x = minC;
+      if (x > fw - minC) x = fw - minC;
+      if (z < minC) z = minC;
+      if (z > fd - minC) z = fd - minC;
+      var iter;
+      for (iter = 0; iter < 6; iter++) {
+        var moved = false;
+        var bi;
+        for (bi = 0; bi < walkColliders.length; bi++) {
+          var box = walkColliders[bi];
+          var minX = box.minX - r;
+          var maxX = box.maxX + r;
+          var minZ = box.minZ - r;
+          var maxZ = box.maxZ + r;
+          if (x <= minX || x >= maxX || z <= minZ || z >= maxZ) continue;
+          var oxL = x - minX;
+          var oxR = maxX - x;
+          var ozN = z - minZ;
+          var ozF = maxZ - z;
+          var best = oxL;
+          var axis = 'x-';
+          if (oxR < best) { best = oxR; axis = 'x+'; }
+          if (ozN < best) { best = ozN; axis = 'z-'; }
+          if (ozF < best) { best = ozF; axis = 'z+'; }
+          if (axis === 'x-') x = minX;
+          else if (axis === 'x+') x = maxX;
+          else if (axis === 'z-') z = minZ;
+          else z = maxZ;
+          moved = true;
+        }
+        if (x < minC) x = minC;
+        if (x > fw - minC) x = fw - minC;
+        if (z < minC) z = minC;
+        if (z > fd - minC) z = fd - minC;
+        if (!moved) break;
+      }
+      return { x: x, z: z };
+    }
+
+    function findWalkSpawn() {
+      var cx = fw / 2;
+      var cz = fd / 2;
+      if (!walkBlocked(cx, cz, 0.35)) return { x: cx, z: cz };
+      var step = 0.45;
+      var maxR = Math.max(fw, fd) * 0.55;
+      var rad;
+      for (rad = step; rad <= maxR; rad += step) {
+        var steps = Math.max(8, Math.round((Math.PI * 2 * rad) / step));
+        var k;
+        for (k = 0; k < steps; k++) {
+          var a = (k / steps) * Math.PI * 2;
+          var sx = cx + Math.cos(a) * rad;
+          var sz = cz + Math.sin(a) * rad;
+          if (!walkBlocked(sx, sz, 0.35)) return { x: sx, z: sz };
+        }
+      }
+      return resolveWalk(cx, cz);
+    }
+
+    function updateWalkHud() {
+      if (!walkHud) return;
+      walkHud.hidden = camMode !== 'walk';
+    }
+
     function updateCamera() {
+      if (camMode === 'walk') {
+        var eye = walkEye + walkPeek;
+        var cp = Math.cos(walkPitch);
+        var sp = Math.sin(walkPitch);
+        camera.position.set(walkX, eye, walkZ);
+        camera.lookAt(
+          walkX + Math.sin(walkYaw) * cp,
+          eye + sp,
+          walkZ + Math.cos(walkYaw) * cp
+        );
+        return;
+      }
       camera.position.x = target.x + radius * Math.sin(phi) * Math.cos(theta);
       camera.position.y = target.y + radius * Math.cos(phi);
       camera.position.z = target.z + radius * Math.sin(phi) * Math.sin(theta);
@@ -2074,34 +2245,164 @@
     }
     updateCamera();
 
-    if (interactive) {
-      renderer.domElement.addEventListener('pointerdown', function (e) {
-        isDown = true;
-        lastX = e.clientX;
-        lastY = e.clientY;
-      });
-      window.addEventListener('pointerup', function () { isDown = false; });
-      window.addEventListener('pointermove', function (e) {
-        if (!isDown) return;
-        var dx = e.clientX - lastX, dy = e.clientY - lastY;
-        lastX = e.clientX;
-        lastY = e.clientY;
-        theta += dx * 0.005;
-        phi = Math.max(0.15, Math.min(Math.PI / 2.1, phi - dy * 0.005));
-        updateCamera();
-      });
-      renderer.domElement.addEventListener('wheel', function (e) {
+    function setCamMode(next) {
+      var want = next === 'walk' ? 'walk' : 'orbit';
+      if (want === 'walk' && !walkEnabled) want = 'orbit';
+      if (want === camMode) {
+        updateWalkHud();
+        return camMode;
+      }
+      camMode = want;
+      if (camMode === 'walk') {
+        var spawn = findWalkSpawn();
+        walkX = spawn.x;
+        walkZ = spawn.z;
+        walkPeek = 0;
+        walkPitch = -0.08;
+        var fdx = target.x - camera.position.x;
+        var fdz = target.z - camera.position.z;
+        walkYaw = Math.atan2(fdx, fdz);
+        camera.fov = 70;
+        try { renderer.domElement.focus(); } catch (eF) { /* ignore */ }
+        walkFocused = true;
+      } else {
+        camera.fov = 45;
+        walkKeys = Object.create(null);
+      }
+      camera.updateProjectionMatrix();
+      updateWalkHud();
+      updateCamera();
+      if (onModeChange) {
+        try { onModeChange(camMode); } catch (eM) { /* ignore */ }
+      }
+      return camMode;
+    }
+
+    function applyWalk(dt) {
+      if (walkKeys.KeyR || walkKeys.PageUp) {
+        walkPeek = Math.min(1.2, walkPeek + 1.6 * dt);
+      }
+      if (walkKeys.KeyF || walkKeys.PageDown) {
+        walkPeek = Math.max(-0.55, walkPeek - 1.6 * dt);
+      }
+      var turn = 0;
+      if (walkKeys.KeyA || walkKeys.ArrowLeft) turn += 1;
+      if (walkKeys.KeyD || walkKeys.ArrowRight) turn -= 1;
+      if (turn) {
+        var turnSpeed = (walkKeys.ShiftLeft || walkKeys.ShiftRight) ? 2.8 : 1.9;
+        walkYaw += turn * turnSpeed * dt;
+      }
+      var wishX = 0;
+      var wishZ = 0;
+      if (walkKeys.KeyW || walkKeys.ArrowUp) wishZ += 1;
+      if (walkKeys.KeyS || walkKeys.ArrowDown) wishZ -= 1;
+      if (walkKeys.KeyE) wishX += 1;
+      if (walkKeys.KeyQ) wishX -= 1;
+      if (wishX || wishZ) {
+        var len = Math.hypot(wishX, wishZ) || 1;
+        wishX /= len;
+        wishZ /= len;
+        var speed = (walkKeys.ShiftLeft || walkKeys.ShiftRight) ? 5.5 : 2.4;
+        var fx = Math.sin(walkYaw);
+        var fz = Math.cos(walkYaw);
+        // Right = rotate forward 90° CCW in XZ so Q/E match look (A/D used to feel flipped).
+        var rx = -Math.cos(walkYaw);
+        var rz = Math.sin(walkYaw);
+        var nx = walkX + (fx * wishZ + rx * wishX) * speed * dt;
+        var nz = walkZ + (fz * wishZ + rz * wishX) * speed * dt;
+        var resolved = resolveWalk(nx, nz);
+        walkX = resolved.x;
+        walkZ = resolved.z;
+      }
+      updateCamera();
+    }
+
+    function onWalkKeyDown(e) {
+      if (!walkEnabled || walkTypingTarget(e.target)) return;
+      if (e.key === 'Escape' && camMode === 'walk') {
         e.preventDefault();
-        radius = Math.max(5, Math.min(80, radius + e.deltaY * 0.02));
+        setCamMode('orbit');
+        return;
+      }
+      if (!walkWantsKeys()) return;
+      var code = e.code || '';
+      var isWalk = code === 'KeyW' || code === 'KeyA' || code === 'KeyS' || code === 'KeyD'
+        || code === 'KeyQ' || code === 'KeyE'
+        || code === 'KeyR' || code === 'KeyF'
+        || code === 'ArrowUp' || code === 'ArrowDown' || code === 'ArrowLeft' || code === 'ArrowRight'
+        || code === 'PageUp' || code === 'PageDown'
+        || code === 'ShiftLeft' || code === 'ShiftRight';
+      if (!isWalk) return;
+      e.preventDefault();
+      walkKeys[code] = true;
+    }
+
+    function onWalkKeyUp(e) {
+      if (!walkEnabled) return;
+      var code = e.code || '';
+      if (walkKeys[code]) walkKeys[code] = false;
+    }
+
+    function onPointerUp() { isDown = false; }
+
+    function onPointerMove(e) {
+      if (!isDown) return;
+      var dx = e.clientX - lastX;
+      var dy = e.clientY - lastY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      if (camMode === 'walk') {
+        walkYaw -= dx * 0.005;
+        walkPitch = Math.max(-1.2, Math.min(1.15, walkPitch - dy * 0.005));
         updateCamera();
-      }, { passive: false });
+        return;
+      }
+      theta += dx * 0.005;
+      phi = Math.max(0.15, Math.min(Math.PI / 2.1, phi - dy * 0.005));
+      updateCamera();
+    }
+
+    function onCanvasPointerDown(e) {
+      isDown = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      walkFocused = true;
+      try { renderer.domElement.focus(); } catch (e2) { /* ignore */ }
+    }
+
+    function onCanvasWheel(e) {
+      e.preventDefault();
+      if (camMode === 'walk') return;
+      radius = Math.max(5, Math.min(80, radius + e.deltaY * 0.02));
+      updateCamera();
+    }
+
+    if (interactive) {
+      renderer.domElement.addEventListener('pointerdown', onCanvasPointerDown);
+      window.addEventListener('pointerup', onPointerUp);
+      window.addEventListener('pointermove', onPointerMove);
+      renderer.domElement.addEventListener('wheel', onCanvasWheel, { passive: false });
+    }
+    if (walkEnabled) {
+      renderer.domElement.addEventListener('pointerenter', function () { walkHover = true; });
+      renderer.domElement.addEventListener('pointerleave', function () { walkHover = false; });
+      renderer.domElement.addEventListener('focus', function () { walkFocused = true; });
+      renderer.domElement.addEventListener('blur', function () { walkFocused = false; });
+      window.addEventListener('keydown', onWalkKeyDown);
+      window.addEventListener('keyup', onWalkKeyUp);
     }
 
     var animId;
     var healthT0 = performance.now();
     function animate() {
       animId = requestAnimationFrame(animate);
-      if (autoRotate && !isDown) {
+      var now = performance.now();
+      if (!walkLastT) walkLastT = now;
+      var dt = Math.min(0.05, (now - walkLastT) / 1000);
+      walkLastT = now;
+      if (camMode === 'walk') {
+        applyWalk(dt);
+      } else if (autoRotate && !isDown) {
         theta += autoRotateSpeed;
         updateCamera();
       }
@@ -2187,6 +2488,12 @@
       setAutoRotate: function (on) {
         autoRotate = !!on;
       },
+      setMode: function (mode) {
+        return setCamMode(mode);
+      },
+      getMode: function () {
+        return camMode;
+      },
       /**
        * Orbit camera: phi = tilt from vertical (rad), radius = distance (m).
        * Optional theta = yaw. Values clamped to interactive ranges.
@@ -2239,9 +2546,16 @@
         cancelled = true;
         cancelAnimationFrame(animId);
         window.removeEventListener('resize', onResize);
+        window.removeEventListener('pointerup', onPointerUp);
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('keydown', onWalkKeyDown);
+        window.removeEventListener('keyup', onWalkKeyUp);
         try {
           if (statusEl && statusEl.parentNode) statusEl.parentNode.removeChild(statusEl);
         } catch (e) { /* ignore */ }
+        try {
+          if (walkHud && walkHud.parentNode) walkHud.parentNode.removeChild(walkHud);
+        } catch (eHud) { /* ignore */ }
         function disposeObj(obj) {
           if (obj.geometry) obj.geometry.dispose();
           if (obj.material) {

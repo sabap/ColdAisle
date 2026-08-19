@@ -363,6 +363,10 @@ if (class_exists('SiteTourService')) {
                     <?= count($envSensors3d) < 1 ? 'disabled' : '' ?>>
                 Temp heat spheres (~3 ft)
             </label>
+            <label class="text-muted" style="font-size:.85rem;display:flex;align-items:center;gap:.4rem;cursor:pointer;margin:0">
+                <input type="checkbox" id="dash3dWalkToggle">
+                Walk hall (WASD / arrows)
+            </label>
             <span class="text-muted" style="font-size:.78rem" id="dash3dHeatHint">
                 <?php if (count($envSensors3d) > 0): ?>
                     <?= count($envSensors3d) ?> sensor(s) on plan · cabinet + placement · not CFD
@@ -465,7 +469,7 @@ if (class_exists('SiteTourService')) {
     if (!el) return;
     el.classList.add('dash-3d-loading');
     var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=19') ?>;
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=27') ?>;
     loadScript(threeUrl)
       .then(function () { return loadScript(app3d); })
       .then(function () {
@@ -482,6 +486,7 @@ if (class_exists('SiteTourService')) {
         var heatOn = true;
         var tog = document.getElementById('dash3dHeatToggle');
         if (tog) heatOn = !!tog.checked;
+        var walkTog = document.getElementById('dash3dWalkToggle');
         var view = ColdAisle3D.mount(el, {
           cabinets: cabinets,
           pdus: pdus,
@@ -493,11 +498,20 @@ if (class_exists('SiteTourService')) {
           logoUrl: logoUrl,
           heatOverlay: heatOn,
           interactive: true,
+          walkEnabled: true,
           textureFaces: 'front',
+          onModeChange: function (mode) {
+            if (walkTog) walkTog.checked = mode === 'walk';
+          },
         });
         if (tog && view && typeof view.setHeatOverlay === 'function') {
           tog.addEventListener('change', function () {
             view.setHeatOverlay(!!tog.checked);
+          });
+        }
+        if (walkTog && view && typeof view.setMode === 'function') {
+          walkTog.addEventListener('change', function () {
+            view.setMode(walkTog.checked ? 'walk' : 'orbit');
           });
         }
         el.classList.remove('dash-3d-loading');
