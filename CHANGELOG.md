@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **3D walk-through:** Floor planner and dashboard 3D can switch to first-person Walk (W/S move, A/D turn, mouse look, aisle collision). Esc or the toggle returns to orbit. NOC and Settings previews stay orbit-only.
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.153] - 2026-08-19
+
+### New features
+
+- **3D walk-through:** Floor planner and dashboard 3D can switch to first-person Walk (W/S move, A/D turn, mouse look, aisle collision). Esc or the toggle returns to orbit. NOC and Settings previews stay orbit-only.
+
+---
 ## [0.3.152] - 2026-08-17
 
 ### New features
