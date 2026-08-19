@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **Walk faceplates:** first-person 3D upgrades rack faces to medium device images (same sharpness as cabinet elevation) instead of the tiny orbit thumbs
-
 ### Bug fixes
 
 ---
 
+## [0.3.154] - 2026-08-19
+
+### Enhancements
+
+- **Walk faceplates:** first-person 3D upgrades rack faces to medium device images (same sharpness as cabinet elevation) instead of the tiny orbit thumbs
+
+---
 ## [0.3.153] - 2026-08-19
 
 ### New features
