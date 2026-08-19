@@ -51,6 +51,7 @@
     const propsEl = root.querySelector('#planner-props');
     const view3d = root.querySelector('#view3d');
     const mode3dBtn = root.querySelector('#toggle3d');
+    const walkBtn = root.querySelector('#toggleWalk');
     const unitsBtn = root.querySelector('#toggleUnits');
     const roomSizeBtn = root.querySelector('#btnEditRoom');
     const gridBtn = root.querySelector('#toggleGrid');
@@ -85,6 +86,7 @@
     let drag = null;
     let show3d = false;
     let view3dInstance = null;
+    let wantWalk = false;
     let units = (window.ColdAisle && window.ColdAisle.lengthUnits) || 'metric';
     let pendingTemplate = null; // cabinet template
     let pendingPdu = null; // { kind: 'preset'|'existing', ... }
@@ -5285,9 +5287,28 @@
         cableRoutes: cableRoutes || [],
         rooms: room ? [room] : [],
         interactive: true,
+        walkEnabled: true,
         textureFaces: 'both',
         logoUrl: base ? base + '/assets/img/logo.svg' : 'assets/img/logo.svg',
+        onModeChange: function (mode) {
+          wantWalk = mode === 'walk';
+          syncWalkBtn();
+        },
       });
+      if (wantWalk && view3dInstance && typeof view3dInstance.setMode === 'function') {
+        view3dInstance.setMode('walk');
+      }
+      syncWalkBtn();
+    }
+
+    function syncWalkBtn() {
+      if (!walkBtn) return;
+      walkBtn.hidden = !show3d;
+      var walking = !!(view3dInstance && typeof view3dInstance.getMode === 'function'
+        && view3dInstance.getMode() === 'walk');
+      walkBtn.textContent = walking ? 'Orbit' : 'Walk';
+      walkBtn.classList.toggle('btn-primary', walking);
+      walkBtn.setAttribute('aria-pressed', walking ? 'true' : 'false');
     }
 
     function setRacewayUi() {
@@ -6680,8 +6701,17 @@
           wrap2d.style.display = 'block';
           view3d.style.display = 'none';
           mode3dBtn.textContent = '3D View';
+          syncWalkBtn();
           draw();
         }
+      });
+    }
+
+    if (walkBtn) {
+      walkBtn.addEventListener('click', function () {
+        if (!show3d || !view3dInstance || typeof view3dInstance.setMode !== 'function') return;
+        var next = view3dInstance.getMode() === 'walk' ? 'orbit' : 'walk';
+        view3dInstance.setMode(next);
       });
     }
 
@@ -6773,7 +6803,7 @@
         return;
       }
       // Only when floor planner is visible / has selection context
-      if (!room) return;
+      if (!room || show3d) return;
       const map = {
         ArrowLeft: [-1, 0],
         ArrowRight: [1, 0],

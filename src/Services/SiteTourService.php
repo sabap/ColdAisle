@@ -52,7 +52,7 @@ class SiteTourService
             [
                 'id' => 'dash-3d',
                 'title' => 'Site in 3D',
-                'body' => 'The dashboard hall view is the same geometry as the floor planner. Drag to orbit. Heat overlay (when enabled) tints racks from environment or power load so hot spots show up without opening each cabinet.',
+                'body' => 'The dashboard hall view is the same geometry as the floor planner. Drag to orbit, or turn on Walk hall and move with WASD / arrow keys (mouse-drag looks around). Heat overlay (when enabled) tints racks from environment or power load so hot spots show up without opening each cabinet.',
                 'page' => 'index.php',
                 'target' => '[data-tour="dash-3d"]',
                 'nav' => 'dashboard',
@@ -115,7 +115,7 @@ class SiteTourService
             [
                 'id' => 'fp-3d',
                 'title' => '3D and raceways',
-                'body' => '3D View is the same hall in elevation. Raceways: On draws ladder / U-channel / trough. Draw raceway to click a path; Finish to save a code. Clone U-channel copies a ladder route at a higher elevation.',
+                'body' => '3D View is the same hall in elevation. Walk puts you in the aisle (WASD / arrows, drag to look; Esc back to orbit). Raceways: On draws ladder / U-channel / trough. Draw raceway to click a path; Finish to save a code. Clone U-channel copies a ladder route at a higher elevation.',
                 'page' => 'pages/floorplan.php',
                 'target' => '[data-tour="fp-3d"]',
                 'nav' => 'floorplan',
@@ -328,7 +328,7 @@ class SiteTourService
         ];
         $waitOf = [
             'fp-add' => 'Click + Cabinet (or drag a model from the palette) to continue.',
-            'fp-3d' => 'Click 3D View to flip the hall — that counts as trying it.',
+            'fp-3d' => 'Click 3D View to flip the hall — that counts as trying it. Walk (once 3D is on) puts you in the aisle.',
             'fp-grid' => 'Click Grid to toggle tiles, then continue.',
         ];
         foreach ($steps as &$s) {
