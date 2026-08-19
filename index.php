@@ -469,7 +469,7 @@ if (class_exists('SiteTourService')) {
     if (!el) return;
     el.classList.add('dash-3d-loading');
     var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=27') ?>;
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=28') ?>;
     loadScript(threeUrl)
       .then(function () { return loadScript(app3d); })
       .then(function () {

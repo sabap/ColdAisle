@@ -59,9 +59,11 @@ class Cabinet3dData
                 'half_depth' => !empty($d['half_depth']) ? 1 : 0,
                 'back_side' => !empty($d['back_side']) ? 1 : 0,
                 'device_type' => $d['device_type'] ?? 'server',
-                // .sm variants for 3D face textures (full-res stays on device detail)
-                'front_image' => self::mediaUrlSm($d['front_picture'] ?? null),
-                'rear_image' => self::mediaUrlSm($d['rear_picture'] ?? null),
+                // .sm for orbit 3D; .md for walk-up close
+                'front_image' => self::mediaUrlVariant($d['front_picture'] ?? null, ImageUpload::VARIANT_SM),
+                'rear_image' => self::mediaUrlVariant($d['rear_picture'] ?? null, ImageUpload::VARIANT_SM),
+                'front_image_md' => self::mediaUrlVariant($d['front_picture'] ?? null, ImageUpload::VARIANT_MD),
+                'rear_image_md' => self::mediaUrlVariant($d['rear_picture'] ?? null, ImageUpload::VARIANT_MD),
             ];
         }
 
@@ -94,12 +96,12 @@ class Cabinet3dData
         return $cabinets;
     }
 
-    private static function mediaUrlSm(?string $rel): ?string
+    private static function mediaUrlVariant(?string $rel, string $variant): ?string
     {
         if ($rel === null || trim($rel) === '') {
             return null;
         }
-        $url = ImageUpload::mediaUrl($rel, ImageUpload::VARIANT_SM);
+        $url = ImageUpload::mediaUrl($rel, $variant);
         return $url !== '' ? $url : null;
     }
 }
