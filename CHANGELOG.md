@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **Ticketing (ITSM):** Settings → Ticketing picks one outbound system — ManageEngine ServiceDesk Cloud, ServiceNow (Table API), Zendesk (Tickets API v2), Jira Cloud/DC (REST v2), or Freshservice (Tickets v2). Work orders create, link, note, close, and **Refresh** tickets over HTTPS; the DCIM host stays internal. Optional ServiceDesk webhook remains off by default.
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.160] - 2026-08-20
+
+### New features
+
+- **Ticketing (ITSM):** Settings → Ticketing picks one outbound system — ManageEngine ServiceDesk Cloud, ServiceNow (Table API), Zendesk (Tickets API v2), Jira Cloud/DC (REST v2), or Freshservice (Tickets v2). Work orders create, link, note, close, and **Refresh** tickets over HTTPS; the DCIM host stays internal. Optional ServiceDesk webhook remains off by default.
+
+---
 ## [0.3.159] - 2026-08-20
 
 ### New features
