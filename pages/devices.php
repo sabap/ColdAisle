@@ -2603,7 +2603,7 @@ if ($action === 'new' || $id) {
                         var rsEl = document.getElementById('snmpDiscRuleset');
                         if (rsEl) {
                             var rs = data.ruleset || 'default';
-                            var rsLabel = { apc: 'APC PowerNet', liebert: 'Liebert / Vertiv', idrac: 'Dell iDRAC', default: 'Default (generic)' };
+                            var rsLabel = { apc: 'APC PowerNet', liebert: 'Liebert / Vertiv', idrac: 'Dell iDRAC', cisco: 'Cisco NX-OS / IOS', ups: 'APC/Schneider UPS', default: 'Default (generic)' };
                             rsEl.textContent = (rsLabel[rs] || rs) + ' (' + rs + ')';
                         }
                         document.getElementById('snmpDiscTplName').textContent = data.template_name || '—';

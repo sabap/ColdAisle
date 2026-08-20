@@ -1651,7 +1651,7 @@ if ($pduId) {
             var rsEl = document.getElementById('pduSnmpDiscRuleset');
             if (rsEl) {
                 var rs = data.ruleset || 'default';
-                var rsLabel = { apc: 'APC PowerNet', liebert: 'Liebert / Vertiv', idrac: 'Dell iDRAC', default: 'Default (generic)' };
+                var rsLabel = { apc: 'APC PowerNet', liebert: 'Liebert / Vertiv', idrac: 'Dell iDRAC', cisco: 'Cisco NX-OS / IOS', ups: 'APC/Schneider UPS', default: 'Default (generic)' };
                 rsEl.textContent = (rsLabel[rs] || rs) + ' (' + rs + ')';
             }
             document.getElementById('pduSnmpDiscTplName').textContent = data.template_name || '—';
