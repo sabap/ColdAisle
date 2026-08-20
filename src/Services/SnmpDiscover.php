@@ -110,17 +110,17 @@ class SnmpDiscover
 
     /**
      * Cisco NX-OS / IOS / Catalyst (enterprise 9).
-     * Never walk IF-MIB ifTable (Nexus 9k has hundreds of ports).
-     * CISCO-ENVMON is the chassis health tree; CPU/mem are small tables.
+     * Never walk IF-MIB ifTable/ifDescr (Nexus 9k has hundreds of ports).
+     * N9K often has no CISCO-ENVMON — NX-OS uses SYSTEM-EXT + ENTITY-SENSOR + FRU.
      */
     private const WALK_ROOTS_CISCO = [
-        '1.3.6.1.2.1.1',
-        '1.3.6.1.2.1.2.2.1.2',
-        '1.3.6.1.2.1.2.2.1.6',
-        '1.3.6.1.4.1.9.9.13.1',          // CISCO-ENVMON (temp / fan / PSU)
+        '1.3.6.1.4.1.9.9.305.1.1',       // CISCO-SYSTEM-EXT-MIB (NX-OS CPU/mem %)
         '1.3.6.1.4.1.9.9.109.1.1.1',     // CISCO-PROCESS-MIB cpmCPUTotalTable
-        '1.3.6.1.4.1.9.9.48.1.1',        // CISCO-MEMORY-POOL-MIB
-        '1.3.6.1.4.1.9.9.91.1.1.1.1.4',  // CISCO-ENTITY-SENSOR-MIB entSensorValue
+        '1.3.6.1.4.1.9.9.91.1.1.1.1.1',  // entSensorType
+        '1.3.6.1.4.1.9.9.91.1.1.1.1.4',  // entSensorValue
+        '1.3.6.1.4.1.9.9.117.1.1.2.1.2', // cefcFRUPowerOperStatus
+        '1.3.6.1.4.1.9.9.117.1.4.1.1.1', // cefcFanTrayOperStatus
+        '1.3.6.1.2.1.1',                 // MIB-II system (identity last)
     ];
 
     /** Unknown manufacturer — safe generic only (no enterprise vendor trees). */
@@ -449,31 +449,14 @@ class SnmpDiscover
             '1.3.6.1.4.1.674.10892.5.4.1200.10.1.5.2',
             '1.3.6.1.4.1.674.10892.5.4.1100.50.1.5.1',
         ];
-        // Cisco NX-OS / IOS — CISCO-ENVMON + CPU/mem (first instances; walks fill the rest)
+        // Cisco NX-OS / IOS — few leaves so walks still have budget (N9K has no ENVMON)
         $leafCisco = [
-            // ciscoEnvMonTemperatureStatusValue °C
-            '1.3.6.1.4.1.9.9.13.1.3.1.3.1',
-            '1.3.6.1.4.1.9.9.13.1.3.1.3.2',
-            '1.3.6.1.4.1.9.9.13.1.3.1.3.3',
-            '1.3.6.1.4.1.9.9.13.1.3.1.3.4',
-            // ciscoEnvMonFanState
-            '1.3.6.1.4.1.9.9.13.1.4.1.3.1',
-            '1.3.6.1.4.1.9.9.13.1.4.1.3.2',
-            '1.3.6.1.4.1.9.9.13.1.4.1.3.3',
-            '1.3.6.1.4.1.9.9.13.1.4.1.3.4',
-            // ciscoEnvMonSupplyState
-            '1.3.6.1.4.1.9.9.13.1.5.1.3.1',
-            '1.3.6.1.4.1.9.9.13.1.5.1.3.2',
-            '1.3.6.1.4.1.9.9.13.1.5.1.3.3',
-            '1.3.6.1.4.1.9.9.13.1.5.1.3.4',
-            // cpmCPUTotal5minRev then legacy 5min
-            '1.3.6.1.4.1.9.9.109.1.1.1.1.8.1',
-            '1.3.6.1.4.1.9.9.109.1.1.1.1.8.2',
-            '1.3.6.1.4.1.9.9.109.1.1.1.1.5.1',
-            '1.3.6.1.4.1.9.9.109.1.1.1.1.5.2',
-            // ciscoMemoryPoolUsed / Free (pool 1 = Processor)
-            '1.3.6.1.4.1.9.9.48.1.1.1.5.1',
-            '1.3.6.1.4.1.9.9.48.1.1.1.6.1',
+            '1.3.6.1.4.1.9.9.305.1.1.1.0',     // cseSysCPUUtilization
+            '1.3.6.1.4.1.9.9.305.1.1.2.0',     // cseSysMemoryUtilization
+            '1.3.6.1.4.1.9.9.109.1.1.1.1.8.1', // cpmCPUTotal5minRev
+            '1.3.6.1.4.1.9.9.117.1.1.2.1.2.1', // FRU PSU 1
+            '1.3.6.1.4.1.9.9.117.1.4.1.1.1.1', // fan tray 1
+            '1.3.6.1.4.1.9.9.13.1.3.1.3.1',    // ENVMON temp (IOS / Catalyst)
         ];
 
         // EMS vs rPDU vs xPDU leaf order inside APC ruleset (preserve prior tuning)
@@ -541,7 +524,7 @@ class SnmpDiscover
         } elseif ($apcFocus && $looksPdu) {
             $leafBudget = 9.0;
         } elseif ($ciscoFocus) {
-            $leafBudget = 8.0;
+            $leafBudget = 5.0;
         }
         $totalBudget = $coolingFocus ? self::COOLING_TOTAL_BUDGET_SEC : 22.0;
         foreach ($leafGets as $oid) {
@@ -680,6 +663,9 @@ class SnmpDiscover
         $walkDeadline = $coolingFocus ? self::COOLING_WALK_DEADLINE_SEC : self::WALK_DEADLINE_SEC;
         // Give xPDU more walk time — table under 15.3.4 is small but old NMC is slow
         if ($apcFocus && !empty($looksXpdu)) {
+            $walkDeadline = max($walkDeadline, 14.0);
+        }
+        if ($ciscoFocus) {
             $walkDeadline = max($walkDeadline, 14.0);
         }
         $walkRootStats = [];
@@ -2219,6 +2205,8 @@ class SnmpDiscover
         $isCiscoCpu = str_starts_with($oid, '1.3.6.1.4.1.9.9.109.');
         $isCiscoMem = str_starts_with($oid, '1.3.6.1.4.1.9.9.48.');
         $isCiscoSensor = str_starts_with($oid, '1.3.6.1.4.1.9.9.91.');
+        $isCiscoSysExt = str_starts_with($oid, '1.3.6.1.4.1.9.9.305.');
+        $isCiscoFru = str_starts_with($oid, '1.3.6.1.4.1.9.9.117.');
         if (str_starts_with($oid, '1.3.6.1.4.1.9.')) {
             $score += 6;
         }
@@ -2234,8 +2222,16 @@ class SnmpDiscover
         if ($isCiscoMem) {
             $score += 12;
         }
-        if ($isCiscoSensor && !$isCiscoEnvMon) {
-            $score += 10;
+        if ($isCiscoSensor && preg_match('/\.91\.1\.1\.1\.1\.4(?:\.|$)/', $oid)) {
+            $score += 14;
+        } elseif ($isCiscoSensor && !$isCiscoEnvMon) {
+            $score += 4;
+        }
+        if ($isCiscoSysExt) {
+            $score += 18;
+        }
+        if ($isCiscoFru) {
+            $score += 14;
         }
 
         // Model / serial / hostname strings must not rank as power metrics
@@ -2414,6 +2410,7 @@ class SnmpDiscover
         if (!$name && $num !== null && $num >= 0 && $num <= 5
             && !preg_match('/watt|power|amp|current|volt|load|temp/', $s)
             && !str_starts_with($oid, '1.3.6.1.4.1.9.9.13.')
+            && !str_starts_with($oid, '1.3.6.1.4.1.9.9.117.')
         ) {
             return 0;
         }
@@ -2445,6 +2442,14 @@ class SnmpDiscover
             $hints[] = 'Cisco memory';
         } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.91.')) {
             $hints[] = 'Cisco entity sensor';
+        } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.305.1.1.1')) {
+            $hints[] = 'NX-OS CPU %';
+        } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.305.1.1.2')) {
+            $hints[] = 'NX-OS memory %';
+        } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.117.1.1.2')) {
+            $hints[] = 'Cisco FRU PSU state';
+        } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.117.1.4.1')) {
+            $hints[] = 'Cisco FRU fan state';
         }
 
         if ($name) {
@@ -2598,7 +2603,7 @@ class SnmpDiscover
                 return true;
             }
             // Cisco ENVMON / CPU / memory — not watts/amps
-            if (preg_match('/1\.3\.6\.1\.4\.1\.9\.9\.(13|48|91|109)\./', $oid)) {
+            if (preg_match('/1\.3\.6\.1\.4\.1\.9\.9\.(13|48|91|109|117|305)\./', $oid)) {
                 return true;
             }
             if (preg_match('/\btemp|temperature|humid|humidity|dewpoint|probe|ems|iem|envmon|environmental\b/', $hay)
@@ -3397,11 +3402,16 @@ class SnmpDiscover
         $out = [];
         $cpuRev = null;
         $cpuLegacy = null;
+        $cpuNxos = null;
+        $sensorType = [];
+        $sensorValueOid = [];
+        $tempN = 0;
         foreach ($candidates as $c) {
             $oid = (string)($c['oid'] ?? '');
             if ($oid === '' || !str_starts_with($oid, '1.3.6.1.4.1.9.')) {
                 continue;
             }
+            $num = $c['numeric'] ?? null;
             if (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.3\.1\.3\.(\d+)$/', $oid, $m)) {
                 $key = 'temperature.' . $m[1];
                 if (!isset($out[$key])) {
@@ -3425,14 +3435,54 @@ class SnmpDiscover
                 if ($cpuLegacy === null || $m[1] === '1') {
                     $cpuLegacy = $oid;
                 }
+            } elseif ($oid === '1.3.6.1.4.1.9.9.305.1.1.1.0') {
+                $cpuNxos = $oid;
+            } elseif ($oid === '1.3.6.1.4.1.9.9.305.1.1.2.0') {
+                $out['mem_pct'] = $oid;
             } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.48\.1\.1\.1\.5\.1$/', $oid)) {
-                $out['mem_used'] = $oid;
+                if (!isset($out['mem_used'])) {
+                    $out['mem_used'] = $oid;
+                }
             } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.48\.1\.1\.1\.6\.1$/', $oid)) {
-                $out['mem_free'] = $oid;
+                if (!isset($out['mem_free'])) {
+                    $out['mem_free'] = $oid;
+                }
+            } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.91\.1\.1\.1\.1\.1\.(\d+)$/', $oid, $m)
+                && $num !== null
+            ) {
+                $sensorType[$m[1]] = (int)$num;
+            } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.91\.1\.1\.1\.1\.4\.(\d+)$/', $oid, $m)) {
+                $sensorValueOid[$m[1]] = $oid;
+            } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.117\.1\.1\.2\.1\.2\.(\d+)$/', $oid, $m)) {
+                $key = 'psu_state.' . $m[1];
+                if (!isset($out[$key])) {
+                    $out[$key] = $oid;
+                }
+            } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.117\.1\.4\.1\.1\.1\.(\d+)$/', $oid, $m)) {
+                $key = 'fan_state.' . $m[1];
+                if (!isset($out[$key])) {
+                    $out[$key] = $oid;
+                }
+            }
+        }
+        // entSensorType 8 = celsius (NX-OS / Nexus substitute for CISCO-ENVMON)
+        foreach ($sensorType as $idx => $type) {
+            if ((int)$type !== 8 || !isset($sensorValueOid[$idx])) {
+                continue;
+            }
+            $tempN++;
+            $key = 'temperature.' . $tempN;
+            if (!isset($out[$key])) {
+                $out[$key] = $sensorValueOid[$idx];
+            }
+            if ($tempN >= 8) {
+                break;
             }
         }
         if ($cpuRev !== null) {
             $out['cpu_pct'] = $cpuRev;
+        } elseif ($cpuNxos !== null) {
+            $out['cpu_pct'] = $cpuNxos;
         } elseif ($cpuLegacy !== null) {
             $out['cpu_pct'] = $cpuLegacy;
         }
@@ -3447,8 +3497,13 @@ class SnmpDiscover
     private static function injectCiscoMap(array $proposed, array $collected): array
     {
         $fake = [];
-        foreach ($collected as $oid => $_) {
-            $fake[] = ['oid' => (string)$oid, 'score' => 20];
+        foreach ($collected as $oid => $row) {
+            $raw = is_array($row) ? ($row['raw'] ?? null) : null;
+            $fake[] = [
+                'oid' => (string)$oid,
+                'score' => 20,
+                'numeric' => self::toNumber($raw),
+            ];
         }
         foreach (self::proposeCiscoMapKeys($fake) as $k => $oid) {
             if (!isset($proposed[$k])) {
