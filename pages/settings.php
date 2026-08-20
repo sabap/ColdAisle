@@ -527,6 +527,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                     . ' If this keeps happening on IIS, run the update from an elevated PowerShell on the server (see docs) or check storage/logs/app.log.'
                 );
             }
+            // Keepalive during apply flushes the body, so Location: would be ignored
+            // (blank white POST page). HTML trampoline if headers already sent.
+            if (class_exists('UpdateService') && method_exists('UpdateService', 'browserReturn')) {
+                UpdateService::browserReturn('pages/settings.php#updates');
+            }
             App::redirect('pages/settings.php#updates');
         }
 
@@ -3224,11 +3229,28 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
                 btn.disabled = true;
                 btn.textContent = 'Updating to v' + version + '…';
             }
-            // Allow other buttons to be disabled so the admin does not double-submit
             document.querySelectorAll('#update-actions button').forEach(function (b) {
                 if (b !== btn) b.disabled = true;
             });
-            return true;
+            // Stay on Settings: POST via fetch so a flushed keepalive body cannot
+            // replace the tab with a blank white page. Always navigate after apply.
+            var dest = (window.ColdAisle && ColdAisle.baseUrl)
+                ? String(ColdAisle.baseUrl).replace(/\/$/, '') + '/pages/settings.php'
+                : 'settings.php';
+            dest += (dest.indexOf('?') >= 0 ? '&' : '?') + '_upd=' + Date.now() + '#updates';
+            var fd = new FormData(form);
+            fetch(form.getAttribute('action') || (window.location.pathname + (window.location.search || '')), {
+                method: 'POST',
+                body: fd,
+                credentials: 'same-origin',
+                redirect: 'manual',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+            }).then(function () {
+                window.location.replace(dest);
+            }).catch(function () {
+                window.location.replace(dest);
+            });
+            return false;
         }
         </script>
     </div>

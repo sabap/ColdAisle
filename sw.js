@@ -1,6 +1,6 @@
 /* ColdAisle field service worker — network-first HTML, cache shell + last cabinet view. */
 /* eslint-disable no-restricted-globals */
-const CACHE = 'coldaisle-field-v1';
+const CACHE = 'coldaisle-field-v2';
 const SHELL = [
   'assets/css/app.css',
   'assets/css/tech.css',
@@ -39,6 +39,9 @@ function isMedia(url) {
 function isAuthPage(url) {
   return /\/(login|logout|setup)\.php$/.test(url.pathname);
 }
+function isSettingsPage(url) {
+  return /\/pages\/settings\.php$/i.test(url.pathname);
+}
 
 self.addEventListener('fetch', function (event) {
   const req = event.request;
@@ -50,7 +53,7 @@ self.addEventListener('fetch', function (event) {
   if (url.origin !== self.location.origin) {
     return;
   }
-  if (isAuthPage(url) || isApi(url)) {
+  if (isAuthPage(url) || isApi(url) || isSettingsPage(url)) {
     return;
   }
 

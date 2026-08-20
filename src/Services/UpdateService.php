@@ -501,7 +501,8 @@ class UpdateService
         if (PHP_SAPI === 'cli') {
             return;
         }
-        // Whitespace is ignored in HTML redirects/flashes if anything leaks; prefer flush only
+        // This sends body bytes — Location: headers will no longer work after the first flush.
+        // Callers must use browserReturn() instead of App::redirect().
         echo ' ';
         if (function_exists('flush')) {
             @flush();
@@ -509,6 +510,30 @@ class UpdateService
         if ($phase !== '') {
             App::log('Update progress: ' . $phase, 'info');
         }
+    }
+
+    /**
+     * After a long apply (keepalive may have already flushed the body), send the
+     * browser back to Settings. Uses HTTP redirect when possible; otherwise a
+     * tiny HTML trampoline so the tab is not left on a blank white POST body.
+     */
+    public static function browserReturn(string $path): never
+    {
+        $url = class_exists('App') ? App::url($path) : $path;
+        if (!headers_sent()) {
+            header('Location: ' . $url);
+            exit;
+        }
+        $safe = htmlspecialchars($url, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $js = json_encode($url, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+        echo '<!DOCTYPE html><html><head><meta charset="utf-8">';
+        echo '<meta http-equiv="refresh" content="0;url=' . $safe . '">';
+        echo '<title>Update complete</title>';
+        echo '<script>try{location.replace(' . $js . ');}catch(e){}</script>';
+        echo '</head><body style="font-family:Segoe UI,system-ui,sans-serif;padding:2rem;background:#0f172a;color:#e2e8f0">';
+        echo '<p>Update finished. <a href="' . $safe . '" style="color:#93c5fd">Back to Settings</a></p>';
+        echo '</body></html>';
+        exit;
     }
 
     private static function writeTempString(string $dir, string $contents): string
