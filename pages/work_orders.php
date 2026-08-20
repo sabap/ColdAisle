@@ -80,7 +80,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             AuditService::log((int)$user['user_id'], $user['username'], 'work_order_create', 'work_order', (int)$woId, [
                 'title' => $title,
             ]);
-            App::flash('success', 'Work order created.');
+            $sdpExtra = '';
+            if (work_order_itsm_ready() && class_exists('ItsmService') && ItsmService::autoCreate()) {
+                try {
+                    $disp = ItsmService::tryCreateFromWorkOrder((int)$woId, true);
+                    if ($disp) {
+                        $sdpExtra = ' ' . ItsmService::label() . ' ticket #' . $disp . ' created.';
+                    }
+                } catch (Throwable $e) {
+                    App::flash('warning', 'Work order created, but ' . ItsmService::label() . ' create failed: ' . $e->getMessage());
+                    App::redirect('pages/work_orders.php?id=' . (int)$woId);
+                }
+            }
+            App::flash('success', 'Work order created.' . $sdpExtra);
             App::redirect('pages/work_orders.php?id=' . (int)$woId);
         }
 
@@ -149,6 +161,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
 
             $apply = !empty($_POST['apply_inventory']);
             $msg = 'Status set to ' . ($statuses[$newStatus] ?? $newStatus) . '.';
+            $flashKind = 'success';
             if ($newStatus === 'completed' && $apply) {
                 $ar = work_order_apply_destinations($woId, $user);
                 $msg .= sprintf(' Applied %d device location(s).', (int)$ar['applied']);
@@ -156,21 +169,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                     $msg .= sprintf(' Skipped %d.', (int)$ar['skipped']);
                 }
                 if ($ar['errors']) {
-                    App::flash('warning', $msg . ' ' . implode(' ', array_slice($ar['errors'], 0, 3)));
+                    $msg .= ' ' . implode(' ', array_slice($ar['errors'], 0, 3));
+                    $flashKind = 'warning';
                     AuditService::log((int)$user['user_id'], $user['username'], 'work_order_complete', 'work_order', $woId, [
                         'apply' => true,
                         'applied' => $ar['applied'],
                         'skipped' => $ar['skipped'],
                     ]);
-                    App::redirect('pages/work_orders.php?id=' . $woId);
                 }
+            }
+            $itsmErr = work_order_itsm_after_status($woId, $cur, $newStatus, $user);
+            if ($itsmErr) {
+                $msg .= ' Ticketing update failed: ' . $itsmErr;
+                $flashKind = 'warning';
             }
             AuditService::log((int)$user['user_id'], $user['username'], 'work_order_status', 'work_order', $woId, [
                 'from' => $cur,
                 'to' => $newStatus,
                 'apply' => $apply,
             ]);
-            App::flash('success', $msg);
+            App::flash($flashKind, $msg);
             App::redirect('pages/work_orders.php?id=' . $woId);
         }
 
@@ -276,6 +294,83 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             Database::update('work_orders', ['updated_at' => date('Y-m-d H:i:s')], 'work_order_id = :id', [':id' => $woId]);
             App::flash('success', 'Added ' . (string)$dev['label'] . '.');
             App::redirect('pages/work_orders.php?id=' . $woId . '#items');
+        }
+
+        if ($action === 'sdp_create' || $action === 'itsm_create') {
+            $woId = (int)($_POST['work_order_id'] ?? 0);
+            if (!work_order_itsm_ready()) {
+                throw new RuntimeException('Ticketing is not configured.');
+            }
+            $link = ItsmService::createFromWorkOrder($woId);
+            AuditService::log((int)$user['user_id'], $user['username'], 'work_order_itsm_create', 'work_order', $woId, $link);
+            $disp = (string)($link['display_id'] ?: $link['id']);
+            App::flash('success', ItsmService::label() . ' ticket #' . $disp . ' created.');
+            App::redirect('pages/work_orders.php?id=' . $woId);
+        }
+
+        if ($action === 'sdp_link' || $action === 'itsm_link') {
+            $woId = (int)($_POST['work_order_id'] ?? 0);
+            $ticket = trim((string)($_POST['sdp_ticket'] ?? $_POST['itsm_ticket'] ?? ''));
+            if (!work_order_itsm_ready()) {
+                throw new RuntimeException('Ticketing is not configured.');
+            }
+            $link = ItsmService::linkExisting($woId, $ticket);
+            AuditService::log((int)$user['user_id'], $user['username'], 'work_order_itsm_link', 'work_order', $woId, $link);
+            $disp = (string)($link['display_id'] ?: $link['id']);
+            App::flash('success', 'Linked ' . ItsmService::label() . ' ticket #' . $disp . '.');
+            App::redirect('pages/work_orders.php?id=' . $woId);
+        }
+
+        if ($action === 'sdp_unlink' || $action === 'itsm_unlink') {
+            $woId = (int)($_POST['work_order_id'] ?? 0);
+            $wo = Database::fetchOne('SELECT * FROM work_orders WHERE work_order_id = ?', [$woId]);
+            if (!$wo) {
+                throw new RuntimeException('Work order not found.');
+            }
+            if (class_exists('ItsmService')) {
+                ItsmService::unlink($woId);
+            }
+            AuditService::log((int)$user['user_id'], $user['username'], 'work_order_itsm_unlink', 'work_order', $woId, [
+                'itsm_request_id' => $wo['itsm_request_id'] ?? null,
+            ]);
+            App::flash('success', 'Unlinked ticketing ticket (the remote ticket was not deleted).');
+            App::redirect('pages/work_orders.php?id=' . $woId);
+        }
+
+        if ($action === 'sdp_pull' || $action === 'itsm_pull') {
+            $woId = (int)($_POST['work_order_id'] ?? 0);
+            if (!work_order_itsm_ready()) {
+                throw new RuntimeException('Ticketing is not configured.');
+            }
+            $result = ItsmService::pullFromWorkOrder($woId);
+            AuditService::log((int)$user['user_id'], $user['username'], 'work_order_itsm_pull', 'work_order', $woId, $result);
+            App::flash('success', (string)($result['detail'] ?? 'Pulled the latest remote ticket.'));
+            App::redirect('pages/work_orders.php?id=' . $woId);
+        }
+
+        if ($action === 'sdp_push_note' || $action === 'itsm_push_note') {
+            $woId = (int)($_POST['work_order_id'] ?? 0);
+            if (!work_order_itsm_ready()) {
+                throw new RuntimeException('Ticketing is not configured.');
+            }
+            $wo = Database::fetchOne('SELECT * FROM work_orders WHERE work_order_id = ?', [$woId]);
+            if (!$wo) {
+                throw new RuntimeException('Work order not found.');
+            }
+            $st = (string)($wo['status'] ?? '');
+            if (trim((string)($wo['itsm_request_id'] ?? '')) === '') {
+                throw new RuntimeException('This work order is not linked to a ticketing ticket.');
+            }
+            $who = (string)($user['display_name'] ?? $user['username'] ?? 'ColdAisle');
+            $stLab = $statuses[$st] ?? $st;
+            $html = '<p>ColdAisle work order <strong>' . htmlspecialchars((string)$wo['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . '</strong> (#' . $woId . ') is <strong>' . htmlspecialchars($stLab, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . '</strong> (note by ' . htmlspecialchars($who, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ').</p>'
+                . '<p><a href="' . htmlspecialchars(App::url('pages/work_orders.php?id=' . $woId), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . '">Open work order</a></p>';
+            ItsmService::addNote($woId, $html, false);
+            App::flash('success', 'Posted a status note to ' . ItsmService::label() . '.');
+            App::redirect('pages/work_orders.php?id=' . $woId);
         }
 
         if ($action === 'update_item') {
@@ -460,6 +555,16 @@ if ($id > 0) {
             <?php if (!empty($wo['change_ticket'])): ?>
                 <span class="text-muted" style="font-size:.9rem">Ticket <?= App::e((string)$wo['change_ticket']) ?></span>
             <?php endif; ?>
+            <?php if (!empty($wo['itsm_request_id']) || !empty($wo['itsm_display_id'])): ?>
+                <?php
+                $sdpHref = trim((string)($wo['itsm_url'] ?? ''));
+                $sdpLab = (string)($wo['itsm_display_id'] ?: $wo['itsm_request_id']);
+                ?>
+                <span class="badge badge-info"><?= App::e(class_exists('ItsmService') ? ItsmService::label((string)($wo['itsm_provider'] ?? '')) : 'ITSM') ?> #<?= App::e($sdpLab) ?></span>
+                <?php if ($sdpHref !== ''): ?>
+                    <a href="<?= App::e($sdpHref) ?>" target="_blank" rel="noopener" style="font-size:.85rem">Open ticket</a>
+                <?php endif; ?>
+            <?php endif; ?>
         </div>
         <div class="flex gap-1" style="flex-wrap:wrap">
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/work_orders.php')) ?>">← All work orders</a>
@@ -610,6 +715,88 @@ if ($id > 0) {
                 <?php endif; ?>
             </div>
         </div>
+
+        <?php
+        $itsmName = class_exists('ItsmService') ? ItsmService::label() : 'Ticketing';
+        $itsmReady = work_order_itsm_ready();
+        ?>
+        <?php if ($itsmReady || !empty($wo['itsm_request_id']) || !empty($wo['itsm_display_id'])): ?>
+        <div class="card mb-2" id="ticketing">
+            <div class="card-header flex-between">
+                <h2><?= App::e($itsmName) ?></h2>
+                <?php if (!empty($wo['itsm_last_sync_at'])): ?>
+                    <span class="text-muted" style="font-size:.8rem">Last sync <?= App::e((string)$wo['itsm_last_sync_at']) ?></span>
+                <?php endif; ?>
+            </div>
+            <div class="card-body">
+                <?php if (!empty($wo['itsm_last_error'])): ?>
+                    <p class="alert alert-warning" style="font-size:.85rem"><?= App::e((string)$wo['itsm_last_error']) ?></p>
+                <?php endif; ?>
+                <?php
+                $sdpLinked = !empty($wo['itsm_request_id']) || !empty($wo['itsm_display_id']);
+                $sdpHref = trim((string)($wo['itsm_url'] ?? ''));
+                $sdpLab = (string)($wo['itsm_display_id'] ?: $wo['change_ticket'] ?: $wo['itsm_request_id'] ?: '');
+                ?>
+                <?php if ($sdpLinked): ?>
+                    <p style="margin-top:0">
+                        Linked request
+                        <strong>#<?= App::e($sdpLab !== '' ? $sdpLab : '—') ?></strong>
+                        <?php if ($sdpHref !== ''): ?>
+                            · <a href="<?= App::e($sdpHref) ?>" target="_blank" rel="noopener">Open in <?= App::e($itsmName) ?></a>
+                        <?php endif; ?>
+                    </p>
+                    <?php if ($canEdit && $itsmReady): ?>
+                        <div class="flex gap-1" style="flex-wrap:wrap">
+                            <form method="post" style="display:inline">
+                                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                                <input type="hidden" name="action" value="itsm_pull">
+                                <input type="hidden" name="work_order_id" value="<?= $id ?>">
+                                <button class="btn btn-secondary btn-sm" type="submit">Refresh from <?= App::e($itsmName) ?></button>
+                            </form>
+                            <form method="post" style="display:inline">
+                                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                                <input type="hidden" name="action" value="itsm_push_note">
+                                <input type="hidden" name="work_order_id" value="<?= $id ?>">
+                                <button class="btn btn-secondary btn-sm" type="submit">Push status note</button>
+                            </form>
+                            <form method="post" style="display:inline"
+                                  onsubmit="return confirm('Unlink this ticket? The remote ticket is not deleted.');">
+                                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                                <input type="hidden" name="action" value="itsm_unlink">
+                                <input type="hidden" name="work_order_id" value="<?= $id ?>">
+                                <button class="btn btn-ghost btn-sm" type="submit">Unlink</button>
+                            </form>
+                        </div>
+                    <?php endif; ?>
+                <?php elseif ($canEdit && $itsmReady && !$closed): ?>
+                    <p class="text-muted" style="font-size:.85rem;margin-top:0">
+                        No remote ticket yet. Create one now, or paste an existing id / number / key.
+                    </p>
+                    <form method="post" style="margin-bottom:.75rem">
+                        <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                        <input type="hidden" name="action" value="itsm_create">
+                        <input type="hidden" name="work_order_id" value="<?= $id ?>">
+                        <button class="btn btn-primary btn-sm" type="submit">Create <?= App::e($itsmName) ?> ticket</button>
+                    </form>
+                    <form method="post" class="form-grid">
+                        <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                        <input type="hidden" name="action" value="itsm_link">
+                        <input type="hidden" name="work_order_id" value="<?= $id ?>">
+                        <div class="form-row"><label>Existing ticket</label>
+                            <input class="form-control" name="itsm_ticket" placeholder="Number, key, or id" required></div>
+                        <div class="form-row">
+                            <button class="btn btn-secondary" type="submit">Link existing</button>
+                        </div>
+                    </form>
+                <?php else: ?>
+                    <p class="text-muted mb-0" style="font-size:.85rem">
+                        Configure a ticketing system under
+                        <a href="<?= App::e(App::url('pages/settings.php#sdp')) ?>">Settings → Ticketing</a>.
+                    </p>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php endif; ?>
 
         <div class="card mb-2" id="checklist">
             <div class="card-header flex-between">
@@ -1061,6 +1248,18 @@ if ($actionGet === 'new') {
                 </div>
                 <div class="form-row"><label>Change ticket</label>
                     <input class="form-control" name="change_ticket" placeholder="CHG-…"></div>
+                <?php if (work_order_itsm_ready()): ?>
+                <div class="form-row full">
+                    <p class="text-muted mb-0" style="font-size:.8rem">
+                        <?php if (class_exists('ItsmService') && ItsmService::autoCreate()): ?>
+                            A <?= App::e(ItsmService::label()) ?> ticket will be created when you save
+                            (Settings → Ticketing).
+                        <?php else: ?>
+                            After save, you can create or link a <?= App::e(ItsmService::label()) ?> ticket from the work order.
+                        <?php endif; ?>
+                    </p>
+                </div>
+                <?php endif; ?>
                 <div class="form-row"><label>Scheduled date</label>
                     <input class="form-control" type="date" name="scheduled_date"></div>
                 <div class="form-row"><label>Assigned to</label>

@@ -631,6 +631,25 @@ class Schema
                     created_at DATETIME2 NOT NULL CONSTRAINT DF_woi_created DEFAULT SYSUTCDATETIME()
                 )"
             );
+            // ManageEngine ServiceDesk Plus Cloud link (ITSM)
+            self::ensureColumn('work_orders', 'itsm_provider', 'NVARCHAR(30) NULL');
+            self::ensureColumn('work_orders', 'itsm_request_id', 'NVARCHAR(40) NULL');
+            self::ensureColumn('work_orders', 'itsm_display_id', 'NVARCHAR(40) NULL');
+            self::ensureColumn('work_orders', 'itsm_url', 'NVARCHAR(500) NULL');
+            self::ensureColumn('work_orders', 'itsm_last_sync_at', 'DATETIME2 NULL');
+            self::ensureColumn('work_orders', 'itsm_last_error', 'NVARCHAR(500) NULL');
+            try {
+                $idx = Database::fetchValue(
+                    "SELECT 1 FROM sys.indexes WHERE name = 'IX_work_orders_itsm_request' AND object_id = OBJECT_ID('dbo.work_orders')"
+                );
+                if (!$idx) {
+                    Database::query(
+                        'CREATE NONCLUSTERED INDEX IX_work_orders_itsm_request ON work_orders(itsm_request_id)'
+                    );
+                }
+            } catch (Throwable $e) {
+                // index is optional
+            }
 
             // Per-cabinet physical audit certifications
             self::ensureTable(
@@ -1056,6 +1075,7 @@ class Schema
             ],
             'work_orders' => [
                 'work_order_id', 'title', 'work_type', 'status', 'change_ticket', 'checklist_json',
+                'itsm_provider', 'itsm_request_id', 'itsm_display_id',
             ],
             'work_order_items' => [
                 'item_id', 'work_order_id', 'device_id', 'from_cabinet_id', 'to_cabinet_id', 'item_status',

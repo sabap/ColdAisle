@@ -360,3 +360,32 @@ function work_order_apply_destinations(int $workOrderId, ?array $actor = null): 
 
     return $result;
 }
+
+function work_order_itsm_ready(): bool
+{
+    return class_exists('ItsmService') && ItsmService::isReady();
+}
+
+/** @deprecated use work_order_itsm_ready() */
+function work_order_sdp_ready(): bool
+{
+    return work_order_itsm_ready();
+}
+
+/**
+ * Best-effort ticketing status push. Returns an error string or null.
+ *
+ * @param array{user_id?:int,username?:string,display_name?:string} $actor
+ */
+function work_order_itsm_after_status(int $workOrderId, string $from, string $to, array $actor): ?string
+{
+    if (!work_order_itsm_ready()) {
+        return null;
+    }
+    try {
+        ItsmService::syncWorkOrderStatus($workOrderId, $from, $to, $actor);
+        return null;
+    } catch (Throwable $e) {
+        return $e->getMessage();
+    }
+}

@@ -930,6 +930,12 @@ CREATE TABLE work_orders (
     completed_at DATETIME2 NULL,
     notes NVARCHAR(MAX) NULL,
     checklist_json NVARCHAR(MAX) NULL,
+    itsm_provider NVARCHAR(30) NULL,
+    itsm_request_id NVARCHAR(40) NULL,
+    itsm_display_id NVARCHAR(40) NULL,
+    itsm_url NVARCHAR(500) NULL,
+    itsm_last_sync_at DATETIME2 NULL,
+    itsm_last_error NVARCHAR(500) NULL,
     created_at DATETIME2 NOT NULL CONSTRAINT DF_wo_created DEFAULT SYSUTCDATETIME(),
     updated_at DATETIME2 NOT NULL CONSTRAINT DF_wo_updated DEFAULT SYSUTCDATETIME()
 );
@@ -955,6 +961,8 @@ GO
 CREATE NONCLUSTERED INDEX IX_work_order_items_wo ON work_order_items(work_order_id);
 GO
 CREATE NONCLUSTERED INDEX IX_work_orders_status ON work_orders(status);
+GO
+CREATE NONCLUSTERED INDEX IX_work_orders_itsm_request ON work_orders(itsm_request_id);
 GO
 
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'notifications')
