@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **Cisco Discover ruleset:** NX-OS / IOS / Catalyst (including Nexus 9504) walks CISCO-ENVMON, CPU, and memory instead of generic MIB-II. Auto-selected from manufacturer Cisco or sysDescr `NX-OS`. MIBs still optional for names.
-
 ### Bug fixes
 
 ---
 
+## [0.3.155] - 2026-08-20
+
+### Enhancements
+
+- **Cisco Discover ruleset:** NX-OS / IOS / Catalyst (including Nexus 9504) walks CISCO-ENVMON, CPU, and memory instead of generic MIB-II. Auto-selected from manufacturer Cisco or sysDescr `NX-OS`. MIBs still optional for names.
+
+---
 ## [0.3.154] - 2026-08-19
 
 ### Enhancements
