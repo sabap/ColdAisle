@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **Device SNMP fields:** Discover can add any candidate as a live field (CPU, memory, software, uptime, …) with an optional **Keep history / graph** flag. Poll stores last values on the device page and charts flagged gauges over 24h. No GitHub template request — the site OID map is created on this install.
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.159] - 2026-08-20
+
+### New features
+
+- **Device SNMP fields:** Discover can add any candidate as a live field (CPU, memory, software, uptime, …) with an optional **Keep history / graph** flag. Poll stores last values on the device page and charts flagged gauges over 24h. No GitHub template request — the site OID map is created on this install.
+
+---
 ## [0.3.158] - 2026-08-20
 
 ### Bug fixes
