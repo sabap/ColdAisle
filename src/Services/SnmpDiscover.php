@@ -114,8 +114,9 @@ class SnmpDiscover
      * N9K often has no CISCO-ENVMON — NX-OS uses SYSTEM-EXT + ENTITY-SENSOR + FRU.
      */
     private const WALK_ROOTS_CISCO = [
-        '1.3.6.1.4.1.9.9.305.1.1',       // CISCO-SYSTEM-EXT-MIB (NX-OS CPU/mem %)
-        '1.3.6.1.4.1.9.9.109.1.1.1',     // CISCO-PROCESS-MIB cpmCPUTotalTable
+        '1.3.6.1.4.1.9.9.305.1.1.1',     // cseSysCPUUtilization (not all of 305.1.1)
+        '1.3.6.1.4.1.9.9.305.1.1.2',     // cseSysMemoryUtilization
+        '1.3.6.1.4.1.9.9.109.1.1.1.1.8', // cpmCPUTotal5minRev column only (not PhysicalIndex)
         '1.3.6.1.4.1.9.9.91.1.1.1.1.1',  // entSensorType
         '1.3.6.1.4.1.9.9.91.1.1.1.1.4',  // entSensorValue
         '1.3.6.1.4.1.9.9.117.1.1.2.1.2', // cefcFRUPowerOperStatus
@@ -2100,6 +2101,17 @@ class SnmpDiscover
     {
         $s = self::nameHaystack($oid, $name);
 
+        // Cisco PROCESS-MIB: PhysicalIndex (.2) and deprecated 5sec/1min/5min (.3–.5)
+        if (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.109\.1\.1\.1\.1\.[2-5](?:\.|$)/', $oid)) {
+            return true;
+        }
+        // CISCO-SYSTEM-EXT: only CPU% (.1) and mem% (.2) — .3 image string, .10 counters, etc.
+        if (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.305\.1\.1\./', $oid)
+            && !preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.305\.1\.1\.[12](?:\.0)?$/', $oid)
+        ) {
+            return true;
+        }
+
         // Always drop pure identity / non-metric strings (model AP8861, timestamps as text)
         if (self::isNonMetricString($raw)) {
             // Allow only if name is clearly a live metric (rare string enums)
@@ -2202,10 +2214,10 @@ class SnmpDiscover
         $isCiscoTemp = (bool)preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.3\.1\.3(?:\.|$)/', $oid);
         $isCiscoFan = (bool)preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.4\.1\.3(?:\.|$)/', $oid);
         $isCiscoPsu = (bool)preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.5\.1\.3(?:\.|$)/', $oid);
-        $isCiscoCpu = str_starts_with($oid, '1.3.6.1.4.1.9.9.109.');
+        $isCiscoCpu = (bool)preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.109\.1\.1\.1\.1\.(6|7|8)(?:\.|$)/', $oid);
         $isCiscoMem = str_starts_with($oid, '1.3.6.1.4.1.9.9.48.');
         $isCiscoSensor = str_starts_with($oid, '1.3.6.1.4.1.9.9.91.');
-        $isCiscoSysExt = str_starts_with($oid, '1.3.6.1.4.1.9.9.305.');
+        $isCiscoSysExt = (bool)preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.305\.1\.1\.[12](?:\.0)?$/', $oid);
         $isCiscoFru = str_starts_with($oid, '1.3.6.1.4.1.9.9.117.');
         if (str_starts_with($oid, '1.3.6.1.4.1.9.')) {
             $score += 6;
@@ -2436,15 +2448,15 @@ class SnmpDiscover
             $hints[] = 'Cisco fan state';
         } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.5\.1\.3(?:\.|$)/', $oid)) {
             $hints[] = 'Cisco PSU state';
-        } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.109.')) {
+        } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.109\.1\.1\.1\.1\.(6|7|8)(?:\.|$)/', $oid)) {
             $hints[] = 'Cisco CPU %';
         } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.48.')) {
             $hints[] = 'Cisco memory';
-        } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.91.')) {
+        } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.91\.1\.1\.1\.1\.4(?:\.|$)/', $oid)) {
             $hints[] = 'Cisco entity sensor';
-        } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.305.1.1.1')) {
+        } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.305\.1\.1\.1(?:\.0)?$/', $oid)) {
             $hints[] = 'NX-OS CPU %';
-        } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.305.1.1.2')) {
+        } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.305\.1\.1\.2(?:\.0)?$/', $oid)) {
             $hints[] = 'NX-OS memory %';
         } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.117.1.1.2')) {
             $hints[] = 'Cisco FRU PSU state';
@@ -3479,10 +3491,10 @@ class SnmpDiscover
                 break;
             }
         }
-        if ($cpuRev !== null) {
-            $out['cpu_pct'] = $cpuRev;
-        } elseif ($cpuNxos !== null) {
+        if ($cpuNxos !== null) {
             $out['cpu_pct'] = $cpuNxos;
+        } elseif ($cpuRev !== null) {
+            $out['cpu_pct'] = $cpuRev;
         } elseif ($cpuLegacy !== null) {
             $out['cpu_pct'] = $cpuLegacy;
         }

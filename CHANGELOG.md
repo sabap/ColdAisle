@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Cisco Discover candidates:** stop treating PROCESS-MIB PhysicalIndex / SYSTEM-EXT counters as CPU %. Walk only CPU 5-min and mem % so ENTITY-SENSOR temps and FRU fan/PSU still fit in the walk budget.
+
 ---
 
 ## [0.3.157] - 2026-08-20
