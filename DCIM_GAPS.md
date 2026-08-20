@@ -82,7 +82,7 @@ These are **not** free-form suggestions; they have acceptance criteria in the ba
 | ID | Gap | Status | vs peers | ColdAisle today | Suggested slice |
 |----|-----|--------|----------|-----------------|-----------------|
 | **G-B1** | **Structured cable plant** | **Closed (v1)** — **0.3.122** | Patch panels, trunks, pathways | Raceways on floor plan, feed OH/UF, media/speed colors, circuit IDs | Patch-panel device templates; multi-path hop list; bulk CSV |
-| **G-B2** | **Change / move work orders** | **Closed (v1)** — **0.3.116** | ITSM-linked moves, approvals | Ticket, from/to, checklist, apply inventory | External ITSM webhooks later |
+| **G-B2** | **Change / move work orders** | **Closed (v1)** — **0.3.116**; **ITSM** — Unreleased | ITSM-linked moves, approvals | Ticket, from/to, checklist, apply inventory; SDP Cloud, ServiceNow, Zendesk, Jira, Freshservice (outbound + pull) | Extra vendors later if requested |
 | **G-B3** | **Asset lifecycle depth** | **Closed (v1)** — **0.3.119** | PO/RMA/warranty campaigns | PO/RMA fields, custody event log, warranty digests + report | Multi-entity warranty (PDU/UPS); full ITAM campaigns later |
 | **G-B4-net** | **IPAM / network-DCIM bridge** | Gap (often intentional) | Device42, NetBox | Infra-first; interfaces on devices only | Out of default scope unless multi-homed switch inventory is requested |
 | **G-B5** | **Mail product flows** | **Closed (v1)** — **0.3.118** | Welcome, password reset, lifecycle mail | Welcome, local forgot/reset, disposal due-soon digests | Optional: must-change-password gate; richer templates |

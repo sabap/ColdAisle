@@ -43,6 +43,13 @@ require_once __DIR__ . '/Services/SetupWizardService.php';
 require_once __DIR__ . '/Services/SiteTourService.php';
 require_once __DIR__ . '/Services/FieldAuditService.php';
 require_once __DIR__ . '/Services/DeviceSnmpHistoryService.php';
+require_once __DIR__ . '/Services/ItsmHttp.php';
+require_once __DIR__ . '/Services/ItsmService.php';
+require_once __DIR__ . '/Services/SdpCloudService.php';
+require_once __DIR__ . '/Services/ItsmSnowService.php';
+require_once __DIR__ . '/Services/ItsmZendeskService.php';
+require_once __DIR__ . '/Services/ItsmJiraService.php';
+require_once __DIR__ . '/Services/ItsmFreshserviceService.php';
 
 class App
 {

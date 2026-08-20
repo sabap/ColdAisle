@@ -277,6 +277,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             SettingsService::set('mail_enabled', !empty($mailCfg['enabled']) ? '1' : '0', 'mail');
         }
 
+        if ($section === 'sdp' || $section === 'itsm') {
+            if (!class_exists('ItsmService')) {
+                throw new RuntimeException('ItsmService is not installed. Deploy the latest release.');
+            }
+            ItsmService::saveFromPost($_POST);
+            AuditService::log((int)$user['user_id'], $user['username'], 'itsm_settings_save', 'system', null, [
+                'provider' => (string)($_POST['itsm_provider'] ?? ''),
+            ]);
+            App::flash('success', 'Ticketing settings saved.');
+            App::redirect('pages/settings.php#sdp');
+        }
+
+        if ($section === 'test_sdp' || $section === 'test_itsm' || $section === 'sdp_exchange_code') {
+            $json = static function (array $payload): void {
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                exit;
+            };
+            if (!class_exists('ItsmService') && !class_exists('SdpCloudService')) {
+                $json([
+                    'ok' => false,
+                    'summary' => 'Ticketing services are not installed on this host.',
+                    'steps' => [[
+                        'ok' => false,
+                        'name' => 'ItsmService',
+                        'detail' => 'Deploy the latest ColdAisle release.',
+                    ]],
+                ]);
+            }
+            $override = $_POST;
+            $override['tls_verify'] = !empty($_POST['sdp_tls_verify'])
+                || !empty($_POST['snow_tls_verify'])
+                || !empty($_POST['zd_tls_verify'])
+                || !empty($_POST['jira_tls_verify'])
+                || !empty($_POST['fs_tls_verify']);
+            try {
+                if ($section === 'sdp_exchange_code') {
+                    if (!class_exists('SdpCloudService')) {
+                        throw new RuntimeException('SdpCloudService is not installed.');
+                    }
+                    $result = SdpCloudService::exchangeGrantCode(
+                        (string)($_POST['sdp_grant_code'] ?? ''),
+                        $override
+                    );
+                } else {
+                    $prov = (string)($_POST['itsm_provider'] ?? '');
+                    $result = class_exists('ItsmService')
+                        ? ItsmService::testConnection($prov, $override)
+                        : SdpCloudService::testConnection($override);
+                }
+            } catch (Throwable $e) {
+                $result = [
+                    'ok' => false,
+                    'summary' => $e->getMessage(),
+                    'steps' => [],
+                ];
+            }
+            $json($result);
+        }
+
         if ($section === 'alerts_hub' || $section === 'power_alerts' || $section === 'env_alerts') {
             if (is_file(dirname(__DIR__) . '/src/Services/AlertService.php')) {
                 require_once dirname(__DIR__) . '/src/Services/AlertService.php';
@@ -867,6 +927,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             'snmp_threshold_save', 'snmp_threshold_delete',
             'noc', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
             'diagnostics', 'schema_ensure', 'smb_backup_save', 'smb_backup_test',
+            'sdp', 'itsm', 'test_sdp', 'test_itsm', 'sdp_exchange_code',
         ], true)) {
             $export = var_export($config, true);
             $php = "<?php\n/** ColdAisle configuration — updated via Settings UI */\ndeclare(strict_types=1);\n\nreturn {$export};\n";
@@ -896,6 +957,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redirHash = '#ldaps';
     } elseif ($secPost === 'mail' || $secPost === 'test_mail') {
         $redirHash = '#mail';
+    } elseif ($secPost === 'sdp' || $secPost === 'itsm' || $secPost === 'test_sdp' || $secPost === 'test_itsm' || $secPost === 'sdp_exchange_code') {
+        $redirHash = '#sdp';
     } elseif (in_array($secPost, [
         'power_alerts', 'env_alerts', 'alerts_hub', 'alert_subscription_save', 'alert_subscription_delete',
         'snmp_threshold_save', 'snmp_threshold_delete',
@@ -923,6 +986,33 @@ $mailCfg = class_exists('MailService') ? MailService::config() : [
 $mailStatus = class_exists('MailService')
     ? MailService::status()
     : ['ready' => false, 'enabled' => false, 'label' => 'Unavailable', 'detail' => 'MailService not deployed on this host.'];
+$sdpCfg = class_exists('SdpCloudService') ? SdpCloudService::config() : [];
+$itsmProvider = class_exists('ItsmService') ? ItsmService::activeId() : ((string)($sdpCfg['enabled'] ?? false) ? 'sdp' : '');
+$sdpStatus = class_exists('ItsmService')
+    ? ItsmService::status()
+    : (class_exists('SdpCloudService')
+        ? SdpCloudService::status()
+        : ['ready' => false, 'enabled' => false, 'label' => 'Unavailable', 'detail' => 'Ticketing services not deployed on this host.']);
+$snowCfg = class_exists('ItsmSnowService') ? ItsmSnowService::config() : [];
+$zdCfg = class_exists('ItsmZendeskService') ? ItsmZendeskService::config() : [];
+$jiraCfg = class_exists('ItsmJiraService') ? ItsmJiraService::config() : [];
+$fsCfg = class_exists('ItsmFreshserviceService') ? ItsmFreshserviceService::config() : [];
+$sdpWebhookUrl = class_exists('SdpCloudService') ? SdpCloudService::webhookUrl() : '';
+$sdpHasSecret = class_exists('SdpCloudService') && ($sdpCfg['webhook_secret'] ?? '') !== '';
+$sdpHasRefresh = class_exists('SdpCloudService') && ($sdpCfg['refresh_token'] ?? '') !== '';
+$sdpHasClientSecret = class_exists('SdpCloudService') && ($sdpCfg['client_secret'] ?? '') !== '';
+$sdpPayloadExample = <<<'JSON'
+{
+  "event": "updated",
+  "request": {
+    "id": "$Request.ID",
+    "display_id": "$Request.DisplayID",
+    "subject": "$Request.Subject",
+    "description": "$Request.Description",
+    "status": "$Request.Status"
+  }
+}
+JSON;
 $powerAlerts = class_exists('PowerAlertService')
     ? PowerAlertService::settings()
     : [
@@ -2081,6 +2171,239 @@ try {
         <div id="mail_test_body" class="ldaps-modal-body"></div>
         <div class="ldaps-modal-foot">
             <button type="button" class="btn btn-secondary" data-mail-close>Close</button>
+        </div>
+    </div>
+</div>
+
+<div class="card" id="sdp">
+    <div class="card-header flex-between">
+        <h2>Ticketing (ITSM)</h2>
+        <span class="badge <?= !empty($sdpStatus['ready']) ? 'badge-success' : (!empty($sdpStatus['enabled']) ? 'badge-warning' : '') ?>"
+              title="<?= App::e($sdpStatus['detail'] ?? '') ?>">
+            <?= App::e($sdpStatus['label'] ?? '—') ?>
+        </span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size:.9rem;margin-top:0">
+            Link work orders to one ticketing system:
+            ManageEngine ServiceDesk Cloud, ServiceNow, Zendesk, Jira, or Freshservice.
+            ColdAisle calls the vendor <strong>outbound over HTTPS</strong> — the DCIM host
+            does not need to be on the public internet. Use
+            <strong>Refresh from …</strong> on a work order to pull ticket status.
+        </p>
+        <p class="text-muted" style="font-size:.8rem;margin:0 0 1rem">
+            <?= App::e($sdpStatus['detail'] ?? '') ?>
+        </p>
+
+        <form method="post" class="form-grid" id="sdp_settings_form">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="section" value="itsm">
+
+            <div class="form-row"><label>Active system</label>
+                <select class="form-control" name="itsm_provider" id="itsm_provider">
+                    <option value="">None (work orders stay internal)</option>
+                    <?php
+                    $itsmProviders = class_exists('ItsmService') ? ItsmService::providers() : ['sdp' => 'ManageEngine ServiceDesk Cloud'];
+                    foreach ($itsmProviders as $pid => $plab): ?>
+                        <option value="<?= App::e($pid) ?>" <?= $itsmProvider === $pid ? 'selected' : '' ?>>
+                            <?= App::e($plab) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+
+            <div data-itsm-panel="sdp" <?= $itsmProvider === 'sdp' ? '' : 'hidden' ?>>
+            <input type="hidden" name="sdp_enabled" value="<?= $itsmProvider === 'sdp' ? '1' : '0' ?>" id="sdp_enabled_flag">
+            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">ServiceDesk Cloud portal</h4></div>
+            <div class="form-row"><label>Data center</label>
+                <select class="form-control" name="sdp_dc">
+                    <?php
+                    $sdpDc = (string)($sdpCfg['dc'] ?? 'us');
+                    $dcs = class_exists('SdpCloudService') ? SdpCloudService::datacenters() : ['us' => ['label' => 'United States']];
+                    foreach ($dcs as $code => $info): ?>
+                        <option value="<?= App::e($code) ?>" <?= $sdpDc === $code ? 'selected' : '' ?>>
+                            <?= App::e((string)($info['label'] ?? $code)) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row"><label>Portal name</label>
+                <input class="form-control" name="sdp_portal" id="sdp_portal"
+                       value="<?= App::e((string)($sdpCfg['portal'] ?? '')) ?>"
+                       placeholder="acme (from /app/acme/ in the SDP URL)"
+                       autocomplete="off"></div>
+            <div class="form-row full"><label>Custom domain (optional)</label>
+                <input class="form-control" name="sdp_custom_domain"
+                       value="<?= App::e((string)($sdpCfg['custom_domain'] ?? '')) ?>"
+                       placeholder="https://servicedesk.contoso.com"
+                       autocomplete="off">
+                <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                    Leave blank to use the regional ManageEngine host. If set, API calls go to
+                    <code>{domain}/app/{portal}/api/v3/…</code>
+                </p>
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="sdp_tls_verify" value="1"
+                    <?= !isset($sdpCfg['tls_verify']) || !empty($sdpCfg['tls_verify']) ? 'checked' : '' ?>>
+                Verify TLS certificates (recommended)
+            </label></div>
+
+            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Zoho OAuth (Self Client)</h4></div>
+            <div class="form-row full">
+                <p class="text-muted" style="font-size:.8rem;margin:0">
+                    1. <a href="https://api-console.zoho.com/" target="_blank" rel="noopener">Zoho API Console</a>
+                    → <strong>Self Client</strong> (enable Multi-DC if you are not on US).<br>
+                    2. Generate a code with scope
+                    <code><?= App::e(class_exists('SdpCloudService') ? SdpCloudService::oauthScope() : 'SDPOnDemand.requests.ALL') ?></code>
+                    (codes expire in a few minutes).<br>
+                    3. Paste Client ID, Client Secret, and the grant code below, then
+                    <strong>Exchange code</strong>. ColdAisle stores the refresh token encrypted.
+                </p>
+            </div>
+            <div class="form-row"><label>Client ID</label>
+                <input class="form-control" name="sdp_client_id" id="sdp_client_id"
+                       value="<?= App::e((string)($sdpCfg['client_id'] ?? '')) ?>"
+                       autocomplete="off"></div>
+            <div class="form-row"><label>Client secret</label>
+                <input class="form-control" type="password" name="sdp_client_secret" id="sdp_client_secret"
+                       value="" placeholder="<?= $sdpHasClientSecret ? '•••• saved (leave blank to keep)' : '' ?>"
+                       autocomplete="new-password"></div>
+            <div class="form-row full"><label>Grant code (from Self Client, not saved)</label>
+                <input class="form-control" name="sdp_grant_code" id="sdp_grant_code"
+                       value="" placeholder="Paste once, then Exchange code"
+                       autocomplete="off"></div>
+            <div class="form-row full"><label>Refresh token (optional paste)</label>
+                <input class="form-control" type="password" name="sdp_refresh_token" id="sdp_refresh_token"
+                       value="" placeholder="<?= $sdpHasRefresh ? '•••• saved (leave blank to keep)' : 'Usually filled by Exchange code' ?>"
+                       autocomplete="new-password"></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="sdp_clear_tokens" value="1">
+                Clear stored refresh / access tokens
+            </label></div>
+
+            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Request defaults</h4></div>
+            <div class="form-row"><label>Requester email (optional)</label>
+                <input class="form-control" type="email" name="sdp_requester_email"
+                       value="<?= App::e((string)($sdpCfg['requester_email'] ?? '')) ?>"
+                       placeholder="Must exist as a requester in SDP"></div>
+            <div class="form-row"><label>Request type name</label>
+                <input class="form-control" name="sdp_request_type"
+                       value="<?= App::e((string)($sdpCfg['request_type'] ?? '')) ?>"
+                       placeholder="Incident (must match SDP exactly)"></div>
+            <div class="form-row"><label>Category name</label>
+                <input class="form-control" name="sdp_category"
+                       value="<?= App::e((string)($sdpCfg['category'] ?? '')) ?>"
+                       placeholder="Optional"></div>
+            <div class="form-row"><label>Site name</label>
+                <input class="form-control" name="sdp_site"
+                       value="<?= App::e((string)($sdpCfg['site'] ?? '')) ?>"
+                       placeholder="Optional"></div>
+            <div class="form-row"><label>Close status name</label>
+                <input class="form-control" name="sdp_closed_status"
+                       value="<?= App::e((string)($sdpCfg['closed_status'] ?? 'Closed')) ?>"></div>
+            <div class="form-row"><label>Cancel status name</label>
+                <input class="form-control" name="sdp_cancelled_status"
+                       value="<?= App::e((string)($sdpCfg['cancelled_status'] ?? 'Cancelled')) ?>"></div>
+            <div class="form-row"><label>In-progress status name</label>
+                <input class="form-control" name="sdp_in_progress_status"
+                       value="<?= App::e((string)($sdpCfg['in_progress_status'] ?? '')) ?>"
+                       placeholder="Leave blank to skip remote status on Start work"></div>
+
+            <div class="form-row full"><label>
+                <input type="checkbox" name="sdp_auto_create" value="1"
+                    <?= !isset($sdpCfg['auto_create']) || !empty($sdpCfg['auto_create']) ? 'checked' : '' ?>>
+                Create a ServiceDesk request when a work order is created
+            </label></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="sdp_auto_note" value="1"
+                    <?= !isset($sdpCfg['auto_note']) || !empty($sdpCfg['auto_note']) ? 'checked' : '' ?>>
+                Add a ServiceDesk note when work-order status changes
+            </label></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="sdp_close_on_complete" value="1"
+                    <?= !empty($sdpCfg['close_on_complete']) ? 'checked' : '' ?>>
+                Set the ServiceDesk status to Close status when the work order is completed
+            </label></div>
+
+            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Pull from ServiceDesk (recommended)</h4></div>
+            <div class="form-row full">
+                <p class="text-muted" style="font-size:.8rem;margin:0">
+                    The DCIM server only needs <em>outbound</em> HTTPS to Zoho (same as Updates).
+                    On a work order, use <strong>Refresh from ServiceDesk</strong> to pull the
+                    current ticket. Link an existing request by display id if the ticket started in SDP.
+                </p>
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="sdp_inbound_status" value="1"
+                    <?= !isset($sdpCfg['inbound_status']) || !empty($sdpCfg['inbound_status']) ? 'checked' : '' ?>>
+                Map ServiceDesk status onto the work order when pulling
+                (Closed → Completed, no inventory apply)
+            </label></div>
+
+            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Webhook (optional — public URL)</h4></div>
+            <div class="form-row full">
+                <p class="text-muted" style="font-size:.8rem;margin:0">
+                    Leave this off unless ColdAisle is reachable from the internet
+                    (Zoho’s cloud must POST to your URL). Most internal DCIM installs
+                    should use pull instead of a webhook.
+                </p>
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="sdp_webhook_enabled" value="1"
+                    <?= !empty($sdpCfg['webhook_enabled']) ? 'checked' : '' ?>>
+                Allow inbound ServiceDesk webhooks (requires a public HTTPS URL)
+            </label></div>
+            <?php if (!empty($sdpCfg['webhook_enabled'])): ?>
+            <div class="form-row full">
+                <p class="text-muted" style="font-size:.8rem;margin:0">
+                    In SDP Cloud: <strong>Admin → Developer Space → Webhooks</strong>, then a
+                    <strong>Custom Trigger</strong> on Requests. Method POST, JSON body.
+                    Token is in the query string.
+                </p>
+            </div>
+            <div class="form-row full"><label>Webhook URL</label>
+                <input class="form-control" readonly value="<?= App::e($sdpWebhookUrl) ?>"
+                       onclick="this.select()"></div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="sdp_webhook_regenerate" value="1">
+                Rotate webhook secret (invalidates the URL above after save)
+            </label>
+                <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                    <?= $sdpHasSecret ? 'A secret is stored (encrypted).' : 'A secret is generated when you enable the webhook and save.' ?>
+                </p>
+            </div>
+            <div class="form-row full"><label>
+                <input type="checkbox" name="sdp_inbound_create" value="1"
+                    <?= !empty($sdpCfg['inbound_create']) ? 'checked' : '' ?>>
+                Create a work order when SDP sends a request we do not already know
+            </label></div>
+            <div class="form-row full"><label>Suggested JSON body for the SDP webhook</label>
+                <textarea class="form-control" rows="12" readonly onclick="this.select()"
+                          style="font-family:ui-monospace,Consolas,monospace;font-size:.8rem"><?= App::e($sdpPayloadExample) ?></textarea>
+            </div>
+            <?php endif; ?>
+
+            <?php require __DIR__ . '/_itsm_provider_forms.php'; ?>
+
+            <div class="form-row full" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+                <button class="btn btn-primary" type="submit">Save ticketing</button>
+                <button class="btn btn-secondary" type="button" id="sdp_test_btn">Test connection</button>
+                <button class="btn btn-secondary" type="button" id="sdp_exchange_btn">Exchange SDP code</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div id="sdp_test_modal" class="ldaps-modal" hidden aria-hidden="true">
+    <div class="ldaps-modal-backdrop" data-sdp-close></div>
+    <div class="ldaps-modal-panel ldaps-pending" role="dialog" aria-modal="true" aria-labelledby="sdp_test_title">
+        <div class="ldaps-modal-head">
+            <h3 id="sdp_test_title">ServiceDesk test</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-sdp-close aria-label="Close">✕</button>
+        </div>
+        <div id="sdp_test_body" class="ldaps-modal-body"></div>
+        <div class="ldaps-modal-foot">
+            <button type="button" class="btn btn-secondary" data-sdp-close>Close</button>
         </div>
     </div>
 </div>
@@ -4026,6 +4349,119 @@ function settingsTestPendingHtml(msg, sub) {
             btn.disabled = false;
         });
     });
+})();
+
+// Ticketing provider panels
+(function () {
+    var sel = document.getElementById('itsm_provider');
+    if (!sel) return;
+    function sync() {
+        var v = sel.value;
+        document.querySelectorAll('[data-itsm-panel]').forEach(function (el) {
+            el.hidden = el.getAttribute('data-itsm-panel') !== v;
+        });
+        var ex = document.getElementById('sdp_exchange_btn');
+        if (ex) ex.style.display = v === 'sdp' ? '' : 'none';
+        var flag = document.getElementById('sdp_enabled_flag');
+        if (flag) flag.value = v === 'sdp' ? '1' : '0';
+    }
+    sel.addEventListener('change', sync);
+    sync();
+})();
+
+// ServiceDesk Cloud test / grant-code exchange
+(function () {
+    var modal = document.getElementById('sdp_test_modal');
+    var body = document.getElementById('sdp_test_body');
+    var title = document.getElementById('sdp_test_title');
+    var form = document.getElementById('sdp_settings_form');
+    var testBtn = document.getElementById('sdp_test_btn');
+    var exchBtn = document.getElementById('sdp_exchange_btn');
+    if (!modal || !body || !form) return;
+    var panel = modal.querySelector('.ldaps-modal-panel');
+
+    function openModal() {
+        modal.hidden = false;
+        modal.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+    }
+    function closeModal() {
+        modal.hidden = true;
+        modal.setAttribute('aria-hidden', 'true');
+        if (!document.querySelector('.ldaps-modal:not([hidden]), .app-modal:not([hidden])')) {
+            document.body.style.overflow = '';
+        }
+    }
+    modal.querySelectorAll('[data-sdp-close]').forEach(function (el) {
+        el.addEventListener('click', closeModal);
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !modal.hidden) closeModal();
+    });
+    function showResult(data, passTitle, failTitle) {
+        var ok = !!(data && data.ok);
+        panel.classList.remove('ldaps-pass', 'ldaps-fail', 'ldaps-pending');
+        panel.classList.add(ok ? 'ldaps-pass' : 'ldaps-fail');
+        title.textContent = ok ? passTitle : failTitle;
+        var html = '<p class="ldaps-summary">' + settingsTestEsc(data.summary || (ok ? 'OK' : 'Failed')) + '</p>';
+        html += settingsTestStepsHtml(data.steps || []);
+        body.innerHTML = html;
+    }
+    function run(section, pendingMsg, passTitle, failTitle, extra) {
+        panel.classList.remove('ldaps-pass', 'ldaps-fail');
+        panel.classList.add('ldaps-pending');
+        title.textContent = pendingMsg;
+        body.innerHTML = settingsTestPendingHtml(pendingMsg, 'Calling Zoho / ServiceDesk — this can take several seconds.');
+        openModal();
+        var fd = new FormData(form);
+        fd.set('section', section);
+        fd.set('_csrf', (window.ColdAisle && window.ColdAisle.csrf) || form.querySelector('[name=_csrf]').value);
+        if (extra) {
+            Object.keys(extra).forEach(function (k) { fd.set(k, extra[k]); });
+        }
+        [testBtn, exchBtn].forEach(function (b) { if (b) b.disabled = true; });
+        fetch(window.location.pathname + (window.location.search || ''), {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+        }).then(function (r) {
+            return r.json().then(function (j) { return j; }).catch(function () {
+                return { ok: false, summary: 'Non-JSON response (HTTP ' + r.status + ')', steps: [] };
+            });
+        }).then(function (data) {
+            showResult(data || {}, passTitle, failTitle);
+        }).catch(function (err) {
+            showResult({
+                ok: false,
+                summary: 'Network error: ' + (err && err.message ? err.message : 'request failed'),
+                steps: []
+            }, passTitle, failTitle);
+        }).finally(function () {
+            [testBtn, exchBtn].forEach(function (b) { if (b) b.disabled = false; });
+        });
+    }
+    if (testBtn) {
+        testBtn.addEventListener('click', function () {
+            run('test_itsm', 'Testing ticketing connection…', 'Ticketing connection works', 'Ticketing test failed');
+        });
+    }
+    if (exchBtn) {
+        exchBtn.addEventListener('click', function () {
+            var codeEl = document.getElementById('sdp_grant_code');
+            var code = codeEl && codeEl.value ? codeEl.value.trim() : '';
+            if (!code) {
+                openModal();
+                showResult({
+                    ok: false,
+                    summary: 'Paste the Self Client grant code first (it expires in a few minutes).',
+                    steps: []
+                }, 'Token saved', 'Exchange failed');
+                return;
+            }
+            run('sdp_exchange_code', 'Exchanging grant code…', 'Refresh token saved', 'Exchange failed');
+        });
+    }
 })();
 
 // LDAPS connection test modal

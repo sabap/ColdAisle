@@ -1018,6 +1018,20 @@ try {
             $pdo->exec('UPDATE disposals SET ' . implode(', ', $sets));
         }
     }
+    if (tableExists($pdo, 'work_orders')) {
+        $cols = columns($pdo, 'work_orders');
+        $sets = [];
+        foreach (['itsm_request_id', 'itsm_display_id', 'itsm_url', 'itsm_last_error', 'change_ticket'] as $c) {
+            if (hasCol($cols, $c)) {
+                $sets[] = "{$c} = NULL";
+            }
+        }
+        if ($sets) {
+            $pdo->exec('UPDATE work_orders SET ' . implode(', ', $sets));
+            out('work_orders: ITSM / ticket fields cleared');
+        }
+    }
+
     if (tableExists($pdo, 'device_ports') && hasCol(columns($pdo, 'device_ports'), 'mac_address')) {
         // Scrub port MACs deterministically
         $ports = $pdo->query(
@@ -1064,8 +1078,10 @@ try {
         $stats['rows_updated'] += upsertSettings($pdo, $pairs);
         // Remove icmp alert state keys that embed real device ids only (optional keep)
         $pdo->exec("DELETE FROM settings WHERE setting_key LIKE 'icmp_alert_%'");
+        $pdo->exec("DELETE FROM settings WHERE setting_key LIKE 'sdp_%'");
+        $pdo->exec("DELETE FROM settings WHERE setting_key LIKE 'itsm_%' OR setting_key LIKE 'snow_%' OR setting_key LIKE 'zd_%' OR setting_key LIKE 'jira_%' OR setting_key LIKE 'fs_%'");
         $stats['tables_touched']++;
-        out('settings: org/demo flags applied');
+        out('settings: org/demo flags applied (SDP tokens cleared)');
     }
 
     // --- 17) Disable SNMP completely + freeze chart history ---
