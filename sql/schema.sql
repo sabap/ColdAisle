@@ -349,6 +349,7 @@ CREATE TABLE devices (
     snmp_last_poll_at DATETIME2 NULL,
     snmp_last_poll_watts DECIMAL(18,4) NULL,
     snmp_last_poll_amps DECIMAL(18,4) NULL,
+    last_poll_json NVARCHAR(MAX) NULL,
     notes NVARCHAR(MAX) NULL, -- legacy freeform; prefer device_notes
     custom_fields NVARCHAR(MAX) NULL, -- JSON
     is_active BIT NOT NULL DEFAULT 1,
@@ -787,6 +788,21 @@ CREATE TABLE snmp_readings (
 GO
 
 CREATE NONCLUSTERED INDEX IX_snmp_readings_target ON snmp_readings(target_id, polled_at DESC);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'device_snmp_readings')
+CREATE TABLE device_snmp_readings (
+    reading_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    device_id INT NOT NULL,
+    metric_name NVARCHAR(100) NOT NULL,
+    metric_value DECIMAL(18,6) NULL,
+    metric_text NVARCHAR(255) NULL,
+    polled_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_dsr_device_metric_time')
+CREATE NONCLUSTERED INDEX IX_dsr_device_metric_time ON device_snmp_readings(device_id, metric_name, polled_at DESC);
 GO
 
 -- ============================================================

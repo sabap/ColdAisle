@@ -561,7 +561,35 @@ class SnmpPoller
         ) {
             $devicePatch['model'] = mb_substr($modelFromSnmp, 0, 100);
         }
-        Database::update('devices', $devicePatch, 'device_id = :id', [':id' => (int)$device['device_id']]);
+        $pollNow = date('Y-m-d H:i:s');
+        $devicePatch['snmp_last_poll_at'] = $pollNow;
+        $snapshot = [
+            'polled_at' => $pollNow,
+            'template_id' => $templateId,
+            'template_name' => (string)($tpl['name'] ?? ''),
+            'ok' => (int)$got['ok'],
+            'failed' => (int)($got['failed'] ?? 0),
+            'metrics' => $metrics,
+        ];
+        try {
+            $devicePatch['last_poll_json'] = json_encode($snapshot, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $eEnc) {
+            unset($devicePatch['last_poll_json']);
+        }
+        try {
+            Database::update('devices', $devicePatch, 'device_id = :id', [':id' => (int)$device['device_id']]);
+        } catch (Throwable $eUp) {
+            unset($devicePatch['last_poll_json']);
+            Database::update('devices', $devicePatch, 'device_id = :id', [':id' => (int)$device['device_id']]);
+        }
+
+        if (class_exists('DeviceSnmpHistoryService')) {
+            try {
+                DeviceSnmpHistoryService::record((int)$device['device_id'], is_array($metrics) ? $metrics : [], $oidMap);
+            } catch (Throwable $eHist) {
+                App::log('DeviceSnmpHistory device_id=' . (int)$device['device_id'] . ': ' . $eHist->getMessage(), 'warning');
+            }
+        }
 
         // Env sensors: temperature.* / humidity.* → last_value + env_readings
         $env = ['updated' => 0, 'readings' => 0, 'unmatched' => 0, 'keys' => 0];

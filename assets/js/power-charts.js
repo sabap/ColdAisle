@@ -454,14 +454,19 @@
     }
 
     var base = (window.ColdAisle && window.ColdAisle.baseUrl) || '';
-    var url = base.replace(/\/$/, '') + '/api/power_history.php?scope=' + encodeURIComponent(scope)
-      + (id ? '&id=' + encodeURIComponent(id) : '');
-    if (from && to) {
+    var url;
+    if (scope === 'device_snmp' || scope === 'device') {
+      url = base.replace(/\/$/, '') + '/api/device_snmp_history.php?device_id=' + encodeURIComponent(id);
+    } else {
+      url = base.replace(/\/$/, '') + '/api/power_history.php?scope=' + encodeURIComponent(scope)
+        + (id ? '&id=' + encodeURIComponent(id) : '');
+    }
+    if (scope !== 'device_snmp' && scope !== 'device' && from && to) {
       url += '&from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
-    } else if (preset) {
+    } else if (scope !== 'device_snmp' && scope !== 'device' && preset) {
       url += '&preset=' + encodeURIComponent(preset);
     } else {
-      url += '&hours=' + hours;
+      url += (url.indexOf('?') >= 0 ? '&' : '?') + 'hours=' + hours;
     }
 
     var charts = root.querySelectorAll('[data-metric]:not([data-unsupported="1"])');

@@ -2447,6 +2447,76 @@ if ($action === 'new' || $id) {
                                 ?>
                             </dd></div>
                         </dl>
+                        <?php
+                        $liveMetrics = [];
+                        if (!empty($device['last_poll_json'])) {
+                            $liveSnap = json_decode((string)$device['last_poll_json'], true);
+                            if (is_array($liveSnap) && !empty($liveSnap['metrics']) && is_array($liveSnap['metrics'])) {
+                                $liveMetrics = $liveSnap['metrics'];
+                            }
+                        }
+                        $oidMapLive = [];
+                        if ($siteTpl && !empty($siteTpl['oid_map'])) {
+                            $oidMapLive = json_decode((string)$siteTpl['oid_map'], true) ?: [];
+                            if (!is_array($oidMapLive)) {
+                                $oidMapLive = [];
+                            }
+                        }
+                        $liveRows = [];
+                        $chartKeys = [];
+                        if (class_exists('DeviceSnmpHistoryService') && ($liveMetrics || $oidMapLive)) {
+                            $keys = array_unique(array_merge(array_keys($oidMapLive), array_keys($liveMetrics)));
+                            foreach ($keys as $mk) {
+                                $mk = (string)$mk;
+                                if ($mk === '' || str_starts_with($mk, '_')) {
+                                    continue;
+                                }
+                                $sample = $liveMetrics[$mk] ?? $liveMetrics[strtolower($mk)] ?? null;
+                                $split = DeviceSnmpHistoryService::splitSample($sample);
+                                $liveRows[] = [
+                                    'key' => $mk,
+                                    'label' => DeviceSnmpHistoryService::labelFor($mk),
+                                    'display' => DeviceSnmpHistoryService::formatDisplay($mk, $split['raw'], $split['numeric']),
+                                    'chart' => DeviceSnmpHistoryService::shouldChart($mk, $oidMapLive),
+                                    'unit' => DeviceSnmpHistoryService::unitFor($mk),
+                                ];
+                                if (DeviceSnmpHistoryService::shouldChart($mk, $oidMapLive)) {
+                                    $chartKeys[] = $mk;
+                                }
+                            }
+                        }
+                        $chartColors = ['#38bdf8', '#a78bfa', '#34d399', '#fbbf24', '#fb923c', '#f472b6'];
+                        ?>
+                        <?php if ($liveRows): ?>
+                            <h3 style="font-size:.9rem;margin:1rem 0 .4rem">Live SNMP fields</h3>
+                            <p class="text-muted" style="font-size:.75rem;margin:0 0 .5rem">
+                                From the last poll of this device’s site OID template — add more fields in Discover.
+                            </p>
+                            <dl class="view-dl" id="snmpLiveFields">
+                                <?php foreach ($liveRows as $lr): ?>
+                                    <div><dt><?= App::e($lr['label']) ?></dt><dd><?= App::e($lr['display']) ?></dd></div>
+                                <?php endforeach; ?>
+                            </dl>
+                        <?php elseif ($siteTplId > 0): ?>
+                            <p class="text-muted" id="snmpLiveFieldsHint" style="font-size:.8rem;margin:.75rem 0 0">
+                                Poll now (or enable scheduled poll) to fill live fields and start history for CPU / memory / other gauges.
+                            </p>
+                        <?php endif; ?>
+                        <?php if ($chartKeys && $siteTplId > 0): ?>
+                            <div class="power-history-wide mb-0" style="margin-top:.85rem"
+                                 data-power-history data-scope="device_snmp"
+                                 data-id="<?= (int)$device['device_id'] ?>" data-hours="24">
+                                <h3 style="font-size:.9rem;margin:0 0 .45rem">History (24h)</h3>
+                                <?php foreach ($chartKeys as $ci => $ck): ?>
+                                    <div class="power-chart" data-metric="<?= App::e($ck) ?>"
+                                         data-unit="<?= App::e(class_exists('DeviceSnmpHistoryService') ? DeviceSnmpHistoryService::unitFor($ck) : '%') ?>"
+                                         data-label="<?= App::e(class_exists('DeviceSnmpHistoryService') ? DeviceSnmpHistoryService::labelFor($ck) : $ck) ?>"
+                                         data-color="<?= App::e($chartColors[$ci % count($chartColors)]) ?>"
+                                         data-height="120" data-outages="0" data-hide-empty="1"></div>
+                                <?php endforeach; ?>
+                            </div>
+                            <script src="<?= App::e(App::url('assets/js/power-charts.js')) ?>?v=10"></script>
+                        <?php endif; ?>
                         <?php if (!$discoverReady && $canSnmpActions): ?>
                             <p class="text-muted snmp-poll-stats">
                                 Discover needs manufacturer, model, and
@@ -2512,6 +2582,7 @@ if ($action === 'new' || $id) {
                                                 <th>Value</th>
                                                 <th>Hint</th>
                                                 <th>Score</th>
+                                                <th></th>
                                             </tr>
                                         </thead>
                                         <tbody id="snmpCandidateBody"></tbody>
@@ -2615,29 +2686,58 @@ if ($action === 'new' || $id) {
                         mapUl.innerHTML = '';
                         var map = data.proposed_map || {};
                         var keys = Object.keys(map);
+                        function defaultChart(key) {
+                            var k = String(key || '').toLowerCase();
+                            return /cpu|mem|pct|watt|amp|volt|temp|humid|load/.test(k)
+                                && !/descr|name|serial|uptime/.test(k);
+                        }
+                        function addMapRow(key, oid, chartOn) {
+                            if (!mapUl) return;
+                            var exists = mapUl.querySelector('input[data-metric="' + key.replace(/"/g, '') + '"]');
+                            if (exists) {
+                                exists.value = oid || exists.value;
+                                return;
+                            }
+                            var extraRow = document.getElementById('snmpExtraMapRow');
+                            var li = document.createElement('li');
+                            li.innerHTML = '<label>' + esc(key) + '</label>';
+                            var inp = document.createElement('input');
+                            inp.className = 'form-control';
+                            inp.dataset.metric = key;
+                            inp.value = oid || '';
+                            li.appendChild(inp);
+                            var lab = document.createElement('label');
+                            lab.style.cssText = 'display:flex;align-items:center;gap:.35rem;font-size:.75rem;margin:.35rem 0 0;font-weight:400';
+                            var cb = document.createElement('input');
+                            cb.type = 'checkbox';
+                            cb.className = 'snmp-chart-flag';
+                            cb.dataset.metric = key;
+                            cb.checked = !!chartOn;
+                            lab.appendChild(cb);
+                            lab.appendChild(document.createTextNode(' Keep history / graph'));
+                            li.appendChild(lab);
+                            if (extraRow && extraRow.parentNode) {
+                                mapUl.insertBefore(li, extraRow.parentNode);
+                            } else {
+                                mapUl.appendChild(li);
+                            }
+                        }
                         if (!keys.length) {
                             mapUl.innerHTML = '<li class="text-muted">No proposed metrics</li>';
                         } else {
                             keys.forEach(function (k) {
-                                var li = document.createElement('li');
-                                li.innerHTML = '<label>' + esc(k) + '</label>';
-                                var inp = document.createElement('input');
-                                inp.className = 'form-control';
-                                inp.dataset.metric = k;
-                                inp.value = map[k] || '';
-                                li.appendChild(inp);
-                                mapUl.appendChild(li);
+                                if (String(k).indexOf('_') === 0) return;
+                                addMapRow(k, map[k] || '', defaultChart(k));
                             });
-                            // Allow adding a freeform extra row
-                            var li2 = document.createElement('li');
-                            li2.innerHTML = '<label class="text-muted">+ metric</label>';
-                            var extra = document.createElement('input');
-                            extra.className = 'form-control';
-                            extra.placeholder = 'name=1.3.6… (optional)';
-                            extra.id = 'snmpExtraMapRow';
-                            li2.appendChild(extra);
-                            mapUl.appendChild(li2);
                         }
+                        var li2 = document.createElement('li');
+                        li2.innerHTML = '<label class="text-muted">+ metric</label>';
+                        var extra = document.createElement('input');
+                        extra.className = 'form-control';
+                        extra.placeholder = 'name=1.3.6… (optional)';
+                        extra.id = 'snmpExtraMapRow';
+                        li2.appendChild(extra);
+                        mapUl.appendChild(li2);
 
                         var tbody = document.getElementById('snmpCandidateBody');
                         tbody.innerHTML = '';
@@ -2651,13 +2751,32 @@ if ($action === 'new' || $id) {
                                 '<td><code style="font-size:.78rem">' + esc(c.oid) + '</code></td>' +
                                 '<td>' + esc(c.value) + '</td>' +
                                 '<td>' + esc(c.hint || '') + '</td>' +
-                                '<td>' + esc(c.score) + '</td>';
-                            tr.style.cursor = 'pointer';
-                            tr.title = 'Click to copy OID' + (nm ? ' · ' + nm : '');
-                            tr.addEventListener('click', function () {
-                                if (navigator.clipboard) navigator.clipboard.writeText(c.oid || '');
-                                toast('Copied ' + c.oid, 'info');
+                                '<td>' + esc(c.score) + '</td>' +
+                                '<td></td>';
+                            var addTd = tr.lastElementChild;
+                            var addBtn = document.createElement('button');
+                            addBtn.type = 'button';
+                            addBtn.className = 'btn btn-ghost btn-sm';
+                            addBtn.textContent = 'Add field';
+                            addBtn.title = 'Add this OID to the template as a live field';
+                            addBtn.addEventListener('click', function (ev) {
+                                ev.stopPropagation();
+                                var hint = String(c.hint || '').toLowerCase();
+                                var suggested = 'field';
+                                if (/cpu/.test(hint)) suggested = 'cpu_pct';
+                                else if (/mem/.test(hint)) suggested = 'mem_pct';
+                                else if (/temp/.test(hint)) suggested = 'temperature';
+                                else if (nm) suggested = String(nm).replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40);
+                                var key = window.prompt('Field name on the device (e.g. cpu_pct)', suggested);
+                                if (!key) return;
+                                key = String(key).trim().replace(/\s+/g, '_');
+                                if (!key) return;
+                                var numeric = c.numeric != null || /cpu|mem|pct|temp|watt|amp|volt|load/.test(hint);
+                                addMapRow(key, c.oid, numeric);
+                                toast('Added ' + key, 'success');
                             });
+                            addTd.appendChild(addBtn);
+                            tr.style.cursor = 'default';
                             tbody.appendChild(tr);
                         });
                         if (!(data.candidates || []).length) {
@@ -2679,10 +2798,15 @@ if ($action === 'new' || $id) {
                     }
                     function collectMap() {
                         var map = {};
-                        document.querySelectorAll('#snmpProposedMap input[data-metric]').forEach(function (inp) {
+                        var charts = [];
+                        document.querySelectorAll('#snmpProposedMap input[data-metric].form-control').forEach(function (inp) {
                             var k = inp.dataset.metric;
                             var v = (inp.value || '').trim();
                             if (k && v) map[k] = v;
+                        });
+                        document.querySelectorAll('#snmpProposedMap input.snmp-chart-flag').forEach(function (cb) {
+                            var k = cb.dataset.metric;
+                            if (k && cb.checked && map[k]) charts.push(k);
                         });
                         var extra = document.getElementById('snmpExtraMapRow');
                         if (extra && extra.value) {
@@ -2692,6 +2816,9 @@ if ($action === 'new' || $id) {
                                 var ev = parts.slice(1).join('=').trim();
                                 if (ek && ev) map[ek] = ev;
                             }
+                        }
+                        if (document.querySelectorAll('#snmpProposedMap input.snmp-chart-flag').length) {
+                            map._charts = charts;
                         }
                         return map;
                     }
@@ -2857,7 +2984,8 @@ if ($action === 'new' || $id) {
                                 name: deviceLabel,
                                 host: deviceHost,
                                 timeoutMs: 55000,
-                                reload: false,
+                                reload: true,
+                                reloadDelayMs: 1100,
                                 request: function (ctx) {
                                     return api({ action: 'poll_now', device_id: deviceId }, (ctx && ctx.timeoutMs) || 55000);
                                 },
