@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **In-app update landing:** after Apply, return to Settings → Updates instead of a blank white page (keepalive flush had already sent the POST body, so the redirect header was ignored)
+
 ---
 
 ## [0.3.156] - 2026-08-20
