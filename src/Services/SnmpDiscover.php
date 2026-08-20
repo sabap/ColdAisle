@@ -14,6 +14,7 @@ class SnmpDiscover
      * - apc:     APC PowerNet / rPDU2 / EMS (existing tuned path — do not dilute)
      * - liebert: Vertiv / Emerson / Liebert LGP cooling
      * - idrac:   Dell iDRAC / OMSA BMC
+     * - cisco:   Cisco NX-OS / IOS / Catalyst (CISCO-ENVMON + CPU/mem; no IF-MIB flood)
      * - default: unknown vendors — generic MIB-II only (no vendor enterprise walks)
      *
      * Keep each walk list short: every empty root burns a full SNMP timeout under IIS.
@@ -107,6 +108,21 @@ class SnmpDiscover
         '1.3.6.1.4.1.674.10892.5.5.1',     // firmware inventory (narrow)
     ];
 
+    /**
+     * Cisco NX-OS / IOS / Catalyst (enterprise 9).
+     * Never walk IF-MIB ifTable (Nexus 9k has hundreds of ports).
+     * CISCO-ENVMON is the chassis health tree; CPU/mem are small tables.
+     */
+    private const WALK_ROOTS_CISCO = [
+        '1.3.6.1.2.1.1',
+        '1.3.6.1.2.1.2.2.1.2',
+        '1.3.6.1.2.1.2.2.1.6',
+        '1.3.6.1.4.1.9.9.13.1',          // CISCO-ENVMON (temp / fan / PSU)
+        '1.3.6.1.4.1.9.9.109.1.1.1',     // CISCO-PROCESS-MIB cpmCPUTotalTable
+        '1.3.6.1.4.1.9.9.48.1.1',        // CISCO-MEMORY-POOL-MIB
+        '1.3.6.1.4.1.9.9.91.1.1.1.1.4',  // CISCO-ENTITY-SENSOR-MIB entSensorValue
+    ];
+
     /** Unknown manufacturer — safe generic only (no enterprise vendor trees). */
     private const WALK_ROOTS_DEFAULT = [
         '1.3.6.1.2.1.1',
@@ -156,9 +172,9 @@ class SnmpDiscover
      *   model?:string,
      *   ruleset?:string
      * } $options
-     *   family: auto|cooling|power|ems|idrac|apc|liebert|default
+     *   family: auto|cooling|power|ems|idrac|apc|liebert|cisco|default
      *   manufacturer / model: inventory hints (prefer over sysDescr when set)
-     *   ruleset: force a ruleset id (apc|liebert|idrac|default)
+     *   ruleset: force a ruleset id (apc|liebert|idrac|cisco|default)
      * @return array{
      *   ok:bool,host:string,sysDescr:?string,candidates:list<array>,
      *   proposed_map:array<string,string>,walk_count:int,message:string,
@@ -168,7 +184,7 @@ class SnmpDiscover
     public static function discover(array $creds, array $options = []): array
     {
         $familyHint = strtolower(trim((string)($options['family'] ?? 'auto')));
-        $allowedFamily = ['auto', 'cooling', 'power', 'ems', 'ups', 'idrac', 'apc', 'liebert', 'default', 'server_bmc'];
+        $allowedFamily = ['auto', 'cooling', 'power', 'ems', 'ups', 'idrac', 'apc', 'liebert', 'cisco', 'default', 'server_bmc'];
         if (!in_array($familyHint, $allowedFamily, true)) {
             $familyHint = 'auto';
         }
@@ -267,6 +283,7 @@ class SnmpDiscover
         $coolingFocus = ($ruleset === 'liebert');
         $apcFocus = ($ruleset === 'apc');
         $idracFocus = ($ruleset === 'idrac');
+        $ciscoFocus = ($ruleset === 'cisco');
         $logStep(
             'ruleset=' . $ruleset
             . ' family=' . $familyHint
@@ -432,6 +449,32 @@ class SnmpDiscover
             '1.3.6.1.4.1.674.10892.5.4.1200.10.1.5.2',
             '1.3.6.1.4.1.674.10892.5.4.1100.50.1.5.1',
         ];
+        // Cisco NX-OS / IOS — CISCO-ENVMON + CPU/mem (first instances; walks fill the rest)
+        $leafCisco = [
+            // ciscoEnvMonTemperatureStatusValue °C
+            '1.3.6.1.4.1.9.9.13.1.3.1.3.1',
+            '1.3.6.1.4.1.9.9.13.1.3.1.3.2',
+            '1.3.6.1.4.1.9.9.13.1.3.1.3.3',
+            '1.3.6.1.4.1.9.9.13.1.3.1.3.4',
+            // ciscoEnvMonFanState
+            '1.3.6.1.4.1.9.9.13.1.4.1.3.1',
+            '1.3.6.1.4.1.9.9.13.1.4.1.3.2',
+            '1.3.6.1.4.1.9.9.13.1.4.1.3.3',
+            '1.3.6.1.4.1.9.9.13.1.4.1.3.4',
+            // ciscoEnvMonSupplyState
+            '1.3.6.1.4.1.9.9.13.1.5.1.3.1',
+            '1.3.6.1.4.1.9.9.13.1.5.1.3.2',
+            '1.3.6.1.4.1.9.9.13.1.5.1.3.3',
+            '1.3.6.1.4.1.9.9.13.1.5.1.3.4',
+            // cpmCPUTotal5minRev then legacy 5min
+            '1.3.6.1.4.1.9.9.109.1.1.1.1.8.1',
+            '1.3.6.1.4.1.9.9.109.1.1.1.1.8.2',
+            '1.3.6.1.4.1.9.9.109.1.1.1.1.5.1',
+            '1.3.6.1.4.1.9.9.109.1.1.1.1.5.2',
+            // ciscoMemoryPoolUsed / Free (pool 1 = Processor)
+            '1.3.6.1.4.1.9.9.48.1.1.1.5.1',
+            '1.3.6.1.4.1.9.9.48.1.1.1.6.1',
+        ];
 
         // EMS vs rPDU vs xPDU leaf order inside APC ruleset (preserve prior tuning)
         $looksEms = $apcFocus && (bool)preg_match(
@@ -467,6 +510,8 @@ class SnmpDiscover
             $leafGets = array_merge($leafSys, $leafLiebertId);
         } elseif ($idracFocus) {
             $leafGets = array_merge($leafSys, $leafIdrac);
+        } elseif ($ciscoFocus) {
+            $leafGets = array_merge($leafSys, $leafCisco);
         } elseif ($apcFocus) {
             if ($looksXpdu) {
                 // Row/modular xPDU only — never thrash rPDU 12/26 leaves (burns slow NMC budget)
@@ -495,6 +540,8 @@ class SnmpDiscover
             $leafBudget = 14.0; // ~1.5s/OID on old NMC; core totals + phases
         } elseif ($apcFocus && $looksPdu) {
             $leafBudget = 9.0;
+        } elseif ($ciscoFocus) {
+            $leafBudget = 8.0;
         }
         $totalBudget = $coolingFocus ? self::COOLING_TOTAL_BUDGET_SEC : 22.0;
         foreach ($leafGets as $oid) {
@@ -620,9 +667,14 @@ class SnmpDiscover
         $elapsed = microtime(true) - $discoverStarted;
         $haveEmsLive = ($emsTempHits + $emsHumHits) >= 2;
         $liebertHits = 0;
+        $ciscoHits = 0;
         foreach ($collected as $oidKey => $_) {
-            if (str_starts_with((string)$oidKey, '1.3.6.1.4.1.476.')) {
+            $ok = (string)$oidKey;
+            if (str_starts_with($ok, '1.3.6.1.4.1.476.')) {
                 $liebertHits++;
+            }
+            if (str_starts_with($ok, '1.3.6.1.4.1.9.')) {
+                $ciscoHits++;
             }
         }
         $walkDeadline = $coolingFocus ? self::COOLING_WALK_DEADLINE_SEC : self::WALK_DEADLINE_SEC;
@@ -678,11 +730,15 @@ class SnmpDiscover
 
         // Recount enterprise after walks
         $liebertHits = 0;
+        $ciscoHits = 0;
         $enterpriseHits = 0;
         foreach ($collected as $oidKey => $_) {
             $ok = (string)$oidKey;
             if (str_starts_with($ok, '1.3.6.1.4.1.476')) {
                 $liebertHits++;
+            }
+            if (str_starts_with($ok, '1.3.6.1.4.1.9.')) {
+                $ciscoHits++;
             }
             if (str_starts_with($ok, '1.3.6.1.4.1.') && !str_starts_with($ok, '1.3.6.1.4.1.99999')) {
                 $enterpriseHits++;
@@ -821,6 +877,10 @@ class SnmpDiscover
                     $proposed[$lkey] = $loid;
                 }
             }
+        }
+        // Cisco ruleset: seed chassis health from collected OIDs even if scoring is weak
+        if ($ciscoFocus) {
+            $proposed = self::injectCiscoMap($proposed, $collected);
         }
         // APC ruleset only: seed model-specific maps (never mix xPDU ↔ rack rPDU).
         if ($apcFocus) {
@@ -1002,7 +1062,8 @@ class SnmpDiscover
 
         $msg .= ' Ruleset: ' . $ruleset . '.';
         $msg .= ' Enterprise objects: ' . (int)$enterpriseHits
-            . ' (Liebert/Emerson 476: ' . (int)$liebertHits . ').';
+            . ' (Cisco 9: ' . (int)$ciscoHits
+            . '; Liebert/Emerson 476: ' . (int)$liebertHits . ').';
         $lgpIdentity = 0;
         $lgpConditions = 0;
         foreach (array_keys($collected) as $oidKey) {
@@ -1014,7 +1075,14 @@ class SnmpDiscover
                 $lgpConditions++;
             }
         }
-        if ($coolingFocus && $liebertHits === 0) {
+        if ($ciscoFocus && $ciscoHits === 0) {
+            $msg .= ' Auth works (sysDescr) but enterprise 1.3.6.1.4.1.9 returned nothing — '
+                . 'NX-OS SNMP view/community often allows mib-2 only. Include ciscoEnvMon '
+                . '(or enterprises) in the view, then Discover again.';
+            if ($errors) {
+                $msg .= ' Walk errors: ' . implode('; ', array_slice($errors, 0, 3)) . '.';
+            }
+        } elseif ($coolingFocus && $liebertHits === 0) {
             $msg .= ' Auth works (sysDescr) but enterprise 1.3.6.1.4.1.476 returned nothing — '
                 . 'use the same community as SolarWinds (e.g. SGMCLAN) for v2c, or fix VACM/AgentX for LGP. '
                 . 'Condition tables (…476.1.42.3…) are often empty on IS-UNITY-ICOM2 even when identity (…42.2…) works.';
@@ -1052,6 +1120,8 @@ class SnmpDiscover
                 'cooling_focus' => $coolingFocus,
                 'apc_focus' => $apcFocus,
                 'idrac_focus' => $idracFocus,
+                'cisco_focus' => $ciscoFocus,
+                'cisco_objects' => $ciscoHits,
                 'liebert_objects' => $liebertHits,
                 'enterprise_objects' => $enterpriseHits,
                 'walk_roots' => $walkRootStats,
@@ -2141,6 +2211,33 @@ class SnmpDiscover
             $score += 8;
         }
 
+        // Cisco NX-OS / IOS (enterprise 9) — chassis health, not IF-MIB
+        $isCiscoEnvMon = str_starts_with($oid, '1.3.6.1.4.1.9.9.13.');
+        $isCiscoTemp = (bool)preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.3\.1\.3(?:\.|$)/', $oid);
+        $isCiscoFan = (bool)preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.4\.1\.3(?:\.|$)/', $oid);
+        $isCiscoPsu = (bool)preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.5\.1\.3(?:\.|$)/', $oid);
+        $isCiscoCpu = str_starts_with($oid, '1.3.6.1.4.1.9.9.109.');
+        $isCiscoMem = str_starts_with($oid, '1.3.6.1.4.1.9.9.48.');
+        $isCiscoSensor = str_starts_with($oid, '1.3.6.1.4.1.9.9.91.');
+        if (str_starts_with($oid, '1.3.6.1.4.1.9.')) {
+            $score += 6;
+        }
+        if ($isCiscoTemp) {
+            $score += 20;
+        }
+        if ($isCiscoFan || $isCiscoPsu) {
+            $score += 14;
+        }
+        if ($isCiscoCpu) {
+            $score += 16;
+        }
+        if ($isCiscoMem) {
+            $score += 12;
+        }
+        if ($isCiscoSensor && !$isCiscoEnvMon) {
+            $score += 10;
+        }
+
         // Model / serial / hostname strings must not rank as power metrics
         if ($nonMetric) {
             $score -= 6;
@@ -2313,8 +2410,10 @@ class SnmpDiscover
         }
 
         // Unnamed OIDs with no metric keyword and only tiny enum-like values → drop
+        // Keep Cisco fan/PSU state (1–6) even without MIB names
         if (!$name && $num !== null && $num >= 0 && $num <= 5
             && !preg_match('/watt|power|amp|current|volt|load|temp/', $s)
+            && !str_starts_with($oid, '1.3.6.1.4.1.9.9.13.')
         ) {
             return 0;
         }
@@ -2333,6 +2432,19 @@ class SnmpDiscover
         }
         if (str_starts_with($oid, '1.3.6.1.4.1.99999.2.2')) {
             $hints[] = 'lab amps×10';
+        }
+        if (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.3\.1\.3(?:\.|$)/', $oid)) {
+            $hints[] = 'Cisco inlet/chassis temp °C';
+        } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.4\.1\.3(?:\.|$)/', $oid)) {
+            $hints[] = 'Cisco fan state';
+        } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.5\.1\.3(?:\.|$)/', $oid)) {
+            $hints[] = 'Cisco PSU state';
+        } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.109.')) {
+            $hints[] = 'Cisco CPU %';
+        } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.48.')) {
+            $hints[] = 'Cisco memory';
+        } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.91.')) {
+            $hints[] = 'Cisco entity sensor';
         }
 
         if ($name) {
@@ -2380,6 +2492,9 @@ class SnmpDiscover
                 || preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.(10|25)\./', $oid)
             ) {
                 $hints[] = 'MIB: environmental probe';
+            }
+            if (preg_match('/ciscoenvmon|ciscoprocess|ciscomemory|entitysensor|cpmcputotal/', $s)) {
+                $hints[] = 'Cisco chassis';
             }
             if (preg_match('/rpdu2|powernet-mib::|::apc|apc::/i', $s) || str_contains($oid, '.1.3.6.1.4.1.318.') || str_starts_with($oid, '1.3.6.1.4.1.318.')) {
                 $hints[] = 'APC PowerNet';
@@ -2462,6 +2577,10 @@ class SnmpDiscover
         foreach (self::proposeCoolingMapKeys($candidates) as $k => $oid) {
             $map[$k] = $oid;
         }
+        // Cisco NX-OS / IOS chassis (CISCO-ENVMON / CPU / memory)
+        foreach (self::proposeCiscoMapKeys($candidates) as $k => $oid) {
+            $map[$k] = $oid;
+        }
 
         // OIDs already claimed as env metrics must never become watts/amps
         $envOids = [];
@@ -2476,6 +2595,10 @@ class SnmpDiscover
             }
             // APC EMS / IEM / UIO env trees — not power
             if (preg_match('/1\.3\.6\.1\.4\.1\.318\.1\.1\.(10|25)\./', $oid)) {
+                return true;
+            }
+            // Cisco ENVMON / CPU / memory — not watts/amps
+            if (preg_match('/1\.3\.6\.1\.4\.1\.9\.9\.(13|48|91|109)\./', $oid)) {
                 return true;
             }
             if (preg_match('/\btemp|temperature|humid|humidity|dewpoint|probe|ems|iem|envmon|environmental\b/', $hay)
@@ -3264,6 +3387,78 @@ class SnmpDiscover
     }
 
     /**
+     * Cisco NX-OS / IOS chassis → map keys from CISCO-ENVMON / PROCESS / MEMORY.
+     *
+     * @param list<array{oid:string,score?:int}> $candidates
+     * @return array<string,string>
+     */
+    private static function proposeCiscoMapKeys(array $candidates): array
+    {
+        $out = [];
+        $cpuRev = null;
+        $cpuLegacy = null;
+        foreach ($candidates as $c) {
+            $oid = (string)($c['oid'] ?? '');
+            if ($oid === '' || !str_starts_with($oid, '1.3.6.1.4.1.9.')) {
+                continue;
+            }
+            if (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.3\.1\.3\.(\d+)$/', $oid, $m)) {
+                $key = 'temperature.' . $m[1];
+                if (!isset($out[$key])) {
+                    $out[$key] = $oid;
+                }
+            } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.4\.1\.3\.(\d+)$/', $oid, $m)) {
+                $key = 'fan_state.' . $m[1];
+                if (!isset($out[$key])) {
+                    $out[$key] = $oid;
+                }
+            } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.13\.1\.5\.1\.3\.(\d+)$/', $oid, $m)) {
+                $key = 'psu_state.' . $m[1];
+                if (!isset($out[$key])) {
+                    $out[$key] = $oid;
+                }
+            } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.109\.1\.1\.1\.1\.8\.(\d+)$/', $oid, $m)) {
+                if ($cpuRev === null || $m[1] === '1') {
+                    $cpuRev = $oid;
+                }
+            } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.109\.1\.1\.1\.1\.5\.(\d+)$/', $oid, $m)) {
+                if ($cpuLegacy === null || $m[1] === '1') {
+                    $cpuLegacy = $oid;
+                }
+            } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.48\.1\.1\.1\.5\.1$/', $oid)) {
+                $out['mem_used'] = $oid;
+            } elseif (preg_match('/^1\.3\.6\.1\.4\.1\.9\.9\.48\.1\.1\.1\.6\.1$/', $oid)) {
+                $out['mem_free'] = $oid;
+            }
+        }
+        if ($cpuRev !== null) {
+            $out['cpu_pct'] = $cpuRev;
+        } elseif ($cpuLegacy !== null) {
+            $out['cpu_pct'] = $cpuLegacy;
+        }
+        return $out;
+    }
+
+    /**
+     * @param array<string,string> $proposed
+     * @param array<string,mixed> $collected
+     * @return array<string,string>
+     */
+    private static function injectCiscoMap(array $proposed, array $collected): array
+    {
+        $fake = [];
+        foreach ($collected as $oid => $_) {
+            $fake[] = ['oid' => (string)$oid, 'score' => 20];
+        }
+        foreach (self::proposeCiscoMapKeys($fake) as $k => $oid) {
+            if (!isset($proposed[$k])) {
+                $proposed[$k] = $oid;
+            }
+        }
+        return $proposed;
+    }
+
+    /**
      * Liebert LGP condition present-values → cooling map keys.
      * Known community IDs: 5002 supply, 4291 return (iCOM / DS family).
      *
@@ -3507,6 +3702,22 @@ class SnmpDiscover
     }
 
     /**
+     * True when manufacturer looks like Cisco Systems (NX-OS / IOS / Catalyst).
+     */
+    public static function isCiscoManufacturer(?string $manufacturer): bool
+    {
+        $m = strtolower(trim((string)$manufacturer));
+        if ($m === '') {
+            return false;
+        }
+        return $m === 'cisco'
+            || str_starts_with($m, 'cisco ')
+            || str_starts_with($m, 'cisco,')
+            || str_starts_with($m, 'cisco.')
+            || str_starts_with($m, 'cisco systems');
+    }
+
+    /**
      * True when manufacturer looks like Liebert / Emerson / Vertiv cooling.
      */
     public static function isLiebertManufacturer(?string $manufacturer): bool
@@ -3519,7 +3730,7 @@ class SnmpDiscover
     }
 
     /**
-     * Pick Discover ruleset: apc | ups | liebert | idrac | default.
+     * Pick Discover ruleset: apc | ups | liebert | idrac | cisco | default.
      * Priority: forced ruleset → family hint → inventory manufacturer → sysDescr → default.
      */
     public static function resolveRulesetId(
@@ -3529,7 +3740,7 @@ class SnmpDiscover
         ?string $sysDescr
     ): string {
         $forced = strtolower(trim($forcedRuleset));
-        if (in_array($forced, ['apc', 'ups', 'liebert', 'idrac', 'default'], true)) {
+        if (in_array($forced, ['apc', 'ups', 'liebert', 'idrac', 'cisco', 'default'], true)) {
             return $forced;
         }
 
@@ -3539,6 +3750,9 @@ class SnmpDiscover
         }
         if (in_array($family, ['idrac', 'server_bmc'], true)) {
             return 'idrac';
+        }
+        if (in_array($family, ['cisco', 'nexus', 'nxos'], true)) {
+            return 'cisco';
         }
         if (in_array($family, ['ups'], true)) {
             return 'ups';
@@ -3554,6 +3768,9 @@ class SnmpDiscover
         // Inventory manufacturer (most reliable when set)
         if (self::isDellManufacturer($manufacturer)) {
             return 'idrac';
+        }
+        if (self::isCiscoManufacturer($manufacturer)) {
+            return 'cisco';
         }
         if (self::isLiebertManufacturer($manufacturer)) {
             return 'liebert';
@@ -3596,6 +3813,12 @@ class SnmpDiscover
             )) {
                 return 'apc';
             }
+            if (preg_match(
+                '/\b(nx-?os|nxos|nexus|catalyst|ios-xe|cisco nx-os|cisco ios|cisco systems)\b/',
+                $sys
+            )) {
+                return 'cisco';
+            }
         }
 
         return 'default';
@@ -3611,6 +3834,7 @@ class SnmpDiscover
             'ups' => self::WALK_ROOTS_UPS,
             'liebert' => self::WALK_ROOTS_LIEBERT,
             'idrac' => self::WALK_ROOTS_IDRAC,
+            'cisco' => self::WALK_ROOTS_CISCO,
             default => self::WALK_ROOTS_DEFAULT,
         };
     }

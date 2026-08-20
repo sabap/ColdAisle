@@ -196,6 +196,9 @@ try {
                 if (SnmpDiscover::isDellManufacturer($prereqs['vendor'])) {
                     $discoverOpts['family'] = 'idrac';
                 }
+                if (SnmpDiscover::isCiscoManufacturer($prereqs['vendor'])) {
+                    $discoverOpts['family'] = 'cisco';
+                }
                 $result = SnmpDiscover::discover($creds, $discoverOpts);
                 $mark(
                     'discover_ok walk=' . (int)($result['walk_count'] ?? 0)
