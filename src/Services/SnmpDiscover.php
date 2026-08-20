@@ -4136,11 +4136,15 @@ class SnmpDiscover
         ?string $notes = null
     ): array {
         $name = self::templateName($vendor, $model);
+        $chartsIn = $oidMap['_charts'] ?? null;
         $cleanMap = [];
         foreach ($oidMap as $k => $v) {
             $k = trim((string)$k);
-            $v = trim((string)$v);
-            if ($k === '' || $v === '' || str_starts_with($k, '_')) {
+            if ($k === '' || str_starts_with($k, '_')) {
+                continue;
+            }
+            $v = is_string($v) || is_numeric($v) ? trim((string)$v) : '';
+            if ($v === '') {
                 continue;
             }
             if (!preg_match('/^\d/', $v)) {
@@ -4150,6 +4154,16 @@ class SnmpDiscover
         }
         if (!$cleanMap) {
             throw new RuntimeException('OID map is empty — cannot create template.');
+        }
+        if (is_array($chartsIn)) {
+            $keep = [];
+            foreach ($chartsIn as $c) {
+                $c = trim((string)$c);
+                if ($c !== '' && isset($cleanMap[$c])) {
+                    $keep[] = $c;
+                }
+            }
+            $cleanMap['_charts'] = array_values(array_unique($keep));
         }
 
         $existing = self::findSiteTemplateByName($name);

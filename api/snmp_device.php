@@ -331,11 +331,20 @@ try {
                 ], 400);
             }
             $result = SnmpPoller::pollDevice($dev);
-            $fresh = Database::fetchOne(
-                'SELECT snmp_last_poll_at, snmp_last_poll_watts, snmp_last_poll_amps, snmp_site_template_id
-                 FROM devices WHERE device_id = ?',
-                [$id]
-            );
+            $fresh = null;
+            try {
+                $fresh = Database::fetchOne(
+                    'SELECT snmp_last_poll_at, snmp_last_poll_watts, snmp_last_poll_amps, snmp_site_template_id, last_poll_json
+                     FROM devices WHERE device_id = ?',
+                    [$id]
+                );
+            } catch (Throwable $eFresh) {
+                $fresh = Database::fetchOne(
+                    'SELECT snmp_last_poll_at, snmp_last_poll_watts, snmp_last_poll_amps, snmp_site_template_id
+                     FROM devices WHERE device_id = ?',
+                    [$id]
+                );
+            }
             $bits = ['Polled ' . $result['ok'] . ' metric(s) from site template.'];
             if ($result['failed'] > 0) {
                 $bits[] = $result['failed'] . ' OID(s) soft-failed.';
@@ -426,6 +435,7 @@ try {
                 'snmp_last_poll_amps' => $fresh['snmp_last_poll_amps'] ?? null,
                 'snmp_auto_poll' => !empty($dev['snmp_auto_poll']),
                 'env' => $env,
+                'metrics' => $result['metrics'] ?? [],
                 'message' => implode(' ', $bits),
             ]);
         }

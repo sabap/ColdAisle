@@ -104,6 +104,7 @@ class Schema
                 'snmp_last_poll_at' => 'DATETIME2 NULL',
                 'snmp_last_poll_watts' => 'DECIMAL(18,4) NULL',
                 'snmp_last_poll_amps' => 'DECIMAL(18,4) NULL',
+                'last_poll_json' => 'NVARCHAR(MAX) NULL',
                 // Dell iDRAC BMC address (IP or hostname) — preferred SNMP / web target when set
                 'idrac_host' => 'NVARCHAR(255) NULL',
                 // ICMP / ping monitoring (independent of SNMP)
@@ -145,6 +146,35 @@ class Schema
                     created_at DATETIME2 NOT NULL CONSTRAINT DF_ae_created DEFAULT SYSUTCDATETIME()
                 )"
             );
+
+            self::ensureTable(
+                'device_snmp_readings',
+                "CREATE TABLE device_snmp_readings (
+                    reading_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                    device_id INT NOT NULL,
+                    metric_name NVARCHAR(100) NOT NULL,
+                    metric_value DECIMAL(18,6) NULL,
+                    metric_text NVARCHAR(255) NULL,
+                    polled_at DATETIME2 NOT NULL CONSTRAINT DF_dsr_at DEFAULT SYSUTCDATETIME()
+                )"
+            );
+            try {
+                $hasDsr = Database::fetchValue(
+                    "SELECT 1 FROM sys.tables WHERE name = 'device_snmp_readings' AND SCHEMA_NAME(schema_id) = 'dbo'"
+                );
+                if ($hasDsr) {
+                    $idx = Database::fetchValue(
+                        "SELECT 1 FROM sys.indexes WHERE name = 'IX_dsr_device_metric_time' AND object_id = OBJECT_ID('dbo.device_snmp_readings')"
+                    );
+                    if (!$idx) {
+                        Database::query(
+                            'CREATE NONCLUSTERED INDEX IX_dsr_device_metric_time ON device_snmp_readings(device_id, metric_name, polled_at DESC)'
+                        );
+                    }
+                }
+            } catch (Throwable $e) {
+                // index is optional
+            }
 
             self::ensureTable(
                 'snmp_site_oid_templates',
@@ -984,7 +1014,7 @@ class Schema
                 'parent_device_id', 'manufacture_date', 'weight_kg', 'num_data_ports', 'num_power_ports',
                 'warranty_provider', 'tags', 'snmp_version', 'snmp_community', 'snmp_fail_count',
                 'snmp_v3_profile_id', 'snmp_site_template_id', 'snmp_auto_poll',
-                'snmp_last_poll_at', 'snmp_last_poll_watts', 'snmp_last_poll_amps',
+                'snmp_last_poll_at', 'snmp_last_poll_watts', 'snmp_last_poll_amps', 'last_poll_json',
                 'idrac_host', 'icmp_monitor', 'icmp_fail_count', 'icmp_last_at', 'icmp_last_ok',
                 'po_number', 'purchase_date', 'purchase_cost', 'purchase_vendor',
                 'rma_number', 'rma_status', 'rma_notes', 'warranty_notify_for_end',
@@ -1054,6 +1084,7 @@ class Schema
                 'snmp_oid', 'snmp_index', 'pos_x', 'pos_y', 'pos_z',
             ],
             'env_readings' => ['reading_id', 'sensor_id', 'value', 'recorded_at'],
+            'device_snmp_readings' => ['reading_id', 'device_id', 'metric_name', 'metric_value', 'polled_at'],
         ];
         $core = array_values(array_unique(array_merge($core, [
             'cooling_units', 'env_sensors', 'env_readings',
