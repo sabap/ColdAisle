@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **Cisco Discover (Nexus 9k):** NX-OS has no CISCO-ENVMON — walk CISCO-SYSTEM-EXT (CPU/mem %), ENTITY-SENSOR (temps), and FRU PSU/fan instead of spending the budget on empty ENVMON / IF-MIB
-
 ### Bug fixes
 
 ---
 
+## [0.3.156] - 2026-08-20
+
+### Enhancements
+
+- **Cisco Discover (Nexus 9k):** NX-OS has no CISCO-ENVMON — walk CISCO-SYSTEM-EXT (CPU/mem %), ENTITY-SENSOR (temps), and FRU PSU/fan instead of spending the budget on empty ENVMON / IF-MIB
+
+---
 ## [0.3.155] - 2026-08-20
 
 ### Enhancements
