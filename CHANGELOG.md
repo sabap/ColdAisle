@@ -13,16 +13,23 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **API service accounts:** Users → **Create API-Service Account** (Global Admin) creates `api-service-{name}` with no website login, optional token shown once, hashed at rest. Probe `GET /api/v1.php` with `Authorization: Bearer ca_live_…` (read cabinets, devices, work orders).
-
 ### Enhancements
+
+### Bug fixes
+
+---
+
+## [0.3.161] - 2026-08-24
+
+### New features
+
+- **API service accounts:** Users → **Create API-Service Account** (Global Admin) creates `api-service-{name}` with no website login, optional token shown once, hashed at rest. Probe `GET /api/v1.php` with `Authorization: Bearer ca_live_…` (read cabinets, devices, work orders).
 
 ### Bug fixes
 
 - **Local user password:** Users → create/edit requires a matching confirmation field; save is rejected if the two values differ
 
 ---
-
 ## [0.3.160] - 2026-08-20
 
 ### New features
