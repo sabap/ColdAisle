@@ -48,6 +48,8 @@ CREATE TABLE users (
     department_id INT NULL,
     is_active BIT NOT NULL DEFAULT 1,
     must_change_password BIT NOT NULL DEFAULT 0,
+    is_service_account BIT NOT NULL CONSTRAINT DF_users_svc DEFAULT 0,
+    can_login BIT NOT NULL CONSTRAINT DF_users_canlogin DEFAULT 1,
     last_login DATETIME2 NULL,
     created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
@@ -960,6 +962,22 @@ GO
 
 CREATE NONCLUSTERED INDEX IX_work_order_items_wo ON work_order_items(work_order_id);
 GO
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'api_tokens')
+CREATE TABLE api_tokens (
+    token_id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES users(user_id),
+    name NVARCHAR(100) NOT NULL,
+    token_prefix NVARCHAR(20) NOT NULL,
+    token_hash NVARCHAR(64) NOT NULL,
+    scopes NVARCHAR(40) NOT NULL CONSTRAINT DF_api_tok_scopes DEFAULT 'read',
+    created_by INT NULL,
+    last_used_at DATETIME2 NULL,
+    expires_at DATETIME2 NULL,
+    revoked_at DATETIME2 NULL,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_api_tok_created DEFAULT SYSUTCDATETIME()
+);
+GO
+
 CREATE NONCLUSTERED INDEX IX_work_orders_status ON work_orders(status);
 GO
 CREATE NONCLUSTERED INDEX IX_work_orders_itsm_request ON work_orders(itsm_request_id);

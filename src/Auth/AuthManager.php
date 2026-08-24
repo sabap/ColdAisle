@@ -133,8 +133,19 @@ class AuthManager
         ];
     }
 
+    /** @var array<string,mixed>|null Bearer-authenticated service account (no session). */
+    private static ?array $apiUser = null;
+
+    public static function setApiUser(?array $user): void
+    {
+        self::$apiUser = $user;
+    }
+
     public static function user(): ?array
     {
+        if (self::$apiUser) {
+            return self::$apiUser;
+        }
         if (empty($_SESSION['user_id'])) {
             return null;
         }
@@ -173,6 +184,12 @@ class AuthManager
 
     public static function login(array $user, string $source = 'local'): void
     {
+        if (class_exists('ApiTokenService') && ApiTokenService::isServiceAccount($user)) {
+            throw new RuntimeException('API service accounts cannot sign in to the website. Use an API token.');
+        }
+        if (array_key_exists('can_login', $user) && (int)$user['can_login'] === 0) {
+            throw new RuntimeException('This account is not allowed to sign in to the website.');
+        }
         session_regenerate_id(true);
         // Rotate CSRF after privilege change (session fixation / stolen token)
         unset($_SESSION['_csrf']);
@@ -986,6 +1003,13 @@ class AuthManager
             'SELECT * FROM users WHERE username = ? AND is_active = 1',
             [$username]
         );
+
+        if ($localUser && class_exists('ApiTokenService') && ApiTokenService::isServiceAccount($localUser)) {
+            return null;
+        }
+        if ($localUser && array_key_exists('can_login', $localUser) && (int)$localUser['can_login'] === 0) {
+            return null;
+        }
 
         if ($localUser && ($localUser['auth_source'] ?? 'local') === 'local' && !empty($localUser['password_hash'])) {
             $user = LocalAuth::authenticate($username, $password);

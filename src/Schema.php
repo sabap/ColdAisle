@@ -581,6 +581,25 @@ class Schema
             self::ensureColumn('notifications', 'is_cleared', 'BIT NOT NULL CONSTRAINT DF_notif_cleared DEFAULT 0');
             self::ensureColumn('notifications', 'cleared_at', 'DATETIME2 NULL');
 
+            self::ensureColumn('users', 'is_service_account', 'BIT NOT NULL CONSTRAINT DF_users_svc DEFAULT 0');
+            self::ensureColumn('users', 'can_login', 'BIT NOT NULL CONSTRAINT DF_users_canlogin DEFAULT 1');
+            self::ensureTable(
+                'api_tokens',
+                "CREATE TABLE api_tokens (
+                    token_id INT IDENTITY(1,1) PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    name NVARCHAR(100) NOT NULL,
+                    token_prefix NVARCHAR(20) NOT NULL,
+                    token_hash NVARCHAR(64) NOT NULL,
+                    scopes NVARCHAR(40) NOT NULL CONSTRAINT DF_api_tok_scopes DEFAULT 'read',
+                    created_by INT NULL,
+                    last_used_at DATETIME2 NULL,
+                    expires_at DATETIME2 NULL,
+                    revoked_at DATETIME2 NULL,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_api_tok_created DEFAULT SYSUTCDATETIME()
+                )"
+            );
+
             // Password reset tokens (G-B5 forgot-password)
             self::ensureTable(
                 'password_reset_tokens',
@@ -1063,6 +1082,8 @@ class Schema
             'disposals' => ['stage', 'vendor_id', 'change_ticket', 'notification_sent', 'notification_sent_at'],
             'notifications' => ['notification_id', 'user_id', 'title', 'category', 'is_read', 'is_cleared', 'cleared_at'],
             'password_reset_tokens' => ['token_id', 'user_id', 'token_hash', 'expires_at'],
+            'api_tokens' => ['token_id', 'user_id', 'token_prefix', 'token_hash', 'scopes'],
+            'users' => ['is_service_account', 'can_login'],
             'asset_events' => ['event_id', 'device_id', 'event_type', 'summary', 'occurred_at'],
             'cable_paths' => [
                 'path_id', 'room_id', 'name', 'path_type', 'waypoints', 'color_hex',

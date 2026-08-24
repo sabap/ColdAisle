@@ -43,6 +43,7 @@ require_once __DIR__ . '/Services/SetupWizardService.php';
 require_once __DIR__ . '/Services/SiteTourService.php';
 require_once __DIR__ . '/Services/FieldAuditService.php';
 require_once __DIR__ . '/Services/DeviceSnmpHistoryService.php';
+require_once __DIR__ . '/Services/ApiTokenService.php';
 require_once __DIR__ . '/Services/ItsmHttp.php';
 require_once __DIR__ . '/Services/ItsmService.php';
 require_once __DIR__ . '/Services/SdpCloudService.php';
@@ -723,6 +724,16 @@ class App
     public static function requireAuth(): array
     {
         $user = AuthManager::user();
+        if (!$user && class_exists('ApiTokenService')) {
+            try {
+                $user = ApiTokenService::authenticateRequest();
+            } catch (Throwable $e) {
+                if (self::isApiRequest()) {
+                    self::json(['error' => $e->getMessage()], 401);
+                }
+                $user = null;
+            }
+        }
         if (!$user) {
             if (self::isApiRequest()) {
                 self::json(['error' => 'Unauthorized'], 401);

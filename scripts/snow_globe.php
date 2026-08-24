@@ -1080,6 +1080,10 @@ try {
         $pdo->exec("DELETE FROM settings WHERE setting_key LIKE 'icmp_alert_%'");
         $pdo->exec("DELETE FROM settings WHERE setting_key LIKE 'sdp_%'");
         $pdo->exec("DELETE FROM settings WHERE setting_key LIKE 'itsm_%' OR setting_key LIKE 'snow_%' OR setting_key LIKE 'zd_%' OR setting_key LIKE 'jira_%' OR setting_key LIKE 'fs_%'");
+        if (tableExists($pdo, 'api_tokens')) {
+            $n = $pdo->exec('DELETE FROM api_tokens');
+            out('api_tokens: cleared ' . (int)$n);
+        }
         $stats['tables_touched']++;
         out('settings: org/demo flags applied (SDP tokens cleared)');
     }

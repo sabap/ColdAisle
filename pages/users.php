@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
 App::boot();
 $user = App::requirePermission('manage_users');
+$isGlobalAdmin = AuthManager::isAdmin($user);
 
 function users_normalize_color(?string $hex): string
 {
@@ -13,6 +14,29 @@ function users_normalize_color(?string $hex): string
         return '#' . ltrim($hex, '#');
     }
     return '#3b82f6';
+}
+
+/**
+ * Validate a local password + confirmation. Empty pair is allowed when $required is false
+ * (edit user: leave both blank to keep the current password).
+ */
+function users_local_password_from_post(bool $required): ?string
+{
+    $password = (string)($_POST['password'] ?? '');
+    $confirm = (string)($_POST['password_confirm'] ?? '');
+    if ($password === '' && $confirm === '') {
+        if ($required) {
+            throw new RuntimeException('Password and confirmation are required for local accounts.');
+        }
+        return null;
+    }
+    if ($password !== $confirm) {
+        throw new RuntimeException('Password and confirmation do not match.');
+    }
+    if (strlen($password) < 8) {
+        throw new RuntimeException('Password must be at least 8 characters.');
+    }
+    return $password;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? '')) {
@@ -25,10 +49,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             }
             $hash = null;
             if (($_POST['auth_source'] ?? 'local') === 'local') {
-                if (strlen($_POST['password'] ?? '') < 8) {
-                    throw new RuntimeException('Password must be at least 8 characters.');
-                }
-                $hash = password_hash($_POST['password'], PASSWORD_DEFAULT);
+                $plain = users_local_password_from_post(true);
+                $hash = password_hash((string)$plain, PASSWORD_DEFAULT);
             }
             $email = trim($_POST['email'] ?? '');
             $authSource = $_POST['auth_source'] ?? 'local';
@@ -60,25 +82,159 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             App::flash('success', $flash);
         }
 
+        if ($action === 'create_api_service') {
+            if (!$isGlobalAdmin) {
+                throw new RuntimeException('Only Global Admin can create API service accounts.');
+            }
+            if (!class_exists('ApiTokenService')) {
+                throw new RuntimeException('ApiTokenService is not deployed.');
+            }
+            $username = ApiTokenService::normalizeUsername((string)($_POST['service_name'] ?? ''));
+            $exists = Database::fetchOne('SELECT user_id FROM users WHERE username = ?', [$username]);
+            if ($exists) {
+                throw new RuntimeException('That service account already exists: ' . $username);
+            }
+            $roleId = (int)($_POST['role_id'] ?? 0);
+            $role = Database::fetchOne('SELECT * FROM roles WHERE role_id = ?', [$roleId]);
+            if (!$role) {
+                throw new RuntimeException('Select a role for the service account.');
+            }
+            $roleName = (string)($role['name'] ?? '');
+            $perms = json_decode((string)($role['permissions'] ?? '[]'), true) ?: [];
+            if (in_array($roleName, ['Global Admin', 'Administrator'], true) || in_array('*', $perms, true)) {
+                throw new RuntimeException('Do not give API service accounts Global Admin. Pick Viewer (read) or a narrower role.');
+            }
+            $display = trim((string)($_POST['display_name'] ?? ''));
+            if ($display === '') {
+                $display = $username;
+            }
+            $email = trim((string)($_POST['email'] ?? ''));
+            if ($email === '') {
+                $email = $username . '@api.local';
+            } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                throw new RuntimeException('Email is not valid.');
+            }
+            $newId = (int)Database::insert('users', [
+                'username' => $username,
+                'email' => $email,
+                'display_name' => $display,
+                'password_hash' => null,
+                'auth_source' => 'api',
+                'role_id' => $roleId,
+                'department_id' => !empty($_POST['department_id']) ? (int)$_POST['department_id'] : null,
+                'is_active' => 1,
+                'is_service_account' => 1,
+                'can_login' => 0,
+                'must_change_password' => 0,
+                'created_at' => date('Y-m-d H:i:s'),
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+            AuditService::log((int)$user['user_id'], $user['username'], 'api_service_create', 'user', $newId, [
+                'username' => $username,
+                'role' => $roleName,
+            ]);
+            $flash = 'API service account ' . $username . ' created. It cannot sign in to the website.';
+            $wantToken = !isset($_POST['create_token']) || !empty($_POST['create_token']);
+            if ($wantToken) {
+                $scope = strtolower(trim((string)($_POST['token_scope'] ?? 'read')));
+                if ($scope !== 'write') {
+                    $scope = 'read';
+                }
+                $expDays = (int)($_POST['token_expires_days'] ?? 0);
+                $expires = $expDays > 0 ? new DateTimeImmutable('+' . $expDays . ' days') : null;
+                $tokName = trim((string)($_POST['token_name'] ?? 'Initial')) ?: 'Initial';
+                $tok = ApiTokenService::createToken($newId, $tokName, $scope, (int)$user['user_id'], $expires);
+                $_SESSION['_api_token_once'] = [
+                    'username' => $username,
+                    'token' => $tok['token'],
+                    'prefix' => $tok['prefix'],
+                    'scopes' => $scope,
+                    'name' => $tokName,
+                ];
+                $flash .= ' Copy the API token now — it will not be shown again.';
+            }
+            App::flash('success', $flash);
+            App::redirect('pages/users.php?edit_user=' . $newId);
+        }
+
+        if ($action === 'create_api_token') {
+            if (!$isGlobalAdmin) {
+                throw new RuntimeException('Only Global Admin can create API tokens.');
+            }
+            $uid = (int)($_POST['user_id'] ?? 0);
+            $svc = Database::fetchOne('SELECT * FROM users WHERE user_id = ?', [$uid]);
+            if (!$svc || !ApiTokenService::isServiceAccount($svc)) {
+                throw new RuntimeException('Tokens can only be created for API service accounts.');
+            }
+            $scope = strtolower(trim((string)($_POST['token_scope'] ?? 'read')));
+            if ($scope !== 'write') {
+                $scope = 'read';
+            }
+            $expDays = (int)($_POST['token_expires_days'] ?? 0);
+            $expires = $expDays > 0 ? new DateTimeImmutable('+' . $expDays . ' days') : null;
+            $tokName = trim((string)($_POST['token_name'] ?? 'Token')) ?: 'Token';
+            $tok = ApiTokenService::createToken($uid, $tokName, $scope, (int)$user['user_id'], $expires);
+            AuditService::log((int)$user['user_id'], $user['username'], 'api_token_create', 'user', $uid, [
+                'token_prefix' => $tok['prefix'],
+                'scopes' => $scope,
+            ]);
+            $_SESSION['_api_token_once'] = [
+                'username' => (string)$svc['username'],
+                'token' => $tok['token'],
+                'prefix' => $tok['prefix'],
+                'scopes' => $scope,
+                'name' => $tokName,
+            ];
+            App::flash('success', 'Token created. Copy it now — it will not be shown again.');
+            App::redirect('pages/users.php?edit_user=' . $uid);
+        }
+
+        if ($action === 'revoke_api_token') {
+            if (!$isGlobalAdmin) {
+                throw new RuntimeException('Only Global Admin can revoke API tokens.');
+            }
+            $uid = (int)($_POST['user_id'] ?? 0);
+            $tid = (int)($_POST['token_id'] ?? 0);
+            ApiTokenService::revokeToken($tid, $uid);
+            AuditService::log((int)$user['user_id'], $user['username'], 'api_token_revoke', 'user', $uid, [
+                'token_id' => $tid,
+            ]);
+            App::flash('success', 'API token revoked.');
+            App::redirect('pages/users.php?edit_user=' . $uid);
+        }
+
         if ($action === 'update') {
             $uid = (int)$_POST['user_id'];
             if ($uid <= 0) {
                 throw new RuntimeException('Select a user to update.');
             }
+            $existing = Database::fetchOne('SELECT * FROM users WHERE user_id = ?', [$uid]);
+            if (!$existing) {
+                throw new RuntimeException('User not found.');
+            }
+            $isSvc = class_exists('ApiTokenService') && ApiTokenService::isServiceAccount($existing);
             $fields = [
                 'email' => trim($_POST['email'] ?? ''),
                 'display_name' => trim($_POST['display_name'] ?? '') !== '' ? trim($_POST['display_name']) : null,
                 'role_id' => (int)$_POST['role_id'],
                 'department_id' => $_POST['department_id'] !== '' ? (int)$_POST['department_id'] : null,
                 'is_active' => !empty($_POST['is_active']) ? 1 : 0,
-                'auth_source' => $_POST['auth_source'] ?? 'local',
+                'auth_source' => $isSvc ? 'api' : ($_POST['auth_source'] ?? 'local'),
                 'updated_at' => date('Y-m-d H:i:s'),
             ];
-            if (!empty($_POST['password'])) {
-                if (strlen($_POST['password']) < 8) {
-                    throw new RuntimeException('Password must be at least 8 characters.');
+            if ($isSvc) {
+                $role = Database::fetchOne('SELECT name, permissions FROM roles WHERE role_id = ?', [(int)$fields['role_id']]);
+                $perms = $role ? (json_decode((string)($role['permissions'] ?? '[]'), true) ?: []) : [];
+                if ($role && (in_array((string)$role['name'], ['Global Admin', 'Administrator'], true) || in_array('*', $perms, true))) {
+                    throw new RuntimeException('Do not give API service accounts Global Admin.');
                 }
-                $fields['password_hash'] = password_hash($_POST['password'], PASSWORD_DEFAULT);
+                $fields['is_service_account'] = 1;
+                $fields['can_login'] = 0;
+            } else {
+                $plain = users_local_password_from_post(false);
+                if ($plain !== null) {
+                    $fields['password_hash'] = password_hash($plain, PASSWORD_DEFAULT);
+                }
             }
             Database::update('users', $fields, 'user_id = :id', [':id' => $uid]);
             App::flash('success', 'User updated.');
@@ -243,6 +399,15 @@ foreach ($users as $u) {
         break;
     }
 }
+$editUserIsSvc = $editUser && class_exists('ApiTokenService') && ApiTokenService::isServiceAccount($editUser);
+$editUserTokens = ($editUserIsSvc && class_exists('ApiTokenService'))
+    ? ApiTokenService::listForUser((int)$editUser['user_id'])
+    : [];
+$apiTokenOnce = null;
+if (!empty($_SESSION['_api_token_once']) && is_array($_SESSION['_api_token_once'])) {
+    $apiTokenOnce = $_SESSION['_api_token_once'];
+    unset($_SESSION['_api_token_once']);
+}
 
 $editDeptId = (int)($_GET['edit_dept'] ?? 0);
 $editDept = null;
@@ -255,6 +420,23 @@ foreach ($departments as $d) {
 
 layout_header('Users & Departments', $user, 'users');
 ?>
+<?php if ($apiTokenOnce): ?>
+<div class="alert alert-warning" style="margin-bottom:1rem" id="api-token-once">
+    <strong>Copy this API token now.</strong> It will not be shown again.
+    <div class="text-muted" style="font-size:.85rem;margin:.35rem 0">
+        Account <code><?= App::e((string)$apiTokenOnce['username']) ?></code>
+        · <?= App::e((string)($apiTokenOnce['name'] ?? 'Token')) ?>
+        · scope <?= App::e((string)($apiTokenOnce['scopes'] ?? 'read')) ?>
+    </div>
+    <input class="form-control" readonly id="api_token_once_value"
+           value="<?= App::e((string)$apiTokenOnce['token']) ?>"
+           onclick="this.select()" style="font-family:ui-monospace,Consolas,monospace;font-size:.85rem">
+    <p class="text-muted" style="font-size:.8rem;margin:.5rem 0 0">
+        Header: <code>Authorization: Bearer <?= App::e((string)$apiTokenOnce['token']) ?></code>
+        · Probe: <code><?= App::e(App::url('api/v1.php')) ?></code>
+    </p>
+</div>
+<?php endif; ?>
 
 <div class="metrics">
     <div class="metric-card"><div class="label">Users</div><div class="value"><?= count($users) ?></div></div>
@@ -346,7 +528,12 @@ layout_header('Users & Departments', $user, 'users');
     <div class="card users-admin-card">
         <div class="card-header flex-between">
             <h2>Users</h2>
-            <button type="button" class="btn btn-sm btn-primary" data-open-modal="modal-user">Add user</button>
+            <div class="flex gap-1" style="flex-wrap:wrap">
+                <?php if ($isGlobalAdmin): ?>
+                    <button type="button" class="btn btn-sm btn-secondary" data-open-modal="modal-api-service">Create API-Service Account</button>
+                <?php endif; ?>
+                <button type="button" class="btn btn-sm btn-primary" data-open-modal="modal-user">Add user</button>
+            </div>
         </div>
         <div class="card-body flush">
             <table class="data table-fit users-table">
@@ -364,6 +551,9 @@ layout_header('Users & Departments', $user, 'users');
                     <tr>
                         <td>
                             <strong class="user-cell-name"><?= App::e($u['username']) ?></strong>
+                            <?php if (class_exists('ApiTokenService') && ApiTokenService::isServiceAccount($u)): ?>
+                                <span class="badge badge-info" title="Cannot sign in to the website">API</span>
+                            <?php endif; ?>
                             <?php if (!empty($onlineMap[(int)$u['user_id']])): ?>
                                 <span class="badge badge-success user-online-badge" title="Signed in within the last ~2 minutes">Online</span>
                             <?php endif; ?>
@@ -582,7 +772,7 @@ layout_header('Users & Departments', $user, 'users');
             <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
         </div>
         <div class="app-modal-body">
-            <form method="post" class="form-grid">
+            <form method="post" class="form-grid" data-password-confirm="create">
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                 <input type="hidden" name="action" value="create">
                 <div class="form-row"><label>Username *</label>
@@ -618,7 +808,11 @@ layout_header('Users & Departments', $user, 'users');
                     </select>
                 </div>
                 <div class="form-row"><label>Password (local)</label>
-                    <input class="form-control" type="password" name="password" autocomplete="new-password"></div>
+                    <input class="form-control" type="password" name="password" id="user_create_password"
+                           autocomplete="new-password" minlength="8"></div>
+                <div class="form-row"><label>Confirm password</label>
+                    <input class="form-control" type="password" name="password_confirm" id="user_create_password_confirm"
+                           autocomplete="new-password" minlength="8"></div>
                 <div class="form-row full"><label>
                     <input type="checkbox" name="send_welcome" value="1" checked>
                     Send welcome email (login link + set-password link for local accounts)
@@ -636,6 +830,89 @@ layout_header('Users & Departments', $user, 'users');
     </div>
 </div>
 
+<?php if ($isGlobalAdmin): ?>
+<div class="app-modal" id="modal-api-service" hidden aria-hidden="true">
+    <div class="app-modal-backdrop" data-modal-close></div>
+    <div class="app-modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-api-service-title">
+        <div class="app-modal-head">
+            <h3 id="modal-api-service-title">Create API-Service Account</h3>
+            <button type="button" class="btn btn-ghost btn-sm" data-modal-close aria-label="Close">✕</button>
+        </div>
+        <div class="app-modal-body">
+            <p class="text-muted" style="font-size:.85rem;margin-top:0">
+                Creates a robot account that <strong>cannot sign in</strong> to the website.
+                Username is always <code>api-service-</code> plus the short name you enter.
+                Give it a least-privilege role (Viewer for read). Global Admin is not allowed.
+            </p>
+            <form method="post" class="form-grid" id="api_service_form">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="create_api_service">
+                <div class="form-row full"><label>Short name</label>
+                    <input class="form-control" name="service_name" id="api_service_name" required
+                           placeholder="servicenow" autocomplete="off"
+                           pattern="[A-Za-z0-9-]+" title="Letters, numbers, hyphens">
+                    <p class="text-muted" style="font-size:.8rem;margin:.3rem 0 0">
+                        Username will be <code id="api_service_preview">api-service-…</code>
+                    </p>
+                </div>
+                <div class="form-row"><label>Display name</label>
+                    <input class="form-control" name="display_name" placeholder="ServiceNow integration"></div>
+                <div class="form-row"><label>Email (optional)</label>
+                    <input class="form-control" type="email" name="email" placeholder="Defaults to username@api.local"></div>
+                <div class="form-row"><label>Role</label>
+                    <select class="form-control" name="role_id" required>
+                        <?php foreach ($roles as $r):
+                            if (in_array($r['name'], ['Global Admin', 'Administrator'], true)) {
+                                continue;
+                            }
+                            ?>
+                            <option value="<?= (int)$r['role_id'] ?>" <?= ($r['name'] ?? '') === 'Viewer' ? 'selected' : '' ?>>
+                                <?= App::e($r['name']) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row"><label>Department</label>
+                    <select class="form-control" name="department_id">
+                        <option value="">— None —</option>
+                        <?php foreach ($departments as $d):
+                            if (empty($d['is_active'])) {
+                                continue;
+                            }
+                            ?>
+                            <option value="<?= (int)$d['department_id'] ?>"><?= App::e($d['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row full"><label>
+                    <input type="checkbox" name="create_token" value="1" checked>
+                    Create an API token now (shown once)
+                </label></div>
+                <div class="form-row"><label>Token name</label>
+                    <input class="form-control" name="token_name" value="Initial"></div>
+                <div class="form-row"><label>Token scope</label>
+                    <select class="form-control" name="token_scope">
+                        <option value="read">Read only (recommended)</option>
+                        <option value="write">Read + write</option>
+                    </select>
+                </div>
+                <div class="form-row"><label>Token expires</label>
+                    <select class="form-control" name="token_expires_days">
+                        <option value="0">Never</option>
+                        <option value="90">90 days</option>
+                        <option value="365">1 year</option>
+                    </select>
+                </div>
+                <div class="form-row full app-modal-actions">
+                    <button class="btn btn-primary" type="submit">Create API-Service Account</button>
+                    <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
 <?php if ($editUser): ?>
 <div class="app-modal" id="modal-user-edit" aria-hidden="false">
     <div class="app-modal-backdrop" data-modal-close-nav></div>
@@ -645,7 +922,7 @@ layout_header('Users & Departments', $user, 'users');
             <a class="btn btn-ghost btn-sm" href="<?= App::e(App::url('pages/users.php')) ?>" aria-label="Close">✕</a>
         </div>
         <div class="app-modal-body">
-            <form method="post" class="form-grid">
+            <form method="post" class="form-grid" data-password-confirm="update">
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                 <input type="hidden" name="action" value="update">
                 <input type="hidden" name="user_id" value="<?= (int)$editUser['user_id'] ?>">
@@ -680,6 +957,14 @@ layout_header('Users & Departments', $user, 'users');
                         <?php endforeach; ?>
                     </select>
                 </div>
+                <?php if ($editUserIsSvc): ?>
+                <div class="form-row full">
+                    <p class="text-muted" style="font-size:.85rem;margin:0">
+                        API service account — cannot sign in to the website. Access is by token only.
+                        Do not assign Global Admin.
+                    </p>
+                </div>
+                <?php else: ?>
                 <div class="form-row"><label>Auth source</label>
                     <select class="form-control" name="auth_source">
                         <?php foreach (['local' => 'Local', 'ldaps' => 'LDAPS', 'entra' => 'Entra ID'] as $val => $lab): ?>
@@ -691,7 +976,13 @@ layout_header('Users & Departments', $user, 'users');
                     </select>
                 </div>
                 <div class="form-row"><label>New password (optional)</label>
-                    <input class="form-control" type="password" name="password" autocomplete="new-password"></div>
+                    <input class="form-control" type="password" name="password" id="user_edit_password"
+                           autocomplete="new-password" minlength="8"
+                           placeholder="Leave both blank to keep current"></div>
+                <div class="form-row"><label>Confirm new password</label>
+                    <input class="form-control" type="password" name="password_confirm" id="user_edit_password_confirm"
+                           autocomplete="new-password" minlength="8"></div>
+                <?php endif; ?>
                 <div class="form-row full"><label>
                     <input type="checkbox" name="is_active" value="1" <?= !empty($editUser['is_active']) ? 'checked' : '' ?>> Active
                 </label></div>
@@ -700,6 +991,72 @@ layout_header('Users & Departments', $user, 'users');
                     <a class="btn btn-secondary" href="<?= App::e(App::url('pages/users.php')) ?>">Cancel</a>
                 </div>
             </form>
+            <?php if ($editUserIsSvc && $isGlobalAdmin): ?>
+            <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#2a3648)">
+                <h4 style="margin:0 0 .5rem;font-size:.95rem">API tokens</h4>
+                <p class="text-muted" style="font-size:.8rem;margin:0 0 .75rem">
+                    Tokens are shown once. Send them as
+                    <code>Authorization: Bearer ca_live_…</code> to
+                    <code><?= App::e(App::url('api/v1.php')) ?></code>
+                </p>
+                <?php if ($editUserTokens): ?>
+                <table class="data" style="margin-bottom:.75rem">
+                    <thead>
+                    <tr><th>Name</th><th>Prefix</th><th>Scope</th><th>Last used</th><th>Expires</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($editUserTokens as $t):
+                        $rev = !empty($t['revoked_at']);
+                        ?>
+                        <tr>
+                            <td><?= App::e((string)$t['name']) ?><?= $rev ? ' <span class="badge badge-danger">Revoked</span>' : '' ?></td>
+                            <td><code><?= App::e((string)$t['token_prefix']) ?>…</code></td>
+                            <td><?= App::e((string)$t['scopes']) ?></td>
+                            <td style="font-size:.8rem"><?= App::e((string)($t['last_used_at'] ?: '—')) ?></td>
+                            <td style="font-size:.8rem"><?= App::e((string)($t['expires_at'] ?: 'never')) ?></td>
+                            <td>
+                                <?php if (!$rev): ?>
+                                <form method="post" onsubmit="return confirm('Revoke this token? The other system will stop working.');">
+                                    <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                                    <input type="hidden" name="action" value="revoke_api_token">
+                                    <input type="hidden" name="user_id" value="<?= (int)$editUser['user_id'] ?>">
+                                    <input type="hidden" name="token_id" value="<?= (int)$t['token_id'] ?>">
+                                    <button class="btn btn-sm btn-ghost" type="submit">Revoke</button>
+                                </form>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <?php else: ?>
+                    <p class="text-muted" style="font-size:.85rem">No tokens yet.</p>
+                <?php endif; ?>
+                <form method="post" class="form-grid">
+                    <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                    <input type="hidden" name="action" value="create_api_token">
+                    <input type="hidden" name="user_id" value="<?= (int)$editUser['user_id'] ?>">
+                    <div class="form-row"><label>Token name</label>
+                        <input class="form-control" name="token_name" value="Token" required></div>
+                    <div class="form-row"><label>Scope</label>
+                        <select class="form-control" name="token_scope">
+                            <option value="read">Read only</option>
+                            <option value="write">Read + write (future writes)</option>
+                        </select>
+                    </div>
+                    <div class="form-row"><label>Expires</label>
+                        <select class="form-control" name="token_expires_days">
+                            <option value="0">Never</option>
+                            <option value="90">90 days</option>
+                            <option value="365">1 year</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <button class="btn btn-secondary" type="submit">Create token</button>
+                    </div>
+                </form>
+            </div>
+            <?php endif; ?>
         </div>
     </div>
 </div>
@@ -934,6 +1291,39 @@ table.data.table-fit td.col-actions {
     if (document.getElementById('modal-dept-edit') || document.getElementById('modal-user-edit')) {
         document.body.style.overflow = 'hidden';
     }
+
+    var nameEl = document.getElementById('api_service_name');
+    var prevEl = document.getElementById('api_service_preview');
+    if (nameEl && prevEl) {
+        function previewApiName() {
+            var s = (nameEl.value || '').trim().toLowerCase().replace(/^api-service-/, '');
+            s = s.replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+            prevEl.textContent = 'api-service-' + (s || '…');
+        }
+        nameEl.addEventListener('input', previewApiName);
+        previewApiName();
+    }
+
+    document.querySelectorAll('form[data-password-confirm]').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+            var p = form.querySelector('[name="password"]');
+            var c = form.querySelector('[name="password_confirm"]');
+            if (!p || !c) return;
+            var a = p.value || '';
+            var b = c.value || '';
+            var required = form.getAttribute('data-password-confirm') === 'create'
+                && (form.querySelector('[name="auth_source"]') || {}).value === 'local';
+            if (!required && a === '' && b === '') return;
+            if (a !== b) {
+                e.preventDefault();
+                (c.setCustomValidity ? c.setCustomValidity('Password and confirmation do not match.') : null);
+                if (c.reportValidity) c.reportValidity();
+                else alert('Password and confirmation do not match.');
+                c.addEventListener('input', function () { c.setCustomValidity(''); }, { once: true });
+                p.addEventListener('input', function () { c.setCustomValidity(''); }, { once: true });
+            }
+        });
+    });
 })();
 </script>
 <?php layout_footer(); ?>
