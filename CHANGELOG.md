@@ -13,6 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+### Enhancements
+
+### Bug fixes
+
+---
+
+## [0.3.163] - 2026-08-25
+
+### New features
+
 - **Desktop search:** top-bar lookup (press `/`) finds cabinets, devices, PDUs, UPS, cables, work orders, and users as you type. List pages for those areas also take `?q=`.
 
 ### Enhancements
@@ -22,10 +32,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **List pagination + export:** Devices, Cabinets, PDUs, Cabling, and Work orders paginate (25/50/100/200). **Export CSV** downloads the current search/filter (up to 10,000 rows), not only the page on screen.
 - **Report CSV:** every Reports catalog table has **Export CSV** (inventory, utilization, capacity, warranty, disposals, cables, orphans, audits, power path, work orders). Filters (Fits?, warranty window, path view) are kept. Power history was already exportable.
 
-### Bug fixes
-
 ---
-
 ## [0.3.162] - 2026-08-25
 
 ### New features
