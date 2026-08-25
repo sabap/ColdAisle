@@ -113,7 +113,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     // Flashes already read; free session lock so media.php / parallel requests are not blocked
     App::releaseSessionLock();
 
-    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '63';
+    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '65';
     $wizAuto = false;
     $wizRisk = ['warn' => false, 'message' => '', 'counts' => []];
     $tourActive = false;
@@ -147,6 +147,10 @@ function layout_header(string $title, array $user, string $active = ''): void
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon.svg')) ?>" type="image/svg+xml">
     <link rel="icon" href="<?= App::e(App::url('assets/img/favicon-32.png')) ?>" type="image/png" sizes="32x32">
     <link rel="apple-touch-icon" href="<?= App::e(App::url('assets/img/favicon-180.png')) ?>" sizes="180x180">
+    <style>
+      #globalSearchPalette { display: none !important; }
+      #globalSearchPalette.is-open { display: flex !important; }
+    </style>
     <link rel="stylesheet" href="<?= App::e(App::url('assets/css/app.css')) ?>?v=<?= App::e($cssV) ?>">
     <link rel="stylesheet" href="<?= App::e(App::url('assets/css/tech.css')) ?>?v=<?= App::e($cssV) ?>">
     <script>
@@ -362,14 +366,17 @@ function layout_tech_shell_open(
 function layout_search_palette(): void
 {
     ?>
-    <div class="gs-palette" id="globalSearchPalette" hidden>
-        <div class="gs-palette-backdrop" data-close-find></div>
+    <div class="gs-palette" id="globalSearchPalette" hidden style="display:none !important">
+        <div class="gs-palette-backdrop" data-close-find tabindex="-1"></div>
         <div class="gs-palette-card" role="dialog" aria-modal="true" aria-labelledby="globalSearchInput">
-            <label class="visually-hidden" for="globalSearchInput">Jump to inventory</label>
+            <div class="gs-palette-head">
+                <label class="visually-hidden" for="globalSearchInput">Jump to inventory</label>
+                <button type="button" class="modal-close" id="globalSearchClose" data-close-find aria-label="Close find">×</button>
+            </div>
             <input class="form-control gs-palette-input" type="search" id="globalSearchInput"
                    placeholder="Jump to cabinet, device, PDU, UPS, work order…"
                    autocomplete="off" spellcheck="false" enterkeyhint="search">
-            <p class="gs-palette-hint">Press <kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd> from anywhere. Enter opens the highlighted match.</p>
+            <p class="gs-palette-hint">Esc or the × closes. <kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd> opens. Enter opens the highlighted match.</p>
             <div class="topbar-search-panel gs-palette-results" id="globalSearchPanel" hidden role="listbox" aria-label="Search results"></div>
         </div>
     </div>
@@ -561,7 +568,7 @@ function layout_footer(): void
     $licenseUrl = $githubUrl . '/blob/main/LICENSE';
     $timerOn = class_exists('App', false) && App::requestTimerEnabled();
     $timing = $timerOn ? App::requestTimingSnapshot() : null;
-    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '22';
+    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '24';
 
     if ($tech):
         $nav = (class_exists('TechMode') && $user)

@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Find palette:** overlay used `display:flex`, which overrode `hidden`, so “Jump to cabinet…” covered the page with no exit. It now starts `display:none !important` and only flexes when opened; Esc, the backdrop, and × close it.
+
 ---
 
 ## [0.3.165] - 2026-08-25

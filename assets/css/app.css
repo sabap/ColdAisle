@@ -184,10 +184,15 @@ body.gs-palette-open { overflow: hidden; }
   position: fixed;
   inset: 0;
   z-index: 80;
-  display: flex;
   align-items: flex-start;
   justify-content: center;
   padding: 12vh 1rem 2rem;
+}
+.gs-palette.is-open {
+  display: flex;
+}
+.gs-palette[hidden] {
+  display: none !important;
 }
 .gs-palette-backdrop {
   position: absolute;
@@ -202,6 +207,15 @@ body.gs-palette-open { overflow: hidden; }
   border-radius: 12px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, .55);
   padding: .75rem .75rem .5rem;
+}
+.gs-palette-head {
+  position: absolute;
+  top: .35rem;
+  right: .4rem;
+  z-index: 1;
+}
+.gs-palette-head .modal-close {
+  pointer-events: auto;
 }
 .gs-palette-input {
   width: 100%;

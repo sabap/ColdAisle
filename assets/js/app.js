@@ -1205,6 +1205,9 @@
     function openPalette() {
       if (palette) {
         palette.hidden = false;
+        palette.removeAttribute('hidden');
+        palette.classList.add('is-open');
+        palette.style.setProperty('display', 'flex', 'important');
         document.body.classList.add('gs-palette-open');
       }
       input.focus();
@@ -1212,12 +1215,19 @@
       if (input.value.trim()) run(input.value);
     }
 
+    function isOpen() {
+      return !!(palette && palette.classList.contains('is-open') && !palette.hidden);
+    }
+
     function closePanel() {
       panel.hidden = true;
       items = [];
       active = -1;
       if (palette) {
+        palette.classList.remove('is-open');
         palette.hidden = true;
+        palette.setAttribute('hidden', 'hidden');
+        palette.style.setProperty('display', 'none', 'important');
         document.body.classList.remove('gs-palette-open');
       }
     }
@@ -1295,7 +1305,6 @@
 
     function run(q) {
       q = String(q || '').trim();
-      lastQ = q;
       if (!q) {
         panel.hidden = true;
         panel.innerHTML = '';
@@ -1373,6 +1382,11 @@
     });
 
     document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && isOpen()) {
+        e.preventDefault();
+        closePanel();
+        return;
+      }
       var t = e.target;
       var tag = t ? (t.tagName || '').toLowerCase() : '';
       var typing = tag === 'input' || tag === 'textarea' || tag === 'select' || (t && t.isContentEditable);
