@@ -13,6 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+### Enhancements
+
+### Bug fixes
+
+---
+
+## [0.3.164] - 2026-08-25
+
+### New features
+
 - **Machine API v1:** paginated lists (`page` / `per_page`, default 50, max 200); PDUs and UPS; JSON booleans instead of SQL `0`/`1`. Write-scoped tokens can `PATCH` devices (allowlisted fields), `POST` device notes, and create/update work orders and line items. No SNMP SET / outlet control. Documentation page updated.
 
 ### Enhancements
@@ -22,10 +32,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **In-app documentation:** sidebar Documentation is for any user who can see the dashboard (not only account admins). Adds operator how-tos for Floor planner, SNMP Discover, work-order apply-to-inventory, and Tech / field PWA; the machine API reference stays on the same page.
 - **Floor planner HUD:** 3D spells out **Orbit** (overview: drag/zoom) vs **Walk** (aisle: WASD, look, Esc). Raceway draw is numbered steps on the 2D plan (click points → Finish); drawing from 3D switches back to 2D. Dashboard 3D uses the same Orbit/Walk strip.
 
-### Bug fixes
-
 ---
-
 ## [0.3.163] - 2026-08-25
 
 ### New features
