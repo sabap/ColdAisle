@@ -52,7 +52,7 @@ class SiteTourService
             [
                 'id' => 'dash-3d',
                 'title' => 'Site in 3D',
-                'body' => 'The dashboard hall view is the same geometry as the floor planner. Drag to orbit, or turn on Walk hall and move with WASD / arrow keys (mouse-drag looks around). Heat overlay (when enabled) tints racks from environment or power load so hot spots show up without opening each cabinet.',
+                'body' => 'The dashboard hall view is the same geometry as the floor planner. Orbit (default): drag to rotate, scroll to zoom. Walk aisle: first-person WASD / arrows, drag to look, Esc back to orbit. Heat overlay (when enabled) tints racks from environment or power load so hot spots show up without opening each cabinet.',
                 'page' => 'index.php',
                 'target' => '[data-tour="dash-3d"]',
                 'nav' => 'dashboard',
@@ -124,7 +124,7 @@ class SiteTourService
             [
                 'id' => 'fp-3d',
                 'title' => '3D and raceways',
-                'body' => '3D View is the same hall in elevation. Walk puts you in the aisle (WASD / arrows, drag to look; Esc back to orbit). Raceways: On draws ladder / U-channel / trough. Draw raceway to click a path; Finish to save a code. Clone U-channel copies a ladder route at a higher elevation.',
+                'body' => '3D View is the same hall, two cameras: Orbit is the overview (drag to spin, scroll to zoom); Walk is first-person in an aisle (WASD, drag to look, Esc back to Orbit). Raceways are drawn on the 2D plan: click vertices, Finish / Enter to save a code. Clone U-channel copies a ladder route at a higher elevation.',
                 'page' => 'pages/floorplan.php',
                 'target' => '[data-tour="fp-3d"]',
                 'nav' => 'floorplan',
@@ -268,7 +268,7 @@ class SiteTourService
             [
                 'id' => 'nav-users',
                 'title' => 'Users and departments',
-                'body' => 'Local accounts, roles (Viewer through Global Admin), and departments. Directory users appear after a successful LDAPS/Entra login. Permissions hide nav items you should not see. Global Admins mint API-service accounts here; Documentation has the machine API reference.',
+                'body' => 'Local accounts, roles (Viewer through Global Admin), and departments. Directory users appear after a successful LDAPS/Entra login. Permissions hide nav items you should not see. Global Admins mint API-service accounts here. Documentation has operator how-tos (floor planner, SNMP Discover, work-order apply, Tech/PWA) and the machine API.',
                 'page' => 'pages/users.php',
                 'target' => '[data-tour="nav-users"]',
                 'nav' => 'users',

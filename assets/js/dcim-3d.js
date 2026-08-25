@@ -92,6 +92,7 @@
     if (t.indexOf('router') >= 0) return '#0891b2';
     if (t.indexOf('chassis') >= 0) return '#64748b';
     if (t.indexOf('server') >= 0) return '#2563eb';
+    if (t.indexOf('patch') >= 0) return '#ca8a04';
     return '#334155';
   }
 
@@ -881,6 +882,7 @@
     var rooms = options.rooms || [];
     var interactive = options.interactive !== false;
     var walkEnabled = options.walkEnabled !== false && interactive;
+    var showCamHud = options.showCamHud !== false && walkEnabled;
     var onModeChange = typeof options.onModeChange === 'function' ? options.onModeChange : null;
     var camMode = 'orbit';
     var logoUrl = options.logoUrl || (mediaBase() ? mediaBase() + '/assets/img/logo.svg' : 'assets/img/logo.svg');
@@ -1002,12 +1004,12 @@
     container.appendChild(statusEl);
 
     var walkHud = null;
-    if (walkEnabled) {
+    if (showCamHud) {
       walkHud = document.createElement('div');
-      walkHud.className = 'dcim-3d-walk-hud';
-      walkHud.hidden = true;
-      walkHud.style.cssText = 'position:absolute;left:50%;bottom:10px;transform:translateX(-50%);z-index:2;font:12px/1.35 Segoe UI,sans-serif;color:#e2e8f0;background:rgba(15,23,42,.78);padding:5px 10px;border-radius:6px;pointer-events:none;white-space:nowrap;letter-spacing:.01em';
-      walkHud.textContent = 'Walk  ·  W/S move  ·  A/D turn  ·  drag look  ·  Esc orbit';
+      walkHud.className = 'dcim-3d-walk-hud dcim-3d-cam-hud';
+      walkHud.setAttribute('role', 'status');
+      walkHud.style.cssText = 'position:absolute;left:50%;bottom:10px;transform:translateX(-50%);z-index:2;font:12px/1.4 Segoe UI,sans-serif;color:#e2e8f0;background:rgba(15,23,42,.82);padding:6px 12px;border-radius:8px;pointer-events:none;white-space:normal;text-align:center;max-width:min(42rem,calc(100% - 20px));letter-spacing:.01em;border:1px solid rgba(148,163,184,.28)';
+      walkHud.textContent = 'Orbit (overview)  ·  Drag to rotate  ·  Scroll to zoom  ·  Walk = stand in an aisle (WASD)';
       container.appendChild(walkHud);
     }
 
@@ -2283,7 +2285,12 @@
 
     function updateWalkHud() {
       if (!walkHud) return;
-      walkHud.hidden = camMode !== 'walk';
+      walkHud.hidden = false;
+      if (camMode === 'walk') {
+        walkHud.textContent = 'Walk (in the aisle)  ·  WASD / arrows move  ·  Q/E sidestep  ·  drag to look  ·  Shift faster  ·  Esc = Orbit (overview)';
+      } else {
+        walkHud.textContent = 'Orbit (overview)  ·  Drag to rotate  ·  Scroll to zoom  ·  Walk = stand in an aisle (WASD)';
+      }
     }
 
     function updateCamera() {

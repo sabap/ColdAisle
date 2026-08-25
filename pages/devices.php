@@ -16,6 +16,7 @@ $deviceTypes = [
     'pdu' => 'PDU',
     'router' => 'Router',
     'network_switch' => 'Network Switch',
+    'patch_panel' => 'Patch panel',
     'storage_array' => 'Storage array',
     'storage_switch' => 'Storage switch',
     'kvm' => 'KVM',
@@ -536,14 +537,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
             }
             // Auto-create data ports from count (power uses device_power_supplies)
             $dp = (int)($data['num_data_ports'] ?? 0);
-            for ($i = 1; $i <= $dp; $i++) {
-                Database::insert('device_ports', [
-                    'device_id' => $did,
-                    'port_type' => 'data',
-                    'port_number' => $i,
-                    'label' => 'Eth' . $i,
-                    'media_type' => 'RJ45',
-                ]);
+            if ($dp > 0 && class_exists('CablePlantService')) {
+                CablePlantService::insertDataPorts(
+                    (int)$did,
+                    (string)($data['device_type'] ?? 'server'),
+                    isset($data['model']) ? (string)$data['model'] : null,
+                    $dp
+                );
+            } else {
+                for ($i = 1; $i <= $dp; $i++) {
+                    Database::insert('device_ports', [
+                        'device_id' => $did,
+                        'port_type' => 'data',
+                        'port_number' => $i,
+                        'label' => 'Eth' . $i,
+                        'media_type' => 'RJ45',
+                    ]);
+                }
             }
             // Create PSUs from template (name / watts / connector; no PDU map yet)
             $psuDefs = [];
@@ -1478,7 +1488,8 @@ if ($action === 'new' || $id) {
                 $devTypeKey = strtolower((string)($device['device_type'] ?? ''));
                 $isSwitchLike = str_contains($devTypeKey, 'switch')
                     || str_contains($devTypeKey, 'router')
-                    || $devTypeKey === 'chassis';
+                    || $devTypeKey === 'chassis'
+                    || $devTypeKey === 'patch_panel';
                 $connectedCableIds = [];
                 foreach ($dataByNum as $dpRow) {
                     if (!empty($dpRow['cable_id'])) {
@@ -3260,6 +3271,7 @@ if ($action === 'new' || $id) {
                            value="<?= App::e((string)($device['num_data_ports'] ?? ($device ? count(array_filter($ports, fn($p) => ($p['port_type'] ?? '') === 'data')) : '0'))) ?>">
                     <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
                         On create, data interface rows are auto-created from this count.
+                        Patch panels use jack numbers (01, 02, …) instead of Eth1.
                     </p>
                 </div>
             </div>
@@ -3283,6 +3295,7 @@ if ($action === 'new' || $id) {
                     </select>
                     <?php if (!$device): ?>
                     <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                        Use <strong>Patch panel</strong> for copper/fiber panels (they are devices, not a separate plant object).
                         Use <strong>Environmental monitor</strong> for AP9340-class hosts;
                         <strong>Env expansion module</strong> for probe expanders. If the U is already filled, ColdAisle will offer to open the existing device.
                     </p>

@@ -364,8 +364,9 @@ if (class_exists('SiteTourService')) {
                 Temp heat spheres (~3 ft)
             </label>
             <label class="text-muted" style="font-size:.85rem;display:flex;align-items:center;gap:.4rem;cursor:pointer;margin:0">
-                <input type="checkbox" id="dash3dWalkToggle">
-                Walk hall (WASD / arrows)
+                <input type="checkbox" id="dash3dWalkToggle"
+                    title="On: stand in an aisle (WASD, drag to look). Off: orbit the hall (drag to rotate, scroll to zoom).">
+                Walk aisle (first-person)
             </label>
             <span class="text-muted" style="font-size:.78rem" id="dash3dHeatHint">
                 <?php if (count($envSensors3d) > 0): ?>
@@ -469,7 +470,7 @@ if (class_exists('SiteTourService')) {
     if (!el) return;
     el.classList.add('dash-3d-loading');
     var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=28') ?>;
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=29') ?>;
     loadScript(threeUrl)
       .then(function () { return loadScript(app3d); })
       .then(function () {

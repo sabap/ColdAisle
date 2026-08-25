@@ -1634,19 +1634,27 @@
     function updatePlannerHud() {
       const hud = document.getElementById('plannerHud');
       if (!hud) return;
+      syncPlannerChromeHint();
       if (racewayDraw) {
         const n = racewayDraw.points ? racewayDraw.points.length : 0;
+        const step = n < 2 ? 1 : 2;
         hud.hidden = false;
         hud.innerHTML =
-          '<div class="hud-title">Raceway draw · ' + n + ' point' + (n === 1 ? '' : 's') + '</div>' +
-          '<ul>' +
-          '<li><strong>Add points:</strong> click empty floor (need 3+ for a corner)</li>' +
-          '<li><strong>Move a point:</strong> drag a <em>round</em> vertex — other ends stay put</li>' +
-          '<li><strong>90° curve (same path only):</strong> on an L-corner, drag the <em>yellow diamond</em> ' +
-          '<strong>inward</strong> (into the angle) to pull a curve; drag <strong>out</strong> until it hard-stops at sharp 90°. ' +
-          'Not between two separate paths.</li>' +
-          '<li><strong>Undo last point:</strong> <kbd>Backspace</kbd> · <strong>Save:</strong> Finish / <kbd>Enter</kbd> · <strong>Exit:</strong> <kbd>Esc</kbd></li>' +
-          '</ul>';
+          '<div class="hud-title">Draw raceway · step ' + step + ' of 2 · ' + n + ' point' + (n === 1 ? '' : 's') + '</div>' +
+          '<ol class="hud-steps">' +
+          '<li' + (step === 1 ? ' class="is-current"' : '') + '>' +
+            (n < 1
+              ? '<strong>Click the floor</strong> to drop the first vertex (start of the tray).'
+              : n < 2
+                ? '<strong>Click again</strong> along the run. Need 2+ points to save.'
+                : 'Points are on the floor. Click to add more, or go to step 2.') +
+          '</li>' +
+          '<li' + (step === 2 ? ' class="is-current"' : '') + '>' +
+            '<strong>Finish</strong> / <kbd>Enter</kbd> names the path and saves. ' +
+            '<kbd>Backspace</kbd> undoes the last point. <kbd>Esc</kbd> exits without saving.' +
+          '</li>' +
+          '</ol>' +
+          '<p class="hud-tip">Optional: drag a <em>round</em> vertex to move that corner. On an L-bend, drag the <em>yellow diamond inward</em> for a 90° curve (out = sharp).</p>';
         return;
       }
       if (cableRoutes && cableRoutes.length) {
@@ -1682,19 +1690,62 @@
         hud.hidden = false;
         hud.innerHTML =
           '<div class="hud-title">Raceway selected</div>' +
-          '<ul>' +
-          '<li><strong>Reshape:</strong> drag a round vertex (others stay fixed)</li>' +
-          '<li><strong>Move whole path:</strong> drag the path line</li>' +
-          '<li><strong>Merge two paths:</strong> drag endpoints within ~0.35&nbsp;m at ~90° (green ring) → ' +
-          '<em>Merge nearby endpoint</em> in props (or after dragging an endpoint close)</li>' +
-          '<li><strong>Smooth 90° bend:</strong> after merge, drag the <em>yellow diamond</em> ' +
-          '<strong>into</strong> the junction (curve equal on both sides); drag out = sharp stop</li>' +
-          '<li><strong>Delete path:</strong> Delete path button or <kbd>Delete</kbd></li>' +
-          '</ul>';
+          '<ol class="hud-steps">' +
+          '<li>Drag a <em>round</em> vertex to reshape that corner (others stay put).</li>' +
+          '<li>Drag the path <em>line</em> to move the whole run.</li>' +
+          '<li>Yellow diamond on a 90° corner: <strong>inward</strong> = curve, <strong>out</strong> = sharp.</li>' +
+          '<li>Endpoints that meet at ~90° (green ring) can merge. <strong>Delete path</strong> or <kbd>Delete</kbd> removes it.</li>' +
+          '</ol>';
+        return;
+      }
+      if (show3d) {
+        const walking = !!(view3dInstance && typeof view3dInstance.getMode === 'function'
+          && view3dInstance.getMode() === 'walk');
+        hud.hidden = false;
+        if (walking) {
+          hud.innerHTML =
+            '<div class="hud-title">Walk — you are in the aisle</div>' +
+            '<ol class="hud-steps">' +
+            '<li><strong>Move:</strong> W/S or arrows. <strong>Sidestep:</strong> Q/E. <strong>Look:</strong> drag.</li>' +
+            '<li><strong>Peek:</strong> R / F (or PageUp / PageDown). <strong>Faster:</strong> hold Shift.</li>' +
+            '<li>Click the hall first if keys do nothing (it needs focus).</li>' +
+            '<li><kbd>Esc</kbd> or the <strong>Orbit</strong> button returns to the overview.</li>' +
+            '</ol>' +
+            '<p class="hud-tip">Orbit is the bird’s-eye spin. Walk is first-person in the hall — same geometry, different camera.</p>';
+        } else {
+          hud.innerHTML =
+            '<div class="hud-title">Orbit — overview of the hall</div>' +
+            '<ol class="hud-steps">' +
+            '<li><strong>Drag</strong> to rotate around the room. <strong>Scroll</strong> to zoom.</li>' +
+            '<li><strong>Walk</strong> drops you into an aisle (WASD, drag to look).</li>' +
+            '<li><strong>2D Plan</strong> is back to drawing cabinets and raceways.</li>' +
+            '</ol>' +
+            '<p class="hud-tip">Orbit = look at the hall from outside. Walk = stand in it. Esc always leaves Walk.</p>';
+        }
         return;
       }
       hud.hidden = true;
       hud.innerHTML = '';
+    }
+
+    function syncPlannerChromeHint() {
+      const hint = document.getElementById('plannerChromeHint');
+      if (!hint) return;
+      const docs = hint.querySelector('a');
+      const docsHtml = docs ? ' · ' + docs.outerHTML : '';
+      if (show3d) {
+        const walking = !!(view3dInstance && typeof view3dInstance.getMode === 'function'
+          && view3dInstance.getMode() === 'walk');
+        hint.innerHTML = walking
+          ? 'Walk (aisle): WASD move · drag look · Esc orbit' + docsHtml
+          : 'Orbit (overview): drag rotate · scroll zoom · Walk = aisle' + docsHtml;
+        return;
+      }
+      if (racewayDraw) {
+        hint.innerHTML = 'Draw raceway: click vertices · Finish / Enter saves · Esc exits' + docsHtml;
+        return;
+      }
+      hint.innerHTML = 'SHIFT+click multi-select · Arrows nudge · Drag floor to pan · Scroll zoom' + docsHtml;
     }
 
     function pduRect(p) {
@@ -5288,6 +5339,7 @@
         rooms: room ? [room] : [],
         interactive: true,
         walkEnabled: true,
+        showCamHud: false,
         textureFaces: 'both',
         logoUrl: base ? base + '/assets/img/logo.svg' : 'assets/img/logo.svg',
         onModeChange: function (mode) {
@@ -5309,6 +5361,10 @@
       walkBtn.textContent = walking ? 'Orbit' : 'Walk';
       walkBtn.classList.toggle('btn-primary', walking);
       walkBtn.setAttribute('aria-pressed', walking ? 'true' : 'false');
+      walkBtn.title = walking
+        ? 'Leave Walk — back to Orbit (drag to rotate around the hall, scroll to zoom)'
+        : 'Walk: stand in an aisle (WASD, drag to look). Orbit: drag to spin around the hall.';
+      updatePlannerHud();
     }
 
     function setRacewayUi() {
@@ -5339,6 +5395,10 @@
       if (drawBtn) {
         drawBtn.classList.toggle('btn-primary', !!racewayDraw);
         drawBtn.classList.toggle('btn-secondary', !racewayDraw);
+        drawBtn.textContent = racewayDraw ? 'Exit draw' : 'Draw raceway';
+        drawBtn.title = racewayDraw
+          ? 'Leave draw mode without saving (Esc)'
+          : 'Click points on the 2D floor; Finish / Enter saves the path';
       }
     }
 
@@ -5425,7 +5485,7 @@
       setRacewayUi();
       draw();
       updatePlannerHud();
-      ColdAisle.toast('Raceway mode: inventory dimmed · see tip panel for 90° curves', 'info');
+      ColdAisle.toast('Raceway: click the floor for points (2+). Finish / Enter saves. Esc exits.', 'info');
     }
 
     function cancelRacewayDraw() {
@@ -5637,8 +5697,15 @@
       });
     }
     if (btnDrawRaceway) btnDrawRaceway.addEventListener('click', function () {
-      if (racewayDraw) cancelRacewayDraw();
-      else startRacewayDraw();
+      if (racewayDraw) {
+        cancelRacewayDraw();
+        return;
+      }
+      if (show3d) {
+        ColdAisle.toast('Drawing is on the 2D plan — leaving 3D.', 'info');
+        setPlanner3d(false);
+      }
+      startRacewayDraw();
     });
     if (btnFinishRaceway) btnFinishRaceway.addEventListener('click', function () { finishRacewayDraw(); });
     if (btnCancelRaceway) btnCancelRaceway.addEventListener('click', cancelRacewayDraw);
@@ -6688,22 +6755,30 @@
       loadRoom(roomSelect.value);
     });
 
+    function setPlanner3d(on) {
+      show3d = !!on;
+      const wrap2d = root.querySelector('.planner-canvas-wrap');
+      if (show3d) {
+        if (racewayDraw) cancelRacewayDraw();
+        if (wrap2d) wrap2d.style.display = 'none';
+        if (view3d) view3d.style.display = 'block';
+        if (mode3dBtn) mode3dBtn.textContent = '2D Plan';
+        if (mode3dBtn) mode3dBtn.title = 'Back to 2D plan (draw cabinets and raceways)';
+        refresh3d();
+      } else {
+        if (wrap2d) wrap2d.style.display = 'block';
+        if (view3d) view3d.style.display = 'none';
+        if (mode3dBtn) mode3dBtn.textContent = '3D View';
+        if (mode3dBtn) mode3dBtn.title = 'Same hall in 3D. Orbit = overview; Walk = aisle.';
+        syncWalkBtn();
+        draw();
+      }
+      updatePlannerHud();
+    }
+
     if (mode3dBtn) {
       mode3dBtn.addEventListener('click', function () {
-        show3d = !show3d;
-        const wrap2d = root.querySelector('.planner-canvas-wrap');
-        if (show3d) {
-          wrap2d.style.display = 'none';
-          view3d.style.display = 'block';
-          mode3dBtn.textContent = '2D Plan';
-          refresh3d();
-        } else {
-          wrap2d.style.display = 'block';
-          view3d.style.display = 'none';
-          mode3dBtn.textContent = '3D View';
-          syncWalkBtn();
-          draw();
-        }
+        setPlanner3d(!show3d);
       });
     }
 

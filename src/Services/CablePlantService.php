@@ -1328,4 +1328,509 @@ class CablePlantService
         }
         return $fields;
     }
+
+    /**
+     * Default data-port label + media when creating a device from a type/model.
+     * Patch panels get jack numbers (01, 02, …); fiber models use LC.
+     *
+     * @return array{label:string,media_type:string,port_type:string,port_number:int}
+     */
+    public static function defaultDataPortFields(string $deviceType, ?string $model, int $n, int $total): array
+    {
+        $n = max(1, $n);
+        $total = max($n, $total);
+        $blob = strtolower(trim($deviceType . ' ' . (string)$model));
+        $isPanel = $deviceType === 'patch_panel'
+            || (bool)preg_match('/\bpatch(\s|-|_)*panel\b/', $blob);
+        $fiber = (bool)preg_match('/\b(om[345]|os2|fiber|fibre|lc|sc|mpo|mtp)\b/', $blob);
+        $width = $total >= 100 ? 3 : 2;
+        $label = $isPanel
+            ? str_pad((string)$n, $width, '0', STR_PAD_LEFT)
+            : ('Eth' . $n);
+
+        return [
+            'port_type' => 'data',
+            'port_number' => $n,
+            'label' => $label,
+            'media_type' => $fiber ? 'LC' : 'RJ45',
+        ];
+    }
+
+    public static function insertDataPorts(
+        int $deviceId,
+        string $deviceType,
+        ?string $model,
+        int $count,
+        ?string $mediaOverride = null
+    ): int {
+        $count = max(0, min(512, $count));
+        $mediaOverride = $mediaOverride !== null ? trim($mediaOverride) : '';
+        $created = 0;
+        for ($i = 1; $i <= $count; $i++) {
+            $fields = self::defaultDataPortFields($deviceType, $model, $i, $count);
+            $fields['device_id'] = $deviceId;
+            if ($mediaOverride !== '') {
+                $fields['media_type'] = $mediaOverride;
+            }
+            Database::insert('device_ports', $fields);
+            $created++;
+        }
+        return $created;
+    }
+
+    /**
+     * Catalog starters: passive panels as devices (jack count = num_data_ports).
+     *
+     * @return list<array{model:string,device_type:string,u_height:int,num_data_ports:int,notes:string}>
+     */
+    public static function patchPanelTemplateSeeds(): array
+    {
+        return [
+            [
+                'model' => '24-port Cat6 patch panel',
+                'device_type' => 'patch_panel',
+                'u_height' => 1,
+                'num_data_ports' => 24,
+                'notes' => 'Passive 1U copper. Devices created from this template get jacks 01–24 (not Eth1).',
+            ],
+            [
+                'model' => '48-port Cat6 patch panel',
+                'device_type' => 'patch_panel',
+                'u_height' => 2,
+                'num_data_ports' => 48,
+                'notes' => 'Passive 2U copper. Jacks 01–48.',
+            ],
+            [
+                'model' => '24-port Cat6A patch panel',
+                'device_type' => 'patch_panel',
+                'u_height' => 1,
+                'num_data_ports' => 24,
+                'notes' => 'Passive 1U Cat6A copper. Jacks 01–24.',
+            ],
+            [
+                'model' => '12-port LC duplex fiber panel',
+                'device_type' => 'patch_panel',
+                'u_height' => 1,
+                'num_data_ports' => 12,
+                'notes' => 'Passive 1U fiber (12 duplex LC). Ports 01–12, media LC.',
+            ],
+            [
+                'model' => '24-port LC duplex fiber panel',
+                'device_type' => 'patch_panel',
+                'u_height' => 1,
+                'num_data_ports' => 24,
+                'notes' => 'Passive 1U fiber (24 duplex LC). Ports 01–24, media LC.',
+            ],
+        ];
+    }
+
+    /**
+     * Insert missing patch-panel templates (matched by model + type).
+     *
+     * @return array{added:int,skipped:int}
+     */
+    public static function ensurePatchPanelTemplates(): array
+    {
+        $added = 0;
+        $skipped = 0;
+        foreach (self::patchPanelTemplateSeeds() as $seed) {
+            $exists = Database::fetchValue(
+                'SELECT TOP 1 template_id FROM device_templates
+                 WHERE model = ? AND device_type = ? AND is_active = 1',
+                [$seed['model'], 'patch_panel']
+            );
+            if ($exists) {
+                $skipped++;
+                continue;
+            }
+            $row = [
+                'manufacturer_id' => null,
+                'model' => $seed['model'],
+                'device_type' => 'patch_panel',
+                'u_height' => (int)$seed['u_height'],
+                'weight_kg' => null,
+                'watts' => null,
+                'num_power_ports' => 0,
+                'num_data_ports' => (int)$seed['num_data_ports'],
+                'notes' => $seed['notes'],
+                'is_active' => 1,
+            ];
+            Database::insert('device_templates', $row);
+            $added++;
+        }
+        return ['added' => $added, 'skipped' => $skipped];
+    }
+
+    /** @return list<string> */
+    public static function csvImportHeaders(): array
+    {
+        return [
+            'cable_label', 'cable_role', 'a_device', 'a_port', 'b_device', 'b_port',
+            'a_cabinet', 'b_cabinet', 'media_type', 'speed', 'circuit_id', 'path_code',
+            'length_m', 'strand_count', 'notes', 'color_hex',
+        ];
+    }
+
+    /** @return list<string> */
+    public static function csvImportExampleRow(): array
+    {
+        return [
+            'PP-A-01-12', 'structured', 'PP-A-01', '12', 'SW-01', 'Eth12',
+            'Cab-A', 'Cab-A', 'Cat6', '1G', 'IDF-A-12', 'RS-A',
+            '15.0', '', 'Permanent link from panel to switch', '#2563eb',
+        ];
+    }
+
+    /**
+     * Bulk-create cables from CSV text. Resolves devices by label (optional cabinet)
+     * and ports by label or number. Does not require every site port in the form.
+     *
+     * @param array{skip_existing?:bool,max_rows?:int} $options
+     * @return array{ok:bool,created:int,skipped:int,errors:list<string>,message:string}
+     */
+    public static function importConnectionsCsv(string $text, array $options = []): array
+    {
+        $skipExisting = !array_key_exists('skip_existing', $options) || !empty($options['skip_existing']);
+        $maxRows = max(1, min(5000, (int)($options['max_rows'] ?? 2000)));
+        $text = preg_replace('/^\xEF\xBB\xBF/', '', $text) ?? $text;
+        $text = str_replace("\r\n", "\n", $text);
+        $text = str_replace("\r", "\n", $text);
+        if (trim($text) === '') {
+            return [
+                'ok' => false, 'created' => 0, 'skipped' => 0,
+                'errors' => ['File is empty.'],
+                'message' => 'File is empty.',
+            ];
+        }
+
+        $fh = fopen('php://temp', 'r+');
+        if ($fh === false) {
+            return [
+                'ok' => false, 'created' => 0, 'skipped' => 0,
+                'errors' => ['Could not read CSV.'],
+                'message' => 'Could not read CSV.',
+            ];
+        }
+        fwrite($fh, $text);
+        rewind($fh);
+
+        $headerLine = fgetcsv($fh);
+        while (is_array($headerLine) && self::csvRowIsComment($headerLine)) {
+            $headerLine = fgetcsv($fh);
+        }
+        if (!is_array($headerLine) || $headerLine === []) {
+            fclose($fh);
+            return [
+                'ok' => false, 'created' => 0, 'skipped' => 0,
+                'errors' => ['Missing header row.'],
+                'message' => 'Missing header row.',
+            ];
+        }
+
+        $map = [];
+        foreach ($headerLine as $i => $raw) {
+            $key = self::csvHeaderKey((string)$raw);
+            if ($key !== '') {
+                $map[$key] = (int)$i;
+            }
+        }
+        $needOne = isset($map['a_device']) || isset($map['a_end']) || isset($map['a_port']);
+        if (!$needOne || (!isset($map['b_device']) && !isset($map['b_end']) && !isset($map['b_port']))) {
+            fclose($fh);
+            return [
+                'ok' => false, 'created' => 0, 'skipped' => 0,
+                'errors' => ['CSV needs a_device/a_port (or a_end) and b_device/b_port (or b_end) columns.'],
+                'message' => 'CSV headers do not match the import template.',
+            ];
+        }
+
+        $created = 0;
+        $skipped = 0;
+        $errors = [];
+        $lineNo = 1;
+        $dataRows = 0;
+        while (($row = fgetcsv($fh)) !== false) {
+            $lineNo++;
+            if (!is_array($row) || self::csvRowIsComment($row) || self::csvRowIsEmpty($row)) {
+                continue;
+            }
+            $dataRows++;
+            if ($dataRows > $maxRows) {
+                $errors[] = 'Stopped after ' . $maxRows . ' data rows (import limit).';
+                break;
+            }
+            try {
+                $cell = static function (string $key) use ($map, $row): string {
+                    if (!isset($map[$key])) {
+                        return '';
+                    }
+                    $i = $map[$key];
+                    return trim((string)($row[$i] ?? ''));
+                };
+
+                $aDevice = $cell('a_device');
+                $aPort = $cell('a_port');
+                $bDevice = $cell('b_device');
+                $bPort = $cell('b_port');
+                if ($aDevice === '' || $aPort === '') {
+                    [$ad, $ap] = self::splitEndLabel($cell('a_end'));
+                    if ($aDevice === '') {
+                        $aDevice = $ad;
+                    }
+                    if ($aPort === '') {
+                        $aPort = $ap;
+                    }
+                }
+                if ($bDevice === '' || $bPort === '') {
+                    [$bd, $bp] = self::splitEndLabel($cell('b_end'));
+                    if ($bDevice === '') {
+                        $bDevice = $bd;
+                    }
+                    if ($bPort === '') {
+                        $bPort = $bp;
+                    }
+                }
+                if ($aDevice === '' || $aPort === '' || $bDevice === '' || $bPort === '') {
+                    throw new RuntimeException('Need A and B device + port.');
+                }
+
+                $aDev = self::findDeviceForImport($aDevice, $cell('a_cabinet'));
+                $bDev = self::findDeviceForImport($bDevice, $cell('b_cabinet'));
+                $aP = self::findPortForImport((int)$aDev['device_id'], $aPort);
+                $bP = self::findPortForImport((int)$bDev['device_id'], $bPort);
+                $aId = (int)$aP['port_id'];
+                $bId = (int)$bP['port_id'];
+                if ($aId === $bId) {
+                    throw new RuntimeException('A and B ports are the same.');
+                }
+
+                $existing = Database::fetchValue(
+                    'SELECT TOP 1 cable_id FROM cables
+                     WHERE (a_port_id = ? AND b_port_id = ?) OR (a_port_id = ? AND b_port_id = ?)',
+                    [$aId, $bId, $bId, $aId]
+                );
+                if ($existing) {
+                    if ($skipExisting) {
+                        $skipped++;
+                        continue;
+                    }
+                    throw new RuntimeException('Connection already exists (cable #' . (int)$existing . ').');
+                }
+
+                $post = [
+                    'cable_label' => $cell('cable_label'),
+                    'cable_role' => $cell('cable_role') !== '' ? $cell('cable_role') : 'structured',
+                    'media_type' => $cell('media_type'),
+                    'speed' => $cell('speed'),
+                    'circuit_id' => $cell('circuit_id'),
+                    'length_m' => $cell('length_m'),
+                    'strand_count' => $cell('strand_count'),
+                    'notes' => $cell('notes'),
+                    'color_hex' => $cell('color_hex'),
+                    'a_port_id' => $aId,
+                    'b_port_id' => $bId,
+                    'status' => 'active',
+                ];
+                $pathCode = $cell('path_code');
+                if ($pathCode !== '') {
+                    $ids = self::findPathIdsForImport($pathCode);
+                    if ($ids !== []) {
+                        $post['path_ids'] = $ids;
+                        $post['path_ids_ordered'] = implode(',', $ids);
+                    }
+                }
+                $fields = self::cableFieldsFromInput($post);
+                $fields['installed_at'] = date('Y-m-d H:i:s');
+                Database::insert('cables', $fields);
+                $created++;
+            } catch (Throwable $e) {
+                $errors[] = 'Row ' . $lineNo . ': ' . $e->getMessage();
+            }
+        }
+        fclose($fh);
+
+        $errN = count($errors);
+        $ok = $created > 0 || ($dataRows > 0 && $errN === 0);
+        $parts = [];
+        $parts[] = $created . ' imported';
+        if ($skipped > 0) {
+            $parts[] = $skipped . ' skipped (already exist)';
+        }
+        if ($errN > 0) {
+            $parts[] = $errN . ' error' . ($errN === 1 ? '' : 's');
+        }
+        if ($dataRows === 0) {
+            $message = 'No data rows in the CSV.';
+            $ok = false;
+        } else {
+            $message = 'CSV: ' . implode(', ', $parts) . '.';
+        }
+
+        return [
+            'ok' => $ok,
+            'created' => $created,
+            'skipped' => $skipped,
+            'errors' => $errors,
+            'message' => $message,
+        ];
+    }
+
+    /** @param list<string|null> $row */
+    private static function csvRowIsComment(array $row): bool
+    {
+        $first = trim((string)($row[0] ?? ''));
+        return str_starts_with($first, '#');
+    }
+
+    /** @param list<string|null> $row */
+    private static function csvRowIsEmpty(array $row): bool
+    {
+        foreach ($row as $c) {
+            if (trim((string)$c) !== '') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static function csvHeaderKey(string $raw): string
+    {
+        $h = strtolower(trim($raw));
+        $h = preg_replace('/[^a-z0-9]+/', '_', $h) ?? $h;
+        $h = trim($h, '_');
+        $aliases = [
+            'label' => 'cable_label',
+            'role' => 'cable_role',
+            'a_end' => 'a_end',
+            'b_end' => 'b_end',
+            'a_end_device' => 'a_device',
+            'b_end_device' => 'b_device',
+            'a_end_port' => 'a_port',
+            'b_end_port' => 'b_port',
+            'media' => 'media_type',
+            'path' => 'path_code',
+            'pathway' => 'path_code',
+            'raceway' => 'path_code',
+            'circuit' => 'circuit_id',
+            'length' => 'length_m',
+            'color' => 'color_hex',
+            'strands' => 'strand_count',
+        ];
+        return $aliases[$h] ?? $h;
+    }
+
+    /** @return array{0:string,1:string} device, port */
+    private static function splitEndLabel(string $end): array
+    {
+        $end = trim($end);
+        if ($end === '') {
+            return ['', ''];
+        }
+        foreach ([' / ', ' | ', '/'] as $sep) {
+            $pos = strrpos($end, $sep);
+            if ($pos !== false) {
+                return [trim(substr($end, 0, $pos)), trim(substr($end, $pos + strlen($sep)))];
+            }
+        }
+        return [$end, ''];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function findDeviceForImport(string $label, string $cabinet): array
+    {
+        $sql = 'SELECT d.device_id, d.label, d.cabinet_id, c.name AS cabinet_name
+                FROM devices d
+                LEFT JOIN cabinets c ON c.cabinet_id = d.cabinet_id
+                WHERE d.is_active = 1 AND LOWER(LTRIM(RTRIM(d.label))) = LOWER(?)';
+        $params = [$label];
+        if ($cabinet !== '') {
+            $sql .= ' AND LOWER(LTRIM(RTRIM(ISNULL(c.name, \'\')))) = LOWER(?)';
+            $params[] = $cabinet;
+        }
+        $rows = Database::fetchAll($sql, $params);
+        if (count($rows) === 1) {
+            return $rows[0];
+        }
+        if (count($rows) > 1) {
+            throw new RuntimeException(
+                'Device "' . $label . '" is ambiguous'
+                . ($cabinet === '' ? ' — add a_cabinet / b_cabinet.' : '.')
+            );
+        }
+        throw new RuntimeException(
+            'Device "' . $label . '" not found'
+            . ($cabinet !== '' ? (' in cabinet "' . $cabinet . '"') : '') . '.'
+        );
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function findPortForImport(int $deviceId, string $spec): array
+    {
+        $spec = trim($spec);
+        if ($spec === '' || $deviceId < 1) {
+            throw new RuntimeException('Port is required.');
+        }
+        $row = Database::fetchOne(
+            'SELECT * FROM device_ports
+             WHERE device_id = ? AND LOWER(LTRIM(RTRIM(ISNULL(label, \'\')))) = LOWER(?)',
+            [$deviceId, $spec]
+        );
+        if ($row) {
+            return $row;
+        }
+        $num = null;
+        if (preg_match('/^(?:eth|gi|te|fo|port|p|jack)?\s*0*(\d+)$/i', $spec, $m)) {
+            $num = (int)$m[1];
+        } elseif (ctype_digit($spec)) {
+            $num = (int)$spec;
+        }
+        if ($num !== null && $num > 0) {
+            $row = Database::fetchOne(
+                'SELECT * FROM device_ports WHERE device_id = ? AND port_number = ? AND port_type = \'data\'',
+                [$deviceId, $num]
+            );
+            if ($row) {
+                return $row;
+            }
+            $padded = str_pad((string)$num, 2, '0', STR_PAD_LEFT);
+            $row = Database::fetchOne(
+                'SELECT * FROM device_ports WHERE device_id = ? AND (
+                    label IN (?, ?, ?, ?)
+                 )',
+                [$deviceId, (string)$num, $padded, 'Eth' . $num, 'Port ' . $num]
+            );
+            if ($row) {
+                return $row;
+            }
+        }
+        throw new RuntimeException('Port "' . $spec . '" not found on that device.');
+    }
+
+    /** @return list<int> */
+    private static function findPathIdsForImport(string $codes): array
+    {
+        $parts = preg_split('/\s*(?:→|->|>|,|;)\s*/u', $codes) ?: [];
+        $ids = [];
+        foreach ($parts as $code) {
+            $code = trim((string)$code);
+            if ($code === '') {
+                continue;
+            }
+            $row = Database::fetchOne(
+                'SELECT path_id FROM cable_paths
+                 WHERE LOWER(LTRIM(RTRIM(ISNULL(path_code, \'\')))) = LOWER(?)
+                    OR LOWER(LTRIM(RTRIM(ISNULL(name, \'\')))) = LOWER(?)',
+                [$code, $code]
+            );
+            if (!$row) {
+                throw new RuntimeException('Raceway "' . $code . '" not found.');
+            }
+            $ids[] = (int)$row['path_id'];
+        }
+        return $ids;
+    }
 }

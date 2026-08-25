@@ -441,7 +441,7 @@ layout_header('Users & Departments', $user, 'users');
     <p class="text-muted" style="font-size:.8rem;margin:.5rem 0 0">
         Header: <code>Authorization: Bearer <?= App::e((string)$apiTokenOnce['token']) ?></code>
         · Probe: <code><?= App::e(App::url('api/v1.php')) ?></code>
-        · <a href="<?= App::e(App::url('pages/docs.php')) ?>">API reference</a>
+        · <a href="<?= App::e(App::url('pages/docs.php#api')) ?>">API reference</a>
     </p>
 </div>
 <?php endif; ?>
@@ -538,7 +538,7 @@ layout_header('Users & Departments', $user, 'users');
             <h2>Users</h2>
             <div class="flex gap-1" style="flex-wrap:wrap;align-items:center">
                 <?php layout_search_form('Search username, name, email, department…', $q, 'pages/users.php'); ?>
-                <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/docs.php')) ?>">API reference</a>
+                <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/docs.php#api')) ?>">API reference</a>
                 <?php if ($isGlobalAdmin): ?>
                     <button type="button" class="btn btn-sm btn-secondary" data-open-modal="modal-api-service">Create API-Service Account</button>
                 <?php endif; ?>
@@ -861,7 +861,7 @@ layout_header('Users & Departments', $user, 'users');
                 Username is always <code>api-service-</code> plus the short name you enter.
                 Give it a least-privilege role (Viewer for read). Global Admin is not allowed.
                 Calls, fields, and examples:
-                <a href="<?= App::e(App::url('pages/docs.php')) ?>">Documentation → API</a>.
+                <a href="<?= App::e(App::url('pages/docs.php#api')) ?>">Documentation → API</a>.
             </p>
             <form method="post" class="form-grid" id="api_service_form">
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
@@ -912,7 +912,7 @@ layout_header('Users & Departments', $user, 'users');
                 <div class="form-row"><label>Token scope</label>
                     <select class="form-control" name="token_scope">
                         <option value="read">Read only (recommended)</option>
-                        <option value="write">Read + write</option>
+                        <option value="write">Read + write (PATCH devices, POST work orders)</option>
                     </select>
                 </div>
                 <div class="form-row"><label>Token expires</label>
@@ -1017,7 +1017,7 @@ layout_header('Users & Departments', $user, 'users');
                     Tokens are shown once. Send them as
                     <code>Authorization: Bearer ca_live_…</code> to
                     <code><?= App::e(App::url('api/v1.php')) ?></code>.
-                    See the <a href="<?= App::e(App::url('pages/docs.php')) ?>">API reference</a> for calls and fields.
+                    See the <a href="<?= App::e(App::url('pages/docs.php#api')) ?>">API reference</a> for calls and fields.
                 </p>
                 <?php if ($editUserTokens): ?>
                 <table class="data" style="margin-bottom:.75rem">
@@ -1061,7 +1061,7 @@ layout_header('Users & Departments', $user, 'users');
                     <div class="form-row"><label>Scope</label>
                         <select class="form-control" name="token_scope">
                             <option value="read">Read only</option>
-                            <option value="write">Read + write (future writes)</option>
+                            <option value="write">Read + write (PATCH devices, POST work orders)</option>
                         </select>
                     </div>
                     <div class="form-row"><label>Expires</label>

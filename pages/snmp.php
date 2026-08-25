@@ -756,6 +756,10 @@ $snmpEnableGithub = 'https://raw.githubusercontent.com/sabap/ColdAisle/main/scri
 
 layout_header('SNMP Polling', $user, 'snmp');
 ?>
+<p class="text-muted" style="margin-top:0;font-size:.85rem">
+    Profiles, site templates, and schedule live here. <strong>Discover OIDs</strong> runs on the PDU, device, UPS, or cooling unit.
+    <a href="<?= App::e(App::url('pages/docs.php#snmp-discover')) ?>">How Discover works</a>
+</p>
 
 <?php if ($hasSnmp): ?>
 <div class="alert alert-success" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">

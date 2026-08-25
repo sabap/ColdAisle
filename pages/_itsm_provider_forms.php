@@ -79,6 +79,8 @@ $itsmProvider = $itsmProvider ?? '';
     <div class="form-row"><label>Caller (email or sys_id)</label>
         <input class="form-control" name="snow_caller" value="<?= App::e((string)($snowCfg['caller'] ?? '')) ?>"
                placeholder="Optional"></div>
+    <details class="itsm-section">
+    <summary>Status mapping &amp; automation</summary>
     <div class="form-row"><label>Closed state</label>
         <input class="form-control" name="snow_closed_state" value="<?= App::e((string)($snowCfg['closed_state'] ?? '7')) ?>"
                placeholder="7 = Closed (incident)"></div>
@@ -87,6 +89,7 @@ $itsmProvider = $itsmProvider ?? '';
     <div class="form-row"><label>In-progress state</label>
         <input class="form-control" name="snow_progress_state" value="<?= App::e((string)($snowCfg['progress_state'] ?? '2')) ?>"></div>
     <?php coldaisle_itsm_toggles('snow', $snowCfg); ?>
+    </details>
 </div>
 
 <div data-itsm-panel="zendesk" <?= $itsmProvider === 'zendesk' ? '' : 'hidden' ?>>
@@ -111,6 +114,8 @@ $itsmProvider = $itsmProvider ?? '';
         <input class="form-control" type="email" name="zd_requester_email"
                value="<?= App::e((string)($zdCfg['requester_email'] ?? '')) ?>"
                placeholder="Optional"></div>
+    <details class="itsm-section">
+    <summary>Status mapping &amp; automation</summary>
     <div class="form-row"><label>Complete status</label>
         <input class="form-control" name="zd_closed_status" value="<?= App::e((string)($zdCfg['closed_status'] ?? 'solved')) ?>"></div>
     <div class="form-row"><label>Cancel status</label>
@@ -118,6 +123,7 @@ $itsmProvider = $itsmProvider ?? '';
     <div class="form-row"><label>In-progress status</label>
         <input class="form-control" name="zd_progress_status" value="<?= App::e((string)($zdCfg['progress_status'] ?? 'open')) ?>"></div>
     <?php coldaisle_itsm_toggles('zd', $zdCfg); ?>
+    </details>
 </div>
 
 <div data-itsm-panel="jira" <?= $itsmProvider === 'jira' ? '' : 'hidden' ?>>
@@ -143,6 +149,8 @@ $itsmProvider = $itsmProvider ?? '';
                placeholder="ITSM"></div>
     <div class="form-row"><label>Issue type</label>
         <input class="form-control" name="jira_issue_type" value="<?= App::e((string)($jiraCfg['issue_type'] ?? 'Task')) ?>"></div>
+    <details class="itsm-section">
+    <summary>Workflow transitions &amp; automation</summary>
     <div class="form-row"><label>Done transition</label>
         <input class="form-control" name="jira_close_transition" value="<?= App::e((string)($jiraCfg['close_transition'] ?? 'Done')) ?>"></div>
     <div class="form-row"><label>Cancel transition</label>
@@ -150,6 +158,7 @@ $itsmProvider = $itsmProvider ?? '';
     <div class="form-row"><label>In-progress transition</label>
         <input class="form-control" name="jira_progress_transition" value="<?= App::e((string)($jiraCfg['progress_transition'] ?? 'In Progress')) ?>"></div>
     <?php coldaisle_itsm_toggles('jira', $jiraCfg); ?>
+    </details>
 </div>
 
 <div data-itsm-panel="freshservice" <?= $itsmProvider === 'freshservice' ? '' : 'hidden' ?>>
@@ -170,6 +179,8 @@ $itsmProvider = $itsmProvider ?? '';
                autocomplete="new-password"></div>
     <div class="form-row"><label>Requester email</label>
         <input class="form-control" type="email" name="fs_email" value="<?= App::e((string)($fsCfg['email'] ?? '')) ?>"></div>
+    <details class="itsm-section">
+    <summary>Status ids &amp; automation</summary>
     <div class="form-row"><label>Closed status id</label>
         <input class="form-control" name="fs_closed_status" value="<?= App::e((string)($fsCfg['closed_status'] ?? '5')) ?>"></div>
     <div class="form-row"><label>Cancelled status id</label>
@@ -177,4 +188,5 @@ $itsmProvider = $itsmProvider ?? '';
     <div class="form-row"><label>In-progress status id</label>
         <input class="form-control" name="fs_progress_status" value="<?= App::e((string)($fsCfg['progress_status'] ?? '2')) ?>"></div>
     <?php coldaisle_itsm_toggles('fs', $fsCfg); ?>
+    </details>
 </div>

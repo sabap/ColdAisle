@@ -1602,7 +1602,7 @@ try {
     </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=28"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=29"></script>
 <script>
 (function () {
   var el = document.getElementById('nocCamPreview');
@@ -2186,13 +2186,11 @@ try {
     </div>
     <div class="card-body">
         <p class="text-muted" style="font-size:.9rem;margin-top:0">
-            Link work orders to one ticketing system:
-            ManageEngine ServiceDesk Cloud, ServiceNow, Zendesk, Jira, or Freshservice.
-            ColdAisle calls the vendor <strong>outbound over HTTPS</strong> — the DCIM host
-            does not need to be on the public internet. Use
-            <strong>Refresh from …</strong> on a work order to pull ticket status.
+            Pick <strong>one</strong> outbound ticketing system. ColdAisle calls it over HTTPS —
+            the DCIM host does not need a public URL. On a work order use
+            <strong>Refresh</strong> to pull ticket status.
         </p>
-        <p class="text-muted" style="font-size:.8rem;margin:0 0 1rem">
+        <p class="text-muted" style="font-size:.8rem;margin:0 0 .75rem">
             <?= App::e($sdpStatus['detail'] ?? '') ?>
         </p>
 
@@ -2200,22 +2198,37 @@ try {
             <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
             <input type="hidden" name="section" value="itsm">
 
-            <div class="form-row"><label>Active system</label>
-                <select class="form-control" name="itsm_provider" id="itsm_provider">
+            <div class="form-row full">
+                <label>Active system</label>
+                <?php
+                $itsmProviders = class_exists('ItsmService') ? ItsmService::providers() : ['sdp' => 'ManageEngine ServiceDesk Cloud'];
+                ?>
+                <div class="itsm-picker" id="itsmPicker" role="listbox" aria-label="Ticketing system">
+                    <button type="button" class="itsm-pick <?= $itsmProvider === '' ? 'is-active' : '' ?>"
+                            data-itsm-pick="" role="option">None</button>
+                    <?php foreach ($itsmProviders as $pid => $plab): ?>
+                        <button type="button" class="itsm-pick <?= $itsmProvider === $pid ? 'is-active' : '' ?>"
+                                data-itsm-pick="<?= App::e($pid) ?>" role="option"><?= App::e($plab) ?></button>
+                    <?php endforeach; ?>
+                </div>
+                <select class="form-control" name="itsm_provider" id="itsm_provider" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0" tabindex="-1" aria-hidden="true">
                     <option value="">None (work orders stay internal)</option>
-                    <?php
-                    $itsmProviders = class_exists('ItsmService') ? ItsmService::providers() : ['sdp' => 'ManageEngine ServiceDesk Cloud'];
-                    foreach ($itsmProviders as $pid => $plab): ?>
+                    <?php foreach ($itsmProviders as $pid => $plab): ?>
                         <option value="<?= App::e($pid) ?>" <?= $itsmProvider === $pid ? 'selected' : '' ?>>
                             <?= App::e($plab) ?>
                         </option>
                     <?php endforeach; ?>
                 </select>
             </div>
+            <p class="text-muted itsm-none-hint" id="itsmNoneHint" style="font-size:.85rem;margin:0 0 .5rem<?= $itsmProvider !== '' ? ';display:none' : '' ?>">
+                Work orders stay in ColdAisle. Choose a vendor to show only that system’s fields.
+            </p>
 
             <div data-itsm-panel="sdp" <?= $itsmProvider === 'sdp' ? '' : 'hidden' ?>>
             <input type="hidden" name="sdp_enabled" value="<?= $itsmProvider === 'sdp' ? '1' : '0' ?>" id="sdp_enabled_flag">
-            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">ServiceDesk Cloud portal</h4></div>
+            <details class="itsm-section" open>
+            <summary>ServiceDesk Cloud connection</summary>
+            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Portal</h4></div>
             <div class="form-row"><label>Data center</label>
                 <select class="form-control" name="sdp_dc">
                     <?php
@@ -2281,7 +2294,10 @@ try {
                 <input type="checkbox" name="sdp_clear_tokens" value="1">
                 Clear stored refresh / access tokens
             </label></div>
+            </details>
 
+            <details class="itsm-section">
+            <summary>Request defaults</summary>
             <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Request defaults</h4></div>
             <div class="form-row"><label>Requester email (optional)</label>
                 <input class="form-control" type="email" name="sdp_requester_email"
@@ -2325,8 +2341,11 @@ try {
                     <?= !empty($sdpCfg['close_on_complete']) ? 'checked' : '' ?>>
                 Set the ServiceDesk status to Close status when the work order is completed
             </label></div>
+            </details>
 
-            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Pull from ServiceDesk (recommended)</h4></div>
+            <details class="itsm-section" open>
+            <summary>Pull from ServiceDesk (recommended)</summary>
+            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Pull</h4></div>
             <div class="form-row full">
                 <p class="text-muted" style="font-size:.8rem;margin:0">
                     The DCIM server only needs <em>outbound</em> HTTPS to Zoho (same as Updates).
@@ -2340,8 +2359,11 @@ try {
                 Map ServiceDesk status onto the work order when pulling
                 (Closed → Completed, no inventory apply)
             </label></div>
+            </details>
 
-            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Webhook (optional — public URL)</h4></div>
+            <details class="itsm-section">
+            <summary>Webhook (optional — needs a public URL)</summary>
+            <div class="form-row full"><h4 class="mt-0" style="margin-bottom:0;font-size:.95rem;color:var(--muted)">Webhook</h4></div>
             <div class="form-row full">
                 <p class="text-muted" style="font-size:.8rem;margin:0">
                     Leave this off unless ColdAisle is reachable from the internet
@@ -2383,6 +2405,7 @@ try {
                           style="font-family:ui-monospace,Consolas,monospace;font-size:.8rem"><?= App::e($sdpPayloadExample) ?></textarea>
             </div>
             <?php endif; ?>
+            </details>
 
             <?php require __DIR__ . '/_itsm_provider_forms.php'; ?>
 
@@ -4361,11 +4384,24 @@ function settingsTestPendingHtml(msg, sub) {
         document.querySelectorAll('[data-itsm-panel]').forEach(function (el) {
             el.hidden = el.getAttribute('data-itsm-panel') !== v;
         });
+        document.querySelectorAll('#itsmPicker .itsm-pick').forEach(function (btn) {
+            btn.classList.toggle('is-active', (btn.getAttribute('data-itsm-pick') || '') === v);
+        });
         var ex = document.getElementById('sdp_exchange_btn');
         if (ex) ex.style.display = v === 'sdp' ? '' : 'none';
+        var test = document.getElementById('sdp_test_btn');
+        if (test) test.style.display = v ? '' : 'none';
+        var hint = document.getElementById('itsmNoneHint');
+        if (hint) hint.style.display = v ? 'none' : '';
         var flag = document.getElementById('sdp_enabled_flag');
         if (flag) flag.value = v === 'sdp' ? '1' : '0';
     }
+    document.querySelectorAll('#itsmPicker .itsm-pick').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            sel.value = btn.getAttribute('data-itsm-pick') || '';
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+    });
     sel.addEventListener('change', sync);
     sync();
 })();

@@ -160,6 +160,25 @@ function work_order_week_range(?int $refTs = null): array
 }
 
 /**
+ * Best human ticket id: ITSM display id, then local change_ticket, then provider request id.
+ *
+ * @param array<string,mixed>|null $wo
+ */
+function work_order_ticket_label(?array $wo): string
+{
+    if (!$wo) {
+        return '';
+    }
+    foreach (['itsm_display_id', 'change_ticket', 'itsm_request_id'] as $k) {
+        $v = trim((string)($wo[$k] ?? ''));
+        if ($v !== '') {
+            return $v;
+        }
+    }
+    return '';
+}
+
+/**
  * Open work orders scheduled this week (not completed/cancelled).
  *
  * @return list<array<string,mixed>>

@@ -113,7 +113,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     // Flashes already read; free session lock so media.php / parallel requests are not blocked
     App::releaseSessionLock();
 
-    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '60';
+    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '62';
     $wizAuto = false;
     $wizRisk = ['warn' => false, 'message' => '', 'counts' => []];
     $tourActive = false;

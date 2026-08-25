@@ -1,6 +1,6 @@
 <?php
 /**
- * In-app documentation — machine API reference for operators.
+ * In-app documentation — operator how-tos + machine API reference.
  */
 declare(strict_types=1);
 
@@ -8,7 +8,7 @@ require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
 require_once dirname(__DIR__) . '/includes/work_order_helpers.php';
 App::boot();
-$user = App::requirePermission('manage_users');
+$user = App::requireAuth();
 
 $apiUrl = App::url('api/v1.php');
 $usersUrl = App::url('pages/users.php');
@@ -19,6 +19,21 @@ $woTypes = work_order_types();
 $woStatuses = work_order_statuses();
 $woItemStatuses = work_order_item_statuses();
 
+$href = static function (string $navKey, string $path) use ($user): ?string {
+    if (!AuthManager::canViewNav($user, $navKey)) {
+        return null;
+    }
+    return App::url($path);
+};
+$fpUrl = $href('floorplan', 'pages/floorplan.php');
+$snmpUrl = $href('snmp', 'pages/snmp.php');
+$devUrl = $href('devices', 'pages/devices.php');
+$pduUrl = $href('power', 'pages/power_pdus.php');
+$woUrl = $href('work_orders', 'pages/work_orders.php');
+$cabUrl = $href('cabinets', 'pages/cabinets.php');
+$techUrl = App::url('pages/tech.php');
+$cablesUrl = $href('cables', 'pages/cables.php');
+
 layout_header('Documentation', $user, 'docs');
 ?>
 <div class="docs-page">
@@ -26,22 +41,33 @@ layout_header('Documentation', $user, 'docs');
         <div>
             <p class="text-muted mb-0">
                 Operator reference for ColdAisle <strong><?= App::e($version) ?></strong>.
-                This page describes the external machine API — the same surface a ServiceNow,
-                script, or other system uses with a service-account token.
+                How-tos for the floor planner, SNMP Discover, applying a work order to inventory,
+                and Tech / field PWA — plus the external machine API for robots.
             </p>
         </div>
-        <div class="flex gap-1">
-            <a class="btn btn-secondary btn-sm" href="#api">API</a>
-            <a class="btn btn-secondary btn-sm" href="#auth">Auth</a>
-            <a class="btn btn-secondary btn-sm" href="#endpoints">Calls</a>
-            <a class="btn btn-secondary btn-sm" href="#fields">Fields</a>
-            <a class="btn btn-secondary btn-sm" href="#examples">Examples</a>
-        </div>
+        <nav class="docs-jump" aria-label="Jump to section">
+            <a class="settings-jump-chip" href="#floorplan">Floor planner</a>
+            <a class="settings-jump-chip" href="#snmp-discover">SNMP Discover</a>
+            <a class="settings-jump-chip" href="#work-orders">Work-order apply</a>
+            <a class="settings-jump-chip" href="#tech-pwa">Tech / PWA</a>
+            <a class="settings-jump-chip" href="#api">API</a>
+            <a class="settings-jump-chip" href="#auth">Auth</a>
+            <a class="settings-jump-chip" href="#endpoints">Calls</a>
+            <a class="settings-jump-chip" href="#examples">Examples</a>
+        </nav>
     </div>
 
     <nav class="card docs-toc" aria-label="On this page">
         <div class="card-header"><h2>On this page</h2></div>
         <div class="card-body">
+            <p class="docs-toc-label">Using ColdAisle</p>
+            <ol class="docs-toc-list">
+                <li><a href="#floorplan">Floor planner</a></li>
+                <li><a href="#snmp-discover">SNMP Discover</a></li>
+                <li><a href="#work-orders">Work-order apply</a></li>
+                <li><a href="#tech-pwa">Tech mode &amp; PWA</a></li>
+            </ol>
+            <p class="docs-toc-label">Machine API</p>
             <ol class="docs-toc-list">
                 <li><a href="#api">External API overview</a></li>
                 <li><a href="#security">Security model</a></li>
@@ -58,18 +84,193 @@ layout_header('Documentation', $user, 'docs');
         </div>
     </nav>
 
+    <div class="card" id="floorplan">
+        <div class="card-header flex-between">
+            <h2 style="margin:0">Floor planner</h2>
+            <?php if ($fpUrl): ?>
+                <a class="btn btn-sm btn-secondary" href="<?= App::e($fpUrl) ?>">Open Floor planner</a>
+            <?php endif; ?>
+        </div>
+        <div class="card-body docs-prose">
+            <p>
+                Spatial canvas for a hall: cabinets, floor PDUs, UPS, cooling footprints, and cable raceways.
+                2D is for drawing; 3D is for checking aisles and troughs. Geometry is stored in
+                <strong>meters</strong> on the room (width / depth). Display units (m vs ft) only change labels.
+            </p>
+            <h3 class="docs-h3">Place a hall</h3>
+            <ol>
+                <li>Create the room under Data Centers (size in meters). That rectangle is the white floor you see.</li>
+                <li>Open Floor planner and pick the room. <strong>Edit Room / North</strong> adjusts size, grid, and which way is north.</li>
+                <li><strong>+ Cabinet</strong> or drag a model from the left palette (catalog uses published external W×D). Blue edge is the front of the rack — set <strong>Front faces</strong> after placing.</li>
+                <li>Drag to move. <strong>Grid</strong> / <strong>Snap</strong> keep aisles straight. Arrow keys <strong>nudge</strong> a selected unlocked object by the amount in the toolbar.</li>
+                <li>Place row PDUs from presets or drag an unplaced PDU onto the plan. Cooling and UPS have the same idea.</li>
+            </ol>
+            <h3 class="docs-h3">Navigate</h3>
+            <ul>
+                <li>2D: drag the floor to pan; scroll or +/− to zoom. SHIFT+click multi-selects. Arrow keys nudge a selected unlocked object.</li>
+                <li><strong>3D View</strong> is the same geometry, two cameras:
+                    <strong>Orbit</strong> is the overview (drag to rotate, scroll to zoom);
+                    <strong>Walk</strong> is first-person in an aisle (WASD / arrows, Q/E sidestep, drag to look, Shift faster, Esc back to Orbit).
+                </li>
+            </ul>
+            <h3 class="docs-h3">Raceways</h3>
+            <ol>
+                <li>Stay on the <strong>2D plan</strong> (drawing from 3D switches you back).</li>
+                <li><strong>Draw raceway</strong> — click the floor for vertices (2+). The HUD counts steps.</li>
+                <li><strong>Finish</strong> / Enter names the path (RS / ORC / IRC) and saves. Backspace undoes a point; Esc exits without saving. Double-click the floor also finishes when you have 2+ points.</li>
+                <li>Optional: drag a round vertex to move that corner. On an L-bend, drag the yellow diamond inward for a 90° curve.</li>
+            </ol>
+            <ul>
+                <li><strong>Clone ladders → U-channel</strong> copies every ladder in the room as yellow fiber U-channel on the same route, typically +10″ elevation. <strong>Raise U-channels +10″</strong> fixes elevation if a clone already exists.</li>
+                <li>Filter which networks draw (ladder, fiber U-channel, trough, conduit). From a cable on
+                    <?php if ($cablesUrl): ?>
+                        <a href="<?= App::e($cablesUrl) ?>">Cabling</a>
+                    <?php else: ?>
+                        Cabling
+                    <?php endif; ?>
+                    use <strong>Path</strong> or <strong>Calc path</strong> to overlay the hop sequence here.</li>
+            </ul>
+            <p class="text-muted" style="margin-bottom:0">
+                Planner edits use the logged-in session (CSRF). They are not part of the machine API.
+            </p>
+        </div>
+    </div>
+
+    <div class="card" id="snmp-discover">
+        <div class="card-header flex-between">
+            <h2 style="margin:0">SNMP Discover</h2>
+            <?php if ($snmpUrl): ?>
+                <a class="btn btn-sm btn-secondary" href="<?= App::e($snmpUrl) ?>">Open SNMP</a>
+            <?php endif; ?>
+        </div>
+        <div class="card-body docs-prose">
+            <p>
+                Discover lives on the unit — a
+                <?php if ($devUrl): ?><a href="<?= App::e($devUrl) ?>">device</a><?php else: ?>device<?php endif; ?>,
+                <?php if ($pduUrl): ?><a href="<?= App::e($pduUrl) ?>">PDU</a><?php else: ?>PDU<?php endif; ?>,
+                UPS, or cooling unit — not as a separate wizard. It walks the agent, proposes an OID map,
+                and saves a <strong>site template</strong> (vendor + model) that later polls reuse.
+            </p>
+            <h3 class="docs-h3">Before you click Discover</h3>
+            <ul>
+                <li><strong>PHP SNMP extension</strong> must be loaded on IIS (SNMP page shows a green banner or an Enable SNMP helper).</li>
+                <li>The unit needs manufacturer, model, and a reachable address (management / primary IP). Dell prefers the <strong>iDRAC host</strong>.</li>
+                <li>Pick an SNMP profile (v2c community or v3). iDRAC often still wants a community even on v3.</li>
+            </ul>
+            <h3 class="docs-h3">Walk, map, save</h3>
+            <ol>
+                <li><strong>Discover OIDs</strong> walks common roots (up to about a minute). You get a proposed map plus a candidate table.</li>
+                <li>Edit empty OIDs away. Add any candidate as a live field. Optional <strong>Keep history / graph</strong> stores that gauge for 24h charts.</li>
+                <li><strong>Create template</strong> (or overwrite if that vendor/model already exists). Scheduled poll unlocks after a site template is assigned.</li>
+                <li><strong>Poll now</strong> reads live values. Leave scheduled poll on so the Windows task (<code>poll_snmp.php</code>) keeps history.</li>
+            </ol>
+            <h3 class="docs-h3">What Discover does not do</h3>
+            <ul>
+                <li>No SNMP SET and no outlet on/off — ColdAisle only reads.</li>
+                <li>The machine API does not run Discover or return live OID walks. Session pages and <code>/api/snmp_*.php</code> stay cookie+CSRF.</li>
+                <li>Vendor MIB files on the SNMP page improve <em>names</em> during the walk; they are optional.</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="card" id="work-orders">
+        <div class="card-header flex-between">
+            <h2 style="margin:0">Work-order apply</h2>
+            <?php if ($woUrl): ?>
+                <a class="btn btn-sm btn-secondary" href="<?= App::e($woUrl) ?>">Open work orders</a>
+            <?php endif; ?>
+        </div>
+        <div class="card-body docs-prose">
+            <p>
+                A work order is the change ticket for rack work: install, move, or other change, with line items
+                that name a device and optional from/to cabinet + U. Completing the ticket is not the same as
+                moving the devices in inventory — that is <strong>Apply destinations to inventory</strong>.
+            </p>
+            <h3 class="docs-h3">Statuses</h3>
+            <p>
+                <?php
+                $bits = [];
+                foreach ($woStatuses as $k => $label) {
+                    $bits[] = '<code>' . App::e((string)$k) . '</code> (' . App::e((string)$label) . ')';
+                }
+                echo implode(' → ', $bits);
+                ?>.
+                Typical path: draft → planned → in progress → completed. Cancel never moves devices.
+            </p>
+            <h3 class="docs-h3">What apply actually does</h3>
+            <ol>
+                <li>Mark each line item <strong>done</strong> and give it a destination cabinet (and U if you know it).</li>
+                <li>While the work order is <strong>in progress</strong>, <strong>Apply inventory now</strong> writes those destinations onto the devices immediately.</li>
+                <li>When you <strong>Complete</strong>, leave <strong>Apply destinations to inventory</strong> checked (default) to apply in the same step. Uncheck if you only want to close the ticket.</li>
+                <li>On a completed work order, <strong>Re-apply inventory</strong> runs the same write again (useful after you fix a skipped U).</li>
+            </ol>
+            <ul>
+                <li>Only items with status <code>done</code> and a <code>to_cabinet_id</code> are written.</li>
+                <li>If the destination U is already occupied by another rack-mounted device, that item is <strong>skipped</strong>; others still apply. Fix the U and re-apply.</li>
+                <li>Each successful device write is audited as <code>work_order_apply_device</code>.</li>
+                <li>Optional ticketing (Settings → Ticketing) can follow status to ServiceDesk, ServiceNow, Zendesk, Jira, or Freshservice. DCIM stays internal — no inbound webhook required.</li>
+            </ul>
+            <p class="text-muted" style="margin-bottom:0">
+                The machine API can PATCH a work order to <code>completed</code>. That changes status only — it does
+                <strong>not</strong> apply destinations. Apply is a session action on this page.
+            </p>
+        </div>
+    </div>
+
+    <div class="card" id="tech-pwa">
+        <div class="card-header flex-between">
+            <h2 style="margin:0">Tech mode &amp; field PWA</h2>
+            <a class="btn btn-sm btn-secondary" href="<?= App::e($techUrl) ?>">Open field hub</a>
+        </div>
+        <div class="card-body docs-prose">
+            <p>
+                Desktop is the full planning UI. <strong>Tech</strong> is the same inventory, permissions, and pages
+                with field chrome: bigger tap targets, a technician hub, and a bottom bar. Nothing is duplicated —
+                audits, power maps, and work orders stay on their real pages.
+            </p>
+            <h3 class="docs-h3">Turn it on</h3>
+            <ul>
+                <li>Header slider: <strong>Desktop</strong> / <strong>Tech</strong>. Tech lands on the field hub.</li>
+                <li>URL: <code>?mode=tech</code> (or <code>?field=1</code> from a cabinet QR). Back: <code>?mode=desktop</code> or the slider.</li>
+                <li>Hub search: serial, asset tag, label, hostname, IP, or cabinet name. Recent cabinets, overdue audits, and this week’s moves are shortcuts, not a second database.</li>
+            </ul>
+            <h3 class="docs-h3">QR labels</h3>
+            <p>
+                Cabinet labels encode a URL that opens that cabinet in field mode
+                <?php if ($cabUrl): ?>
+                    (print from the cabinet page or bulk sheet on <a href="<?= App::e($cabUrl) ?>">Cabinets</a>).
+                <?php else: ?>
+                    (print from the cabinet page).
+                <?php endif; ?>
+                The phone must reach this host (site network or VPN) and the tech must be logged in.
+            </p>
+            <h3 class="docs-h3">Add to Home Screen</h3>
+            <ol>
+                <li>Open ColdAisle in the phone/tablet browser (Safari / Edge / Chrome) while logged in.</li>
+                <li>Share / menu → <strong>Add to Home Screen</strong>. The icon is <strong>ColdAisle Field</strong>; start URL is the tech hub.</li>
+                <li>Launching the icon uses standalone chrome (no browser toolbar).</li>
+            </ol>
+            <h3 class="docs-h3">Offline</h3>
+            <ul>
+                <li>A service worker caches the field shell (CSS/JS) and the <strong>last cabinet pages</strong> you actually opened.</li>
+                <li>HTML is network-first: if the hall Wi-Fi is up, you get live data. If it drops, you can still <em>read</em> the last elevation you viewed.</li>
+                <li>Writes (audit, apply inventory, SNMP) need a live session. Login, settings, and APIs are never served from cache.</li>
+            </ul>
+        </div>
+    </div>
+
     <div class="card" id="api">
         <div class="card-header"><h2>External API overview</h2></div>
         <div class="card-body docs-prose">
             <p>
-                ColdAisle exposes a <strong>read-only JSON API</strong> at
+                ColdAisle exposes a JSON API at
                 <code><?= App::e($apiUrl) ?></code>
                 for automation. It is separate from the website:
             </p>
             <ul>
                 <li>Browser pages and <code>/api/*.php</code> helpers (floor plan, SNMP, NOC) use a login cookie and CSRF. Those are <strong>not</strong> the integration API.</li>
                 <li>Integrations must call <code>/api/v1.php</code> with a Bearer token issued to an <code><?= App::e($svcPrefix) ?>*</code> service account.</li>
-                <li>This version accepts <code>GET</code>, <code>HEAD</code>, and <code>OPTIONS</code> only. <code>POST</code> / <code>PUT</code> / <code>PATCH</code> / <code>DELETE</code> return <code>405</code>.</li>
+                <li><code>GET</code> / <code>HEAD</code> work with a <code>read</code> token. <code>POST</code> / <code>PATCH</code> require a <code>write</code> token <em>and</em> the matching role permission. <code>DELETE</code> is not offered.</li>
             </ul>
             <p>
                 Base URL on this host (copy into scripts):
@@ -92,7 +293,7 @@ layout_header('Documentation', $user, 'docs');
                 <li><strong>Storage:</strong> the plaintext token is shown <em>once</em>. ColdAisle stores HMAC-SHA256 of the secret (peppered with the site <code>app_key</code>), plus a short prefix for lookup. Lost tokens must be revoked and replaced.</li>
                 <li><strong>Prefix:</strong> live tokens start with <code><?= App::e($tokenPrefix) ?></code>. Treat the whole string as a password.</li>
                 <li><strong>Secrets stripped:</strong> SNMP communities, SNMPv3 passphrases, password hashes, LDAP bind passwords, and OAuth client secrets are never returned.</li>
-                <li><strong>Write scope:</strong> a token may be minted with scope <code>write</code>, but <strong>v1 ignores it</strong> — the API is still read-only. Prefer <code>read</code>.</li>
+                <li><strong>Write scope:</strong> mint <code>write</code> only for robots that must change inventory. Writes still need the service account’s role (e.g. <code>edit_work_orders</code>). Prefer <code>read</code> when a CMDB only pulls.</li>
             </ul>
         </div>
     </div>
@@ -117,7 +318,7 @@ layout_header('Documentation', $user, 'docs');
                 <tbody>
                 <tr><td>Username prefix</td><td><code><?= App::e($svcPrefix) ?></code></td></tr>
                 <tr><td>Token prefix</td><td><code><?= App::e($tokenPrefix) ?></code></td></tr>
-                <tr><td>Token scopes</td><td><code>read</code> (recommended) or <code>write</code> (reserved; v1 is GET-only)</td></tr>
+                <tr><td>Token scopes</td><td><code>read</code> (GET) or <code>write</code> (GET + PATCH/POST allowlist)</td></tr>
                 <tr><td>Expiry options</td><td>Never, 90 days, or 1 year (set at mint time)</td></tr>
                 <tr><td>Last used</td><td>Updated at most once per minute on a successful call</td></tr>
                 </tbody>
@@ -160,11 +361,11 @@ layout_header('Documentation', $user, 'docs');
                 <tbody>
                 <tr><td>Content-Type</td><td><code>application/json; charset=utf-8</code></td></tr>
                 <tr><td>JSON encoding</td><td>Unescaped Unicode and slashes; invalid UTF-8 is substituted</td></tr>
-                <tr><td>Booleans</td><td>SQL Server <code>BIT</code> fields usually arrive as <code>0</code> / <code>1</code>, not JSON true/false</td></tr>
+                <tr><td>Booleans</td><td>JSON <code>true</code> / <code>false</code> (SQL <code>BIT</code> is converted; not <code>0</code>/<code>1</code>)</td></tr>
                 <tr><td>Dates</td><td>ISO-like strings from SQL Server (<code>YYYY-MM-DD</code> or <code>YYYY-MM-DD HH:MM:SS</code>)</td></tr>
-                <tr><td>Pagination</td><td>None in v1 — list endpoints return the full result set</td></tr>
+                <tr><td>Pagination</td><td>Lists: <code>page</code> (1-based, default 1) and <code>per_page</code> or <code>per</code> (default 50, max 200). Response includes <code>total</code> and <code>pages</code>.</td></tr>
                 <tr><td>HEAD</td><td>Same as GET without a body</td></tr>
-                <tr><td>OPTIONS</td><td>Returns <code>Allow: GET, HEAD, OPTIONS</code> (no auth required for the preflight itself)</td></tr>
+                <tr><td>OPTIONS</td><td>Returns <code>Allow: GET, HEAD, POST, PATCH, OPTIONS</code></td></tr>
                 </tbody>
             </table>
         </div>
@@ -184,8 +385,11 @@ layout_header('Documentation', $user, 'docs');
                 <tbody>
                 <tr><td><code>GET /api/v1.php</code> (status)</td><td>None beyond a valid token</td><td>Any service-account role</td></tr>
                 <tr><td>Cabinets</td><td><code>view_cabinets</code></td><td>Viewer</td></tr>
-                <tr><td>Devices</td><td><code>view_devices</code></td><td>Viewer</td></tr>
-                <tr><td>Work orders</td><td><code>view_work_orders</code></td><td>Viewer</td></tr>
+                <tr><td>Devices GET</td><td><code>view_devices</code></td><td>Viewer</td></tr>
+                <tr><td>Devices PATCH / notes</td><td>Token <code>write</code> + <code>edit_devices_*</code></td><td>Department or DC Admin</td></tr>
+                <tr><td>PDUs / UPS</td><td><code>view_power</code></td><td>Viewer</td></tr>
+                <tr><td>Work orders GET</td><td><code>view_work_orders</code></td><td>Viewer</td></tr>
+                <tr><td>Work orders POST/PATCH</td><td>Token <code>write</code> + <code>edit_work_orders</code></td><td>DC Admin</td></tr>
                 </tbody>
             </table>
         </div>
@@ -208,38 +412,60 @@ layout_header('Documentation', $user, 'docs');
                 <tr><td><code>account</code></td><td>string</td><td>Service-account username</td></tr>
                 <tr><td><code>role</code></td><td>string</td><td>Role name (e.g. Viewer)</td></tr>
                 <tr><td><code>scopes</code></td><td>string</td><td>Token scope, usually <code>read</code></td></tr>
-                <tr><td><code>resources</code></td><td>string[]</td><td><code>cabinets</code>, <code>devices</code>, <code>work_orders</code></td></tr>
+                <tr><td><code>resources</code></td><td>string[]</td><td><code>cabinets</code>, <code>devices</code>, <code>pdus</code>, <code>ups</code>, <code>work_orders</code></td></tr>
+                <tr><td><code>writes</code></td><td>boolean</td><td>Whether this token’s scope includes write</td></tr>
                 </tbody>
             </table>
 
             <h3 class="docs-h3"><span class="docs-method">GET</span> List cabinets</h3>
             <p class="docs-path"><code><?= App::e($apiUrl) ?>/cabinets</code></p>
-            <p>All cabinets (active and inactive), ordered by name. Wrapper key: <code>cabinets</code>.</p>
+            <p>Query: <code>q</code>, <code>page</code>, <code>per_page</code>. Wrapper: <code>cabinets</code> plus pagination fields.</p>
 
             <h3 class="docs-h3"><span class="docs-method">GET</span> One cabinet</h3>
             <p class="docs-path"><code><?= App::e($apiUrl) ?>/cabinets/{id}</code></p>
-            <p>Full cabinet row plus <code>row_name</code> and <code>room_name</code>. Wrapper key: <code>cabinet</code>. Unknown id → 404.</p>
+            <p>Full cabinet row plus <code>row_name</code> and <code>room_name</code>. Wrapper: <code>cabinet</code>.</p>
 
             <h3 class="docs-h3"><span class="docs-method">GET</span> List devices</h3>
             <p class="docs-path"><code><?= App::e($apiUrl) ?>/devices</code></p>
             <table class="data">
                 <thead><tr><th>Query</th><th>Type</th><th>Notes</th></tr></thead>
                 <tbody>
-                <tr>
-                    <td><code>cabinet_id</code></td>
-                    <td>integer</td>
-                    <td>If &gt; 0, only devices in that cabinet. Omit for the whole site.</td>
-                </tr>
+                <tr><td><code>cabinet_id</code></td><td>integer</td><td>If &gt; 0, only devices in that cabinet.</td></tr>
+                <tr><td><code>q</code></td><td>string</td><td>Label, hostname, serial, asset tag, IP, or id.</td></tr>
+                <tr><td><code>page</code> / <code>per_page</code></td><td>integer</td><td>Pagination (default 50, max 200).</td></tr>
                 </tbody>
             </table>
-            <p>Active devices only (<code>is_active = 1</code>), ordered by label. Wrapper key: <code>devices</code>.</p>
+            <p>Active devices only. Wrapper: <code>devices</code>.</p>
 
             <h3 class="docs-h3"><span class="docs-method">GET</span> One device</h3>
             <p class="docs-path"><code><?= App::e($apiUrl) ?>/devices/{id}</code></p>
-            <p>
-                Single device including <code>primary_ip</code> and <code>cabinet_name</code>.
-                Inactive devices are returned if you know the id. Wrapper key: <code>device</code>.
-            </p>
+            <p>Includes <code>primary_ip</code>, <code>mgmt_ip</code>, <code>hostname</code>, <code>status</code>. Wrapper: <code>device</code>.</p>
+
+            <h3 class="docs-h3"><span class="docs-method docs-method-write">PATCH</span> Update device</h3>
+            <p class="docs-path"><code><?= App::e($apiUrl) ?>/devices/{id}</code></p>
+            <p>Write scope. Body JSON, only listed keys are applied:</p>
+            <p><code>label</code>, <code>serial_no</code>, <code>asset_tag</code>, <code>hostname</code>, <code>primary_ip</code>, <code>mgmt_ip</code>, <code>notes</code>, <code>status</code>, <code>cabinet_id</code> (null un-racks), <code>position_u</code>, <code>u_height</code>.</p>
+            <p>U-space conflicts return 400. SNMP secrets cannot be written.</p>
+
+            <h3 class="docs-h3"><span class="docs-method docs-method-write">POST</span> Add device note</h3>
+            <p class="docs-path"><code><?= App::e($apiUrl) ?>/devices/{id}/notes</code></p>
+            <p>Body: <code>{"note_text": "…"}</code>. HTTP 201. Write scope + device edit permission.</p>
+
+            <h3 class="docs-h3"><span class="docs-method">GET</span> List PDUs</h3>
+            <p class="docs-path"><code><?= App::e($apiUrl) ?>/pdus</code></p>
+            <p>Query: <code>q</code>, <code>zone_id</code>, <code>page</code>, <code>per_page</code>. Active units. Wrapper: <code>pdus</code>.</p>
+
+            <h3 class="docs-h3"><span class="docs-method">GET</span> One PDU</h3>
+            <p class="docs-path"><code><?= App::e($apiUrl) ?>/pdus/{id}</code></p>
+            <p>Includes load, SNMP flags (not communities/passphrases), cabinet/row/zone names. Wrapper: <code>pdu</code>.</p>
+
+            <h3 class="docs-h3"><span class="docs-method">GET</span> List UPS</h3>
+            <p class="docs-path"><code><?= App::e($apiUrl) ?>/ups</code></p>
+            <p>Query: <code>q</code>, <code>page</code>, <code>per_page</code>. Wrapper: <code>ups</code>.</p>
+
+            <h3 class="docs-h3"><span class="docs-method">GET</span> One UPS</h3>
+            <p class="docs-path"><code><?= App::e($apiUrl) ?>/ups/{id}</code></p>
+            <p>Load %, battery %, identity. Wrapper: <code>ups</code>.</p>
 
             <h3 class="docs-h3"><span class="docs-method">GET</span> List work orders</h3>
             <p class="docs-path"><code><?= App::e($apiUrl) ?>/work_orders</code></p>
@@ -257,16 +483,26 @@ layout_header('Documentation', $user, 'docs');
                         echo implode(', ', $bits);
                         ?>.</td>
                 </tr>
+                <tr><td><code>q</code></td><td>string</td><td>Title, ticket, ITSM id, or numeric id.</td></tr>
                 </tbody>
             </table>
-            <p>Newest <code>updated_at</code> first. Wrapper key: <code>work_orders</code>.</p>
+            <p>Newest <code>updated_at</code> first. Paginated. Wrapper: <code>work_orders</code>.</p>
 
             <h3 class="docs-h3"><span class="docs-method">GET</span> One work order</h3>
             <p class="docs-path"><code><?= App::e($apiUrl) ?>/work_orders/{id}</code></p>
-            <p>
-                Full work-order row plus <code>items</code> (line items for moves/installs).
-                Wrapper keys: <code>work_order</code>, <code>items</code>.
-            </p>
+            <p>Full row plus <code>items</code>.</p>
+
+            <h3 class="docs-h3"><span class="docs-method docs-method-write">POST</span> Create work order</h3>
+            <p class="docs-path"><code><?= App::e($apiUrl) ?>/work_orders</code></p>
+            <p>Write scope. HTTP 201. Body: <code>title</code> (required), <code>work_type</code>, <code>change_ticket</code>, <code>scheduled_date</code>, <code>notes</code>, <code>assigned_to</code>, optional seed <code>device_id</code> + <code>to_cabinet_id</code> / <code>to_position_u</code>. Created as <code>draft</code>. Completing a WO via PATCH does <strong>not</strong> apply inventory — that stays in the UI.</p>
+
+            <h3 class="docs-h3"><span class="docs-method docs-method-write">PATCH</span> Update work order</h3>
+            <p class="docs-path"><code><?= App::e($apiUrl) ?>/work_orders/{id}</code></p>
+            <p>Allowlist: <code>title</code>, <code>work_type</code>, <code>status</code>, <code>change_ticket</code>, <code>scheduled_date</code>, <code>notes</code>, <code>assigned_to</code>.</p>
+
+            <h3 class="docs-h3"><span class="docs-method docs-method-write">POST</span> Add work-order item</h3>
+            <p class="docs-path"><code><?= App::e($apiUrl) ?>/work_orders/{id}/items</code></p>
+            <p>Body: <code>device_id</code> (required), <code>to_cabinet_id</code>, <code>to_position_u</code>. HTTP 201. Returns the work order + items.</p>
         </div>
     </div>
 
@@ -280,7 +516,7 @@ layout_header('Documentation', $user, 'docs');
                 <tr><td><code>cabinet_id</code></td><td>int</td><td>Primary key</td></tr>
                 <tr><td><code>name</code></td><td>string</td><td>Rack name</td></tr>
                 <tr><td><code>u_height</code></td><td>int</td><td>Rack units (typically 42)</td></tr>
-                <tr><td><code>is_active</code></td><td>0/1</td><td>Soft-delete flag</td></tr>
+                <tr><td><code>is_active</code></td><td>boolean</td><td>Soft-delete flag</td></tr>
                 <tr><td><code>row_name</code></td><td>string|null</td><td>Joined from the row</td></tr>
                 <tr><td><code>room_name</code></td><td>string|null</td><td>Joined from the room</td></tr>
                 </tbody>
@@ -320,15 +556,23 @@ layout_header('Documentation', $user, 'docs');
                 <tr><td><code>cabinet_name</code></td><td>✓</td><td>✓</td><td>Joined name</td></tr>
                 <tr><td><code>position_u</code></td><td>✓</td><td>✓</td><td>Bottom U (1 = lowest)</td></tr>
                 <tr><td><code>u_height</code></td><td>✓</td><td>✓</td><td>Occupied U</td></tr>
-                <tr><td><code>device_type</code></td><td>✓</td><td>✓</td><td>e.g. server, pdu, network_switch</td></tr>
+                <tr><td><code>device_type</code></td><td>✓</td><td>✓</td><td>e.g. server, pdu, network_switch, patch_panel</td></tr>
                 <tr><td><code>manufacturer</code> / <code>model</code></td><td>✓</td><td>✓</td><td></td></tr>
-                <tr><td><code>is_active</code></td><td>✓</td><td>✓</td><td>List is active-only</td></tr>
-                <tr><td><code>primary_ip</code></td><td></td><td>✓</td><td>Management / primary address</td></tr>
+                <tr><td><code>is_active</code></td><td>✓</td><td>✓</td><td>JSON boolean; list is active-only</td></tr>
+                <tr><td><code>status</code></td><td>✓</td><td>✓</td><td>production, testing, …</td></tr>
+                <tr><td><code>primary_ip</code></td><td>✓</td><td>✓</td><td></td></tr>
+                <tr><td><code>mgmt_ip</code> / <code>hostname</code></td><td></td><td>✓</td><td></td></tr>
                 </tbody>
             </table>
             <p class="text-muted">
                 Detail does not currently return SNMP credentials, iDRAC passwords, or other secret columns.
             </p>
+
+            <h3 class="docs-h3">PDUs</h3>
+            <p>List/detail: <code>pdu_id</code>, <code>name</code>, <code>ip_address</code>, <code>pdu_scope</code>, <code>is_active</code>, <code>rated_amps</code>, <code>last_poll_watts</code>, <code>snmp_enabled</code> (boolean, no secrets), <code>cabinet_name</code>, <code>row_name</code>, <code>zone_name</code>. Detail also has volts, amps, poll time, serial, manufacturer, model.</p>
+
+            <h3 class="docs-h3">UPS</h3>
+            <p>List/detail: <code>ups_id</code>, <code>name</code>, <code>primary_ip</code>, <code>ups_scope</code>, <code>manufacturer</code>, <code>model</code>, <code>is_active</code>, <code>last_load_pct</code>, <code>last_battery_pct</code>, <code>room_name</code>, <code>zone_name</code>. Detail also has serial, asset tag, rated kVA/kW, output status.</p>
 
             <h3 class="docs-h3">Work orders — list</h3>
             <table class="data">
@@ -405,10 +649,12 @@ layout_header('Documentation', $user, 'docs');
                 <thead><tr><th>HTTP</th><th>When</th><th>Body extras</th></tr></thead>
                 <tbody>
                 <tr><td><code>200</code></td><td>Success</td><td>Resource wrapper as documented</td></tr>
+                <tr><td><code>201</code></td><td>Created (work order, item, note)</td><td></td></tr>
+                <tr><td><code>400</code></td><td>Validation (empty title, U conflict, unknown status)</td><td><code>error</code></td></tr>
                 <tr><td><code>401</code></td><td>Missing, invalid, or revoked token</td><td><code>error</code> message</td></tr>
-                <tr><td><code>403</code></td><td>Account disabled, or role lacks the resource permission</td><td><code>permission</code> on missing-perm</td></tr>
+                <tr><td><code>403</code></td><td>Disabled account, missing role permission, or read token on a write call</td><td><code>permission</code> or <code>scopes</code></td></tr>
                 <tr><td><code>404</code></td><td>Unknown id, or unknown resource name</td><td><code>resource</code> on unknown path</td></tr>
-                <tr><td><code>405</code></td><td>Anything other than GET/HEAD/OPTIONS</td><td><code>hint</code>: Use GET</td></tr>
+                <tr><td><code>405</code></td><td>Unsupported method on that path</td><td></td></tr>
                 <tr><td><code>500</code></td><td>Unexpected server error</td><td>Logged server-side</td></tr>
                 <tr><td><code>503</code></td><td>Not installed, or API token code not deployed</td><td></td></tr>
                 </tbody>
@@ -430,10 +676,18 @@ curl -sS -H "Authorization: Bearer <?= App::e($tokenPrefix) ?>YOUR_TOKEN" \
   "<?= App::e($apiUrl) ?>/cabinets"
 
 curl -sS -H "Authorization: Bearer <?= App::e($tokenPrefix) ?>YOUR_TOKEN" \
-  "<?= App::e($apiUrl) ?>/devices?cabinet_id=12"
+  "<?= App::e($apiUrl) ?>/devices?cabinet_id=12&page=1&per_page=50"
 
 curl -sS -H "Authorization: Bearer <?= App::e($tokenPrefix) ?>YOUR_TOKEN" \
-  "<?= App::e($apiUrl) ?>/work_orders?status=in_progress"</pre>
+  "<?= App::e($apiUrl) ?>/pdus?zone_id=1"
+
+curl -sS -H "Authorization: Bearer <?= App::e($tokenPrefix) ?>YOUR_TOKEN" \
+  "<?= App::e($apiUrl) ?>/work_orders?status=in_progress"
+
+curl -sS -X PATCH -H "Authorization: Bearer <?= App::e($tokenPrefix) ?>YOUR_WRITE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"primary_ip\":\"10.0.0.12\"}" \
+  "<?= App::e($apiUrl) ?>/devices/12"</pre>
                 <button type="button" class="btn btn-sm btn-secondary docs-copy" data-copy-target="docs-ex-curl">Copy</button>
             </div>
 
@@ -456,8 +710,9 @@ base = "<?= App::e($apiUrl) ?>"
 headers = {"Authorization": "Bearer <?= App::e($tokenPrefix) ?>YOUR_TOKEN"}
 
 status = requests.get(base, headers=headers, timeout=30).json()
-cabinets = requests.get(base + "/cabinets", headers=headers, timeout=30).json()["cabinets"]
-devices = requests.get(base + "/devices", headers=headers, params={"cabinet_id": 12}, timeout=30).json()["devices"]</pre>
+cabinets = requests.get(base + "/cabinets", headers=headers, params={"page": 1, "per_page": 50}, timeout=30).json()
+devices = requests.get(base + "/devices", headers=headers, params={"cabinet_id": 12}, timeout=30).json()["devices"]
+pdus = requests.get(base + "/pdus", headers=headers, timeout=30).json()["pdus"]</pre>
                 <button type="button" class="btn btn-sm btn-secondary docs-copy" data-copy-target="docs-ex-py">Copy</button>
             </div>
         </div>
@@ -467,10 +722,10 @@ devices = requests.get(base + "/devices", headers=headers, params={"cabinet_id":
         <div class="card-header"><h2>Limits &amp; notes</h2></div>
         <div class="card-body docs-prose">
             <ul>
-                <li><strong>Not in v1:</strong> power PDUs/UPS, cooling, cabling, floor plan geometry writes, SNMP live values, users, or creating/updating records.</li>
+                <li><strong>Not in v1:</strong> cooling, cabling, floor-plan geometry, SNMP live OIDs, users, PDU outlet maps, or applying a completed work order to inventory. Completing a WO via PATCH only changes status.</li>
+                <li><strong>No power control.</strong> The API never issues SNMP SET / outlet on-off.</li>
                 <li><strong>Internal APIs</strong> under <code>/api/</code> (except <code>v1.php</code>) stay session-authenticated. Do not point an ITSM robot at them.</li>
-                <li><strong>Keep DCIM internal.</strong> Tokens are long-lived secrets. Prefer calling this API from a trusted network or a jump host — do not publish ColdAisle to the internet just to enable integrations.</li>
-                <li>List calls are unbounded; large sites should filter (<code>cabinet_id</code>, <code>status</code>) where possible.</li>
+                <li><strong>Keep DCIM internal.</strong> Tokens are long-lived secrets. Prefer a trusted network or jump host.</li>
                 <li>If you rotate <code>app_key</code>, existing token hashes no longer verify — mint new tokens.</li>
             </ul>
         </div>

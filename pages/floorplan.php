@@ -58,8 +58,10 @@ layout_header('Floor Planner', $user, 'floorplan');
         <span id="zoomLabel" class="text-muted" style="font-size:.8rem;min-width:2.5rem;text-align:center">100%</span>
         <button type="button" class="btn btn-secondary btn-sm" id="btnZoomIn" title="Zoom in">+</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnZoomReset" title="Reset zoom">Reset</button>
-        <button type="button" class="btn btn-secondary btn-sm" id="toggle3d" data-tour="fp-3d">3D View</button>
-        <button type="button" class="btn btn-secondary btn-sm" id="toggleWalk" hidden title="Walk the hall (WASD / arrows)">Walk</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="toggle3d" data-tour="fp-3d"
+                title="Same hall in 3D. Orbit = overview (drag to spin); Walk = stand in an aisle.">3D View</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="toggleWalk" hidden
+                title="Walk: stand in an aisle (WASD, drag to look). Orbit: drag to spin around the hall.">Walk</button>
         <button type="button" class="btn btn-secondary btn-sm" id="toggleRaceways" title="Show cable raceways / fiber troughs">Raceways: On</button>
         <label class="text-muted" style="font-size:.78rem;margin:0 0 0 .25rem" for="racewayFilterSelect" title="Which raceway types to show in 2D and 3D">Show</label>
         <select id="racewayFilterSelect" class="form-control" style="width:auto;min-width:9.5rem;padding:.2rem .35rem;font-size:.8rem"
@@ -73,7 +75,8 @@ layout_header('Floor Planner', $user, 'floorplan');
         </select>
         <button type="button" class="btn btn-ghost btn-sm" id="btnClearCableRoutes" hidden
                 title="Hide cable path overlay from Show path">Clear cable paths</button>
-        <button type="button" class="btn btn-secondary btn-sm" id="btnDrawRaceway" title="Click points on the floor; double-click or Finish to save">Draw raceway</button>
+        <button type="button" class="btn btn-secondary btn-sm" id="btnDrawRaceway"
+                title="Click points on the 2D floor; Finish / Enter saves. Esc exits.">Draw raceway</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnBulkCloneUChannel"
                 title="Clone every ladder in this room as yellow fiber U-channel (+10&quot;, same routes)">Clone ladders → U-channel</button>
         <button type="button" class="btn btn-secondary btn-sm" id="btnRaiseUChannelElev"
@@ -83,8 +86,9 @@ layout_header('Floor Planner', $user, 'floorplan');
         <button type="button" class="btn btn-primary btn-sm" id="btnFinishRaceway" hidden title="Save polyline">Finish path</button>
         <button type="button" class="btn btn-ghost btn-sm" id="btnCancelRaceway" hidden title="Exit raceway draw mode">Exit draw</button>
         <button type="button" class="btn btn-danger btn-sm" id="btnDeleteRaceway" hidden title="Delete selected saved raceway">Delete path</button>
-        <span class="text-muted" style="font-size:.8rem;margin-left:auto">
+        <span class="text-muted" id="plannerChromeHint" style="font-size:.8rem;margin-left:auto">
             SHIFT+click multi-select · Arrows nudge · Drag floor to pan · Scroll zoom
+            · <a href="<?= App::e(App::url('pages/docs.php#floorplan')) ?>">Docs</a>
         </span>
     </div>
     <div class="planner-layout">
@@ -300,8 +304,17 @@ layout_header('Floor Planner', $user, 'floorplan');
     font-family: inherit;
   }
   .planner-hud .hud-title { font-weight: 700; color: #fbbf24; margin: 0 0 .3rem; font-size: .85rem; }
-  .planner-hud ul { margin: .2rem 0 0; padding-left: 1.15rem; }
-  .planner-hud li { margin: .15rem 0; }
+  .planner-hud ul,
+  .planner-hud ol.hud-steps { margin: .2rem 0 0; padding-left: 1.2rem; }
+  .planner-hud li { margin: .18rem 0; }
+  .planner-hud ol.hud-steps li.is-current { color: #f8fafc; }
+  .planner-hud ol.hud-steps li.is-current::marker { color: #38bdf8; }
+  .planner-hud .hud-tip {
+    margin: .45rem 0 0;
+    font-size: .75rem;
+    color: #94a3b8;
+    line-height: 1.4;
+  }
 </style>
 
 <script>
@@ -309,9 +322,9 @@ layout_header('Floor Planner', $user, 'floorplan');
   window.ColdAisle.lengthUnits = <?= json_encode($units) ?>;
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=28"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=29"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=39"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=40"></script>
 <script>
 (function () {
   var c2 = document.getElementById('rwFinishCancel2');

@@ -129,14 +129,24 @@ try {
 
         // Auto-create data ports if count provided (power uses device_power_supplies)
         $dataPorts = (int)($data['num_data_ports'] ?? 0);
-        for ($i = 1; $i <= $dataPorts; $i++) {
-            Database::insert('device_ports', [
-                'device_id' => $id,
-                'port_type' => 'data',
-                'port_number' => $i,
-                'label' => 'Eth' . $i,
-                'media_type' => $data['data_media'] ?? 'RJ45',
-            ]);
+        if ($dataPorts > 0 && class_exists('CablePlantService')) {
+            CablePlantService::insertDataPorts(
+                (int)$id,
+                (string)($data['device_type'] ?? 'server'),
+                isset($data['model']) ? (string)$data['model'] : null,
+                $dataPorts,
+                isset($data['data_media']) ? (string)$data['data_media'] : null
+            );
+        } else {
+            for ($i = 1; $i <= $dataPorts; $i++) {
+                Database::insert('device_ports', [
+                    'device_id' => $id,
+                    'port_type' => 'data',
+                    'port_number' => $i,
+                    'label' => 'Eth' . $i,
+                    'media_type' => $data['data_media'] ?? 'RJ45',
+                ]);
+            }
         }
 
         // PSUs from explicit payload or device template

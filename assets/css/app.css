@@ -383,6 +383,55 @@ code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); 
     -webkit-overflow-scrolling: touch;
   }
 }
+
+/* Ticketing (ITSM) vendor picker */
+.itsm-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+  margin: .35rem 0 .15rem;
+}
+.itsm-pick {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: .82rem;
+  font-weight: 600;
+  padding: .35rem .7rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.itsm-pick:hover {
+  color: var(--text);
+  border-color: rgba(59, 130, 246, .45);
+  background: var(--accent-dim);
+}
+.itsm-pick.is-active {
+  color: #dbeafe;
+  background: var(--accent-dim);
+  border-color: rgba(59, 130, 246, .7);
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+.itsm-section {
+  grid-column: 1 / -1;
+  margin: .35rem 0 .55rem;
+  padding: .35rem .75rem .55rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(2, 6, 23, 0.28);
+}
+.itsm-section > summary {
+  cursor: pointer;
+  font-weight: 650;
+  font-size: .88rem;
+  color: #93c5fd;
+  padding: .35rem 0;
+}
+.itsm-section[open] > summary {
+  margin-bottom: .45rem;
+}
 .settings-sections > .card.is-collapsed {
   /* tighter gap when closed */
 }
@@ -1615,6 +1664,16 @@ table.table-env-sensors .col-name a:hover {
 .rack-device.type-storage { background: linear-gradient(90deg, #4c1d95, #7c3aed); }
 .rack-device.type-chassis { background: linear-gradient(90deg, #334155, #64748b); }
 .rack-device.type-router { background: linear-gradient(90deg, #0e7490, #06b6d4); }
+.rack-device.type-patch_panel { background: linear-gradient(90deg, #854d0e, #ca8a04); }
+
+/* Cable plant: device-then-port picker (do not dump every site port into one select) */
+.cable-end-picker {
+  display: grid;
+  gap: .4rem;
+}
+.cable-end-picker input[type="search"] {
+  font-size: .88rem;
+}
 
 /* Cabinet / chassis: parent row + nested child (blade/module) rows */
 .cabinet-device-table .cabinet-device-parent.has-children > td {
@@ -3899,11 +3958,28 @@ body.site-tour-open { overflow: hidden; }
   .setup-wizard-fields { grid-template-columns: 1fr; }
 }
 
-/* In-app documentation (API reference) */
+/* In-app documentation (operator how-tos + API) */
 .docs-page { max-width: 920px; }
 .docs-page .docs-intro { align-items: flex-start; gap: .75rem; }
+.docs-page .card { scroll-margin-top: 5.5rem; }
+.docs-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .28rem;
+  justify-content: flex-end;
+  max-width: 28rem;
+}
+.docs-toc-label {
+  margin: .75rem 0 .25rem;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.docs-toc-label:first-child { margin-top: 0; }
 .docs-toc-list {
-  margin: 0;
+  margin: 0 0 .35rem;
   padding-left: 1.25rem;
   columns: 2;
   column-gap: 1.5rem;
@@ -3932,6 +4008,10 @@ body.site-tour-open { overflow: hidden; }
   border-radius: 4px;
   background: var(--success-dim);
   color: #86efac;
+}
+.docs-method-write {
+  background: #3f2a12;
+  color: #fdba74;
 }
 .docs-path { margin: 0 0 .55rem; }
 .docs-path code { font-size: .82rem; }

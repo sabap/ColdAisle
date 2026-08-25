@@ -14,9 +14,12 @@ try {
         }
         $ports = Database::fetchAll(
             'SELECT p.*,
+                d.cabinet_id, c.name AS cabinet_name,
                 ca.cable_id, ca.cable_label,
                 CASE WHEN ca.a_port_id = p.port_id THEN ca.b_port_id ELSE ca.a_port_id END AS peer_port_id
              FROM device_ports p
+             INNER JOIN devices d ON d.device_id = p.device_id
+             LEFT JOIN cabinets c ON c.cabinet_id = d.cabinet_id
              LEFT JOIN cables ca ON (ca.a_port_id = p.port_id OR ca.b_port_id = p.port_id) AND ca.status = \'active\'
              WHERE p.device_id = ?
              ORDER BY p.port_type, p.port_number',

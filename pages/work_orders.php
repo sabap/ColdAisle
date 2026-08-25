@@ -569,6 +569,7 @@ if ($id > 0) {
         </div>
         <div class="flex gap-1" style="flex-wrap:wrap">
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/work_orders.php')) ?>">← All work orders</a>
+            <a class="btn btn-ghost btn-sm" href="<?= App::e(App::url('pages/docs.php#work-orders')) ?>">Apply docs</a>
             <?php if ($canEdit && !$closed): ?>
                 <?php if ($st === 'draft'): ?>
                     <form method="post" style="display:inline">
@@ -1338,15 +1339,19 @@ try {
         $params[] = $filterStatus;
     }
     if ($filterTicket !== '') {
-        $sql .= ' AND w.change_ticket LIKE ?';
-        $params[] = '%' . $filterTicket . '%';
+        $likeT = '%' . $filterTicket . '%';
+        $sql .= ' AND (ISNULL(w.change_ticket, \'\') LIKE ?
+                     OR ISNULL(w.itsm_display_id, \'\') LIKE ?
+                     OR ISNULL(w.itsm_request_id, \'\') LIKE ?)';
+        array_push($params, $likeT, $likeT, $likeT);
     }
     if ($q !== '') {
         $like = '%' . $q . '%';
         $sql .= ' AND (w.title LIKE ? OR ISNULL(w.change_ticket, \'\') LIKE ?
-                     OR ISNULL(w.itsm_display_id, \'\') LIKE ? OR ISNULL(w.notes, \'\') LIKE ?
+                     OR ISNULL(w.itsm_display_id, \'\') LIKE ? OR ISNULL(w.itsm_request_id, \'\') LIKE ?
+                     OR ISNULL(w.notes, \'\') LIKE ?
                      OR CAST(w.work_order_id AS NVARCHAR(20)) = ?)';
-        array_push($params, $like, $like, $like, $like, $q);
+        array_push($params, $like, $like, $like, $like, $like, $q);
     }
     $sql .= ' ORDER BY
         CASE w.status
@@ -1392,11 +1397,23 @@ try {
     App::flash('error', 'Work order tables not ready yet — open Settings or wait for schema ensure. ' . $e->getMessage());
 }
 
+$itsmListLabel = '';
+if (class_exists('ItsmService') && ItsmService::activeId() !== '') {
+    $itsmListLabel = ItsmService::label();
+}
+
 layout_header('Work orders', $user, 'work_orders');
 ?>
 <div class="flex-between mb-2">
     <p class="text-muted mb-0" style="font-size:.92rem">
-        Plan rack moves and changes: ticket, from/to cabinet, checklist, optional inventory apply.
+        Rack moves and changes: from/to cabinet, checklist, apply inventory when the work is done.
+        <a href="<?= App::e(App::url('pages/docs.php#work-orders')) ?>">How apply works</a>.
+        <?php if ($itsmListLabel !== ''): ?>
+            Tickets live in <strong><?= App::e($itsmListLabel) ?></strong>
+            (create, link, or <strong>Refresh</strong> on a work order — DCIM stays internal).
+        <?php else: ?>
+            Optional ticketing: Settings → Ticketing (ServiceDesk, ServiceNow, Zendesk, Jira, Freshservice).
+        <?php endif; ?>
     </p>
     <div class="flex gap-1">
         <?php if (!empty($woPager['total']) && class_exists('ListPager')): ?>
@@ -1456,7 +1473,10 @@ layout_header('Work orders', $user, 'work_orders');
                             <?= App::e((string)$wm['title']) ?>
                         </a>
                     </td>
-                    <td><?= App::e((string)($wm['change_ticket'] ?: '—')) ?></td>
+                    <td><?php
+                        $wmTicket = work_order_ticket_label($wm);
+                        echo $wmTicket !== '' ? App::e($wmTicket) : '—';
+                        ?></td>
                     <td>
                         <span class="badge <?= App::e(work_order_status_badge_class((string)$wm['status'])) ?>">
                             <?= App::e($statuses[$wm['status'] ?? ''] ?? (string)$wm['status']) ?>
@@ -1498,8 +1518,10 @@ layout_header('Work orders', $user, 'work_orders');
                     <?php endforeach; ?>
                 </select>
             </div>
-            <div class="form-row"><label>Ticket contains</label>
-                <input class="form-control" name="ticket" value="<?= App::e($filterTicket) ?>"></div>
+            <div class="form-row"><label>Ticket #</label>
+                <input class="form-control" name="ticket" value="<?= App::e($filterTicket) ?>"
+                       placeholder="<?= $itsmListLabel !== '' ? 'INC / CHG / SDP id' : 'CHG-…' ?>"
+                       title="Matches ITSM display id, local change ticket, or provider request id"></div>
             <div class="form-row full">
                 <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem">
                     <input type="checkbox" name="week" value="1" <?= $filterWeek ? 'checked' : '' ?>>
@@ -1539,7 +1561,10 @@ layout_header('Work orders', $user, 'work_orders');
                         </a>
                     </td>
                     <td><?= App::e($types[$row['work_type'] ?? ''] ?? (string)$row['work_type']) ?></td>
-                    <td><?= App::e((string)($row['change_ticket'] ?: '—')) ?></td>
+                    <td><?php
+                        $rowTicket = work_order_ticket_label($row);
+                        echo $rowTicket !== '' ? App::e($rowTicket) : '—';
+                        ?></td>
                     <td>
                         <span class="badge <?= App::e(work_order_status_badge_class((string)$row['status'])) ?>">
                             <?= App::e($statuses[$row['status'] ?? ''] ?? (string)$row['status']) ?>

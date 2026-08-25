@@ -86,6 +86,10 @@ if ($openCab > 0) {
 layout_header('Home', $user, 'tech');
 ?>
 
+<p class="text-muted" style="font-size:.82rem;margin:.25rem 0 .75rem">
+    Field hub — same inventory as desktop. Scan a cabinet QR or search below.
+    <a href="<?= App::e(App::url('pages/docs.php#tech-pwa')) ?>">Tech / PWA docs</a>
+</p>
 <form class="tech-search-form" method="get" action="">
     <label class="text-muted" style="font-size:.8rem;font-weight:600" for="tech_q">Find device or cabinet</label>
     <input class="form-control" type="search" name="q" id="tech_q" value="<?= App::e($q) ?>"

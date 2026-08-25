@@ -13,17 +13,13 @@ $canEdit = AuthManager::can($user, 'edit_cables')
     || AuthManager::can($user, 'edit_infrastructure')
     || AuthManager::isAdmin($user);
 
-$ports = Database::fetchAll(
-    'SELECT p.port_id, p.label, p.port_type, p.port_number, p.speed AS port_speed,
-            d.label AS device_label, d.device_id, d.cabinet_id,
-            c.name AS cabinet_name, c.room_id
-     FROM device_ports p
-     INNER JOIN devices d ON d.device_id = p.device_id
-     LEFT JOIN cabinets c ON c.cabinet_id = d.cabinet_id
-     WHERE d.is_active = 1
-     ORDER BY d.label, p.port_type, p.port_number'
-);
-$rooms = Database::fetchAll('SELECT room_id, name FROM rooms WHERE is_active = 1 ORDER BY name');
+if (strtolower(trim((string)($_GET['export'] ?? ''))) === 'csv_template') {
+    if (class_exists('ListPager')) {
+        ListPager::sendCsv('coldaisle-cables-import-template.csv', CablePlantService::csvImportHeaders(), [
+            CablePlantService::csvImportExampleRow(),
+        ]);
+    }
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? '')) {
     if (!$canEdit) {
@@ -37,6 +33,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             $fields['installed_at'] = date('Y-m-d H:i:s');
             Database::insert('cables', $fields);
             App::flash('success', 'Cable connection recorded.');
+        }
+        if ($action === 'import_csv') {
+            $file = $_FILES['csv'] ?? null;
+            $err = (int)($file['error'] ?? UPLOAD_ERR_NO_FILE);
+            if (!is_array($file) || $err === UPLOAD_ERR_NO_FILE) {
+                throw new RuntimeException('Choose a CSV file to import.');
+            }
+            if ($err !== UPLOAD_ERR_OK) {
+                throw new RuntimeException('Upload failed (code ' . $err . ').');
+            }
+            $size = (int)($file['size'] ?? 0);
+            if ($size < 1 || $size > 2 * 1024 * 1024) {
+                throw new RuntimeException('CSV must be between 1 byte and 2 MB.');
+            }
+            $text = (string)file_get_contents((string)$file['tmp_name']);
+            $res = CablePlantService::importConnectionsCsv($text, [
+                'skip_existing' => !empty($_POST['skip_existing']),
+            ]);
+            if (class_exists('AuditService')) {
+                AuditService::log(
+                    (int)$user['user_id'],
+                    $user['username'] ?? '',
+                    'import',
+                    'cable',
+                    0,
+                    ['created' => $res['created'] ?? 0, 'skipped' => $res['skipped'] ?? 0]
+                );
+            }
+            if (!empty($res['ok'])) {
+                App::flash('success', (string)($res['message'] ?? 'Import finished.'));
+            } else {
+                App::flash('error', (string)($res['message'] ?? 'Import failed.'));
+            }
+            $errs = $res['errors'] ?? [];
+            if (is_array($errs) && $errs !== []) {
+                $show = array_slice($errs, 0, 8);
+                App::flash('error', implode(' ', $show) . (count($errs) > 8 ? ' …' : ''));
+            }
         }
         if ($action === 'add_path') {
             if (trim((string)($_POST['name'] ?? '')) === '' && trim((string)($_POST['path_code'] ?? '')) !== '') {
@@ -101,6 +135,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
     }
     App::redirect('pages/cables.php');
 }
+
+$portDevices = [];
+if ($canEdit) {
+    $portDevices = Database::fetchAll(
+        'SELECT d.device_id, d.label, d.device_type, d.cabinet_id,
+                c.name AS cabinet_name, c.room_id
+         FROM devices d
+         LEFT JOIN cabinets c ON c.cabinet_id = d.cabinet_id
+         WHERE d.is_active = 1
+         ORDER BY d.label'
+    );
+}
+$rooms = Database::fetchAll('SELECT room_id, name FROM rooms WHERE is_active = 1 ORDER BY name');
 
 $q = class_exists('SearchService') ? SearchService::queryFromRequest() : trim((string)($_GET['q'] ?? ''));
 $like = $q !== '' ? ('%' . $q . '%') : '';
@@ -216,12 +263,20 @@ layout_header('Cable plant', $user, 'cables');
     <a href="<?= App::e(App::url('pages/floorplan.php')) ?>">Floor planner</a>,
     then <strong>Show path</strong> or <strong>Calculate shortest path</strong> on a connection.
     Fiber troughs, copper trays, overhead vs raised-floor feed, and speed colors live here.
+    Patch panels are devices (templates on
+    <a href="<?= App::e(App::url('pages/device_templates.php')) ?>">Device templates</a>);
+    bulk plant goes in via CSV below.
 </p>
 <div class="flex-between mb-2" style="flex-wrap:wrap;gap:.5rem">
     <?php layout_search_form('Search label, circuit, device, cabinet, raceway…', $q, 'pages/cables.php', $cableKeep); ?>
-    <?php if (!empty($cablePager['total']) && class_exists('ListPager')): ?>
-        <a class="btn btn-secondary" href="<?= App::e(ListPager::href('pages/cables.php', $cableKeep, ['export' => 'csv'])) ?>">Export CSV</a>
-    <?php endif; ?>
+    <div class="flex gap-1" style="flex-wrap:wrap">
+        <?php if (!empty($cablePager['total']) && class_exists('ListPager')): ?>
+            <a class="btn btn-secondary" href="<?= App::e(ListPager::href('pages/cables.php', $cableKeep, ['export' => 'csv'])) ?>">Export CSV</a>
+        <?php endif; ?>
+        <?php if ($canEdit): ?>
+            <a class="btn btn-secondary" href="<?= App::e(App::url('pages/cables.php?export=csv_template')) ?>">Import template</a>
+        <?php endif; ?>
+    </div>
 </div>
 
 <div class="split-2">
@@ -393,34 +448,28 @@ layout_header('Cable plant', $user, 'cables');
                 <div class="form-row"><label>Strand count</label>
                     <input class="form-control" type="number" min="1" name="strand_count" placeholder="Fiber strands"></div>
                 <div class="form-row full"><label>Port A</label>
-                    <select class="form-control" name="a_port_id" id="cable_a_port">
-                        <option value="">—</option>
-                        <?php foreach ($ports as $p): ?>
-                            <option value="<?= (int)$p['port_id'] ?>"
-                                    data-cabinet="<?= (int)($p['cabinet_id'] ?? 0) ?>"
-                                    data-cabinet-name="<?= App::e((string)($p['cabinet_name'] ?? '')) ?>">
-                                <?= App::e($p['device_label'] . ' · ' . $p['port_type'] . ' · ' . ($p['label'] ?: '#' . $p['port_number'])) ?>
-                                <?php if (!empty($p['cabinet_name'])): ?>
-                                    · <?= App::e((string)$p['cabinet_name']) ?>
-                                <?php endif; ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
+                    <div class="cable-end-picker">
+                        <input class="form-control" type="search" id="cable_a_device_filter"
+                               placeholder="Filter devices…" autocomplete="off">
+                        <select class="form-control" id="cable_a_device" aria-label="Device A">
+                            <option value="">— device —</option>
+                        </select>
+                        <select class="form-control" name="a_port_id" id="cable_a_port" aria-label="Port A">
+                            <option value="">— pick a device first —</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="form-row full"><label>Port B</label>
-                    <select class="form-control" name="b_port_id" id="cable_b_port">
-                        <option value="">—</option>
-                        <?php foreach ($ports as $p): ?>
-                            <option value="<?= (int)$p['port_id'] ?>"
-                                    data-cabinet="<?= (int)($p['cabinet_id'] ?? 0) ?>"
-                                    data-cabinet-name="<?= App::e((string)($p['cabinet_name'] ?? '')) ?>">
-                                <?= App::e($p['device_label'] . ' · ' . $p['port_type'] . ' · ' . ($p['label'] ?: '#' . $p['port_number'])) ?>
-                                <?php if (!empty($p['cabinet_name'])): ?>
-                                    · <?= App::e((string)$p['cabinet_name']) ?>
-                                <?php endif; ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
+                    <div class="cable-end-picker">
+                        <input class="form-control" type="search" id="cable_b_device_filter"
+                               placeholder="Filter devices…" autocomplete="off">
+                        <select class="form-control" id="cable_b_device" aria-label="Device B">
+                            <option value="">— device —</option>
+                        </select>
+                        <select class="form-control" name="b_port_id" id="cable_b_port" aria-label="Port B">
+                            <option value="">— pick a device first —</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="form-row full">
                     <label>Raceway route (multi-hop)</label>
@@ -462,6 +511,32 @@ layout_header('Cable plant', $user, 'cables');
                     <input class="form-control" type="number" step="0.1" name="length_m" id="cable_length_m"></div>
                 <div class="form-row full"><label>Notes</label><input class="form-control" name="notes"></div>
                 <div class="form-row"><button class="btn btn-primary" type="submit">Add cable</button></div>
+            </form>
+            <h3>Bulk import</h3>
+            <p class="text-muted" style="font-size:.82rem;margin:.2rem 0 .6rem">
+                CSV of connections (up to 2,000 rows). Columns:
+                <code>a_device</code>, <code>a_port</code>, <code>b_device</code>, <code>b_port</code>
+                (or combined <code>a_end</code> / <code>b_end</code> as “device / port”).
+                Optional: label, role, cabinets, media, speed, circuit, path code, length.
+                Duplicate A–B pairs are skipped by default.
+            </p>
+            <form method="post" enctype="multipart/form-data" class="form-grid">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="import_csv">
+                <div class="form-row full">
+                    <label>CSV file</label>
+                    <input class="form-control" type="file" name="csv" accept=".csv,text/csv,text/plain" required>
+                </div>
+                <div class="form-row">
+                    <label style="display:flex;align-items:center;gap:.4rem;margin-top:1.35rem">
+                        <input type="checkbox" name="skip_existing" value="1" checked>
+                        Skip pairs that already exist
+                    </label>
+                </div>
+                <div class="form-row" style="display:flex;gap:.4rem;align-items:flex-end;flex-wrap:wrap">
+                    <button class="btn btn-secondary" type="submit">Import CSV</button>
+                    <a class="btn btn-ghost" href="<?= App::e(App::url('pages/cables.php?export=csv_template')) ?>">Download template</a>
+                </div>
             </form>
         </div>
         <?php endif; ?>
@@ -624,6 +699,16 @@ layout_header('Cable plant', $user, 'cables');
 
 <script>
 (function () {
+  var cableDevices = <?= json_encode(array_map(static function ($d) {
+      return [
+          'device_id' => (int)$d['device_id'],
+          'label' => (string)($d['label'] ?? ''),
+          'device_type' => (string)($d['device_type'] ?? ''),
+          'cabinet_id' => (int)($d['cabinet_id'] ?? 0),
+          'cabinet_name' => (string)($d['cabinet_name'] ?? ''),
+      ];
+  }, $portDevices), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
   var media = document.getElementById('cable_media');
   var speed = document.getElementById('cable_speed');
   var color = document.getElementById('cable_color');
@@ -667,6 +752,103 @@ layout_header('Cable plant', $user, 'cables');
     });
   }
 
+  function deviceOptionLabel(d) {
+    var lab = String(d.label || '');
+    if (d.cabinet_name) lab += ' · ' + d.cabinet_name;
+    if (d.device_type) lab += ' · ' + d.device_type;
+    return lab;
+  }
+
+  function fillDeviceSelect(sel, filter, keepId) {
+    if (!sel) return;
+    filter = (filter || '').toLowerCase().trim();
+    var cur = keepId != null ? String(keepId) : sel.value;
+    sel.innerHTML = '';
+    var blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = '— device —';
+    sel.appendChild(blank);
+    cableDevices.forEach(function (d) {
+      var lab = deviceOptionLabel(d);
+      if (filter && lab.toLowerCase().indexOf(filter) < 0 && String(d.device_id) !== cur) return;
+      var o = document.createElement('option');
+      o.value = String(d.device_id);
+      o.textContent = lab;
+      o.setAttribute('data-cabinet', String(d.cabinet_id || 0));
+      o.setAttribute('data-cabinet-name', d.cabinet_name || '');
+      sel.appendChild(o);
+    });
+    if (cur) {
+      for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === cur) { sel.selectedIndex = i; break; }
+      }
+    }
+  }
+
+  function stampPortCabinet(portSel, deviceSel) {
+    if (!portSel || !deviceSel) return;
+    var opt = deviceSel.options[deviceSel.selectedIndex];
+    var cab = opt ? (opt.getAttribute('data-cabinet') || '0') : '0';
+    var name = opt ? (opt.getAttribute('data-cabinet-name') || '') : '';
+    for (var i = 0; i < portSel.options.length; i++) {
+      portSel.options[i].setAttribute('data-cabinet', cab);
+      portSel.options[i].setAttribute('data-cabinet-name', name);
+    }
+  }
+
+  function loadEndPorts(deviceSel, portSel) {
+    if (!portSel) return;
+    var id = deviceSel ? Number(deviceSel.value || 0) : 0;
+    if (!(id > 0) || !window.ColdAisle || !ColdAisle.api) {
+      portSel.innerHTML = '<option value="">— pick a device first —</option>';
+      return;
+    }
+    portSel.innerHTML = '<option value="">Loading…</option>';
+    ColdAisle.api('api/ports.php?device_id=' + encodeURIComponent(id)).then(function (data) {
+      var ports = (data.ports || []).filter(function (p) {
+        return String(p.port_type || 'data') === 'data';
+      });
+      portSel.innerHTML = '';
+      var blank = document.createElement('option');
+      blank.value = '';
+      blank.textContent = ports.length ? '— port —' : 'No data ports on this device';
+      portSel.appendChild(blank);
+      ports.forEach(function (p) {
+        var busy = p.cable_id && Number(p.cable_id) > 0;
+        var o = document.createElement('option');
+        o.value = String(p.port_id);
+        o.textContent = (p.label || ('Port ' + p.port_number))
+          + (p.port_type && p.port_type !== 'data' ? (' · ' + p.port_type) : '')
+          + (p.speed ? (' · ' + p.speed) : '')
+          + (busy ? ' (in use)' : '');
+        if (busy) o.disabled = true;
+        portSel.appendChild(o);
+      });
+      stampPortCabinet(portSel, deviceSel);
+    }).catch(function (e) {
+      portSel.innerHTML = '<option value="">' + ((e && e.message) || 'Failed to load ports') + '</option>';
+    });
+  }
+
+  function bindEnd(prefix) {
+    var filter = document.getElementById('cable_' + prefix + '_device_filter');
+    var device = document.getElementById('cable_' + prefix + '_device');
+    var port = document.getElementById('cable_' + prefix + '_port');
+    fillDeviceSelect(device, '', '');
+    if (filter) {
+      filter.addEventListener('input', function () {
+        fillDeviceSelect(device, filter.value, device ? device.value : '');
+      });
+    }
+    if (device) {
+      device.addEventListener('change', function () {
+        loadEndPorts(device, port);
+      });
+    }
+  }
+  bindEnd('a');
+  bindEnd('b');
+
   // Calculate shortest multi-hop raceway path between Port A / Port B cabinets
   var btnCalc = document.getElementById('btnCalcShortestPath');
   var aPort = document.getElementById('cable_a_port');
@@ -675,13 +857,27 @@ layout_header('Cable plant', $user, 'cables');
   var calcOut = document.getElementById('calcPathResult');
   var lenInput = document.getElementById('cable_length_m');
   if (btnCalc && aPort && bPort && pathMulti && window.ColdAisle && ColdAisle.api) {
-    btnCalc.addEventListener('click', function () {
-      var oa = aPort.options[aPort.selectedIndex];
-      var ob = bPort.options[bPort.selectedIndex];
+    function cabinetFromEnd(portSel, prefix) {
+      var oa = portSel && portSel.options[portSel.selectedIndex];
       var ca = oa ? Number(oa.getAttribute('data-cabinet') || 0) : 0;
-      var cb = ob ? Number(ob.getAttribute('data-cabinet') || 0) : 0;
-      var na = oa ? (oa.getAttribute('data-cabinet-name') || 'A') : 'A';
-      var nb = ob ? (ob.getAttribute('data-cabinet-name') || 'B') : 'B';
+      var na = oa ? (oa.getAttribute('data-cabinet-name') || '') : '';
+      if (!(ca > 0)) {
+        var ds = document.getElementById('cable_' + prefix + '_device');
+        var od = ds && ds.options[ds.selectedIndex];
+        if (od) {
+          ca = Number(od.getAttribute('data-cabinet') || 0);
+          if (!na) na = od.getAttribute('data-cabinet-name') || '';
+        }
+      }
+      return { id: ca, name: na || prefix.toUpperCase() };
+    }
+    btnCalc.addEventListener('click', function () {
+      var ea = cabinetFromEnd(aPort, 'a');
+      var eb = cabinetFromEnd(bPort, 'b');
+      var ca = ea.id;
+      var cb = eb.id;
+      var na = ea.name;
+      var nb = eb.name;
       if (!(ca > 0) || !(cb > 0)) {
         if (calcOut) {
           calcOut.style.display = 'block';

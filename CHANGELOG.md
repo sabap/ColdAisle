@@ -13,7 +13,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Machine API v1:** paginated lists (`page` / `per_page`, default 50, max 200); PDUs and UPS; JSON booleans instead of SQL `0`/`1`. Write-scoped tokens can `PATCH` devices (allowlisted fields), `POST` device notes, and create/update work orders and line items. No SNMP SET / outlet control. Documentation page updated.
+
 ### Enhancements
+
+- **Work orders + ticketing:** list copy mentions the active ITSM system; ticket filter and list column use ITSM display id (then local change ticket). Settings → Ticketing is a vendor picker with collapsible sections instead of one long five-vendor form.
+- **Cabling plant:** add-connection picks a **device then its ports** (AJAX) instead of loading every site port into one select. **Bulk CSV import** (template download, skip existing A–B pairs). **Patch panel** is a device type; Device templates can add 24/48-port copper and LC fiber starters, and new panels get jack numbers (01, 02, …) not Eth1.
+- **In-app documentation:** sidebar Documentation is for any user who can see the dashboard (not only account admins). Adds operator how-tos for Floor planner, SNMP Discover, work-order apply-to-inventory, and Tech / field PWA; the machine API reference stays on the same page.
+- **Floor planner HUD:** 3D spells out **Orbit** (overview: drag/zoom) vs **Walk** (aisle: WASD, look, Esc). Raceway draw is numbered steps on the 2D plan (click points → Finish); drawing from 3D switches back to 2D. Dashboard 3D uses the same Orbit/Walk strip.
 
 ### Bug fixes
 

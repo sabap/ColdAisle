@@ -16,6 +16,7 @@ $deviceTypes = [
     'pdu' => 'PDU',
     'router' => 'Router',
     'network_switch' => 'Network Switch',
+    'patch_panel' => 'Patch panel',
     'storage_array' => 'Storage array',
     'storage_switch' => 'Storage switch',
     'kvm' => 'KVM',
@@ -70,6 +71,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         $redir = 'pages/device_templates.php?action=new';
     }
     App::redirect($redir);
+}
+
+// ---- Seed patch-panel templates ----
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? '') && ($_POST['action'] ?? '') === 'seed_patch_panels') {
+    try {
+        if (!class_exists('CablePlantService')) {
+            throw new RuntimeException('Cable plant service unavailable.');
+        }
+        $res = CablePlantService::ensurePatchPanelTemplates();
+        $added = (int)($res['added'] ?? 0);
+        $skipped = (int)($res['skipped'] ?? 0);
+        if ($added > 0) {
+            App::flash('success', 'Added ' . $added . ' patch-panel template' . ($added === 1 ? '' : 's')
+                . ($skipped > 0 ? ' (' . $skipped . ' already present).' : '.'));
+        } else {
+            App::flash('success', 'Patch-panel templates already present (' . $skipped . ').');
+        }
+        if (class_exists('AuditService')) {
+            AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'create', 'device_template', 0, $res);
+        }
+    } catch (Throwable $e) {
+        App::flash('error', $e->getMessage());
+    }
+    App::redirect('pages/device_templates.php');
 }
 
 // ---- Soft-delete template ----
@@ -246,7 +271,7 @@ if ($action === 'new' || $id) {
                 <div class="form-row"><label>Model *</label>
                     <input class="form-control" name="model" required value="<?= App::e($tpl['model'] ?? '') ?>"></div>
                 <div class="form-row"><label>Device type</label>
-                    <select class="form-control" name="device_type">
+                    <select class="form-control" name="device_type" id="tpl_device_type">
                         <?php foreach ($deviceTypes as $val => $lab): ?>
                             <option value="<?= App::e($val) ?>"
                                 <?= ($tpl['device_type'] ?? 'server') === $val ? 'selected' : '' ?>>
@@ -267,7 +292,11 @@ if ($action === 'new' || $id) {
                            title="Device-level rated draw (optional; per-PSU watts below)"></div>
                 <div class="form-row"><label>Number of data ports</label>
                     <input class="form-control" type="number" min="0" name="num_data_ports"
-                           value="<?= (int)($tpl['num_data_ports'] ?? 0) ?>"></div>
+                           value="<?= (int)($tpl['num_data_ports'] ?? 0) ?>">
+                    <p class="text-muted" style="font-size:.75rem;margin:.25rem 0 0">
+                        Patch panels: jack count (24 / 48 typical). Devices created from the template get numbered ports (01, 02, …).
+                    </p>
+                </div>
                 <div class="form-row"><label>SNMP version</label>
                     <select class="form-control" name="snmp_template">
                         <option value="">— None —</option>
@@ -397,6 +426,16 @@ if ($action === 'new' || $id) {
                     body.appendChild(tr);
                 });
             }
+            var typeSel = document.getElementById('tpl_device_type');
+            var portsEl = document.querySelector('[name="num_data_ports"]');
+            var uEl = document.querySelector('[name="u_height"]');
+            if (typeSel) {
+                typeSel.addEventListener('change', function () {
+                    if (typeSel.value !== 'patch_panel') return;
+                    if (portsEl && (!portsEl.value || Number(portsEl.value) === 0)) portsEl.value = '24';
+                    if (uEl && (!uEl.value || Number(uEl.value) < 1)) uEl.value = '1';
+                });
+            }
         })();
         </script>
 
@@ -458,11 +497,18 @@ $templates = Database::fetchAll(
 layout_header('Device Templates', $user, 'device_templates');
 ?>
 <div class="flex-between mb-2">
-    <div class="flex gap-1" style="align-items:center">
+    <div class="flex gap-1" style="align-items:center;flex-wrap:wrap">
         <a class="btn btn-sm btn-ghost" href="<?= App::e(App::url('pages/devices.php')) ?>">← Devices</a>
-        <span class="text-muted" style="font-size:.85rem">Templates pre-fill fields and create PSUs when creating a device</span>
+        <span class="text-muted" style="font-size:.85rem">Templates pre-fill fields and create ports / PSUs when creating a device. Patch panels are a device type (jack count = data ports).</span>
     </div>
-    <a class="btn btn-primary" href="?action=new">+ New template</a>
+    <div class="flex gap-1" style="flex-wrap:wrap">
+        <form method="post" style="display:inline" onsubmit="return confirm('Add the standard 24/48-port copper and LC fiber panel templates if they are not already in the catalog?');">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="action" value="seed_patch_panels">
+            <button class="btn btn-secondary" type="submit">Add patch-panel templates</button>
+        </form>
+        <a class="btn btn-primary" href="?action=new">+ New template</a>
+    </div>
 </div>
 
 <div class="card">
