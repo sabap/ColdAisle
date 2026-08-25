@@ -15,15 +15,20 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+### Bug fixes
+
+---
+
+## [0.3.165] - 2026-08-25
+
+### Enhancements
+
 - **Find palette:** sidebar **Find…** and `/` (or Ctrl+K) open a jump list for cabinets, devices, PDUs, UPS, cables, and work orders — not a cramped top-bar typeahead.
 - **PDU / UPS lifecycle:** purchase order, vendor, cost, dates, and warranty on plant gear (same idea as devices). Reports → Warranty includes PDUs and UPS.
 - **SNMP Discover:** proposed map is the save target; the 100KB walk dump is folded under **Other SNMP values** with a filter.
 - **Field kit on desktop:** dashboard card explains Tech mode, Add to Home Screen, and cabinet QR so phone install is visible without opening Documentation.
 
-### Bug fixes
-
 ---
-
 ## [0.3.164] - 2026-08-25
 
 ### New features

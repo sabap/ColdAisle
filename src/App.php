@@ -58,7 +58,7 @@ require_once __DIR__ . '/Services/ItsmFreshserviceService.php';
 class App
 {
     /** App semver — keep in sync with /VERSION */
-    public const VERSION = '0.3.164';
+    public const VERSION = '0.3.165';
     /** Product name is fixed (not user-configurable). */
     public const APP_NAME = 'ColdAisle';
     public const ROOT = __DIR__ . '/..';
