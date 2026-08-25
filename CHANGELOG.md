@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **In-app API documentation:** Documentation (sidebar, Users who can manage accounts) lists the machine API — auth, service accounts, GET `/api/v1.php` resources, query params, fields, errors, and curl / PowerShell / Python examples using this host’s URL.
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.162] - 2026-08-25
+
+### New features
+
+- **In-app API documentation:** Documentation (sidebar, Users who can manage accounts) lists the machine API — auth, service accounts, GET `/api/v1.php` resources, query params, fields, errors, and curl / PowerShell / Python examples using this host’s URL.
+
+---
 ## [0.3.161] - 2026-08-24
 
 ### New features
