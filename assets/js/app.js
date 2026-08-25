@@ -947,6 +947,107 @@
 
     if (!cards.length) return;
 
+    var CHIP_LABELS = {
+      support: 'Support',
+      'setup-wizard': 'Wizard',
+      'site-tour': 'Tour',
+      general: 'General',
+      noc: 'NOC',
+      diagnostics: 'Diagnostics',
+      schema: 'Schema',
+      security: 'Security',
+      mail: 'Email',
+      sdp: 'Ticketing',
+      'snmp-schedule': 'SNMP',
+      alerts: 'Alerts',
+      ldaps: 'LDAPS',
+      entra: 'Entra',
+      'opendcim-import': 'openDCIM',
+      updates: 'Updates',
+      backup: 'Backup',
+      housekeeping: 'Storage',
+      environment: 'Environment',
+    };
+
+    function chipLabel(card) {
+      var custom = card.el.getAttribute('data-jump');
+      if (custom) return custom;
+      if (CHIP_LABELS[card.id]) return CHIP_LABELS[card.id];
+      var h2 = card.el.querySelector('h2');
+      var raw = h2 ? h2.textContent.trim() : card.id;
+      return raw.replace(/\s*\(.*$/, '').slice(0, 18);
+    }
+
+    var jump = document.getElementById('settingsJump');
+    var chipById = Object.create(null);
+    if (jump) {
+      cards.forEach(function (card) {
+        var a = document.createElement('a');
+        a.className = 'settings-jump-chip';
+        a.href = '#' + card.id;
+        a.textContent = chipLabel(card);
+        a.dataset.id = card.id;
+        a.title = (card.el.querySelector('h2') || {}).textContent || card.id;
+        a.addEventListener('click', function (e) {
+          e.preventDefault();
+          goTo(card.id, false);
+        });
+        jump.appendChild(a);
+        chipById[card.id] = a;
+      });
+    }
+
+    var skipSpy = false;
+    var spyTimer = 0;
+
+    function setActiveChip(id) {
+      Object.keys(chipById).forEach(function (k) {
+        chipById[k].classList.toggle('is-active', k === id);
+      });
+      var active = chipById[id];
+      if (active && active.scrollIntoView && jump && jump.scrollWidth > jump.clientWidth) {
+        active.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+      }
+    }
+
+    function syncStickyOffset() {
+      var topbar = document.querySelector('.topbar');
+      var bar = document.getElementById('settingsToolbar');
+      var topH = topbar ? topbar.offsetHeight : 56;
+      var barH = bar ? bar.offsetHeight : 48;
+      document.documentElement.style.setProperty('--settings-sticky-top', topH + 'px');
+      document.documentElement.style.setProperty('--settings-scroll-pad', (topH + barH + 10) + 'px');
+    }
+
+    function goTo(id, fromHash) {
+      var match = cards.filter(function (c) { return c.id === id; })[0];
+      if (match) setOpen(match, true);
+      setActiveChip(id);
+      skipSpy = true;
+      if (spyTimer) clearTimeout(spyTimer);
+      spyTimer = setTimeout(function () { skipSpy = false; }, 700);
+      if (!fromHash && location.hash !== '#' + id) {
+        location.hash = id;
+        return;
+      }
+      if (match) {
+        match.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+
+    function updateActiveFromScroll() {
+      if (skipSpy) return;
+      var pad = parseFloat(getComputedStyle(document.documentElement)
+        .getPropertyValue('--settings-scroll-pad')) || 120;
+      var current = cards[0];
+      cards.forEach(function (c) {
+        if (c.el.getBoundingClientRect().top <= pad + 8) {
+          current = c;
+        }
+      });
+      if (current) setActiveChip(current.id);
+    }
+
     var saved = loadOpenSet();
     var hash = (location.hash || '').replace(/^#/, '');
 
@@ -961,29 +1062,31 @@
       setOpen(card, shouldOpen, true);
     });
     saveOpenSet();
+    syncStickyOffset();
 
     if (hash) {
-      var target = document.getElementById(hash);
-      if (target && target.classList.contains('card')) {
-        // Expand and scroll after layout
-        var match = cards.filter(function (c) { return c.id === hash; })[0];
-        if (match) setOpen(match, true);
+      var match = cards.filter(function (c) { return c.id === hash; })[0];
+      if (match) {
+        setOpen(match, true);
+        setActiveChip(hash);
         setTimeout(function () {
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          match.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }, 50);
       }
+    } else if (cards[0]) {
+      setActiveChip(cards[0].id);
     }
 
     window.addEventListener('hashchange', function () {
       var h = (location.hash || '').replace(/^#/, '');
       if (!h) return;
-      cards.forEach(function (card) {
-        if (card.id === h) {
-          setOpen(card, true);
-          card.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      });
+      goTo(h, true);
     });
+
+    window.addEventListener('scroll', function () {
+      updateActiveFromScroll();
+    }, { passive: true });
+    window.addEventListener('resize', syncStickyOffset);
 
     var expandAll = document.getElementById('settingsExpandAll');
     var collapseAll = document.getElementById('settingsCollapseAll');
@@ -991,14 +1094,273 @@
       expandAll.addEventListener('click', function () {
         cards.forEach(function (c) { setOpen(c, true, true); });
         saveOpenSet();
+        syncStickyOffset();
       });
     }
     if (collapseAll) {
       collapseAll.addEventListener('click', function () {
         cards.forEach(function (c) { setOpen(c, false, true); });
         saveOpenSet();
+        syncStickyOffset();
       });
     }
+  }
+
+  function initPageJump() {
+    var nav = document.querySelector('.page-jump');
+    if (!nav) return;
+    var chips = Array.prototype.slice.call(nav.querySelectorAll('.page-jump-chip[data-jump-id]'));
+    if (!chips.length) return;
+
+    var targets = chips.map(function (chip) {
+      var id = chip.getAttribute('data-jump-id');
+      var el = id ? document.getElementById(id) : null;
+      if (el) el.classList.add('page-jump-target');
+      return { id: id, chip: chip, el: el };
+    }).filter(function (t) { return t.el; });
+
+    var skipSpy = false;
+    var spyTimer = 0;
+
+    function setActive(id) {
+      chips.forEach(function (c) {
+        c.classList.toggle('is-active', c.getAttribute('data-jump-id') === id);
+      });
+    }
+
+    function syncOffset() {
+      var topbar = document.querySelector('.topbar');
+      var topH = topbar ? topbar.offsetHeight : 56;
+      var barH = nav.offsetHeight || 44;
+      document.documentElement.style.setProperty('--page-jump-top', topH + 'px');
+      document.documentElement.style.setProperty('--page-jump-height', barH + 'px');
+      document.documentElement.style.setProperty('--page-jump-scroll-pad', (topH + barH + 10) + 'px');
+    }
+
+    function goTo(id, fromHash) {
+      var t = targets.filter(function (x) { return x.id === id; })[0];
+      setActive(id);
+      skipSpy = true;
+      if (spyTimer) clearTimeout(spyTimer);
+      spyTimer = setTimeout(function () { skipSpy = false; }, 700);
+      if (!fromHash && location.hash !== '#' + id) {
+        location.hash = id;
+        return;
+      }
+      if (t && t.el) {
+        t.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+
+    function updateFromScroll() {
+      if (skipSpy) return;
+      var pad = parseFloat(getComputedStyle(document.documentElement)
+        .getPropertyValue('--page-jump-scroll-pad')) || 120;
+      var current = targets[0];
+      targets.forEach(function (t) {
+        if (t.el.getBoundingClientRect().top <= pad + 8) {
+          current = t;
+        }
+      });
+      if (current) setActive(current.id);
+    }
+
+    chips.forEach(function (chip) {
+      chip.addEventListener('click', function (e) {
+        e.preventDefault();
+        goTo(chip.getAttribute('data-jump-id'), false);
+      });
+    });
+
+    syncOffset();
+    var hash = (location.hash || '').replace(/^#/, '');
+    if (hash && targets.some(function (t) { return t.id === hash; })) {
+      goTo(hash, true);
+    } else if (targets[0]) {
+      setActive(targets[0].id);
+    }
+
+    window.addEventListener('hashchange', function () {
+      var h = (location.hash || '').replace(/^#/, '');
+      if (h && targets.some(function (t) { return t.id === h; })) {
+        goTo(h, true);
+      }
+    });
+    window.addEventListener('scroll', updateFromScroll, { passive: true });
+    window.addEventListener('resize', syncOffset);
+  }
+
+  function initGlobalSearch() {
+    var wrap = document.getElementById('globalSearchWrap');
+    var input = document.getElementById('globalSearchInput');
+    var panel = document.getElementById('globalSearchPanel');
+    if (!wrap || !input || !panel) return;
+
+    var searchUrl = (window.ColdAisle && ColdAisle.searchUrl) || '';
+    var timer = null;
+    var abort = null;
+    var items = [];
+    var active = -1;
+    var lastQ = '';
+
+    function closePanel() {
+      panel.hidden = true;
+      wrap.classList.remove('is-open');
+      items = [];
+      active = -1;
+    }
+
+    function setActive(i) {
+      active = i;
+      var nodes = panel.querySelectorAll('.gs-hit');
+      nodes.forEach(function (el, idx) {
+        el.classList.toggle('is-active', idx === i);
+      });
+      if (i >= 0 && nodes[i]) {
+        nodes[i].scrollIntoView({ block: 'nearest' });
+      }
+    }
+
+    function go(href) {
+      if (href) window.location.href = href;
+    }
+
+    function render(data, q) {
+      items = [];
+      active = -1;
+      var groups = (data && data.groups) || [];
+      if (!groups.length) {
+        var devicesHref = (window.ColdAisle && ColdAisle.baseUrl ? ColdAisle.baseUrl.replace(/\/$/, '') : '')
+          + '/pages/devices.php?q=' + encodeURIComponent(q);
+        panel.innerHTML = '<div class="gs-empty">No matches for “' + escapeHtml(q) + '”.'
+          + ' <a href="' + escapeHtml(devicesHref) + '">Search devices</a></div>';
+        panel.hidden = false;
+        wrap.classList.add('is-open');
+        return;
+      }
+      var html = '';
+      groups.forEach(function (g) {
+        html += '<div class="gs-group"><div class="gs-group-head"><span>'
+          + escapeHtml(g.label || '') + '</span>';
+        if (g.href) {
+          html += '<a href="' + escapeHtml(g.href) + '">See all</a>';
+        }
+        html += '</div>';
+        (g.hits || []).forEach(function (h) {
+          items.push(h);
+          var idx = items.length - 1;
+          html += '<a class="gs-hit" role="option" data-i="' + idx + '" href="'
+            + escapeHtml(h.href || '#') + '"><strong>' + escapeHtml(h.title || '')
+            + '</strong><span>' + escapeHtml(h.subtitle || '') + '</span></a>';
+        });
+        html += '</div>';
+      });
+      panel.innerHTML = html;
+      panel.hidden = false;
+      wrap.classList.add('is-open');
+      panel.querySelectorAll('.gs-hit').forEach(function (el) {
+        el.addEventListener('mouseenter', function () {
+          setActive(parseInt(el.getAttribute('data-i') || '-1', 10));
+        });
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+      });
+    }
+
+    function run(q) {
+      q = String(q || '').trim();
+      lastQ = q;
+      if (!q) {
+        closePanel();
+        return;
+      }
+      if (!searchUrl) return;
+      if (abort) {
+        try { abort.abort(); } catch (e) { /* ignore */ }
+      }
+      abort = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      var url = searchUrl + (searchUrl.indexOf('?') >= 0 ? '&' : '?') + 'q=' + encodeURIComponent(q);
+      fetch(url, {
+        credentials: 'same-origin',
+        headers: { 'Accept': 'application/json' },
+        signal: abort ? abort.signal : undefined,
+      }).then(function (res) { return res.json(); }).then(function (data) {
+        if (input.value.trim() !== q) return;
+        render(data, q);
+      }).catch(function (err) {
+        if (err && err.name === 'AbortError') return;
+      });
+    }
+
+    input.addEventListener('input', function () {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () { run(input.value); }, 180);
+    });
+    input.addEventListener('focus', function () {
+      if (input.value.trim()) run(input.value);
+    });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        closePanel();
+        input.blur();
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (!items.length) return;
+        setActive(active < items.length - 1 ? active + 1 : 0);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!items.length) return;
+        setActive(active > 0 ? active - 1 : items.length - 1);
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        var q = input.value.trim();
+        if (active >= 0 && items[active]) {
+          go(items[active].href);
+          return;
+        }
+        if (items.length === 1) {
+          go(items[0].href);
+          return;
+        }
+        if (items.length > 1) {
+          var firstSee = panel.querySelector('.gs-group-head a');
+          if (firstSee && firstSee.getAttribute('href')) {
+            go(firstSee.getAttribute('href'));
+            return;
+          }
+          go(items[0].href);
+          return;
+        }
+        var devicesHref = (window.ColdAisle && ColdAisle.baseUrl ? ColdAisle.baseUrl.replace(/\/$/, '') : '')
+          + '/pages/devices.php?q=' + encodeURIComponent(q);
+        go(devicesHref);
+      }
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!wrap.contains(e.target)) closePanel();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+      var t = e.target;
+      if (!t) return;
+      var tag = (t.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable) return;
+      e.preventDefault();
+      input.focus();
+      input.select();
+    });
   }
 
   // Sidebar toggle + timezone widgets
@@ -1016,6 +1378,8 @@
     }
     initTimezoneComboboxes(document);
     initSettingsCollapsible();
+    initGlobalSearch();
+    initPageJump();
     // First paint of browser metrics at DCL; refine on full load
     paintDevRequestTimer();
   });

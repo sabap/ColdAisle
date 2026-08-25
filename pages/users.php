@@ -342,13 +342,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
     App::redirect('pages/users.php');
 }
 
-$users = Database::fetchAll(
-    'SELECT u.*, r.name AS role_name, d.name AS department_name, d.color_hex AS department_color
+$q = class_exists('SearchService') ? SearchService::queryFromRequest() : trim((string)($_GET['q'] ?? ''));
+$userSql = 'SELECT u.*, r.name AS role_name, d.name AS department_name, d.color_hex AS department_color
      FROM users u
      INNER JOIN roles r ON r.role_id = u.role_id
-     LEFT JOIN departments d ON d.department_id = u.department_id
-     ORDER BY u.username'
-);
+     LEFT JOIN departments d ON d.department_id = u.department_id';
+$userParams = [];
+if ($q !== '') {
+    $like = '%' . $q . '%';
+    $userSql .= ' WHERE u.username LIKE ? OR ISNULL(u.display_name, \'\') LIKE ?
+                    OR u.email LIKE ? OR ISNULL(d.name, \'\') LIKE ? OR r.name LIKE ?';
+    $userParams = [$like, $like, $like, $like, $like];
+}
+$userSql .= ' ORDER BY u.username';
+$users = Database::fetchAll($userSql, $userParams);
 $onlineMap = AuthManager::onlineUserIdMap();
 $roles = Database::fetchAll('SELECT * FROM roles ORDER BY name');
 // Prefer the four platform roles first in UI
@@ -529,7 +536,8 @@ layout_header('Users & Departments', $user, 'users');
     <div class="card users-admin-card">
         <div class="card-header flex-between">
             <h2>Users</h2>
-            <div class="flex gap-1" style="flex-wrap:wrap">
+            <div class="flex gap-1" style="flex-wrap:wrap;align-items:center">
+                <?php layout_search_form('Search username, name, email, department…', $q, 'pages/users.php'); ?>
                 <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/docs.php')) ?>">API reference</a>
                 <?php if ($isGlobalAdmin): ?>
                     <button type="button" class="btn btn-sm btn-secondary" data-open-modal="modal-api-service">Create API-Service Account</button>
@@ -587,7 +595,14 @@ layout_header('Users & Departments', $user, 'users');
                     </tr>
                 <?php endforeach; ?>
                 <?php if (!$users): ?>
-                    <tr><td colspan="5" class="text-muted">No users yet. Use <strong>Add user</strong> to create one.</td></tr>
+                    <tr><td colspan="5" class="text-muted">
+                        <?php if ($q !== ''): ?>
+                            No users match “<?= App::e($q) ?>”.
+                            <a href="<?= App::e(App::url('pages/users.php')) ?>">Clear search</a>
+                        <?php else: ?>
+                            No users yet. Use <strong>Add user</strong> to create one.
+                        <?php endif; ?>
+                    </td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>

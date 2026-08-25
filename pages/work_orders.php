@@ -18,6 +18,7 @@ $startDeviceId = isset($_GET['device_id']) ? (int)$_GET['device_id'] : 0;
 $filterStatus = strtolower(trim((string)($_GET['status'] ?? '')));
 $filterTicket = trim((string)($_GET['ticket'] ?? ''));
 $filterWeek = !empty($_GET['week']);
+$q = class_exists('SearchService') ? SearchService::queryFromRequest() : trim((string)($_GET['q'] ?? ''));
 
 // Ensure tables exist on first hit
 try {
@@ -1312,6 +1313,11 @@ foreach ($weekMoves as $wm) {
 }
 
 $list = [];
+$woKeep = class_exists('ListPager') ? ListPager::keepGet(['q', 'status', 'ticket', 'week']) : [];
+$woPager = [
+    'page' => 1, 'per_page' => 50, 'offset' => 0, 'total' => 0,
+    'pages' => 1, 'from' => 0, 'to' => 0,
+];
 try {
     $sql = 'SELECT w.*,
                    (SELECT COUNT(*) FROM work_order_items i WHERE i.work_order_id = w.work_order_id) AS item_count,
@@ -1335,6 +1341,13 @@ try {
         $sql .= ' AND w.change_ticket LIKE ?';
         $params[] = '%' . $filterTicket . '%';
     }
+    if ($q !== '') {
+        $like = '%' . $q . '%';
+        $sql .= ' AND (w.title LIKE ? OR ISNULL(w.change_ticket, \'\') LIKE ?
+                     OR ISNULL(w.itsm_display_id, \'\') LIKE ? OR ISNULL(w.notes, \'\') LIKE ?
+                     OR CAST(w.work_order_id AS NVARCHAR(20)) = ?)';
+        array_push($params, $like, $like, $like, $like, $q);
+    }
     $sql .= ' ORDER BY
         CASE w.status
             WHEN \'in_progress\' THEN 0
@@ -1343,7 +1356,37 @@ try {
             WHEN \'completed\' THEN 3
             ELSE 4 END,
         w.scheduled_date, w.updated_at DESC';
-    $list = Database::fetchAll($sql, $params);
+    if (class_exists('ListPager') && ListPager::wantsCsv()) {
+        $exportRows = Database::fetchAll(ListPager::applyLimit($sql, 0, ListPager::CSV_MAX), $params);
+        $csv = [];
+        foreach ($exportRows as $row) {
+            $csv[] = [
+                $row['title'] ?? '',
+                $types[$row['work_type'] ?? ''] ?? ($row['work_type'] ?? ''),
+                $row['change_ticket'] ?? '',
+                $row['itsm_display_id'] ?? '',
+                $statuses[$row['status'] ?? ''] ?? ($row['status'] ?? ''),
+                $row['scheduled_date'] ?? '',
+                $row['item_count'] ?? 0,
+                $row['requested_by_name'] ?? '',
+                $row['updated_at'] ?? '',
+            ];
+        }
+        ListPager::sendCsv('coldaisle-work-orders-' . date('Ymd-His') . '.csv', [
+            'Title', 'Type', 'Ticket', 'ITSM id', 'Status', 'Scheduled', 'Devices', 'Requested by', 'Updated',
+        ], $csv);
+    }
+    $woTotal = class_exists('ListPager') ? ListPager::count($sql, $params) : 0;
+    $woPager = class_exists('ListPager') ? ListPager::fromRequest($woTotal) : [
+        'page' => 1, 'per_page' => 50, 'offset' => 0, 'total' => $woTotal,
+        'pages' => 1, 'from' => 0, 'to' => 0,
+    ];
+    $list = Database::fetchAll(
+        class_exists('ListPager')
+            ? ListPager::applyLimit($sql, $woPager['offset'], $woPager['per_page'])
+            : $sql,
+        $params
+    );
 } catch (Throwable $e) {
     $list = [];
     App::flash('error', 'Work order tables not ready yet — open Settings or wait for schema ensure. ' . $e->getMessage());
@@ -1356,6 +1399,9 @@ layout_header('Work orders', $user, 'work_orders');
         Plan rack moves and changes: ticket, from/to cabinet, checklist, optional inventory apply.
     </p>
     <div class="flex gap-1">
+        <?php if (!empty($woPager['total']) && class_exists('ListPager')): ?>
+            <a class="btn btn-secondary" href="<?= App::e(ListPager::href('pages/work_orders.php', $woKeep, ['export' => 'csv'])) ?>">Export CSV</a>
+        <?php endif; ?>
         <?php if ($canEdit): ?>
             <a class="btn btn-primary" href="<?= App::e(App::url('pages/work_orders.php?action=new')) ?>">+ New work order</a>
         <?php endif; ?>
@@ -1438,6 +1484,12 @@ layout_header('Work orders', $user, 'work_orders');
 <div class="card mb-2">
     <div class="card-body">
         <form method="get" class="form-grid" style="align-items:end">
+            <?php if (!empty($woKeep['per'])): ?>
+                <input type="hidden" name="per" value="<?= App::e((string)$woKeep['per']) ?>">
+            <?php endif; ?>
+            <div class="form-row"><label>Search</label>
+                <input class="form-control" type="search" name="q" value="<?= App::e($q) ?>"
+                       placeholder="Title, ticket, notes…" autocomplete="off"></div>
             <div class="form-row"><label>Status</label>
                 <select class="form-control" name="status">
                     <option value="">All</option>
@@ -1456,7 +1508,7 @@ layout_header('Work orders', $user, 'work_orders');
             </div>
             <div class="form-row">
                 <button class="btn btn-secondary" type="submit">Filter</button>
-                <?php if ($filterWeek || $filterStatus !== '' || $filterTicket !== ''): ?>
+                <?php if ($filterWeek || $filterStatus !== '' || $filterTicket !== '' || $q !== ''): ?>
                     <a class="btn btn-ghost" href="<?= App::e(App::url('pages/work_orders.php')) ?>">Clear</a>
                 <?php endif; ?>
             </div>
@@ -1501,15 +1553,23 @@ layout_header('Work orders', $user, 'work_orders');
             <?php if (!$list): ?>
                 <tr>
                     <td colspan="7" class="text-muted">
-                        No work orders yet.
-                        <?php if ($canEdit): ?>
-                            <a href="<?= App::e(App::url('pages/work_orders.php?action=new')) ?>">Create one</a>.
+                        <?php if ($q !== '' || $filterTicket !== '' || $filterStatus !== '' || $filterWeek): ?>
+                            No work orders match this filter.
+                            <a href="<?= App::e(App::url('pages/work_orders.php')) ?>">Clear</a>
+                        <?php else: ?>
+                            No work orders yet.
+                            <?php if ($canEdit): ?>
+                                <a href="<?= App::e(App::url('pages/work_orders.php?action=new')) ?>">Create one</a>.
+                            <?php endif; ?>
                         <?php endif; ?>
                     </td>
                 </tr>
             <?php endif; ?>
             </tbody>
         </table>
+        <?php if (class_exists('ListPager')) {
+            layout_list_pager($woPager, 'pages/work_orders.php', $woKeep);
+        } ?>
     </div>
 </div>
 <?php layout_footer(); ?>

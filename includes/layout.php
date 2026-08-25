@@ -113,7 +113,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     // Flashes already read; free session lock so media.php / parallel requests are not blocked
     App::releaseSessionLock();
 
-    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '56';
+    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '60';
     $wizAuto = false;
     $wizRisk = ['warn' => false, 'message' => '', 'counts' => []];
     $tourActive = false;
@@ -159,7 +159,8 @@ function layout_header(string $title, array $user, string $active = ''): void
       techMode: <?= $tech ? 'true' : 'false' ?>,
       setupWizardAuto: <?= $wizAuto ? 'true' : 'false' ?>,
       setupWizardRisk: <?= json_encode($wizRisk, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>,
-      siteTourActive: <?= (!empty($tourActive) ? 'true' : 'false') ?>
+      siteTourActive: <?= (!empty($tourActive) ? 'true' : 'false') ?>,
+      searchUrl: <?= json_encode(App::url('api/search.php')) ?>
     };
     window.WINDCIM = window.ColdAisle; // legacy alias
     </script>
@@ -291,6 +292,7 @@ function layout_header(string $title, array $user, string $active = ''): void
         <header class="topbar">
             <button type="button" class="btn btn-ghost btn-icon" id="sidebarToggle" aria-label="Toggle menu">☰</button>
             <h1 class="page-title"><?= App::e($title) ?></h1>
+            <?php layout_global_search(); ?>
             <div class="topbar-actions">
                 <span data-tour="tech-mode"><?php layout_tech_mode_toggle(false); ?></span>
                 <span data-tour="notifications">
@@ -346,6 +348,193 @@ function layout_tech_shell_open(
     <?php
 }
 
+/**
+ * Desktop top-bar typeahead (hidden in Tech mode — hub has its own find).
+ */
+function layout_global_search(): void
+{
+    ?>
+    <div class="topbar-search" data-tour="global-search" id="globalSearchWrap">
+        <label class="visually-hidden" for="globalSearchInput">Find cabinets, devices, PDUs</label>
+        <input class="form-control topbar-search-input" type="search" id="globalSearchInput"
+               placeholder="Find cabinets, devices, PDUs…"
+               autocomplete="off" spellcheck="false" enterkeyhint="search">
+        <kbd class="topbar-search-kbd" title="Press / to search">/</kbd>
+        <div class="topbar-search-panel" id="globalSearchPanel" hidden role="listbox" aria-label="Search results"></div>
+    </div>
+    <?php
+}
+
+/**
+ * GET ?q= box used on inventory list pages.
+ *
+ * @param array<string,scalar|null> $keepGet Extra query params preserved on Search and Clear.
+ */
+function layout_search_form(string $placeholder, string $q, string $clearPath, array $keepGet = []): void
+{
+    $keep = [];
+    foreach ($keepGet as $k => $v) {
+        if ($v === '' || $v === null || $v === false) {
+            continue;
+        }
+        $keep[(string)$k] = (string)$v;
+    }
+    $clearHref = App::url($clearPath);
+    if ($keep) {
+        $clearHref .= (str_contains($clearHref, '?') ? '&' : '?') . http_build_query($keep);
+    }
+    ?>
+    <form method="get" class="list-search-form" role="search">
+        <?php foreach ($keep as $k => $v):
+            if ($k === 'q') {
+                continue;
+            }
+            ?>
+            <input type="hidden" name="<?= App::e($k) ?>" value="<?= App::e($v) ?>">
+        <?php endforeach; ?>
+        <input class="form-control" type="search" name="q" value="<?= App::e($q) ?>"
+               placeholder="<?= App::e($placeholder) ?>" autocomplete="off" enterkeyhint="search">
+        <button class="btn btn-secondary" type="submit">Search</button>
+        <?php if ($q !== ''): ?>
+            <a class="btn btn-ghost" href="<?= App::e($clearHref) ?>">Clear</a>
+        <?php endif; ?>
+    </form>
+    <?php
+}
+
+/**
+ * Sticky in-page jump chips (device / PDU detail).
+ *
+ * @param list<array{id:string,label:string}> $items
+ */
+/**
+ * Pager + “export this view” for inventory lists.
+ *
+ * @param array{page:int,per_page:int,offset:int,total:int,pages:int,from:int,to:int} $pager
+ * @param array<string,scalar> $keepGet
+ */
+function layout_list_pager(array $pager, string $path, array $keepGet = [], bool $export = true): void
+{
+    $total = (int)($pager['total'] ?? 0);
+    $page = (int)($pager['page'] ?? 1);
+    $pages = max(1, (int)($pager['pages'] ?? 1));
+    $per = (int)($pager['per_page'] ?? ListPager::DEFAULT_PER);
+    $from = (int)($pager['from'] ?? 0);
+    $to = (int)($pager['to'] ?? 0);
+    $keep = [];
+    foreach ($keepGet as $k => $v) {
+        if ($v === '' || $v === null || $v === false) {
+            continue;
+        }
+        if ((string)$k === 'page') {
+            continue;
+        }
+        $keep[(string)$k] = (string)$v;
+    }
+    if ($per !== ListPager::DEFAULT_PER) {
+        $keep['per'] = (string)$per;
+    } else {
+        unset($keep['per']);
+    }
+    $href = static function (array $over) use ($path, $keep): string {
+        return ListPager::href($path, $keep, $over);
+    };
+    ?>
+    <div class="list-pager">
+        <div class="list-pager-meta">
+            <?php if ($total < 1): ?>
+                <span>No rows</span>
+            <?php else: ?>
+                <span>Showing <?= (int)$from ?>–<?= (int)$to ?> of <?= (int)$total ?></span>
+            <?php endif; ?>
+            <?php if ($export && $total > 0 && class_exists('ListPager')): ?>
+                <a class="btn btn-sm btn-secondary" href="<?= App::e($href(['export' => 'csv', 'page' => null])) ?>">Export CSV</a>
+            <?php endif; ?>
+        </div>
+        <div class="list-pager-nav">
+            <span class="list-pager-per" title="Rows per page">
+                <?php foreach (ListPager::CHOICES as $n): ?>
+                    <?php if ($n === $per): ?>
+                        <strong><?= (int)$n ?></strong>
+                    <?php else: ?>
+                        <a href="<?= App::e($href([
+                            'per' => $n === ListPager::DEFAULT_PER ? null : (string)$n,
+                            'page' => null,
+                        ])) ?>"><?= (int)$n ?></a>
+                    <?php endif; ?>
+                <?php endforeach; ?>
+                / page
+            </span>
+            <?php if ($pages > 1): ?>
+                <?php if ($page > 1): ?>
+                    <a class="btn btn-sm btn-ghost" href="<?= App::e($href(['page' => (string)($page - 1)])) ?>">Prev</a>
+                <?php else: ?>
+                    <span class="btn btn-sm btn-ghost" aria-disabled="true">Prev</span>
+                <?php endif; ?>
+                <?php
+                $window = [];
+                $start = max(1, $page - 2);
+                $end = min($pages, $page + 2);
+                if ($start > 1) {
+                    $window[] = 1;
+                    if ($start > 2) {
+                        $window[] = 0;
+                    }
+                }
+                for ($i = $start; $i <= $end; $i++) {
+                    $window[] = $i;
+                }
+                if ($end < $pages) {
+                    if ($end < $pages - 1) {
+                        $window[] = 0;
+                    }
+                    $window[] = $pages;
+                }
+                foreach ($window as $p):
+                    if ($p === 0): ?>
+                        <span class="list-pager-ellipsis">…</span>
+                    <?php elseif ($p === $page): ?>
+                        <span class="list-pager-page is-active"><?= (int)$p ?></span>
+                    <?php else: ?>
+                        <a class="list-pager-page" href="<?= App::e($href(['page' => (string)$p])) ?>"><?= (int)$p ?></a>
+                    <?php endif;
+                endforeach; ?>
+                <?php if ($page < $pages): ?>
+                    <a class="btn btn-sm btn-ghost" href="<?= App::e($href(['page' => (string)($page + 1)])) ?>">Next</a>
+                <?php else: ?>
+                    <span class="btn btn-sm btn-ghost" aria-disabled="true">Next</span>
+                <?php endif; ?>
+            <?php endif; ?>
+        </div>
+    </div>
+    <?php
+}
+
+function layout_page_jump(array $items, string $aria = 'On this page'): void
+{
+    $out = [];
+    foreach ($items as $it) {
+        $id = trim((string)($it['id'] ?? ''));
+        $label = trim((string)($it['label'] ?? ''));
+        if ($id === '' || $label === '') {
+            continue;
+        }
+        $out[] = ['id' => $id, 'label' => $label];
+    }
+    if ($out === []) {
+        return;
+    }
+    ?>
+    <nav class="page-jump" aria-label="<?= App::e($aria) ?>">
+        <?php foreach ($out as $it): ?>
+            <a class="page-jump-chip" href="#<?= App::e($it['id']) ?>" data-jump-id="<?= App::e($it['id']) ?>">
+                <?= App::e($it['label']) ?>
+            </a>
+        <?php endforeach; ?>
+    </nav>
+    <?php
+}
+
 function layout_footer(): void
 {
     $ctx = $GLOBALS['coldaisle_layout_ctx'] ?? null;
@@ -361,7 +550,7 @@ function layout_footer(): void
     $licenseUrl = $githubUrl . '/blob/main/LICENSE';
     $timerOn = class_exists('App', false) && App::requestTimerEnabled();
     $timing = $timerOn ? App::requestTimingSnapshot() : null;
-    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '18';
+    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '21';
 
     if ($tech):
         $nav = (class_exists('TechMode') && $user)

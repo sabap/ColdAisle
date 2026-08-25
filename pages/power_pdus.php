@@ -1182,9 +1182,27 @@ if ($pduId) {
     $phaseNa = static function (): string {
         return '<span class="text-muted snmp-metric-na" title="The PDU&#39;s SNMP does not report this metric" style="cursor:help">N/A</span>';
     };
+    $pduHasPhases = !empty($phaseSnapEarly) && (
+        !empty($phaseRowsEarly)
+        || !empty($phaseSnapEarly['ll'])
+        || !empty($phaseSnapEarly['device'])
+        || !empty($phaseSnapEarly['ps'])
+    );
+    $pduJump = [
+        ['id' => 'pdu-overview', 'label' => 'Overview'],
+        ['id' => 'pdu-history', 'label' => 'History'],
+    ];
+    if ($pduHasPhases) {
+        $pduJump[] = ['id' => 'pdu-phase-status', 'label' => 'Phases'];
+    }
+    $pduJump[] = [
+        'id' => 'pdu-panel',
+        'label' => $outputMode === 'breakers' ? 'Breakers' : 'Outlets',
+    ];
+    layout_page_jump($pduJump, 'PDU sections');
     ?>
 
-    <div class="metrics">
+    <div class="metrics" id="pdu-overview">
         <?php if ($showKwCard): ?>
         <div class="metric-card warning">
             <div class="label">Polled load</div>
@@ -1272,7 +1290,7 @@ if ($pduId) {
     </div>
 
     <!-- 24h PDU history -->
-    <div class="card power-history-wide mb-2" data-power-history data-scope="pdu" data-id="<?= (int)$pduId ?>" data-hours="24">
+    <div class="card power-history-wide mb-2" id="pdu-history" data-power-history data-scope="pdu" data-id="<?= (int)$pduId ?>" data-hours="24">
         <div class="card-header flex-between">
             <h2 style="margin:0;font-size:1.05rem">Last 24 hours</h2>
             <span class="text-muted" style="font-size:.8rem">
@@ -2321,7 +2339,7 @@ if ($pduId) {
     })();
     </script>
 
-    <div class="card">
+    <div class="card" id="pdu-panel">
             <?php if ($outputMode === 'breakers'):
                 $layout = power_normalize_breaker_layout($p['breaker_layout'] ?? 'odd_right_even_left');
                 $cols = max(1, min(3, (int)($p['breaker_columns'] ?? 2)));
@@ -2916,8 +2934,79 @@ if ($filterZone) {
     $sql .= ' AND p.zone_id = ?';
     $params[] = $filterZone;
 }
+$q = class_exists('SearchService') ? SearchService::queryFromRequest() : trim((string)($_GET['q'] ?? ''));
+if ($q !== '') {
+    $like = '%' . $q . '%';
+    $sql .= ' AND (p.name LIKE ? OR ISNULL(p.ip_address, \'\') LIKE ?
+                 OR ISNULL(p.serial_no, \'\') LIKE ? OR ISNULL(p.manufacturer, \'\') LIKE ?
+                 OR ISNULL(p.model, \'\') LIKE ? OR ISNULL(c.name, \'\') LIKE ?
+                 OR ISNULL(r.name, \'\') LIKE ? OR ISNULL(z.name, \'\') LIKE ?
+                 OR CAST(p.pdu_id AS NVARCHAR(20)) = ?)';
+    array_push($params, $like, $like, $like, $like, $like, $like, $like, $like, $q);
+}
 $sql .= ' ORDER BY p.name';
-$pdus = power_natural_sort_rows(Database::fetchAll($sql, $params), 'name');
+$pduKeep = class_exists('ListPager') ? ListPager::keepGet(['q', 'zone_id']) : [];
+if (class_exists('ListPager') && ListPager::wantsCsv()) {
+    $exportRows = power_natural_sort_rows(
+        Database::fetchAll(ListPager::applyLimit($sql, 0, ListPager::CSV_MAX), $params),
+        'name'
+    );
+    $csv = [];
+    foreach ($exportRows as $p) {
+        $csv[] = [
+            $p['name'] ?? '',
+            $p['ip_address'] ?? '',
+            $p['pdu_scope'] ?? '',
+            $p['cabinet_name'] ?? '',
+            $p['row_name'] ?? '',
+            $p['zone_name'] ?? '',
+            $p['rated_amps'] ?? '',
+            isset($p['last_poll_watts']) && $p['last_poll_watts'] !== null
+                ? round(((float)$p['last_poll_watts']) / 1000, 3) : '',
+            !empty($p['snmp_enabled']) ? ('v' . ($p['snmp_version'] ?? '')) : 'off',
+            $p['serial_no'] ?? '',
+        ];
+    }
+    ListPager::sendCsv('coldaisle-pdus-' . date('Ymd-His') . '.csv', [
+        'Name', 'IP', 'Scope', 'Cabinet', 'Row', 'Zone', 'Rated amps', 'Load kW', 'SNMP', 'Serial',
+    ], $csv);
+}
+$pduTotal = class_exists('ListPager') ? ListPager::count($sql, $params) : 0;
+$pduPager = class_exists('ListPager') ? ListPager::fromRequest($pduTotal) : [
+    'page' => 1, 'per_page' => 50, 'offset' => 0, 'total' => $pduTotal,
+    'pages' => 1, 'from' => 0, 'to' => 0,
+];
+$pdusAllSlim = [];
+try {
+    $pdusAllSlim = Database::fetchAll(
+        ListPager::stripOrderBy(
+            'SELECT p.pdu_id, p.pdu_scope, p.last_poll_watts, p.snmp_enabled, p.zone_id, p.cabinet_id, p.row_id
+             FROM pdus p
+             LEFT JOIN cabinets c ON c.cabinet_id = p.cabinet_id
+             LEFT JOIN power_zones z ON z.zone_id = p.zone_id
+             LEFT JOIN cabinet_rows r ON r.row_id = p.row_id
+             WHERE p.is_active = 1'
+            . ($filterZone ? ' AND p.zone_id = ?' : '')
+            . ($q !== '' ? ' AND (p.name LIKE ? OR ISNULL(p.ip_address, \'\') LIKE ?
+                 OR ISNULL(p.serial_no, \'\') LIKE ? OR ISNULL(p.manufacturer, \'\') LIKE ?
+                 OR ISNULL(p.model, \'\') LIKE ? OR ISNULL(c.name, \'\') LIKE ?
+                 OR ISNULL(r.name, \'\') LIKE ? OR ISNULL(z.name, \'\') LIKE ?
+                 OR CAST(p.pdu_id AS NVARCHAR(20)) = ?)' : '')
+        ),
+        $params
+    );
+} catch (Throwable $e) {
+    $pdusAllSlim = [];
+}
+$pdus = power_natural_sort_rows(
+    Database::fetchAll(
+        class_exists('ListPager')
+            ? ListPager::applyLimit($sql, $pduPager['offset'], $pduPager['per_page'])
+            : $sql,
+        $params
+    ),
+    'name'
+);
 
 $canEditPdu = AuthManager::canEditPower($user);
 $canBatchIcmpPdu = AuthManager::canEditPower($user) || AuthManager::canEditSnmp($user);
@@ -2938,23 +3027,36 @@ foreach ($pdus as $pp) {
         $pdusCabinet[] = $pp;
     }
 }
-$countRack = count($pdusCabinet);
-$countRow = count($pdusRow);
-$countRoom = count($pdusRoom);
+$metricPdus = $pdusAllSlim !== [] ? $pdusAllSlim : $pdus;
+$countRack = 0;
+$countRow = 0;
+$countRoom = 0;
+foreach ($metricPdus as $mp) {
+    $sc = strtolower((string)($mp['pdu_scope'] ?? 'rack'));
+    if ($sc === 'row') {
+        $countRow++;
+    } elseif ($sc === 'room') {
+        $countRoom++;
+    } else {
+        $countRack++;
+    }
+}
 // Facility-aware total when rollup helpers exist; else raw sum
 if (function_exists('power_site_load_totals')) {
-    $listLoad = power_site_load_totals($pdus);
+    $listLoad = power_site_load_totals($metricPdus);
     $totalKw = $listLoad['kw'];
     $loadSub = power_site_load_mode_labels()[$listLoad['mode'] ?? 'all'] ?? 'facility rollup';
 } else {
     $totalKw = 0.0;
-    foreach ($pdus as $pp) {
+    foreach ($metricPdus as $pp) {
         if ($pp['last_poll_watts'] !== null) {
             $totalKw += (float)$pp['last_poll_watts'] / 1000.0;
         }
     }
     $loadSub = 'sum of last SNMP polls';
 }
+$snmpOnCount = count(array_filter($metricPdus, static fn($x) => !empty($x['snmp_enabled'])));
+$pduListed = (int)($pduPager['total'] ?? count($pdus));
 
 /**
  * Render one PDU list table body rows (shared by Row / Cabinet / Room sections).
@@ -3154,11 +3256,20 @@ layout_header('PDU Management', $user, 'power_pdus');
             Rack, row, and room PDUs
             <?php if ($filterZone): ?>
                 · filtered by zone
-                <a href="<?= App::e(App::url('pages/power_pdus.php')) ?>">(clear)</a>
+                <a href="<?= App::e(App::url('pages/power_pdus.php' . ($q !== '' ? '?q=' . rawurlencode($q) : ''))) ?>">(clear zone)</a>
             <?php endif; ?>
         </p>
+        <?php layout_search_form(
+            'Search name, IP, serial, cabinet, zone…',
+            $q,
+            'pages/power_pdus.php',
+            $pduKeep
+        ); ?>
     </div>
     <div class="flex gap-1">
+        <?php if (!empty($pduPager['total']) && class_exists('ListPager')): ?>
+            <a class="btn btn-secondary" href="<?= App::e(ListPager::href('pages/power_pdus.php', $pduKeep, ['export' => 'csv'])) ?>">Export CSV</a>
+        <?php endif; ?>
         <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power.php')) ?>">← Dashboard</a>
         <a class="btn btn-secondary" href="<?= App::e(App::url('pages/power_zones.php')) ?>">Zones</a>
         <?php if ($canEditPdu): ?>
@@ -3170,7 +3281,7 @@ layout_header('PDU Management', $user, 'power_pdus');
 <div class="metrics">
     <div class="metric-card">
         <div class="label">PDUs</div>
-        <div class="value"><?= count($pdus) ?></div>
+        <div class="value"><?= (int)$pduListed ?></div>
         <div class="sub"><?= $countRow ?> row · <?= $countRack ?> cabinet · <?= $countRoom ?> room</div>
     </div>
     <div class="metric-card warning">
@@ -3180,8 +3291,8 @@ layout_header('PDU Management', $user, 'power_pdus');
     </div>
     <div class="metric-card accent">
         <div class="label">SNMP on</div>
-        <div class="value"><?= count(array_filter($pdus, static fn($x) => !empty($x['snmp_enabled']))) ?></div>
-        <div class="sub">of <?= count($pdus) ?> listed</div>
+        <div class="value"><?= (int)$snmpOnCount ?></div>
+        <div class="sub">of <?= (int)$pduListed ?> listed</div>
     </div>
 </div>
 
@@ -3245,9 +3356,21 @@ if ($countRoom > 0) {
         $renderPduListRows
     );
 }
-if (!$pdus && $canEditPdu):
+if (!$pdus):
     ?>
-    <p class="text-muted" style="margin-top:-.5rem">No PDUs yet — use <strong>Add PDU</strong> and set Scope to Row or Rack (cabinet).</p>
+    <p class="text-muted" style="margin-top:-.5rem">
+        <?php if ($q !== ''): ?>
+            No PDUs match “<?= App::e($q) ?>”.
+            <a href="<?= App::e(App::url('pages/power_pdus.php' . ($filterZone ? '?zone_id=' . (int)$filterZone : ''))) ?>">Clear search</a>
+        <?php elseif ($canEditPdu): ?>
+            No PDUs yet — use <strong>Add PDU</strong> and set Scope to Row or Rack (cabinet).
+        <?php endif; ?>
+    </p>
+<?php endif; ?>
+<?php if (class_exists('ListPager')): ?>
+<div class="card">
+    <?php layout_list_pager($pduPager, 'pages/power_pdus.php', $pduKeep); ?>
+</div>
 <?php endif; ?>
 <style>
 /* Compact All PDUs table — keep IP visible without forcing page horizontal scroll */

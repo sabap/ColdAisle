@@ -44,6 +44,8 @@ require_once __DIR__ . '/Services/SiteTourService.php';
 require_once __DIR__ . '/Services/FieldAuditService.php';
 require_once __DIR__ . '/Services/DeviceSnmpHistoryService.php';
 require_once __DIR__ . '/Services/ApiTokenService.php';
+require_once __DIR__ . '/Services/SearchService.php';
+require_once __DIR__ . '/Services/ListPager.php';
 require_once __DIR__ . '/Services/ItsmHttp.php';
 require_once __DIR__ . '/Services/ItsmService.php';
 require_once __DIR__ . '/Services/SdpCloudService.php';

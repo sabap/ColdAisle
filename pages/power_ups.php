@@ -1043,19 +1043,28 @@ if ($action === 'new' || ($action === 'edit' && $upsId > 0)) {
 
 // List
 $units = [];
+$q = class_exists('SearchService') ? SearchService::queryFromRequest() : trim((string)($_GET['q'] ?? ''));
 try {
     if (!function_exists('power_natural_sort_rows')) {
         require_once dirname(__DIR__) . '/includes/power_helpers.php';
     }
-    $units = power_natural_sort_rows(Database::fetchAll(
-        'SELECT u.*, rm.name AS room_name, dc.name AS dc_name, z.name AS zone_name
+    $upsSql = 'SELECT u.*, rm.name AS room_name, dc.name AS dc_name, z.name AS zone_name
          FROM ups_units u
          LEFT JOIN rooms rm ON rm.room_id = u.room_id
          LEFT JOIN datacenters dc ON dc.datacenter_id = rm.datacenter_id
          LEFT JOIN power_zones z ON z.zone_id = u.zone_id
-         WHERE u.is_active = 1
-         ORDER BY u.name'
-    ), 'name');
+         WHERE u.is_active = 1';
+    $upsParams = [];
+    if ($q !== '') {
+        $like = '%' . $q . '%';
+        $upsSql .= ' AND (u.name LIKE ? OR ISNULL(u.primary_ip, \'\') LIKE ?
+                       OR ISNULL(u.manufacturer, \'\') LIKE ? OR ISNULL(u.model, \'\') LIKE ?
+                       OR ISNULL(u.serial_no, \'\') LIKE ? OR ISNULL(u.asset_tag, \'\') LIKE ?
+                       OR ISNULL(rm.name, \'\') LIKE ? OR CAST(u.ups_id AS NVARCHAR(20)) = ?)';
+        $upsParams = [$like, $like, $like, $like, $like, $like, $like, $q];
+    }
+    $upsSql .= ' ORDER BY u.name';
+    $units = power_natural_sort_rows(Database::fetchAll($upsSql, $upsParams), 'name');
 } catch (Throwable $e) {
     $units = [];
 }
@@ -1063,9 +1072,12 @@ try {
 layout_header('UPS', $user, 'power_ups');
 ?>
 <div class="flex-between mb-2">
-    <p class="text-muted mb-0">
-        In-row and in-rack UPS inventory (e.g. Schneider Symmetra 40K). Place in-row units on the floor plan for 3D / NOC.
-    </p>
+    <div>
+        <p class="text-muted mb-0">
+            In-row and in-rack UPS inventory (e.g. Schneider Symmetra 40K). Place in-row units on the floor plan for 3D / NOC.
+        </p>
+        <?php layout_search_form('Search name, IP, serial, model, room…', $q ?? '', 'pages/power_ups.php'); ?>
+    </div>
     <?php if ($canEdit): ?>
         <a class="btn btn-primary" href="?action=new">+ Add UPS</a>
     <?php endif; ?>
@@ -1120,7 +1132,13 @@ layout_header('UPS', $user, 'power_ups');
                 </tr>
             <?php endforeach; ?>
             <?php if (!$units): ?>
-                <tr><td colspan="10" class="text-muted">No UPS units yet. Add a Symmetra / Smart-UPS and place in-row frames on the floor plan.</td></tr>
+                <tr><td colspan="10" class="text-muted">
+                    <?php if ($q !== ''): ?>
+                        No UPS matches “<?= App::e($q) ?>”. <a href="<?= App::e(App::url('pages/power_ups.php')) ?>">Clear search</a>
+                    <?php else: ?>
+                        No UPS units yet. Add a Symmetra / Smart-UPS and place in-row frames on the floor plan.
+                    <?php endif; ?>
+                </td></tr>
             <?php endif; ?>
             </tbody>
         </table>

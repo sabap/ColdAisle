@@ -1081,6 +1081,19 @@ if ($action === 'new' || $id) {
                 <?php endif; ?>
             </div>
         </div>
+        <?php
+        $devJump = [
+            ['id' => 'device-overview', 'label' => 'Overview'],
+            ['id' => 'device-power', 'label' => 'Power'],
+            ['id' => 'deviceDataConnections', 'label' => 'Ports'],
+        ];
+        if (!empty($envSensors) || !empty($isEnvHostType)) {
+            $devJump[] = ['id' => 'deviceEnvCard', 'label' => 'Env'];
+        }
+        $devJump[] = ['id' => 'deviceSnmpCard', 'label' => 'SNMP'];
+        $devJump[] = ['id' => 'lifecycle-events', 'label' => 'Lifecycle'];
+        layout_page_jump($devJump, 'Device sections');
+        ?>
 
         <div class="device-view-grid">
             <!-- Left: images -->
@@ -1109,7 +1122,7 @@ if ($action === 'new' || $id) {
 
             <!-- Right: property panes -->
             <div class="device-view-right">
-                <div class="card view-pane">
+                <div class="card view-pane" id="device-overview">
                     <div class="card-header"><h2>Physical infrastructure</h2></div>
                     <div class="card-body">
                         <dl class="view-dl">
@@ -1418,7 +1431,7 @@ if ($action === 'new' || $id) {
                     </div>
                 </div>
 
-                <div class="card view-pane">
+                <div class="card view-pane" id="device-power">
                     <div class="card-header"><h2>Power supplies</h2></div>
                     <div class="card-body flush">
                         <?php if ($numPower <= 0): ?>
@@ -4420,7 +4433,46 @@ if ($q !== '') {
     $params = [$like, $like, $like, $like, $like, $like, $like];
 }
 $sql .= ' ORDER BY d.label';
-$devices = Database::fetchAll($sql, $params);
+$listKeep = class_exists('ListPager') ? ListPager::keepGet(['q']) : [];
+if (class_exists('ListPager') && ListPager::wantsCsv()) {
+    $exportRows = Database::fetchAll(ListPager::applyLimit($sql, 0, ListPager::CSV_MAX), $params);
+    $csv = [];
+    foreach ($exportRows as $d) {
+        $u = '';
+        if (!empty($d['parent_device_id'])) {
+            $u = $d['position_u'] !== null ? ('slot ' . (int)$d['position_u']) : '';
+        } elseif ($d['position_u'] !== null) {
+            $u = (int)$d['position_u'] . '–' . ((int)$d['position_u'] + (int)$d['u_height'] - 1);
+        }
+        $csv[] = [
+            $d['label'] ?? '',
+            $deviceTypes[$d['device_type'] ?? ''] ?? ($d['device_type'] ?? ''),
+            $d['department_name'] ?? '',
+            $d['dc_name'] ?? '',
+            $d['cabinet_name'] ?? '',
+            $u,
+            $d['primary_ip'] ?? '',
+            $d['serial_no'] ?? '',
+            $d['asset_tag'] ?? '',
+            $d['hostname'] ?? '',
+            $deviceStatuses[$d['status'] ?? ''] ?? ($d['status'] ?? ''),
+        ];
+    }
+    ListPager::sendCsv('coldaisle-devices-' . date('Ymd-His') . '.csv', [
+        'Name', 'Type', 'Department', 'Data center', 'Cabinet', 'U', 'IP', 'Serial', 'Asset tag', 'Hostname', 'Status',
+    ], $csv);
+}
+$devTotal = class_exists('ListPager') ? ListPager::count($sql, $params) : count(Database::fetchAll($sql, $params));
+$devPager = class_exists('ListPager') ? ListPager::fromRequest($devTotal) : [
+    'page' => 1, 'per_page' => max(1, $devTotal), 'offset' => 0, 'total' => $devTotal,
+    'pages' => 1, 'from' => $devTotal ? 1 : 0, 'to' => $devTotal,
+];
+$devices = Database::fetchAll(
+    class_exists('ListPager')
+        ? ListPager::applyLimit($sql, $devPager['offset'], $devPager['per_page'])
+        : $sql,
+    $params
+);
 $canCreate = AuthManager::canEditDevice($user, null);
 $canBatchIcmp = AuthManager::canManageDevices($user) || AuthManager::canEditSnmp($user);
 if (is_file(dirname(__DIR__) . '/src/Services/IcmpMonitorService.php')) {
@@ -4431,14 +4483,11 @@ $testingModeList = class_exists('IcmpMonitorService') && IcmpMonitorService::tes
 layout_header('Devices', $user, 'devices');
 ?>
 <div class="flex-between mb-2">
-    <form method="get" class="flex gap-1" style="flex-wrap:wrap;align-items:center">
-        <input class="form-control" name="q" placeholder="Search name, serial, IP, tags, department..." value="<?= App::e($q) ?>" style="width:280px">
-        <button class="btn btn-secondary" type="submit">Search</button>
-        <?php if ($q !== ''): ?>
-            <a class="btn btn-ghost" href="<?= App::e(App::url('pages/devices.php')) ?>">Clear</a>
-        <?php endif; ?>
-    </form>
+    <?php layout_search_form('Search name, serial, IP, tags, department…', $q, 'pages/devices.php', $listKeep); ?>
     <div class="flex gap-1">
+        <?php if (!empty($devPager['total']) && class_exists('ListPager')): ?>
+            <a class="btn btn-secondary" href="<?= App::e(ListPager::href('pages/devices.php', $listKeep, ['export' => 'csv'])) ?>">Export CSV</a>
+        <?php endif; ?>
         <a class="btn btn-secondary" href="<?= App::e(App::url('pages/device_templates.php')) ?>">Device templates</a>
         <?php if ($canCreate): ?>
             <a class="btn btn-primary" href="?action=new">+ Add Device</a>
@@ -4576,11 +4625,21 @@ layout_header('Devices', $user, 'devices');
                     </tr>
                 <?php endforeach; ?>
                 <?php if (!$devices): ?>
-                    <tr><td colspan="<?= $canBatchIcmp ? 10 : 9 ?>" class="text-muted">No devices found.</td></tr>
+                    <tr><td colspan="<?= $canBatchIcmp ? 10 : 9 ?>" class="text-muted">
+                        <?php if ($q !== ''): ?>
+                            No devices match “<?= App::e($q) ?>”.
+                            <a href="<?= App::e(App::url('pages/devices.php')) ?>">Clear search</a>
+                        <?php else: ?>
+                            No devices found.
+                        <?php endif; ?>
+                    </td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>
         </div>
+        <?php if (class_exists('ListPager')) {
+            layout_list_pager($devPager, 'pages/devices.php', $listKeep);
+        } ?>
     </div>
 </div>
 <?php if ($canBatchIcmp): ?>

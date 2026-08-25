@@ -102,8 +102,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
     App::redirect('pages/cables.php');
 }
 
+$q = class_exists('SearchService') ? SearchService::queryFromRequest() : trim((string)($_GET['q'] ?? ''));
+$like = $q !== '' ? ('%' . $q . '%') : '';
+
 try {
-    $paths = Database::fetchAll('SELECT * FROM cable_paths ORDER BY name');
+    if ($q !== '') {
+        $paths = Database::fetchAll(
+            'SELECT * FROM cable_paths
+             WHERE name LIKE ? OR ISNULL(path_code, \'\') LIKE ? OR ISNULL(notes, \'\') LIKE ?
+                OR CAST(path_id AS NVARCHAR(20)) = ?
+             ORDER BY name',
+            [$like, $like, $like, $q]
+        );
+    } else {
+        $paths = Database::fetchAll('SELECT * FROM cable_paths ORDER BY name');
+    }
 } catch (Throwable $e) {
     $paths = [];
 }
@@ -113,8 +126,7 @@ foreach ($paths as &$p) {
 }
 unset($p);
 
-$cables = Database::fetchAll(
-    'SELECT c.*,
+$cableSql = 'SELECT c.*,
         pa.label AS a_label, da.label AS a_device, da.device_id AS a_device_id,
         da.cabinet_id AS a_cabinet_id, ca.name AS a_cabinet_name, ca.room_id AS a_room_id,
         pb.label AS b_label, db.label AS b_device, db.device_id AS b_device_id,
@@ -128,8 +140,49 @@ $cables = Database::fetchAll(
      LEFT JOIN device_ports pb ON pb.port_id = c.b_port_id
      LEFT JOIN devices db ON db.device_id = pb.device_id
      LEFT JOIN cabinets cb ON cb.cabinet_id = db.cabinet_id
-     LEFT JOIN cable_paths cp ON cp.path_id = c.path_id
-     ORDER BY c.cable_id DESC'
+     LEFT JOIN cable_paths cp ON cp.path_id = c.path_id';
+$cableParams = [];
+if ($q !== '') {
+    $cableSql .= ' WHERE ISNULL(c.cable_label, \'\') LIKE ? OR ISNULL(c.circuit_id, \'\') LIKE ?
+                      OR ISNULL(da.label, \'\') LIKE ? OR ISNULL(db.label, \'\') LIKE ?
+                      OR ISNULL(ca.name, \'\') LIKE ? OR ISNULL(cb.name, \'\') LIKE ?
+                      OR ISNULL(cp.path_code, \'\') LIKE ? OR ISNULL(cp.name, \'\') LIKE ?
+                      OR CAST(c.cable_id AS NVARCHAR(20)) = ?';
+    $cableParams = [$like, $like, $like, $like, $like, $like, $like, $like, $q];
+}
+$cableSql .= ' ORDER BY c.cable_id DESC';
+$cableKeep = class_exists('ListPager') ? ListPager::keepGet(['q']) : [];
+if (class_exists('ListPager') && ListPager::wantsCsv()) {
+    $exportRows = Database::fetchAll(ListPager::applyLimit($cableSql, 0, ListPager::CSV_MAX), $cableParams);
+    $csv = [];
+    foreach ($exportRows as $c) {
+        $csv[] = [
+            $c['cable_label'] ?? ('#' . ($c['cable_id'] ?? '')),
+            $c['cable_role'] ?? '',
+            trim(($c['a_device'] ?? '') . ' / ' . ($c['a_label'] ?? ''), ' /'),
+            trim(($c['b_device'] ?? '') . ' / ' . ($c['b_label'] ?? ''), ' /'),
+            $c['a_cabinet_name'] ?? '',
+            $c['b_cabinet_name'] ?? '',
+            $c['media_type'] ?? '',
+            $c['speed'] ?? '',
+            $c['path_code'] ?: ($c['path_name'] ?? ''),
+            $c['circuit_id'] ?? '',
+        ];
+    }
+    ListPager::sendCsv('coldaisle-cables-' . date('Ymd-His') . '.csv', [
+        'Label', 'Role', 'A end', 'B end', 'A cabinet', 'B cabinet', 'Media', 'Speed', 'Path', 'Circuit',
+    ], $csv);
+}
+$cableTotal = class_exists('ListPager') ? ListPager::count($cableSql, $cableParams) : count($cables ?? []);
+$cablePager = class_exists('ListPager') ? ListPager::fromRequest($cableTotal) : [
+    'page' => 1, 'per_page' => 50, 'offset' => 0, 'total' => $cableTotal,
+    'pages' => 1, 'from' => 0, 'to' => 0,
+];
+$cables = Database::fetchAll(
+    class_exists('ListPager')
+        ? ListPager::applyLimit($cableSql, $cablePager['offset'], $cablePager['per_page'])
+        : $cableSql,
+    $cableParams
 );
 
 // Map path_id → short code for multi-hop labels
@@ -164,6 +217,12 @@ layout_header('Cable plant', $user, 'cables');
     then <strong>Show path</strong> or <strong>Calculate shortest path</strong> on a connection.
     Fiber troughs, copper trays, overhead vs raised-floor feed, and speed colors live here.
 </p>
+<div class="flex-between mb-2" style="flex-wrap:wrap;gap:.5rem">
+    <?php layout_search_form('Search label, circuit, device, cabinet, raceway…', $q, 'pages/cables.php', $cableKeep); ?>
+    <?php if (!empty($cablePager['total']) && class_exists('ListPager')): ?>
+        <a class="btn btn-secondary" href="<?= App::e(ListPager::href('pages/cables.php', $cableKeep, ['export' => 'csv'])) ?>">Export CSV</a>
+    <?php endif; ?>
+</div>
 
 <div class="split-2">
     <div class="card">
@@ -275,9 +334,21 @@ layout_header('Cable plant', $user, 'cables');
                         </td>
                     </tr>
                 <?php endforeach; ?>
-                <?php if (!$cables): ?><tr><td colspan="9" class="text-muted">No cables recorded.</td></tr><?php endif; ?>
+                <?php if (!$cables): ?>
+                    <tr><td colspan="9" class="text-muted">
+                        <?php if ($q !== ''): ?>
+                            No connections match “<?= App::e($q) ?>”.
+                            <a href="<?= App::e(App::url('pages/cables.php')) ?>">Clear search</a>
+                        <?php else: ?>
+                            No cables recorded.
+                        <?php endif; ?>
+                    </td></tr>
+                <?php endif; ?>
                 </tbody>
             </table>
+            <?php if (class_exists('ListPager')) {
+                layout_list_pager($cablePager, 'pages/cables.php', $cableKeep);
+            } ?>
         </div>
         <?php if ($canEdit): ?>
         <div class="card-body">
@@ -447,7 +518,15 @@ layout_header('Cable plant', $user, 'cables');
                         </td>
                     </tr>
                 <?php endforeach; ?>
-                <?php if (!$paths): ?><tr><td colspan="8" class="text-muted">No raceways yet — add one below or draw on the floor plan.</td></tr><?php endif; ?>
+                <?php if (!$paths): ?>
+                    <tr><td colspan="8" class="text-muted">
+                        <?php if ($q !== ''): ?>
+                            No raceways match “<?= App::e($q) ?>”.
+                        <?php else: ?>
+                            No raceways yet — add one below or draw on the floor plan.
+                        <?php endif; ?>
+                    </td></tr>
+                <?php endif; ?>
                 </tbody>
             </table>
         </div>

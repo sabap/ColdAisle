@@ -68,6 +68,15 @@ class SiteTourService
                 'place' => 'bottom',
             ],
             [
+                'id' => 'global-search',
+                'title' => 'Find anything',
+                'body' => 'The top-bar search looks up cabinets, devices, PDUs, UPS, cables, work orders, and users as you type. Press / from anywhere (except a field) to jump into it. Enter opens the best match. Each list page also has its own Search box.',
+                'page' => 'index.php',
+                'target' => '[data-tour="global-search"]',
+                'nav' => 'dashboard',
+                'place' => 'bottom',
+            ],
+            [
                 'id' => 'notifications',
                 'title' => 'Alerts land here',
                 'body' => 'The bell is in-app notifications: power, environment, ICMP, warranty, and system events. Unread count stays on the badge. Email is optional and configured under Settings.',
@@ -300,6 +309,7 @@ class SiteTourService
             'dash-metrics' => 'Start',
             'dash-3d' => 'Start',
             'tech-mode' => 'Start',
+            'global-search' => 'Start',
             'notifications' => 'Start',
             'nav-floorplan' => 'Floor plan',
             'fp-room' => 'Floor plan',

@@ -13,7 +13,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Desktop search:** top-bar lookup (press `/`) finds cabinets, devices, PDUs, UPS, cables, work orders, and users as you type. List pages for those areas also take `?q=`.
+
 ### Enhancements
+
+- **Settings jump chips:** sticky Sections bar lists every card (Ticketing, Alerts, Updates, LDAPS, …). Click expands that card and scrolls to it; existing `#hash` links still work.
+- **Device / PDU detail jump strip:** sticky Overview / Power / Ports / SNMP / Lifecycle (devices) and Overview / History / Phases / Outlets or Breakers (PDUs) skip the card wall. Hash links still work.
+- **List pagination + export:** Devices, Cabinets, PDUs, Cabling, and Work orders paginate (25/50/100/200). **Export CSV** downloads the current search/filter (up to 10,000 rows), not only the page on screen.
+- **Report CSV:** every Reports catalog table has **Export CSV** (inventory, utilization, capacity, warranty, disposals, cables, orphans, audits, power path, work orders). Filters (Fits?, warranty window, path view) are kept. Power history was already exportable.
 
 ### Bug fixes
 

@@ -1125,6 +1125,7 @@ layout_header('Settings', $user, 'settings');
 
 <div class="settings-toolbar" id="settingsToolbar">
     <div class="settings-toolbar-label text-muted">Sections</div>
+    <nav class="settings-jump" id="settingsJump" aria-label="Jump to settings section"></nav>
     <div class="settings-toolbar-actions">
         <button type="button" class="btn btn-sm btn-secondary" id="settingsExpandAll">Expand all</button>
         <button type="button" class="btn btn-sm btn-secondary" id="settingsCollapseAll">Collapse all</button>
@@ -1203,7 +1204,7 @@ layout_header('Settings', $user, 'settings');
     </div>
 </div>
 
-<div class="card">
+<div class="card" id="general">
     <div class="card-header"><h2>General</h2></div>
     <div class="card-body">
         <form method="post" class="form-grid">
@@ -3200,7 +3201,7 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
     </div>
 </div>
 
-<div class="card">
+<div class="card" id="entra">
     <div class="card-header"><h2>Microsoft Entra ID (SSO)</h2></div>
     <div class="card-body">
         <form method="post" class="form-grid">
@@ -4201,7 +4202,7 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
 </div>
 <?php endif; ?>
 
-<div class="card">
+<div class="card" id="environment">
     <div class="card-header"><h2>Environment</h2></div>
     <div class="card-body">
         <table class="data">

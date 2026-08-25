@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
 require_once dirname(__DIR__) . '/includes/power_helpers.php';
+require_once dirname(__DIR__) . '/includes/work_order_helpers.php';
 App::boot();
 $user = App::requirePermission('view_reports');
 
@@ -206,6 +207,291 @@ function report_audit_history(): array
     );
 }
 
+function report_work_orders(): array
+{
+    try {
+        return Database::fetchAll(
+            "SELECT w.work_order_id, w.title, w.work_type, w.status, w.change_ticket,
+                    w.itsm_display_id, w.itsm_provider, w.scheduled_date, w.updated_at,
+                    (SELECT COUNT(*) FROM work_order_items i WHERE i.work_order_id = w.work_order_id) AS item_count
+             FROM work_orders w
+             ORDER BY w.updated_at DESC"
+        );
+    } catch (Throwable $e) {
+        return Database::fetchAll(
+            "SELECT w.work_order_id, w.title, w.work_type, w.status, w.change_ticket,
+                    w.scheduled_date, w.updated_at,
+                    (SELECT COUNT(*) FROM work_order_items i WHERE i.work_order_id = w.work_order_id) AS item_count
+             FROM work_orders w
+             ORDER BY w.updated_at DESC"
+        );
+    }
+}
+
+/** Current report URL with export=csv (keeps filters). */
+function report_export_url(array $extra = []): string
+{
+    $q = $_GET;
+    unset($q['export']);
+    foreach ($extra as $k => $v) {
+        if ($v === null || $v === '') {
+            unset($q[$k]);
+        } else {
+            $q[$k] = $v;
+        }
+    }
+    $q['export'] = 'csv';
+    $qs = http_build_query($q);
+    return App::url('pages/reports.php' . ($qs !== '' ? '?' . $qs : ''));
+}
+
+function report_export_btn(array $extra = []): void
+{
+    echo '<a class="btn btn-sm btn-secondary" href="' . App::e(report_export_url($extra)) . '">Export CSV</a>';
+}
+
+function report_emit_csv(string $report): never
+{
+    $stamp = date('Ymd-His');
+    $file = 'coldaisle-report-' . preg_replace('/\W+/', '-', $report) . '-' . $stamp . '.csv';
+
+    if ($report === 'inventory_summary') {
+        $data = report_inventory_summary();
+        $rows = [];
+        foreach ($data['by_type'] as $r) {
+            $rows[] = ['type', (string)$r['device_type'], (int)$r['cnt']];
+        }
+        foreach ($data['by_status'] as $r) {
+            $rows[] = ['status', (string)$r['status'], (int)$r['cnt']];
+        }
+        foreach ($data['by_dc'] as $r) {
+            $rows[] = ['data_center', (string)$r['name'], (int)$r['cnt']];
+        }
+        ListPager::sendCsv($file, ['Group', 'Name', 'Count'], $rows);
+    }
+
+    if ($report === 'cabinet_utilization') {
+        $rows = [];
+        foreach (report_cabinet_utilization() as $r) {
+            $h = (int)$r['u_height'];
+            $u = (int)$r['u_used'];
+            $pct = $h > 0 ? round(100 * $u / $h, 1) : 0;
+            $rows[] = [
+                $r['name'] ?? '',
+                $r['dc_name'] ?? '',
+                $r['room_name'] ?? '',
+                $h,
+                $u,
+                $h - $u,
+                $pct,
+            ];
+        }
+        ListPager::sendCsv($file, ['Cabinet', 'Data center', 'Room', 'U height', 'Used U', 'Free U', 'Percent'], $rows);
+    }
+
+    if ($report === 'power_capacity') {
+        $needKw = isset($_GET['need_kw']) && $_GET['need_kw'] !== '' ? (float)$_GET['need_kw'] : 0.0;
+        $needU = isset($_GET['need_u']) && $_GET['need_u'] !== '' ? (int)$_GET['need_u'] : 0;
+        $data = report_power_capacity(max(0, $needKw), max(0, $needU));
+        $sheet = strtolower(trim((string)($_GET['sheet'] ?? 'zones')));
+        if ($sheet === 'pdus') {
+            $rows = [];
+            foreach ($data['pdus'] as $p) {
+                $rows[] = [
+                    $p['name'] ?? '',
+                    $p['pdu_scope'] ?? '',
+                    $p['zone_name'] ?? '',
+                    $p['cabinet_name'] ?? '',
+                    $p['rated_volts'] ?? '',
+                    $p['rated_amps'] ?? '',
+                    $p['last_poll_watts'] ?? '',
+                    $p['last_poll_amps'] ?? '',
+                    $p['last_poll_at'] ?? '',
+                ];
+            }
+            ListPager::sendCsv($file, ['Name', 'Scope', 'Zone', 'Cabinet', 'Rated V', 'Rated A', 'Last W', 'Last A', 'Polled'], $rows);
+        }
+        $src = ($needKw > 0 || $needU > 0) ? $data['fits'] : $data['zones'];
+        $rows = [];
+        foreach ($src as $z) {
+            $rows[] = [
+                $z['name'] ?? '',
+                $z['dc_name'] ?? '',
+                $z['feed_type'] ?? '',
+                $z['load_kw'] ?? '',
+                $z['max_kw'] ?? '',
+                $z['free_kw'] ?? '',
+                $z['util_pct'] ?? '',
+                $z['free_u'] ?? '',
+                $z['u_total'] ?? '',
+                function_exists('power_format_phase_amps') ? power_format_phase_amps($z['phase_amps'] ?? []) : '',
+                $z['imbalance']['label'] ?? '',
+            ];
+        }
+        ListPager::sendCsv($file, [
+            'Zone', 'Data center', 'Feed', 'Load kW', 'Max kW', 'Free kW', 'Util %', 'Free U', 'U total', 'Phases A', 'Balance',
+        ], $rows);
+    }
+
+    if ($report === 'warranty_expiration') {
+        $days = max(0, min(730, (int)($_GET['days'] ?? SettingsService::get('warranty_notify_days', '60'))));
+        $filter = strtolower(trim((string)($_GET['wfilter'] ?? 'window')));
+        if (!in_array($filter, ['all', 'soon', 'expired', 'window'], true)) {
+            $filter = 'window';
+        }
+        $rows = [];
+        foreach (report_warranty($filter, $days) as $r) {
+            $dLeft = class_exists('AssetLifecycleService')
+                ? AssetLifecycleService::daysUntil(isset($r['warranty_end']) ? (string)$r['warranty_end'] : null)
+                : null;
+            $rows[] = [
+                $r['label'] ?? '',
+                $r['asset_tag'] ?? '',
+                trim(($r['manufacturer'] ?? '') . ' ' . ($r['model'] ?? '')),
+                $r['serial_no'] ?? '',
+                $r['warranty_provider'] ?? '',
+                $r['warranty_end'] ?? '',
+                $dLeft,
+                $r['department_name'] ?? '',
+                $r['status'] ?? '',
+            ];
+        }
+        ListPager::sendCsv($file, [
+            'Device', 'Asset tag', 'Make/Model', 'Serial', 'Provider', 'Warranty end', 'Days remaining', 'Department', 'Status',
+        ], $rows);
+    }
+
+    if ($report === 'disposal_queue') {
+        $rows = [];
+        foreach (report_disposal_queue() as $r) {
+            $rows[] = [
+                $r['device_label'] ?? '',
+                $r['status'] ?? '',
+                $r['method'] ?? '',
+                $r['scheduled_date'] ?? '',
+                $r['reason'] ?? '',
+            ];
+        }
+        ListPager::sendCsv($file, ['Device', 'Status', 'Method', 'Scheduled', 'Reason'], $rows);
+    }
+
+    if ($report === 'cable_inventory') {
+        $rows = [];
+        foreach (report_cables() as $r) {
+            $rows[] = [
+                $r['cable_label'] ?? '',
+                trim(($r['a_device'] ?? '') . ' / ' . ($r['a_port'] ?? ''), ' /'),
+                trim(($r['b_device'] ?? '') . ' / ' . ($r['b_port'] ?? ''), ' /'),
+                $r['media_type'] ?? '',
+                $r['length_m'] ?? '',
+                $r['status'] ?? '',
+            ];
+        }
+        ListPager::sendCsv($file, ['Label', 'A', 'B', 'Media', 'Length m', 'Status'], $rows);
+    }
+
+    if ($report === 'orphaned_devices') {
+        $rows = [];
+        foreach (report_orphans() as $r) {
+            $rows[] = [
+                $r['label'] ?? '',
+                $r['device_type'] ?? '',
+                $r['status'] ?? '',
+                $r['serial_no'] ?? '',
+                $r['asset_tag'] ?? '',
+            ];
+        }
+        ListPager::sendCsv($file, ['Label', 'Type', 'Status', 'Serial', 'Asset tag'], $rows);
+    }
+
+    if ($report === 'audit_history') {
+        $rows = [];
+        foreach (report_audit_history() as $r) {
+            $rows[] = [
+                $r['name'] ?? '',
+                $r['audit_type'] ?? '',
+                $r['completed_at'] ?? '',
+                $r['findings_summary'] ?? '',
+            ];
+        }
+        ListPager::sendCsv($file, ['Name', 'Type', 'Completed', 'Findings'], $rows);
+    }
+
+    if ($report === 'power_path') {
+        $zone = isset($_GET['zone_id']) && $_GET['zone_id'] !== '' ? (int)$_GET['zone_id'] : 0;
+        $view = strtolower(trim((string)($_GET['view'] ?? 'all')));
+        if (!in_array($view, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_feed'], true)) {
+            $view = 'all';
+        }
+        $pp = class_exists('PowerPathService')
+            ? PowerPathService::report(['zone_id' => $zone, 'view' => $view])
+            : ['paths' => []];
+        $rows = [];
+        foreach ($pp['paths'] ?? [] as $pr) {
+            $status = 'OK';
+            if (!empty($pr['half_map'])) {
+                $status = 'Half-map';
+            } elseif (empty($pr['mapped'])) {
+                $status = 'Unmapped';
+            } elseif (empty($pr['has_row_feed']) && !empty($pr['cabinet_id'])) {
+                $status = 'No row feed';
+            }
+            $outlet = '';
+            if (!empty($pr['mapped'])) {
+                $outlet = (string)($pr['rack_pdu_name'] ?? '');
+                $ol = (string)(($pr['outlet_label'] ?? '') !== ''
+                    ? $pr['outlet_label']
+                    : ('#' . ($pr['outlet_number'] ?? '')));
+                $outlet .= ($outlet !== '' ? ' · ' : '') . $ol;
+            }
+            $rows[] = [
+                $pr['device_label'] ?? '',
+                $pr['device_type'] ?? '',
+                $pr['psu_name'] ?? '',
+                $pr['cabinet_name'] ?? '',
+                $outlet,
+                $pr['row_feed_summary'] ?? '',
+                $pr['zone_name'] ?? '',
+                $pr['feed_type'] ?? '',
+                $pr['ups_summary'] ?? '',
+                $status,
+            ];
+        }
+        ListPager::sendCsv($file, [
+            'Device', 'Type', 'PSU', 'Cabinet', 'Rack PDU / outlet', 'Row/room feed', 'Zone', 'Feed type', 'UPS', 'Status',
+        ], $rows);
+    }
+
+    if ($report === 'work_orders') {
+        $types = work_order_types();
+        $statuses = work_order_statuses();
+        $rows = [];
+        foreach (report_work_orders() as $r) {
+            $rows[] = [
+                $r['title'] ?? '',
+                $types[$r['work_type'] ?? ''] ?? ($r['work_type'] ?? ''),
+                $r['change_ticket'] ?? '',
+                $r['itsm_display_id'] ?? '',
+                $r['itsm_provider'] ?? '',
+                $statuses[$r['status'] ?? ''] ?? ($r['status'] ?? ''),
+                $r['scheduled_date'] ?? '',
+                $r['item_count'] ?? 0,
+                $r['updated_at'] ?? '',
+            ];
+        }
+        ListPager::sendCsv($file, [
+            'Title', 'Type', 'Ticket', 'ITSM id', 'ITSM', 'Status', 'Scheduled', 'Devices', 'Updated',
+        ], $rows);
+    }
+
+    App::flash('error', 'That report cannot be exported as CSV.');
+    App::redirect('pages/reports.php' . ($report !== '' ? '?report=' . rawurlencode($report) : ''));
+}
+
+if (class_exists('ListPager') && ListPager::wantsCsv() && $report !== '' && $report !== 'power_history') {
+    report_emit_csv((string)$report);
+}
+
 layout_header('Reports', $user, 'reports');
 
 $catalog = [
@@ -218,6 +504,7 @@ $catalog = [
     'disposal_queue' => 'Disposal Queue',
     'cable_inventory' => 'Cable Inventory',
     'orphaned_devices' => 'Orphaned Devices',
+    'work_orders' => 'Work orders',
     'audit_history' => 'Audit History',
 ];
 
@@ -461,7 +748,10 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
 <div class="card mb-2">
     <div class="card-header flex-between">
         <h2 style="margin:0">Power Path</h2>
-        <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/power.php')) ?>">Power dashboard</a>
+        <div class="flex gap-1">
+            <?php report_export_btn(); ?>
+            <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/power.php')) ?>">Power dashboard</a>
+        </div>
     </div>
     <div class="card-body">
         <p class="text-muted" style="font-size:.9rem;margin-top:0">
@@ -699,6 +989,10 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
 
 <?php elseif ($report === 'inventory_summary'):
     $data = report_inventory_summary(); ?>
+<div class="flex-between mb-2">
+    <p class="text-muted mb-0">Active devices by type, status, and data center.</p>
+    <?php report_export_btn(); ?>
+</div>
 <div class="split-2">
     <div class="card"><div class="card-header"><h2>By Type</h2></div>
         <div class="card-body flush"><table class="data"><thead><tr><th>Type</th><th>Count</th></tr></thead><tbody>
@@ -716,7 +1010,7 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
 
 <?php elseif ($report === 'cabinet_utilization'):
     $rows = report_cabinet_utilization(); ?>
-<div class="card"><div class="card-header"><h2>Cabinet Utilization</h2></div>
+<div class="card"><div class="card-header flex-between"><h2 style="margin:0">Cabinet Utilization</h2><?php report_export_btn(); ?></div>
     <div class="card-body flush"><table class="data">
         <thead><tr><th>Cabinet</th><th>Location</th><th>U Height</th><th>Used</th><th>Free</th><th>%</th></tr></thead>
         <tbody>
@@ -749,7 +1043,10 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
 <div class="card mb-2">
     <div class="card-header flex-between">
         <h2 style="margin:0">Power Capacity</h2>
-        <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/power.php')) ?>">Power dashboard</a>
+        <div class="flex gap-1">
+            <?php report_export_btn(); ?>
+            <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/power.php')) ?>">Power dashboard</a>
+        </div>
     </div>
     <div class="card-body">
         <p class="text-muted" style="font-size:.9rem;margin-top:0">
@@ -853,7 +1150,7 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
             </tr>
         <?php endif; ?>
         </tbody></table></div></div>
-<div class="card"><div class="card-header"><h2>PDUs</h2></div>
+<div class="card"><div class="card-header flex-between"><h2 style="margin:0">PDUs</h2><?php report_export_btn(['sheet' => 'pdus']); ?></div>
     <div class="card-body flush"><table class="data">
         <thead><tr><th>Name</th><th>Scope</th><th>Zone</th><th>Rated</th><th>Last W</th><th>Last A</th><th>Polled</th></tr></thead>
         <tbody>
@@ -893,6 +1190,8 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
 <div class="card">
     <div class="card-header flex-between">
         <h2 style="margin:0">Warranty Expiration</h2>
+        <div class="flex gap-1" style="align-items:center;flex-wrap:wrap">
+        <?php report_export_btn(); ?>
         <form method="get" class="flex gap-1" style="align-items:center;flex-wrap:wrap;margin:0">
             <input type="hidden" name="report" value="warranty_expiration">
             <label class="text-muted" style="font-size:.8rem;margin:0">Filter</label>
@@ -905,6 +1204,7 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
             <input class="form-control" type="number" name="days" min="0" max="730" value="<?= (int)$wDays ?>"
                    style="width:5rem" onchange="this.form.submit()">
         </form>
+        </div>
     </div>
     <div class="card-body" style="padding-bottom:0">
         <p class="text-muted" style="font-size:.85rem;margin:0 0 .75rem">
@@ -955,7 +1255,7 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
 
 <?php elseif ($report === 'disposal_queue'):
     $rows = report_disposal_queue(); ?>
-<div class="card"><div class="card-header"><h2>Open Disposals</h2></div>
+<div class="card"><div class="card-header flex-between"><h2 style="margin:0">Open Disposals</h2><?php report_export_btn(); ?></div>
     <div class="card-body flush"><table class="data">
         <thead><tr><th>Device</th><th>Status</th><th>Method</th><th>Scheduled</th><th>Reason</th></tr></thead>
         <tbody>
@@ -972,7 +1272,7 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
 
 <?php elseif ($report === 'cable_inventory'):
     $rows = report_cables(); ?>
-<div class="card"><div class="card-header"><h2>Cable Inventory</h2></div>
+<div class="card"><div class="card-header flex-between"><h2 style="margin:0">Cable Inventory</h2><?php report_export_btn(); ?></div>
     <div class="card-body flush"><table class="data">
         <thead><tr><th>Label</th><th>A</th><th>B</th><th>Media</th><th>Length</th><th>Status</th></tr></thead>
         <tbody>
@@ -990,7 +1290,7 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
 
 <?php elseif ($report === 'orphaned_devices'):
     $rows = report_orphans(); ?>
-<div class="card"><div class="card-header"><h2>Orphaned Devices (no cabinet)</h2></div>
+<div class="card"><div class="card-header flex-between"><h2 style="margin:0">Orphaned Devices (no cabinet)</h2><?php report_export_btn(); ?></div>
     <div class="card-body flush"><table class="data">
         <thead><tr><th>Label</th><th>Type</th><th>Status</th><th>Serial</th><th>Asset Tag</th></tr></thead>
         <tbody>
@@ -1008,7 +1308,7 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
 
 <?php elseif ($report === 'audit_history'):
     $rows = report_audit_history(); ?>
-<div class="card"><div class="card-header"><h2>Completed Audits</h2></div>
+<div class="card"><div class="card-header flex-between"><h2 style="margin:0">Completed Audits</h2><?php report_export_btn(); ?></div>
     <div class="card-body flush"><table class="data">
         <thead><tr><th>Name</th><th>Type</th><th>Completed</th><th>Findings</th></tr></thead>
         <tbody>
@@ -1021,6 +1321,53 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
             </tr>
         <?php endforeach; ?>
         </tbody></table></div></div>
+
+<?php elseif ($report === 'work_orders'):
+    $woTypes = work_order_types();
+    $woStatuses = work_order_statuses();
+    $rows = report_work_orders();
+    ?>
+<div class="card">
+    <div class="card-header flex-between">
+        <h2 style="margin:0">Work orders</h2>
+        <div class="flex gap-1">
+            <?php report_export_btn(); ?>
+            <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/work_orders.php')) ?>">Open list</a>
+        </div>
+    </div>
+    <div class="card-body flush">
+        <table class="data">
+            <thead>
+            <tr>
+                <th>Title</th><th>Type</th><th>Ticket</th><th>Status</th>
+                <th>Scheduled</th><th>Devices</th><th>Updated</th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($rows as $r): ?>
+                <tr>
+                    <td>
+                        <a href="<?= App::e(App::url('pages/work_orders.php?id=' . (int)$r['work_order_id'])) ?>">
+                            <?= App::e((string)$r['title']) ?>
+                        </a>
+                    </td>
+                    <td><?= App::e($woTypes[$r['work_type'] ?? ''] ?? (string)($r['work_type'] ?? '')) ?></td>
+                    <td><?= App::e((string)(($r['itsm_display_id'] ?? '') !== ''
+                        ? $r['itsm_display_id']
+                        : (($r['change_ticket'] ?? '') !== '' ? $r['change_ticket'] : '—'))) ?></td>
+                    <td><?= App::e($woStatuses[$r['status'] ?? ''] ?? (string)($r['status'] ?? '')) ?></td>
+                    <td><?= App::e((string)($r['scheduled_date'] ?: '—')) ?></td>
+                    <td><?= (int)($r['item_count'] ?? 0) ?></td>
+                    <td style="font-size:.85rem"><?= App::e((string)($r['updated_at'] ?? '—')) ?></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$rows): ?>
+                <tr><td colspan="7" class="text-muted">No work orders yet.</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
 <?php endif; ?>
 
 <?php layout_footer(); ?>

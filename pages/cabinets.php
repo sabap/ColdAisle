@@ -1726,8 +1726,8 @@ if ($rowId) {
 }
 
 // ========== List view: rows → cabinets ==========
-$cabinets = Database::fetchAll(
-    'SELECT c.*, r.name AS room_name, r.room_id, dc.name AS dc_name, dc.datacenter_id,
+$q = class_exists('SearchService') ? SearchService::queryFromRequest() : trim((string)($_GET['q'] ?? ''));
+$cabSql = 'SELECT c.*, r.name AS room_name, r.room_id, dc.name AS dc_name, dc.datacenter_id,
             cr.row_id, cr.name AS row_name, cr.color_hex AS row_color,
             z.name AS zone_name,
         (SELECT COUNT(*) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1) AS device_count,
@@ -1741,8 +1741,47 @@ $cabinets = Database::fetchAll(
      INNER JOIN datacenters dc ON dc.datacenter_id = r.datacenter_id
      LEFT JOIN cabinet_rows cr ON cr.row_id = c.row_id
      LEFT JOIN power_zones z ON z.zone_id = cr.zone_id
-     WHERE c.is_active = 1
-     ORDER BY dc.name, r.name, cr.name, c.name'
+     WHERE c.is_active = 1';
+$cabParams = [];
+if ($q !== '') {
+    $like = '%' . $q . '%';
+    $cabSql .= ' AND (c.name LIKE ? OR ISNULL(c.location_tag, \'\') LIKE ?
+                    OR r.name LIKE ? OR dc.name LIKE ? OR ISNULL(cr.name, \'\') LIKE ?
+                    OR CAST(c.cabinet_id AS NVARCHAR(20)) = ?)';
+    $cabParams = [$like, $like, $like, $like, $like, $q];
+}
+$cabSql .= ' ORDER BY dc.name, r.name, cr.name, c.name';
+$cabKeep = class_exists('ListPager') ? ListPager::keepGet(['q']) : [];
+if (class_exists('ListPager') && ListPager::wantsCsv()) {
+    $exportRows = Database::fetchAll(ListPager::applyLimit($cabSql, 0, ListPager::CSV_MAX), $cabParams);
+    $csv = [];
+    foreach ($exportRows as $c) {
+        $csv[] = [
+            $c['name'] ?? '',
+            $c['dc_name'] ?? '',
+            $c['room_name'] ?? '',
+            $c['row_name'] ?? '',
+            $c['location_tag'] ?? '',
+            $c['u_height'] ?? '',
+            $c['u_used'] ?? '',
+            $c['device_count'] ?? '',
+            isset($c['pdu_watts']) ? round(((float)$c['pdu_watts']) / 1000, 3) : '',
+        ];
+    }
+    ListPager::sendCsv('coldaisle-cabinets-' . date('Ymd-His') . '.csv', [
+        'Cabinet', 'Data center', 'Room', 'Row', 'Location tag', 'U height', 'U used', 'Devices', 'PDU kW',
+    ], $csv);
+}
+$cabTotal = class_exists('ListPager') ? ListPager::count($cabSql, $cabParams) : 0;
+$cabPager = class_exists('ListPager') ? ListPager::fromRequest($cabTotal) : [
+    'page' => 1, 'per_page' => 50, 'offset' => 0, 'total' => $cabTotal,
+    'pages' => 1, 'from' => 0, 'to' => 0,
+];
+$cabinets = Database::fetchAll(
+    class_exists('ListPager')
+        ? ListPager::applyLimit($cabSql, $cabPager['offset'], $cabPager['per_page'])
+        : $cabSql,
+    $cabParams
 );
 if (class_exists('CabinetHealthService')) {
     try {
@@ -1752,8 +1791,8 @@ if (class_exists('CabinetHealthService')) {
     }
 }
 
-// Also load empty rows (no cabinets yet)
-$allRows = Database::fetchAll(
+// Also load empty rows (no cabinets yet) — skip when searching or paging
+$allRows = ($q !== '' || (int)($cabPager['page'] ?? 1) > 1) ? [] : Database::fetchAll(
     'SELECT cr.*, rm.name AS room_name, rm.room_id, dc.name AS dc_name, dc.datacenter_id,
             z.name AS zone_name
      FROM cabinet_rows cr
@@ -1842,8 +1881,8 @@ foreach ($tree as &$dcNode) {
 }
 unset($dcNode);
 
-// Global metrics
-$mCabs = count($cabinets);
+// Global metrics (cabinet count is the full filter; U/kW are this page)
+$mCabs = (int)($cabPager['total'] ?? count($cabinets));
 $mRows = 0;
 $mUTotal = 0;
 $mUUsed = 0;
@@ -1868,8 +1907,14 @@ layout_header('Cabinets', $user, 'cabinets');
 $cabLabelBase = App::url('pages/cabinet_label.php');
 ?>
 <div class="flex-between mb-2">
-    <p class="text-muted mb-0">Cabinets grouped by row. Order follows label (natural A/1… sort) and front-facing L→R for each row.</p>
+    <div>
+        <p class="text-muted mb-0">Cabinets grouped by row. Order follows label (natural A/1… sort) and front-facing L→R for each row.</p>
+        <?php layout_search_form('Search name, row, room, location tag…', $q, 'pages/cabinets.php', $cabKeep); ?>
+    </div>
     <div class="flex gap-1" style="flex-wrap:wrap">
+        <?php if (!empty($cabPager['total']) && class_exists('ListPager')): ?>
+            <a class="btn btn-secondary" href="<?= App::e(ListPager::href('pages/cabinets.php', $cabKeep, ['export' => 'csv'])) ?>">Export CSV</a>
+        <?php endif; ?>
         <button type="button" class="btn btn-secondary" id="cabQrBatchBtn" disabled title="Print QR sheet for selected cabinets">
             QR sheet <span id="cabQrSelCount" class="text-muted"></span>
         </button>
@@ -1884,7 +1929,7 @@ $cabLabelBase = App::url('pages/cabinet_label.php');
     <div class="metric-card accent">
         <div class="label">Cabinets</div>
         <div class="value"><?= $mCabs ?></div>
-        <div class="sub"><?= $mRows ?> labeled rows</div>
+        <div class="sub"><?= $mRows ?> labeled rows<?php if ((int)($cabPager['total'] ?? 0) > (int)($cabPager['per_page'] ?? 50)): ?> · this page <?= (int)$cabPager['from'] ?>–<?= (int)$cabPager['to'] ?><?php endif; ?></div>
     </div>
     <div class="metric-card success">
         <div class="label">U capacity</div>
@@ -1905,9 +1950,15 @@ $cabLabelBase = App::url('pages/cabinet_label.php');
 
 <?php if (!$tree): ?>
     <div class="card"><div class="card-body empty-state">
-        <h3>No cabinets</h3>
-        <p>Drag cabinets onto the floor plan to get started.</p>
-        <a class="btn btn-primary" href="<?= App::e(App::url('pages/floorplan.php')) ?>">Floor Planner</a>
+        <?php if ($q !== ''): ?>
+            <h3>No cabinets match “<?= App::e($q) ?>”</h3>
+            <p>Try a rack name, row, room, or location tag.</p>
+            <a class="btn btn-secondary" href="<?= App::e(App::url('pages/cabinets.php')) ?>">Clear search</a>
+        <?php else: ?>
+            <h3>No cabinets</h3>
+            <p>Drag cabinets onto the floor plan to get started.</p>
+            <a class="btn btn-primary" href="<?= App::e(App::url('pages/floorplan.php')) ?>">Floor Planner</a>
+        <?php endif; ?>
     </div></div>
 <?php endif; ?>
 
@@ -2057,6 +2108,12 @@ $cabLabelBase = App::url('pages/cabinet_label.php');
         <?php endforeach; ?>
     </div>
 <?php endforeach; ?>
+
+<?php if (class_exists('ListPager')): ?>
+<div class="card">
+    <?php layout_list_pager($cabPager, 'pages/cabinets.php', $cabKeep); ?>
+</div>
+<?php endif; ?>
 
 <style>
 .cab-dc-title {
