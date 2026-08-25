@@ -113,7 +113,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     // Flashes already read; free session lock so media.php / parallel requests are not blocked
     App::releaseSessionLock();
 
-    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '55';
+    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '56';
     $wizAuto = false;
     $wizRisk = ['warn' => false, 'message' => '', 'counts' => []];
     $tourActive = false;
@@ -204,6 +204,7 @@ function layout_header(string $title, array $user, string $active = ''): void
                 'audits' => ['Audits', 'pages/audits.php', '✓', 'nav-audits'],
                 'reports' => ['Reports', 'pages/reports.php', '📊', 'nav-reports'],
                 'users' => ['Users & Depts', 'pages/users.php', '👤', 'nav-users'],
+                'docs' => ['Documentation', 'pages/docs.php', '📖', 'nav-docs'],
                 'settings' => ['Settings', 'pages/settings.php', '⚙', 'nav-settings'],
             ];
             $devicesActive = in_array($active, ['devices', 'device_templates'], true);

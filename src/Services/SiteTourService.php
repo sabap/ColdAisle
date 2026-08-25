@@ -259,7 +259,7 @@ class SiteTourService
             [
                 'id' => 'nav-users',
                 'title' => 'Users and departments',
-                'body' => 'Local accounts, roles (Viewer through Global Admin), and departments. Directory users appear after a successful LDAPS/Entra login. Permissions hide nav items you should not see.',
+                'body' => 'Local accounts, roles (Viewer through Global Admin), and departments. Directory users appear after a successful LDAPS/Entra login. Permissions hide nav items you should not see. Global Admins mint API-service accounts here; Documentation has the machine API reference.',
                 'page' => 'pages/users.php',
                 'target' => '[data-tour="nav-users"]',
                 'nav' => 'users',

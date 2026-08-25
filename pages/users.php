@@ -434,6 +434,7 @@ layout_header('Users & Departments', $user, 'users');
     <p class="text-muted" style="font-size:.8rem;margin:.5rem 0 0">
         Header: <code>Authorization: Bearer <?= App::e((string)$apiTokenOnce['token']) ?></code>
         · Probe: <code><?= App::e(App::url('api/v1.php')) ?></code>
+        · <a href="<?= App::e(App::url('pages/docs.php')) ?>">API reference</a>
     </p>
 </div>
 <?php endif; ?>
@@ -529,6 +530,7 @@ layout_header('Users & Departments', $user, 'users');
         <div class="card-header flex-between">
             <h2>Users</h2>
             <div class="flex gap-1" style="flex-wrap:wrap">
+                <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/docs.php')) ?>">API reference</a>
                 <?php if ($isGlobalAdmin): ?>
                     <button type="button" class="btn btn-sm btn-secondary" data-open-modal="modal-api-service">Create API-Service Account</button>
                 <?php endif; ?>
@@ -843,6 +845,8 @@ layout_header('Users & Departments', $user, 'users');
                 Creates a robot account that <strong>cannot sign in</strong> to the website.
                 Username is always <code>api-service-</code> plus the short name you enter.
                 Give it a least-privilege role (Viewer for read). Global Admin is not allowed.
+                Calls, fields, and examples:
+                <a href="<?= App::e(App::url('pages/docs.php')) ?>">Documentation → API</a>.
             </p>
             <form method="post" class="form-grid" id="api_service_form">
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
@@ -997,7 +1001,8 @@ layout_header('Users & Departments', $user, 'users');
                 <p class="text-muted" style="font-size:.8rem;margin:0 0 .75rem">
                     Tokens are shown once. Send them as
                     <code>Authorization: Bearer ca_live_…</code> to
-                    <code><?= App::e(App::url('api/v1.php')) ?></code>
+                    <code><?= App::e(App::url('api/v1.php')) ?></code>.
+                    See the <a href="<?= App::e(App::url('pages/docs.php')) ?>">API reference</a> for calls and fields.
                 </p>
                 <?php if ($editUserTokens): ?>
                 <table class="data" style="margin-bottom:.75rem">

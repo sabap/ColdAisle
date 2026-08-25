@@ -77,6 +77,7 @@ class AuthManager
         'reports' => 'view_reports',
         'notifications' => 'view_notifications',
         'users' => 'manage_users',
+        'docs' => 'manage_users',
         'settings' => 'manage_settings',
     ];
 
