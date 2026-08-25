@@ -328,7 +328,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'snmp_auto_poll' => $snmpAutoPoll,
                 'include_in_site_load' => !empty($_POST['include_in_site_load']) ? 1 : 0,
                 'notes' => trim($_POST['notes'] ?? '') !== '' ? trim($_POST['notes']) : null,
-            ], $elec);
+            ], $elec, function_exists('plant_lifecycle_from_post') ? plant_lifecycle_from_post($_POST) : []);
 
             // On update: blank secrets mean "keep existing" when not applying a profile
             if ($action === 'update_pdu' && !$profileId) {
@@ -1557,15 +1557,19 @@ if ($pduId) {
                         Edit before creating the site template. Empty metrics are skipped.
                     </p>
                     <ul class="snmp-map-list" id="pduSnmpProposedMap"></ul>
-                    <h3 style="font-size:.95rem;margin:1.1rem 0 .4rem">Candidates</h3>
-                    <div style="max-height:220px;overflow:auto;border:1px solid rgba(148,163,184,.2);border-radius:8px">
+                    <details class="snmp-candidates">
+                        <summary>Other SNMP values <span class="snmp-cand-count text-muted"></span></summary>
+                        <p class="snmp-cand-help">The proposed map above is what gets saved. Open this only if a metric is missing.</p>
+                        <input class="form-control snmp-cand-filter" type="search" placeholder="Filter name, OID, hint…">
+                        <div class="snmp-cand-table-wrap">
                         <table class="snmp-oid-table">
                             <thead>
                                 <tr><th>Name</th><th>OID</th><th>Value</th><th>Hint</th><th>Score</th></tr>
                             </thead>
                             <tbody id="pduSnmpCandidateBody"></tbody>
                         </table>
-                    </div>
+                        </div>
+                    </details>
                     <div id="pduSnmpExistsWarn" class="alert alert-warning" hidden style="margin-top:.85rem"></div>
                 </div>
             </div>
@@ -1717,29 +1721,12 @@ if ($pduId) {
             li2.appendChild(extra);
             mapUl.appendChild(li2);
 
-            var tbody = document.getElementById('pduSnmpCandidateBody');
-            tbody.innerHTML = '';
-            (data.candidates || []).forEach(function (c) {
-                var tr = document.createElement('tr');
-                var nm = c.name || '';
-                tr.innerHTML =
-                    '<td style="font-size:.78rem;max-width:14rem;word-break:break-all">' +
-                        (nm ? '<code title="' + esc(nm) + '">' + esc(nm) + '</code>' : '<span class="text-muted">—</span>') +
-                    '</td>' +
-                    '<td><code style="font-size:.78rem">' + esc(c.oid) + '</code></td>' +
-                    '<td>' + esc(c.value) + '</td>' +
-                    '<td>' + esc(c.hint || '') + '</td>' +
-                    '<td>' + esc(c.score) + '</td>';
-                tr.style.cursor = 'pointer';
-                tr.title = 'Click to copy OID' + (nm ? ' · ' + nm : '');
-                tr.addEventListener('click', function () {
-                    if (navigator.clipboard) navigator.clipboard.writeText(c.oid || '');
-                    toast('Copied ' + c.oid, 'info');
-                });
-                tbody.appendChild(tr);
-            });
-            if (!(data.candidates || []).length) {
-                tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No scored candidates</td></tr>';
+            if (window.ColdAisle && typeof ColdAisle.renderSnmpCandidates === 'function') {
+                ColdAisle.renderSnmpCandidates(
+                    document.getElementById('pduSnmpCandidateBody'),
+                    data.candidates || [],
+                    { esc: esc, cols: 5 }
+                );
             }
 
             if (data.existing_template) {
@@ -2096,6 +2083,31 @@ if ($pduId) {
                     <dd id="pduOverviewSerial"><?= !empty($p['serial_no'])
                         ? App::e((string)$p['serial_no'])
                         : '<span class="text-muted">—</span>' ?></dd>
+                </div>
+                <div>
+                    <dt>PO number</dt>
+                    <dd><?= !empty($p['po_number']) ? App::e((string)$p['po_number']) : '<span class="text-muted">—</span>' ?></dd>
+                </div>
+                <div>
+                    <dt>Warranty</dt>
+                    <dd><?php
+                        $pw = trim((string)($p['warranty_provider'] ?? ''));
+                        $pe = trim((string)($p['warranty_end'] ?? ''));
+                        if ($pw === '' && $pe === '') {
+                            echo '<span class="text-muted">—</span>';
+                        } else {
+                            echo App::e($pw !== '' ? $pw : '—');
+                            if ($pe !== '') {
+                                echo ' · ' . App::e($pe);
+                                if (class_exists('AssetLifecycleService')) {
+                                    $bd = AssetLifecycleService::warrantyBadge(AssetLifecycleService::daysUntil($pe));
+                                    if (!empty($bd['label']) && $bd['label'] !== '—') {
+                                        echo ' <span class="badge ' . App::e($bd['class']) . '">' . App::e($bd['label']) . '</span>';
+                                    }
+                                }
+                            }
+                        }
+                    ?></dd>
                 </div>
                 <div>
                     <dt>MAC address</dt>

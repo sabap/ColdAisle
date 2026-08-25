@@ -374,6 +374,13 @@ class Schema
                 'icmp_last_error' => 'NVARCHAR(255) NULL',
                 // Facility / site load rollup (avoid double-counting rack under row PDUs)
                 'include_in_site_load' => 'BIT NOT NULL CONSTRAINT DF_pdus_site_load DEFAULT 1',
+                'po_number' => 'NVARCHAR(100) NULL',
+                'purchase_date' => 'DATE NULL',
+                'purchase_cost' => 'DECIMAL(14,2) NULL',
+                'purchase_vendor' => 'NVARCHAR(150) NULL',
+                'warranty_provider' => 'NVARCHAR(150) NULL',
+                'warranty_end' => 'DATE NULL',
+                'install_date' => 'DATE NULL',
             ];
             foreach ($pduCols as $col => $def) {
                 self::ensureColumn('pdus', $col, $def);
@@ -873,6 +880,10 @@ class Schema
             self::ensureColumn('ups_units', 'warranty_end', 'DATE NULL');
             self::ensureColumn('ups_units', 'install_date', 'DATE NULL');
             self::ensureColumn('ups_units', 'manufacture_date', 'DATE NULL');
+            self::ensureColumn('ups_units', 'po_number', 'NVARCHAR(100) NULL');
+            self::ensureColumn('ups_units', 'purchase_date', 'DATE NULL');
+            self::ensureColumn('ups_units', 'purchase_cost', 'DECIMAL(14,2) NULL');
+            self::ensureColumn('ups_units', 'purchase_vendor', 'NVARCHAR(150) NULL');
             self::ensureColumn('ups_units', 'asset_tag', 'NVARCHAR(100) NULL');
             self::ensureColumn('ups_units', 'ups_template_id', 'INT NULL');
             self::ensureColumn('ups_units', 'last_input_freq', 'DECIMAL(10,3) NULL');
@@ -1070,6 +1081,8 @@ class Schema
                 'last_poll_phases', 'room_id', 'pos_x', 'pos_y',
                 'icmp_monitor', 'icmp_fail_count', 'icmp_last_at', 'icmp_last_ok',
                 'include_in_site_load',
+                'po_number', 'purchase_date', 'purchase_cost', 'purchase_vendor',
+                'warranty_provider', 'warranty_end', 'install_date',
             ],
             'pdu_outlets' => ['rated_amps', 'device_power_supply_id'],
             'power_alert_state' => ['alert_key', 'pdu_id', 'severity'],

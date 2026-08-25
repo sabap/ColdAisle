@@ -418,13 +418,17 @@ if ($unitId > 0) {
                     <div id="cuSnmpExistsWarn" class="alert alert-warning" hidden></div>
                     <h4 style="font-size:.95rem;margin:1rem 0 .5rem">Proposed OID map</h4>
                     <ul id="cuSnmpProposedMap" class="snmp-proposed-map" style="list-style:none;padding:0;margin:0"></ul>
-                    <h4 style="font-size:.95rem;margin:1rem 0 .5rem">Candidates</h4>
-                    <div class="table-wrap" style="max-height:14rem;overflow:auto">
+                    <details class="snmp-candidates">
+                        <summary>Other SNMP values <span class="snmp-cand-count text-muted"></span></summary>
+                        <p class="snmp-cand-help">The proposed map above is what gets saved. Open this only if a metric is missing.</p>
+                        <input class="form-control snmp-cand-filter" type="search" placeholder="Filter name, OID…">
+                        <div class="snmp-cand-table-wrap">
                         <table class="table table-sm">
                             <thead><tr><th>Name</th><th>OID</th><th>Value</th></tr></thead>
                             <tbody id="cuSnmpCandidateBody"></tbody>
                         </table>
-                    </div>
+                        </div>
+                    </details>
                 </div>
             </div>
             <div class="modal-footer">
@@ -524,19 +528,13 @@ if ($unitId > 0) {
             li2.appendChild(extra);
             mapUl.appendChild(li2);
 
-            var tbody = document.getElementById('cuSnmpCandidateBody');
-            tbody.innerHTML = '';
-            (data.candidates || []).forEach(function (c) {
-                var tr = document.createElement('tr');
-                var nm = c.name || '';
-                tr.innerHTML =
-                    '<td style="font-size:.78rem;max-width:14rem;word-break:break-all">' +
-                        (nm ? '<code title="' + esc(nm) + '">' + esc(nm) + '</code>' : '<span class="text-muted">—</span>') +
-                    '</td>' +
-                    '<td style="font-size:.75rem;word-break:break-all"><code>' + esc(c.oid || '') + '</code></td>' +
-                    '<td style="font-size:.8rem">' + esc(c.value != null ? c.value : '') + '</td>';
-                tbody.appendChild(tr);
-            });
+            if (window.ColdAisle && typeof ColdAisle.renderSnmpCandidates === 'function') {
+                ColdAisle.renderSnmpCandidates(
+                    document.getElementById('cuSnmpCandidateBody'),
+                    data.candidates || [],
+                    { esc: esc, cols: 3 }
+                );
+            }
 
             if (resEl) resEl.hidden = false;
             if (createBtn) createBtn.disabled = false;

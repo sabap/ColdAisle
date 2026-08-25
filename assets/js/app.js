@@ -1191,23 +1191,47 @@
   }
 
   function initGlobalSearch() {
-    var wrap = document.getElementById('globalSearchWrap');
+    var palette = document.getElementById('globalSearchPalette');
     var input = document.getElementById('globalSearchInput');
     var panel = document.getElementById('globalSearchPanel');
-    if (!wrap || !input || !panel) return;
+    if (!input || !panel) return;
 
     var searchUrl = (window.ColdAisle && ColdAisle.searchUrl) || '';
     var timer = null;
     var abort = null;
     var items = [];
     var active = -1;
-    var lastQ = '';
+
+    function openPalette() {
+      if (palette) {
+        palette.hidden = false;
+        document.body.classList.add('gs-palette-open');
+      }
+      input.focus();
+      input.select();
+      if (input.value.trim()) run(input.value);
+    }
 
     function closePanel() {
       panel.hidden = true;
-      wrap.classList.remove('is-open');
       items = [];
       active = -1;
+      if (palette) {
+        palette.hidden = true;
+        document.body.classList.remove('gs-palette-open');
+      }
+    }
+
+    document.querySelectorAll('[data-open-find]').forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        openPalette();
+      });
+    });
+    if (palette) {
+      palette.addEventListener('click', function (e) {
+        if (e.target && e.target.getAttribute('data-close-find') !== null) closePanel();
+      });
     }
 
     function setActive(i) {
@@ -1235,7 +1259,6 @@
         panel.innerHTML = '<div class="gs-empty">No matches for “' + escapeHtml(q) + '”.'
           + ' <a href="' + escapeHtml(devicesHref) + '">Search devices</a></div>';
         panel.hidden = false;
-        wrap.classList.add('is-open');
         return;
       }
       var html = '';
@@ -1257,7 +1280,6 @@
       });
       panel.innerHTML = html;
       panel.hidden = false;
-      wrap.classList.add('is-open');
       panel.querySelectorAll('.gs-hit').forEach(function (el) {
         el.addEventListener('mouseenter', function () {
           setActive(parseInt(el.getAttribute('data-i') || '-1', 10));
@@ -1275,7 +1297,10 @@
       q = String(q || '').trim();
       lastQ = q;
       if (!q) {
-        closePanel();
+        panel.hidden = true;
+        panel.innerHTML = '';
+        items = [];
+        active = -1;
         return;
       }
       if (!searchUrl) return;
@@ -1347,20 +1372,107 @@
       }
     });
 
-    document.addEventListener('click', function (e) {
-      if (!wrap.contains(e.target)) closePanel();
-    });
-
     document.addEventListener('keydown', function (e) {
-      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
       var t = e.target;
-      if (!t) return;
-      var tag = (t.tagName || '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable) return;
-      e.preventDefault();
-      input.focus();
-      input.select();
+      var tag = t ? (t.tagName || '').toLowerCase() : '';
+      var typing = tag === 'input' || tag === 'textarea' || tag === 'select' || (t && t.isContentEditable);
+      if (e.key === 'k' && (e.ctrlKey || e.metaKey) && !e.altKey) {
+        e.preventDefault();
+        openPalette();
+        return;
+      }
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !typing) {
+        e.preventDefault();
+        openPalette();
+      }
     });
+  }
+
+  /**
+   * Collapse a large SNMP Discover candidate table: filter + count, closed by default.
+   * @param {HTMLTableSectionElement} tbody
+   * @param {Array} candidates
+   * @param {{esc?:function, onAdd?:function, cols?:number}} opts
+   */
+  function renderSnmpCandidates(tbody, candidates, opts) {
+    opts = opts || {};
+    if (!tbody) return;
+    var esc = opts.esc || function (s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+      });
+    };
+    var cols = opts.cols || 5;
+    var wrap = tbody.closest('.snmp-candidates') || tbody.closest('details');
+    var filter = wrap ? wrap.querySelector('.snmp-cand-filter') : null;
+    var countEl = wrap ? wrap.querySelector('.snmp-cand-count') : null;
+    var list = candidates || [];
+    if (countEl) {
+      countEl.textContent = list.length
+        ? ('(' + list.length + ' from the walk — optional)')
+        : '(none)';
+    }
+    tbody.innerHTML = '';
+    if (!list.length) {
+      tbody.innerHTML = '<tr><td colspan="' + cols + '" class="text-muted">No scored candidates</td></tr>';
+      return;
+    }
+    list.forEach(function (c) {
+      var tr = document.createElement('tr');
+      var nm = c.name || '';
+      var hay = (nm + ' ' + (c.oid || '') + ' ' + (c.hint || '') + ' ' + (c.value || '')).toLowerCase();
+      tr.setAttribute('data-hay', hay);
+      tr.innerHTML =
+        '<td style="font-size:.78rem;max-width:14rem;word-break:break-all">' +
+          (nm ? '<code title="' + esc(nm) + '">' + esc(nm) + '</code>' : '<span class="text-muted">—</span>') +
+        '</td>' +
+        '<td><code style="font-size:.78rem">' + esc(c.oid || '') + '</code></td>' +
+        '<td>' + esc(c.value != null ? c.value : '') + '</td>' +
+        (cols >= 5 ? '<td>' + esc(c.hint || '') + '</td><td>' + esc(c.score != null ? c.score : '') + '</td>' : '') +
+        (typeof opts.onAdd === 'function' ? '<td></td>' : '');
+      if (typeof opts.onAdd === 'function') {
+        var addTd = tr.lastElementChild;
+        var addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'btn btn-ghost btn-sm';
+        addBtn.textContent = 'Add field';
+        addBtn.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          opts.onAdd(c);
+        });
+        addTd.appendChild(addBtn);
+      } else {
+        tr.style.cursor = 'pointer';
+        tr.title = 'Click to copy OID';
+        tr.addEventListener('click', function () {
+          if (navigator.clipboard) navigator.clipboard.writeText(c.oid || '');
+          if (window.ColdAisle && ColdAisle.toast) ColdAisle.toast('Copied ' + (c.oid || ''), 'info');
+        });
+      }
+      tbody.appendChild(tr);
+    });
+    function applyFilter() {
+      var q = filter && filter.value ? filter.value.toLowerCase().trim() : '';
+      var shown = 0;
+      tbody.querySelectorAll('tr[data-hay]').forEach(function (tr) {
+        var ok = !q || (tr.getAttribute('data-hay') || '').indexOf(q) >= 0;
+        tr.hidden = !ok;
+        if (ok) shown++;
+      });
+      if (countEl && list.length) {
+        countEl.textContent = q
+          ? ('(' + shown + ' of ' + list.length + ')')
+          : ('(' + list.length + ' from the walk — optional)');
+      }
+    }
+    if (filter && !filter.dataset.bound) {
+      filter.dataset.bound = '1';
+      filter.addEventListener('input', applyFilter);
+    }
+    applyFilter();
+  }
+  if (window.ColdAisle) {
+    window.ColdAisle.renderSnmpCandidates = renderSnmpCandidates;
   }
 
   // Sidebar toggle + timezone widgets

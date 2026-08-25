@@ -113,7 +113,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     // Flashes already read; free session lock so media.php / parallel requests are not blocked
     App::releaseSessionLock();
 
-    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '62';
+    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '63';
     $wizAuto = false;
     $wizRisk = ['warn' => false, 'message' => '', 'counts' => []];
     $tourActive = false;
@@ -188,6 +188,11 @@ function layout_header(string $title, array $user, string $active = ''): void
                 <?php if ($org): ?><small><?= App::e($org) ?></small><?php endif; ?>
             </div>
         </div>
+        <button type="button" class="sidebar-find" id="sidebarFindBtn" data-open-find
+                title="Jump to a cabinet, device, PDU, or work order">
+            <span class="sidebar-find-label">Find…</span>
+            <kbd>/</kbd>
+        </button>
         <nav class="sidebar-nav">
             <?php
             $nav = [
@@ -292,9 +297,12 @@ function layout_header(string $title, array $user, string $active = ''): void
         <header class="topbar">
             <button type="button" class="btn btn-ghost btn-icon" id="sidebarToggle" aria-label="Toggle menu">☰</button>
             <h1 class="page-title"><?= App::e($title) ?></h1>
-            <?php layout_global_search(); ?>
+            <button type="button" class="btn btn-ghost topbar-find" id="topbarFindBtn" data-open-find
+                    data-tour="global-search" title="Find cabinets, devices, PDUs, work orders (press /)">
+                Find <kbd>/</kbd>
+            </button>
             <div class="topbar-actions">
-                <span data-tour="tech-mode"><?php layout_tech_mode_toggle(false); ?></span>
+                <span data-tour="tech-mode" title="Field chrome for tablets. Dashboard → Field kit explains Add to Home Screen."><?php layout_tech_mode_toggle(false); ?></span>
                 <span data-tour="notifications">
                 <a class="notif-badge" href="<?= App::e(App::url('pages/notifications.php')) ?>"
                    title="Notifications"
@@ -349,18 +357,21 @@ function layout_tech_shell_open(
 }
 
 /**
- * Desktop top-bar typeahead (hidden in Tech mode — hub has its own find).
+ * Command palette: jump to cabinet / device / PDU / UPS / cable / work order.
  */
-function layout_global_search(): void
+function layout_search_palette(): void
 {
     ?>
-    <div class="topbar-search" data-tour="global-search" id="globalSearchWrap">
-        <label class="visually-hidden" for="globalSearchInput">Find cabinets, devices, PDUs</label>
-        <input class="form-control topbar-search-input" type="search" id="globalSearchInput"
-               placeholder="Find cabinets, devices, PDUs…"
-               autocomplete="off" spellcheck="false" enterkeyhint="search">
-        <kbd class="topbar-search-kbd" title="Press / to search">/</kbd>
-        <div class="topbar-search-panel" id="globalSearchPanel" hidden role="listbox" aria-label="Search results"></div>
+    <div class="gs-palette" id="globalSearchPalette" hidden>
+        <div class="gs-palette-backdrop" data-close-find></div>
+        <div class="gs-palette-card" role="dialog" aria-modal="true" aria-labelledby="globalSearchInput">
+            <label class="visually-hidden" for="globalSearchInput">Jump to inventory</label>
+            <input class="form-control gs-palette-input" type="search" id="globalSearchInput"
+                   placeholder="Jump to cabinet, device, PDU, UPS, work order…"
+                   autocomplete="off" spellcheck="false" enterkeyhint="search">
+            <p class="gs-palette-hint">Press <kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd> from anywhere. Enter opens the highlighted match.</p>
+            <div class="topbar-search-panel gs-palette-results" id="globalSearchPanel" hidden role="listbox" aria-label="Search results"></div>
+        </div>
     </div>
     <?php
 }
@@ -550,7 +561,7 @@ function layout_footer(): void
     $licenseUrl = $githubUrl . '/blob/main/LICENSE';
     $timerOn = class_exists('App', false) && App::requestTimerEnabled();
     $timing = $timerOn ? App::requestTimingSnapshot() : null;
-    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '21';
+    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '22';
 
     if ($tech):
         $nav = (class_exists('TechMode') && $user)
@@ -571,6 +582,7 @@ function layout_footer(): void
         <?php endforeach; ?>
     </nav>
 </div>
+<?php layout_search_palette(); ?>
 <script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=<?= App::e($jsV) ?>"></script>
 <script>
 if ('serviceWorker' in navigator) {
@@ -634,6 +646,7 @@ if ('serviceWorker' in navigator) {
         </footer>
     </div>
 </div>
+<?php layout_search_palette(); ?>
 
 <div class="modal-overlay modal-overlay-glass" id="aboutColdAisle" hidden>
     <div class="modal-panel modal-panel-glass about-coldaisle-panel" role="dialog" aria-modal="true"

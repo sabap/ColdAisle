@@ -61,7 +61,7 @@ class SiteTourService
             [
                 'id' => 'tech-mode',
                 'title' => 'Desktop vs Tech',
-                'body' => 'Desktop is the full planning UI. Tech mode is a field-friendly shell (bigger tap targets, fewer chrome bits) for rack work on a tablet or cart. Same data — switch anytime.',
+                'body' => 'Desktop is the full planning UI. Tech mode is a field-friendly shell for rack work on a tablet or cart (same data). The dashboard Field kit card explains Add to Home Screen and cabinet QR. Switch anytime.',
                 'page' => 'index.php',
                 'target' => '[data-tour="tech-mode"]',
                 'nav' => 'dashboard',
@@ -70,7 +70,7 @@ class SiteTourService
             [
                 'id' => 'global-search',
                 'title' => 'Find anything',
-                'body' => 'The top-bar search looks up cabinets, devices, PDUs, UPS, cables, work orders, and users as you type. Press / from anywhere (except a field) to jump into it. Enter opens the best match. Each list page also has its own Search box.',
+                'body' => 'Find (sidebar or the top-bar button) is a jump palette: cabinets, devices, PDUs, UPS, cables, work orders. Press / or Ctrl+K from anywhere (except a field). Enter opens the highlighted match. List pages also have their own Search box.',
                 'page' => 'index.php',
                 'target' => '[data-tour="global-search"]',
                 'nav' => 'dashboard',

@@ -395,6 +395,29 @@ if (class_exists('SiteTourService')) {
              data-logo-url='<?= App::e(App::url('assets/img/logo.svg')) ?>'></div>
     </div>
 
+    <div style="display:flex;flex-direction:column;gap:1.25rem;min-width:0">
+    <div class="card">
+        <div class="card-header">
+            <h2>Field kit</h2>
+            <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/tech.php')) ?>">Open Tech hub</a>
+        </div>
+        <div class="card-body docs-prose" style="font-size:.9rem">
+            <p style="margin-top:0">
+                Desktop is the planning UI. <strong>Tech</strong> (header slider) is the same inventory on a tablet or phone:
+                bigger taps, a field hub, cabinet QR → rack.
+            </p>
+            <ol style="margin:.35rem 0 .6rem;padding-left:1.2rem">
+                <li>On the phone, open this site while on the hall network (or VPN) and log in.</li>
+                <li>Browser menu → <strong>Add to Home Screen</strong>. The icon is <strong>ColdAisle Field</strong>.</li>
+                <li>Scan a cabinet QR (print from the cabinet page) to open that rack in field mode.</li>
+            </ol>
+            <p class="text-muted" style="margin-bottom:0;font-size:.8rem">
+                Offline: last cabinet you opened can still be <em>read</em>. Writes need a live session.
+                <a href="<?= App::e(App::url('pages/docs.php#tech-pwa')) ?>">How Tech / PWA works</a>
+            </p>
+        </div>
+    </div>
+
     <div class="card">
         <div class="card-header">
             <h2>Recent Devices</h2>
@@ -423,6 +446,7 @@ if (class_exists('SiteTourService')) {
                 </table>
             </div>
         </div>
+    </div>
     </div>
 </div>
 

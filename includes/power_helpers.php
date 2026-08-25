@@ -13,6 +13,30 @@ function power_natural_strcmp(string $a, string $b): int
 }
 
 /**
+ * PO / warranty / install fields shared by PDUs (and merged into UPS save).
+ *
+ * @param array<string,mixed> $post
+ * @return array<string,mixed>
+ */
+function plant_lifecycle_from_post(array $post): array
+{
+    $str = static function (string $key) use ($post): ?string {
+        $v = trim((string)($post[$key] ?? ''));
+        return $v !== '' ? $v : null;
+    };
+    $cost = trim((string)($post['purchase_cost'] ?? ''));
+    return [
+        'po_number' => $str('po_number'),
+        'purchase_date' => $str('purchase_date'),
+        'purchase_vendor' => $str('purchase_vendor'),
+        'purchase_cost' => $cost !== '' ? (float)$cost : null,
+        'warranty_provider' => $str('warranty_provider'),
+        'warranty_end' => $str('warranty_end'),
+        'install_date' => $str('install_date'),
+    ];
+}
+
+/**
  * How facility / site / zone load totals are built from polled PDUs.
  *
  * - all: sum every active PDU (legacy; can double-count rack under row meters)
@@ -1926,7 +1950,7 @@ function power_capacity_fits_filter(array $snapshots, float $needKw = 0.0, int $
 }
 
 /**
- * Format phase amps for compact UI: "L1 12.1 · L2 11.8 · L3 9.2"
+ * Format phase amps for compact UI: "L1 12.1 ï¿½ L2 11.8 ï¿½ L3 9.2"
  *
  * @param array{L1?:?float,L2?:?float,L3?:?float} $amps
  */
@@ -1939,5 +1963,5 @@ function power_format_phase_amps(array $amps): string
         }
         $bits[] = $lab . ' ' . rtrim(rtrim(sprintf('%.1F', (float)$amps[$lab]), '0'), '.');
     }
-    return $bits ? implode(' · ', $bits) : '—';
+    return $bits ? implode(' ï¿½ ', $bits) : 'ï¿½';
 }

@@ -227,6 +227,7 @@ layout_header('Documentation', $user, 'docs');
                 Desktop is the full planning UI. <strong>Tech</strong> is the same inventory, permissions, and pages
                 with field chrome: bigger tap targets, a technician hub, and a bottom bar. Nothing is duplicated —
                 audits, power maps, and work orders stay on their real pages.
+                The dashboard <strong>Field kit</strong> card is the desktop reminder of how to install the PWA.
             </p>
             <h3 class="docs-h3">Turn it on</h3>
             <ul>

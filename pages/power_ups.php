@@ -471,8 +471,20 @@ if ($upsId > 0 && $action !== 'edit' && $action !== 'new') {
                 <div><dt>Asset tag</dt><dd><?= App::e($u['asset_tag'] ?? '—') ?></dd></div>
                 <div><dt>IP</dt><dd><?= App::e($u['primary_ip'] ?? '—') ?></dd></div>
                 <div><dt>Zone</dt><dd><?= App::e($u['zone_name'] ?? '—') ?></dd></div>
+                <div><dt>PO number</dt><dd><?= App::e($u['po_number'] ?? '—') ?></dd></div>
+                <div><dt>Purchase vendor</dt><dd><?= App::e($u['purchase_vendor'] ?? '—') ?></dd></div>
                 <div><dt>Warranty company</dt><dd><?= App::e($u['warranty_provider'] ?? '—') ?></dd></div>
-                <div><dt>Warranty expiration</dt><dd><?= App::e($u['warranty_end'] ?? '—') ?></dd></div>
+                <div><dt>Warranty expiration</dt><dd><?php
+                    echo App::e($u['warranty_end'] ?? '—');
+                    if (!empty($u['warranty_end']) && class_exists('AssetLifecycleService')) {
+                        $ub = AssetLifecycleService::warrantyBadge(
+                            AssetLifecycleService::daysUntil((string)$u['warranty_end'])
+                        );
+                        if (!empty($ub['label']) && $ub['label'] !== '—') {
+                            echo ' <span class="badge ' . App::e($ub['class']) . '">' . App::e($ub['label']) . '</span>';
+                        }
+                    }
+                ?></dd></div>
                 <div><dt>Install date</dt><dd><?= App::e($u['install_date'] ?? '—') ?></dd></div>
                 <div><dt>Manufacture date</dt><dd><?= App::e($u['manufacture_date'] ?? '—') ?></dd></div>
                 <div><dt>Floor plan</dt><dd>
@@ -882,13 +894,10 @@ if ($action === 'new' || ($action === 'edit' && $upsId > 0)) {
                 <input class="form-control" type="number" step="0.1" name="rated_kw" id="ups_rated_kw" value="<?= App::e((string)($u['rated_kw'] ?? '40')) ?>"></div>
             <div class="form-row"><label>Phases</label>
                 <input class="form-control" type="number" min="1" max="3" name="phases" id="ups_phases" value="<?= (int)($u['phases'] ?? 3) ?>"></div>
-            <div class="form-row"><label>Warranty company</label>
-                <input class="form-control" name="warranty_provider" id="ups_warranty_provider" value="<?= App::e($u['warranty_provider'] ?? '') ?>"
-                       placeholder="e.g. Schneider Electric"></div>
-            <div class="form-row"><label>Warranty expiration</label>
-                <input class="form-control" type="date" name="warranty_end" value="<?= App::e($u['warranty_end'] ?? '') ?>"></div>
-            <div class="form-row"><label>Install date</label>
-                <input class="form-control" type="date" name="install_date" value="<?= App::e($u['install_date'] ?? '') ?>"></div>
+            <?php
+            $lifecycle = $u ?? [];
+            require dirname(__FILE__) . '/_plant_lifecycle_fields.php';
+            ?>
             <div class="form-row"><label>Manufacture date</label>
                 <input class="form-control" type="date" name="manufacture_date" value="<?= App::e($u['manufacture_date'] ?? '') ?>"></div>
             <div class="form-row"><label>Room (optional)</label>

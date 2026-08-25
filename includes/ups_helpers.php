@@ -781,6 +781,11 @@ function ups_fields_from_post(array $post): array
         'warranty_provider' => (($m = trim((string)($post['warranty_provider'] ?? ''))) !== '') ? $m : null,
         'warranty_end' => (($m = trim((string)($post['warranty_end'] ?? ''))) !== '') ? $m : null,
         'install_date' => (($m = trim((string)($post['install_date'] ?? ''))) !== '') ? $m : null,
+        'po_number' => (($m = trim((string)($post['po_number'] ?? ''))) !== '') ? $m : null,
+        'purchase_date' => (($m = trim((string)($post['purchase_date'] ?? ''))) !== '') ? $m : null,
+        'purchase_vendor' => (($m = trim((string)($post['purchase_vendor'] ?? ''))) !== '') ? $m : null,
+        'purchase_cost' => (isset($post['purchase_cost']) && $post['purchase_cost'] !== '')
+            ? (float)$post['purchase_cost'] : null,
         'manufacture_date' => (($m = trim((string)($post['manufacture_date'] ?? ''))) !== '') ? $m : null,
         'status' => $status,
         'width_mm' => $w,

@@ -2592,12 +2592,15 @@ if ($action === 'new' || $id) {
 
                                 <h3 style="font-size:.95rem;margin:1rem 0 .4rem">Proposed OID map</h3>
                                 <p class="text-muted" style="font-size:.75rem;margin:0 0 .5rem">
-                                    Edit before creating the site template. Metrics with empty OIDs are skipped.
+                                    This map is the template. Empty metrics are skipped. The walk dump stays folded below.
                                 </p>
                                 <ul class="snmp-map-list" id="snmpProposedMap"></ul>
 
-                                <h3 style="font-size:.95rem;margin:1.1rem 0 .4rem">Candidates</h3>
-                                <div style="max-height:220px;overflow:auto;border:1px solid rgba(148,163,184,.2);border-radius:8px">
+                                <details class="snmp-candidates" id="snmpCandidatesWrap">
+                                    <summary>Other SNMP values <span class="snmp-cand-count text-muted"></span></summary>
+                                    <p class="snmp-cand-help">The proposed map above is what gets saved. Open this only if a metric is missing from the walk.</p>
+                                    <input class="form-control snmp-cand-filter" type="search" placeholder="Filter name, OID, hint…">
+                                    <div class="snmp-cand-table-wrap">
                                     <table class="snmp-oid-table">
                                         <thead>
                                             <tr>
@@ -2611,7 +2614,8 @@ if ($action === 'new' || $id) {
                                         </thead>
                                         <tbody id="snmpCandidateBody"></tbody>
                                     </table>
-                                </div>
+                                    </div>
+                                </details>
                                 <div id="snmpExistsWarn" class="alert alert-warning" hidden style="margin-top:.85rem"></div>
                             </div>
                         </div>
@@ -2763,48 +2767,31 @@ if ($action === 'new' || $id) {
                         li2.appendChild(extra);
                         mapUl.appendChild(li2);
 
-                        var tbody = document.getElementById('snmpCandidateBody');
-                        tbody.innerHTML = '';
-                        (data.candidates || []).forEach(function (c) {
-                            var tr = document.createElement('tr');
-                            var nm = c.name || '';
-                            tr.innerHTML =
-                                '<td style="font-size:.78rem;max-width:14rem;word-break:break-all">' +
-                                    (nm ? '<code title="' + esc(nm) + '">' + esc(nm) + '</code>' : '<span class="text-muted">—</span>') +
-                                '</td>' +
-                                '<td><code style="font-size:.78rem">' + esc(c.oid) + '</code></td>' +
-                                '<td>' + esc(c.value) + '</td>' +
-                                '<td>' + esc(c.hint || '') + '</td>' +
-                                '<td>' + esc(c.score) + '</td>' +
-                                '<td></td>';
-                            var addTd = tr.lastElementChild;
-                            var addBtn = document.createElement('button');
-                            addBtn.type = 'button';
-                            addBtn.className = 'btn btn-ghost btn-sm';
-                            addBtn.textContent = 'Add field';
-                            addBtn.title = 'Add this OID to the template as a live field';
-                            addBtn.addEventListener('click', function (ev) {
-                                ev.stopPropagation();
-                                var hint = String(c.hint || '').toLowerCase();
-                                var suggested = 'field';
-                                if (/cpu/.test(hint)) suggested = 'cpu_pct';
-                                else if (/mem/.test(hint)) suggested = 'mem_pct';
-                                else if (/temp/.test(hint)) suggested = 'temperature';
-                                else if (nm) suggested = String(nm).replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40);
-                                var key = window.prompt('Field name on the device (e.g. cpu_pct)', suggested);
-                                if (!key) return;
-                                key = String(key).trim().replace(/\s+/g, '_');
-                                if (!key) return;
-                                var numeric = c.numeric != null || /cpu|mem|pct|temp|watt|amp|volt|load/.test(hint);
-                                addMapRow(key, c.oid, numeric);
-                                toast('Added ' + key, 'success');
-                            });
-                            addTd.appendChild(addBtn);
-                            tr.style.cursor = 'default';
-                            tbody.appendChild(tr);
-                        });
-                        if (!(data.candidates || []).length) {
-                            tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No scored candidates</td></tr>';
+                        if (window.ColdAisle && typeof ColdAisle.renderSnmpCandidates === 'function') {
+                            ColdAisle.renderSnmpCandidates(
+                                document.getElementById('snmpCandidateBody'),
+                                data.candidates || [],
+                                {
+                                    esc: esc,
+                                    cols: 5,
+                                    onAdd: function (c) {
+                                        var hint = String(c.hint || '').toLowerCase();
+                                        var nm = c.name || '';
+                                        var suggested = 'field';
+                                        if (/cpu/.test(hint)) suggested = 'cpu_pct';
+                                        else if (/mem/.test(hint)) suggested = 'mem_pct';
+                                        else if (/temp/.test(hint)) suggested = 'temperature';
+                                        else if (nm) suggested = String(nm).replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40);
+                                        var key = window.prompt('Field name on the device (e.g. cpu_pct)', suggested);
+                                        if (!key) return;
+                                        key = String(key).trim().replace(/\s+/g, '_');
+                                        if (!key) return;
+                                        var numeric = c.numeric != null || /cpu|mem|pct|temp|watt|amp|volt|load/.test(hint);
+                                        addMapRow(key, c.oid, numeric);
+                                        toast('Added ' + key, 'success');
+                                    }
+                                }
+                            );
                         }
 
                         if (data.existing_template) {

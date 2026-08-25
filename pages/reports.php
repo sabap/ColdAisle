@@ -148,23 +148,68 @@ function report_power_capacity(float $needKw = 0.0, int $needU = 0): array
 function report_warranty(string $filter = 'all', int $days = 60): array
 {
     $days = max(0, min(730, $days));
-    $sql = "SELECT d.device_id, d.label, d.manufacturer, d.model, d.serial_no, d.asset_tag,
-                   d.warranty_end, d.warranty_provider, d.status, d.cabinet_id,
-                   dep.name AS department_name
-            FROM devices d
-            LEFT JOIN departments dep ON dep.department_id = d.department_id
-            WHERE d.is_active = 1
-              AND d.status NOT IN ('disposed')
-              AND d.warranty_end IS NOT NULL";
+    $datePred = '';
+    $params = [];
     if ($filter === 'expired') {
-        $sql .= ' AND d.warranty_end < CAST(GETUTCDATE() AS date)';
+        $datePred = ' AND warranty_end < CAST(GETUTCDATE() AS date)';
     } elseif ($filter === 'soon' || $filter === 'window') {
-        $sql .= ' AND d.warranty_end <= DATEADD(day, ?, CAST(GETUTCDATE() AS date))';
-        $sql .= ' ORDER BY d.warranty_end, d.label';
-        return Database::fetchAll($sql, [$days]);
+        $datePred = ' AND warranty_end <= DATEADD(day, ?, CAST(GETUTCDATE() AS date))';
+        $params[] = $days;
     }
-    $sql .= ' ORDER BY d.warranty_end, d.label';
-    return Database::fetchAll($sql);
+
+    $parts = [
+        "SELECT 'device' AS kind, d.device_id AS entity_id, d.label, d.asset_tag,
+                d.manufacturer, d.model, d.serial_no, d.warranty_end, d.warranty_provider,
+                d.status, dep.name AS department_name
+         FROM devices d
+         LEFT JOIN departments dep ON dep.department_id = d.department_id
+         WHERE d.is_active = 1
+           AND d.status NOT IN ('disposed')
+           AND d.warranty_end IS NOT NULL" . str_replace('warranty_end', 'd.warranty_end', $datePred),
+    ];
+    try {
+        $parts[] = "SELECT 'pdu' AS kind, p.pdu_id, p.name, CAST(NULL AS NVARCHAR(100)),
+                           p.manufacturer, p.model, p.serial_no, p.warranty_end, p.warranty_provider,
+                           CAST(NULL AS NVARCHAR(50)), CAST(NULL AS NVARCHAR(150))
+                    FROM pdus p
+                    WHERE p.is_active = 1 AND p.warranty_end IS NOT NULL"
+            . str_replace('warranty_end', 'p.warranty_end', $datePred);
+    } catch (Throwable $e) {
+        // columns not yet on this install
+    }
+    try {
+        $parts[] = "SELECT 'ups' AS kind, u.ups_id, u.name, u.asset_tag,
+                           u.manufacturer, u.model, u.serial_no, u.warranty_end, u.warranty_provider,
+                           u.status, CAST(NULL AS NVARCHAR(150))
+                    FROM ups_units u
+                    WHERE u.is_active = 1 AND u.warranty_end IS NOT NULL"
+            . str_replace('warranty_end', 'u.warranty_end', $datePred);
+    } catch (Throwable $e) {
+        // optional
+    }
+
+    $sql = implode("\nUNION ALL\n", $parts) . ' ORDER BY warranty_end, label';
+    $bind = [];
+    foreach ($parts as $_) {
+        foreach ($params as $p) {
+            $bind[] = $p;
+        }
+    }
+    try {
+        return Database::fetchAll($sql, $bind);
+    } catch (Throwable $e) {
+        $sql = "SELECT 'device' AS kind, d.device_id AS entity_id, d.label, d.asset_tag,
+                       d.manufacturer, d.model, d.serial_no, d.warranty_end, d.warranty_provider,
+                       d.status, dep.name AS department_name
+                FROM devices d
+                LEFT JOIN departments dep ON dep.department_id = d.department_id
+                WHERE d.is_active = 1
+                  AND d.status NOT IN ('disposed')
+                  AND d.warranty_end IS NOT NULL"
+            . str_replace('warranty_end', 'd.warranty_end', $datePred)
+            . ' ORDER BY d.warranty_end, d.label';
+        return Database::fetchAll($sql, $params);
+    }
 }
 
 function report_disposal_queue(): array
@@ -345,6 +390,7 @@ function report_emit_csv(string $report): never
                 ? AssetLifecycleService::daysUntil(isset($r['warranty_end']) ? (string)$r['warranty_end'] : null)
                 : null;
             $rows[] = [
+                $r['kind'] ?? 'device',
                 $r['label'] ?? '',
                 $r['asset_tag'] ?? '',
                 trim(($r['manufacturer'] ?? '') . ' ' . ($r['model'] ?? '')),
@@ -357,7 +403,7 @@ function report_emit_csv(string $report): never
             ];
         }
         ListPager::sendCsv($file, [
-            'Device', 'Asset tag', 'Make/Model', 'Serial', 'Provider', 'Warranty end', 'Days remaining', 'Department', 'Status',
+            'Kind', 'Name', 'Asset tag', 'Make/Model', 'Serial', 'Provider', 'Warranty end', 'Days remaining', 'Department', 'Status',
         ], $rows);
     }
 
@@ -1208,7 +1254,7 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
     </div>
     <div class="card-body" style="padding-bottom:0">
         <p class="text-muted" style="font-size:.85rem;margin:0 0 .75rem">
-            Showing <?= count($rows) ?> device(s)
+            Showing <?= count($rows) ?> asset(s) (devices, PDUs, UPS)
             <?php if ($wFilter !== 'all'): ?>
                 · <?= $expiredCount ?> expired · <?= $soonCount ?> within <?= (int)$wDays ?> day(s)
             <?php endif; ?>
@@ -1218,7 +1264,7 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
     <div class="card-body flush"><table class="data">
         <thead>
         <tr>
-            <th>Device</th><th>Asset tag</th><th>Make/Model</th><th>Serial</th>
+            <th>Kind</th><th>Name</th><th>Asset tag</th><th>Make/Model</th><th>Serial</th>
             <th>Provider</th><th>Warranty end</th><th>Remaining</th><th>Dept</th><th>Status</th>
         </tr>
         </thead>
@@ -1230,11 +1276,21 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
             $badge = class_exists('AssetLifecycleService')
                 ? AssetLifecycleService::warrantyBadge($dLeft)
                 : ['label' => '—', 'class' => ''];
-            $did = (int)($r['device_id'] ?? 0);
+            $kind = (string)($r['kind'] ?? 'device');
+            $eid = (int)($r['entity_id'] ?? $r['device_id'] ?? 0);
+            $href = '';
+            if ($eid > 0) {
+                $href = match ($kind) {
+                    'pdu' => App::url('pages/power_pdus.php?id=' . $eid),
+                    'ups' => App::url('pages/power_ups.php?id=' . $eid),
+                    default => App::url('pages/devices.php?id=' . $eid),
+                };
+            }
             ?>
             <tr>
-                <td><?php if ($did): ?>
-                    <a href="<?= App::e(App::url('pages/devices.php?id=' . $did)) ?>"><?= App::e($r['label']) ?></a>
+                <td><?= App::e($kind === 'pdu' ? 'PDU' : ($kind === 'ups' ? 'UPS' : 'Device')) ?></td>
+                <td><?php if ($href !== ''): ?>
+                    <a href="<?= App::e($href) ?>"><?= App::e($r['label']) ?></a>
                 <?php else: ?>
                     <?= App::e($r['label']) ?>
                 <?php endif; ?></td>

@@ -106,6 +106,10 @@ $formModal = !empty($formModal);
         <input class="form-control" name="mac_address" autocomplete="off"
                value="<?= App::e($edit['mac_address'] ?? '') ?>"
                placeholder="e.g. 00:1A:2B:3C:4D:5E" spellcheck="false"></div>
+    <?php
+    $lifecycle = $edit;
+    require dirname(__FILE__) . '/_plant_lifecycle_fields.php';
+    ?>
     <div class="form-row"><label>Scope</label>
         <select class="form-control" name="pdu_scope" id="power_pdu_scope">
             <?php foreach (['rack' => 'Rack PDU', 'row' => 'Row PDU', 'room' => 'Room PDU'] as $val => $lab): ?>
@@ -589,7 +593,8 @@ $formModal = !empty($formModal);
         }
         Object.keys(f).forEach(function (k) {
             // never overwrite identity / placement on apply
-            if (['name', 'serial_no', 'ip_address', 'cabinet_id', 'row_id', 'zone_id', 'position_u'].indexOf(k) >= 0) return;
+            if (['name', 'serial_no', 'ip_address', 'cabinet_id', 'row_id', 'zone_id', 'position_u',
+                'po_number', 'purchase_date', 'purchase_cost', 'purchase_vendor'].indexOf(k) >= 0) return;
             // profile filled after select is set
             if (k === 'snmp_v3_profile_id') return;
             setFormVal(k, f[k], true);
