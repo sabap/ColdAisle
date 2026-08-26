@@ -216,7 +216,7 @@ $keep = class_exists('SearchService') ? ['q' => $q] : [];
         <p class="text-muted" style="font-size:.85rem">
             Columns (flexible names): IP, hostname/device, status, MAC, description, notes, VLAN, gateway, CIDR.
             Empty host rows are skipped (those IPs stay available). Gateway / reserved / DHCP in the status column are mapped automatically.
-            Matching device, PDU, or UPS names are linked when unique.
+            Matching device, PDU, or UPS names are linked when unique. Format the IP column as text in Excel.
         </p>
         <form method="post" enctype="multipart/form-data" class="form-grid">
             <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">

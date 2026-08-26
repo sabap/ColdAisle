@@ -723,37 +723,29 @@ class IpamService
     /** @return list<array{name:string,rows:list<list<string>>}> */
     public static function xlsxSheets(string $path): array
     {
-        if (!class_exists('ZipArchive')) {
-            throw new RuntimeException('PHP zip extension is required to read .xlsx files.');
-        }
-        $zip = new ZipArchive();
-        if ($zip->open($path) !== true) {
-            throw new RuntimeException('Could not open the Excel file.');
-        }
+        $files = self::xlsxUnzipFiles($path);
         $shared = [];
-        $ss = $zip->getFromName('xl/sharedStrings.xml');
-        if (is_string($ss) && $ss !== '') {
-            $shared = self::xlsxSharedStrings($ss);
+        if (!empty($files['xl/sharedStrings.xml'])) {
+            $shared = self::xlsxSharedStrings($files['xl/sharedStrings.xml']);
         }
-        $wb = $zip->getFromName('xl/workbook.xml');
-        $rels = $zip->getFromName('xl/_rels/workbook.xml.rels');
-        if (!is_string($wb) || $wb === '') {
-            $zip->close();
+        $wb = $files['xl/workbook.xml'] ?? '';
+        $rels = $files['xl/_rels/workbook.xml.rels'] ?? '';
+        if ($wb === '') {
             return [];
         }
         $relMap = [];
-        if (is_string($rels) && $rels !== '') {
-            $relXml = @simplexml_load_string($rels);
+        if ($rels !== '') {
+            $relXml = self::xlsxSimpleXml($rels);
             if ($relXml) {
                 foreach ($relXml->Relationship as $rel) {
                     $id = (string)$rel['Id'];
-                    $tgt = (string)$rel['Target'];
-                    $relMap[$id] = 'xl/' . ltrim(str_replace('\\', '/', $tgt), '/');
+                    $tgt = str_replace('\\', '/', (string)$rel['Target']);
+                    $relMap[$id] = 'xl/' . ltrim($tgt, '/');
                     $relMap[$id] = preg_replace('#^xl/xl/#', 'xl/', $relMap[$id]) ?? $relMap[$id];
                 }
             }
         }
-        $wbXml = @simplexml_load_string($wb);
+        $wbXml = self::xlsxSimpleXml($wb);
         $out = [];
         if ($wbXml && isset($wbXml->sheets->sheet)) {
             $i = 0;
@@ -765,8 +757,8 @@ class IpamService
                     $rid = (string)$a;
                 }
                 $target = $relMap[$rid] ?? ('xl/worksheets/sheet' . $i . '.xml');
-                $xml = $zip->getFromName($target);
-                if (!is_string($xml) || $xml === '') {
+                $xml = $files[$target] ?? $files[ltrim($target, '/')] ?? '';
+                if ($xml === '') {
                     continue;
                 }
                 $rows = self::xlsxSheetRows($xml, $shared);
@@ -776,15 +768,355 @@ class IpamService
                 $out[] = ['name' => $name !== '' ? $name : ('Sheet' . $i), 'rows' => $rows];
             }
         }
-        $zip->close();
         return $out;
+    }
+
+    /**
+     * Read OOXML parts from an .xlsx (zip). ZipArchive if loaded; otherwise a
+     * built-in ZIP reader (no php_zip, no exec) so production IIS can import.
+     * Windows PowerShell unzip is a last resort.
+     *
+     * @return array<string,string> path => contents
+     */
+    private static function xlsxUnzipFiles(string $path): array
+    {
+        $path = (string)realpath($path) ?: $path;
+        if (!is_file($path) || !is_readable($path)) {
+            throw new RuntimeException('Could not read the uploaded spreadsheet.');
+        }
+        if (class_exists('ZipArchive')) {
+            $zip = new ZipArchive();
+            if ($zip->open($path) === true) {
+                $files = [];
+                for ($i = 0; $i < $zip->numFiles; $i++) {
+                    $name = str_replace('\\', '/', (string)$zip->getNameIndex($i));
+                    if ($name === '' || str_ends_with($name, '/')) {
+                        continue;
+                    }
+                    $data = $zip->getFromIndex($i);
+                    if (is_string($data)) {
+                        $files[$name] = $data;
+                    }
+                }
+                $zip->close();
+                if ($files !== []) {
+                    return $files;
+                }
+            }
+        }
+
+        $files = self::xlsxUnzipViaPhp($path);
+        if ($files !== []) {
+            return $files;
+        }
+
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+            $files = self::xlsxUnzipViaPowerShell($path);
+            if ($files !== []) {
+                return $files;
+            }
+        }
+
+        throw new RuntimeException(
+            'Could not read the Excel workbook. Enable extension=zip in php.ini and recycle the IIS app pool, '
+            . 'or save each worksheet as CSV.'
+        );
+    }
+
+    /**
+     * Store (0) + deflate (8) ZIP reader. Uses zlib gzinflate — no ZipArchive.
+     *
+     * @return array<string,string>
+     */
+    private static function xlsxUnzipViaPhp(string $path): array
+    {
+        $bin = @file_get_contents($path);
+        if (!is_string($bin) || strlen($bin) < 30 || !str_starts_with($bin, 'PK')) {
+            return [];
+        }
+        $files = self::zipExtractFromCentralDirectory($bin);
+        if ($files !== []) {
+            return $files;
+        }
+        return self::zipExtractFromLocalHeaders($bin);
+    }
+
+    /** @return array<string,string> */
+    private static function zipExtractFromCentralDirectory(string $bin): array
+    {
+        $eocd = self::zipFindEocd($bin);
+        if ($eocd === null) {
+            return [];
+        }
+        $len = strlen($bin);
+        $pos = $eocd['cdOff'];
+        $files = [];
+        for ($i = 0; $i < $eocd['entries']; $i++) {
+            if ($pos + 46 > $len || substr($bin, $pos, 4) !== "PK\x01\x02") {
+                return $files;
+            }
+            $flags = self::zipU16($bin, $pos + 8);
+            $method = self::zipU16($bin, $pos + 10);
+            $comp = self::zipU32($bin, $pos + 20);
+            $uncomp = self::zipU32($bin, $pos + 24);
+            $nameLen = self::zipU16($bin, $pos + 28);
+            $extraLen = self::zipU16($bin, $pos + 30);
+            $commentLen = self::zipU16($bin, $pos + 32);
+            $localOff = self::zipU32($bin, $pos + 42);
+            $name = str_replace('\\', '/', substr($bin, $pos + 46, $nameLen));
+            $pos += 46 + $nameLen + $extraLen + $commentLen;
+            if ($name === '' || str_ends_with($name, '/') || ($flags & 1) !== 0) {
+                continue;
+            }
+            $data = self::zipReadLocalData($bin, $localOff, $method, $comp, $uncomp);
+            if (is_string($data)) {
+                $files[$name] = $data;
+            }
+        }
+        return $files;
+    }
+
+    /** @return array{entries:int,cdOff:int}|null */
+    private static function zipFindEocd(string $bin): ?array
+    {
+        $len = strlen($bin);
+        $maxScan = min($len - 22, 65535);
+        $sig = "PK\x05\x06";
+        for ($i = 0; $i <= $maxScan; $i++) {
+            $off = $len - 22 - $i;
+            if (substr($bin, $off, 4) !== $sig) {
+                continue;
+            }
+            $commentLen = self::zipU16($bin, $off + 20);
+            if ($off + 22 + $commentLen !== $len) {
+                continue;
+            }
+            $cdOff = self::zipU32($bin, $off + 16);
+            $entries = self::zipU16($bin, $off + 10);
+            if ($cdOff === 0xFFFFFFFF || $entries < 1 || $cdOff + 46 > $len) {
+                return null;
+            }
+            return ['entries' => $entries, 'cdOff' => $cdOff];
+        }
+        return null;
+    }
+
+    private static function zipReadLocalData(
+        string $bin,
+        int $localOff,
+        int $method,
+        int $comp,
+        int $uncomp
+    ): ?string {
+        $len = strlen($bin);
+        if ($localOff + 30 > $len || substr($bin, $localOff, 4) !== "PK\x03\x04") {
+            return null;
+        }
+        $nameLen = self::zipU16($bin, $localOff + 26);
+        $extraLen = self::zipU16($bin, $localOff + 28);
+        $dataOff = $localOff + 30 + $nameLen + $extraLen;
+        if ($comp < 0 || $dataOff + $comp > $len) {
+            return null;
+        }
+        return self::zipInflate(substr($bin, $dataOff, $comp), $method, $uncomp);
+    }
+
+    /** @return array<string,string> */
+    private static function zipExtractFromLocalHeaders(string $bin): array
+    {
+        $len = strlen($bin);
+        $pos = 0;
+        $files = [];
+        $sig = "PK\x03\x04";
+        while ($pos + 30 <= $len) {
+            $found = strpos($bin, $sig, $pos);
+            if ($found === false) {
+                break;
+            }
+            $pos = $found;
+            $flags = self::zipU16($bin, $pos + 6);
+            $method = self::zipU16($bin, $pos + 8);
+            $comp = self::zipU32($bin, $pos + 18);
+            $uncomp = self::zipU32($bin, $pos + 22);
+            $nameLen = self::zipU16($bin, $pos + 26);
+            $extraLen = self::zipU16($bin, $pos + 28);
+            $name = str_replace('\\', '/', substr($bin, $pos + 30, $nameLen));
+            $dataOff = $pos + 30 + $nameLen + $extraLen;
+            if (($flags & 8) !== 0 && $comp === 0) {
+                $pos = $dataOff + 1;
+                continue;
+            }
+            if ($dataOff + $comp > $len) {
+                break;
+            }
+            if ($name !== '' && !str_ends_with($name, '/') && ($flags & 1) === 0) {
+                $data = self::zipInflate(substr($bin, $dataOff, $comp), $method, $uncomp);
+                if (is_string($data)) {
+                    $files[$name] = $data;
+                }
+            }
+            $pos = $dataOff + $comp;
+        }
+        return $files;
+    }
+
+    private static function zipInflate(string $raw, int $method, int $uncomp): ?string
+    {
+        if ($method === 0) {
+            return $raw;
+        }
+        if ($method !== 8) {
+            return null;
+        }
+        if ($raw === '' && $uncomp === 0) {
+            return '';
+        }
+        $out = function_exists('gzinflate') ? @gzinflate($raw) : false;
+        if (!is_string($out) && function_exists('inflate_init') && defined('ZLIB_ENCODING_RAW')) {
+            $ctx = @inflate_init(ZLIB_ENCODING_RAW);
+            if ($ctx !== false) {
+                $out = @inflate_add($ctx, $raw, ZLIB_FINISH);
+            }
+        }
+        return is_string($out) ? $out : null;
+    }
+
+    private static function zipU16(string $bin, int $off): int
+    {
+        if ($off + 2 > strlen($bin)) {
+            return 0;
+        }
+        $a = unpack('v', substr($bin, $off, 2));
+        return (int)($a[1] ?? 0);
+    }
+
+    private static function zipU32(string $bin, int $off): int
+    {
+        if ($off + 4 > strlen($bin)) {
+            return 0;
+        }
+        $a = unpack('V', substr($bin, $off, 4));
+        return (int)($a[1] ?? 0);
+    }
+
+    /** @return array<string,string> */
+    private static function xlsxUnzipViaPowerShell(string $path): array
+    {
+        $work = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ca-xlsx-' . bin2hex(random_bytes(4));
+        if (class_exists('App')) {
+            $base = App::ROOT . '/storage/tmp';
+            if (!is_dir($base)) {
+                @mkdir($base, 0775, true);
+            }
+            if (is_dir($base) && is_writable($base)) {
+                $work = $base . DIRECTORY_SEPARATOR . 'ca-xlsx-' . bin2hex(random_bytes(4));
+            }
+        }
+        @mkdir($work, 0700, true);
+        $zipCopy = $work . '.zip';
+        if (!@copy($path, $zipCopy)) {
+            self::xlsxCleanupDir($work);
+            return [];
+        }
+        $dest = $work . DIRECTORY_SEPARATOR . 'x';
+        @mkdir($dest, 0700, true);
+        $root = getenv('SystemRoot') ?: 'C:\\Windows';
+        $psExe = $root . '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+        if (!is_file($psExe)) {
+            $psExe = 'powershell.exe';
+        }
+        $srcLit = str_replace("'", "''", $zipCopy);
+        $dstLit = str_replace("'", "''", $dest);
+        $script = 'Add-Type -AssemblyName System.IO.Compression.FileSystem; '
+            . "[System.IO.Compression.ZipFile]::ExtractToDirectory('$srcLit', '$dstLit')";
+        $cmd = escapeshellarg($psExe)
+            . ' -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command '
+            . escapeshellarg($script);
+        $out = [];
+        $code = 1;
+        @exec($cmd, $out, $code);
+        if ($code !== 0) {
+            $script2 = "Expand-Archive -LiteralPath '$srcLit' -DestinationPath '$dstLit' -Force";
+            $cmd2 = escapeshellarg($psExe)
+                . ' -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command '
+                . escapeshellarg($script2);
+            $out = [];
+            $code = 1;
+            @exec($cmd2, $out, $code);
+        }
+        $files = $code === 0 ? self::xlsxReadExtractedDir($dest) : [];
+        self::xlsxCleanupDir($work);
+        @unlink($zipCopy);
+        return $files;
+    }
+
+    /** @return array<string,string> */
+    private static function xlsxReadExtractedDir(string $dir): array
+    {
+        $files = [];
+        $dir = rtrim(str_replace('\\', '/', $dir), '/');
+        $it = @scandir($dir);
+        if (!is_array($it)) {
+            return [];
+        }
+        $stack = [$dir];
+        while ($stack) {
+            $cur = array_pop($stack);
+            $entries = @scandir($cur);
+            if (!is_array($entries)) {
+                continue;
+            }
+            foreach ($entries as $e) {
+                if ($e === '.' || $e === '..') {
+                    continue;
+                }
+                $full = $cur . DIRECTORY_SEPARATOR . $e;
+                if (is_dir($full)) {
+                    $stack[] = $full;
+                    continue;
+                }
+                $rel = str_replace('\\', '/', substr($full, strlen($dir) + 1));
+                $data = @file_get_contents($full);
+                if (is_string($data)) {
+                    $files[$rel] = $data;
+                }
+            }
+        }
+        return $files;
+    }
+
+    private static function xlsxCleanupDir(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($it as $f) {
+            if ($f->isDir()) {
+                @rmdir($f->getPathname());
+            } else {
+                @unlink($f->getPathname());
+            }
+        }
+        @rmdir($dir);
+    }
+
+    /** Default xmlns hides children from SimpleXML property access. */
+    private static function xlsxSimpleXml(string $xml): ?SimpleXMLElement
+    {
+        $xml = preg_replace('/\sxmlns="[^"]*"/', '', $xml) ?? $xml;
+        $sx = @simplexml_load_string($xml);
+        return $sx instanceof SimpleXMLElement ? $sx : null;
     }
 
     /** @return list<string> */
     private static function xlsxSharedStrings(string $xml): array
     {
         $out = [];
-        $sx = @simplexml_load_string($xml);
+        $sx = self::xlsxSimpleXml($xml);
         if (!$sx) {
             return $out;
         }
@@ -808,7 +1140,7 @@ class IpamService
      */
     private static function xlsxSheetRows(string $xml, array $shared): array
     {
-        $sx = @simplexml_load_string($xml);
+        $sx = self::xlsxSimpleXml($xml);
         if (!$sx || !isset($sx->sheetData->row)) {
             return [];
         }

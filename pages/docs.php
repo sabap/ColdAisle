@@ -152,7 +152,7 @@ layout_header('Documentation', $user, 'docs');
             <ul>
                 <li>One <strong>.xlsx workbook</strong> is enough. Each worksheet (tab) becomes a subnet.</li>
                 <li>Put the CIDR in the tab name (<code>10.12.40.0/24</code>) or in a Subnet/CIDR column. You do not need to save each tab as CSV.</li>
-                <li>CSV is the fallback: one subnet per file, or import into a prefix you already created.</li>
+                <li>CSV is the fallback: one subnet per file, or import into a prefix you already created. Excel import does not require PHP’s zip extension.</li>
                 <li>Empty hostname rows are skipped. Status words like reserved, gateway, DHCP are mapped automatically.</li>
             </ul>
             <p class="text-muted" style="margin-bottom:0">
