@@ -145,10 +145,11 @@ layout_header('Documentation', $user, 'docs');
         </div>
         <div class="card-body docs-prose">
             <p>
-                Two tracking modes. An <strong>address plan</strong> is a prefix plus host records (empty IPs are not stored;
-                <strong>Next free</strong> is computed). A <strong>subnet plan</strong> tracks prefixes only — a supernet and
-                the smaller blocks carved from it — with no host list. Nested prefixes sit under a parent and stay off the top-level list.
-                DHCP on an address plan is a start/end fence, not a DHCP server.
+                Two tracking modes, same idea as phpIPAM nested subnets or NetBox containers.
+                An <strong>address plan</strong> is a prefix plus host records (empty IPs are not stored; <strong>Next free</strong> is computed).
+                A <strong>subnet plan</strong> is a container: you assign a block to a site, then carve child prefixes inside it.
+                Set <strong>Parent</strong> on a prefix to nest it. Opening a container shows children, leftover ranges, and next-free /n.
+                Import does not build that tree for you. DHCP on an address plan is a start/end fence, not a DHCP server.
             </p>
             <h3 class="docs-h3">Import from Excel</h3>
             <ul>

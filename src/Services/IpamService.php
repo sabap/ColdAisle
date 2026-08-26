@@ -415,6 +415,165 @@ class IpamService
         ) ?: [];
     }
 
+    /** @param array<int,array<string,mixed>> $byId */
+    public static function rootPrefixId(array $prefix, array $byId): int
+    {
+        $id = (int)($prefix['prefix_id'] ?? 0);
+        $guard = 0;
+        while (!empty($prefix['parent_id']) && $guard++ < 20) {
+            $pid = (int)$prefix['parent_id'];
+            if ($pid < 1 || !isset($byId[$pid])) {
+                break;
+            }
+            $id = $pid;
+            $prefix = $byId[$pid];
+        }
+        return $id;
+    }
+
+    /**
+     * Parents from root down to immediate parent (not including $prefix).
+     *
+     * @param array<int,array<string,mixed>> $byId
+     * @return list<array<string,mixed>>
+     */
+    public static function ancestorChain(array $prefix, array $byId): array
+    {
+        $chain = [];
+        $guard = 0;
+        $p = $prefix;
+        while (!empty($p['parent_id']) && $guard++ < 20) {
+            $pid = (int)$p['parent_id'];
+            if ($pid < 1 || !isset($byId[$pid])) {
+                break;
+            }
+            array_unshift($chain, $byId[$pid]);
+            $p = $byId[$pid];
+        }
+        return $chain;
+    }
+
+    /** @param array<int,list<array<string,mixed>>> $childrenByParent */
+    public static function descendantHaystack(int $prefixId, array $childrenByParent): string
+    {
+        $bits = [];
+        foreach ($childrenByParent[$prefixId] ?? [] as $kid) {
+            $bits[] = (string)($kid['cidr'] ?? '');
+            $bits[] = (string)($kid['name'] ?? '');
+            $bits[] = (string)($kid['vlan_id'] ?? '');
+            $bits[] = self::descendantHaystack((int)$kid['prefix_id'], $childrenByParent);
+        }
+        return trim(implode(' ', $bits));
+    }
+
+    /**
+     * Holes in a container prefix, as maximal CIDRs (for carving a new VLAN/subnet).
+     *
+     * @return list<array{cidr:string,prefix_len:int}>
+     */
+    public static function unallocatedCidrs(array $prefix): array
+    {
+        $parsed = self::parseCidr((string)($prefix['cidr'] ?? ''));
+        if (!$parsed) {
+            return [];
+        }
+        $kids = self::childPrefixes((int)($prefix['prefix_id'] ?? 0));
+        $used = [];
+        foreach ($kids as $kid) {
+            $kp = self::parseCidr((string)($kid['cidr'] ?? ''));
+            if ($kp) {
+                $used[] = [(int)$kp['network_int'], (int)$kp['broadcast_int']];
+            }
+        }
+        usort($used, static fn ($a, $b) => $a[0] <=> $b[0]);
+        $merged = [];
+        foreach ($used as $span) {
+            if ($merged === []) {
+                $merged[] = $span;
+                continue;
+            }
+            $last = count($merged) - 1;
+            if ($span[0] <= $merged[$last][1] + 1) {
+                $merged[$last][1] = max($merged[$last][1], $span[1]);
+            } else {
+                $merged[] = $span;
+            }
+        }
+        $cursor = (int)$parsed['network_int'];
+        $end = (int)$parsed['broadcast_int'];
+        $holes = [];
+        foreach ($merged as $span) {
+            if ($span[0] > $cursor) {
+                foreach (self::rangeToCidrs($cursor, $span[0] - 1) as $c) {
+                    $holes[] = $c;
+                }
+            }
+            $cursor = max($cursor, $span[1] + 1);
+        }
+        if ($cursor <= $end) {
+            foreach (self::rangeToCidrs($cursor, $end) as $c) {
+                $holes[] = $c;
+            }
+        }
+        return $holes;
+    }
+
+    public static function nextAvailablePrefix(array $prefix, int $wantLen): ?string
+    {
+        if ($wantLen < 8 || $wantLen > 32) {
+            return null;
+        }
+        $parent = self::parseCidr((string)($prefix['cidr'] ?? ''));
+        if (!$parent || $wantLen < (int)$parent['prefix_len']) {
+            return null;
+        }
+        foreach (self::unallocatedCidrs($prefix) as $hole) {
+            $hp = self::parseCidr($hole['cidr']);
+            if (!$hp || (int)$hp['prefix_len'] > $wantLen) {
+                continue;
+            }
+            if ((int)$hp['prefix_len'] === $wantLen) {
+                return $hp['cidr'];
+            }
+            $p = self::parseCidr($hp['network'] . '/' . $wantLen);
+            return $p['cidr'] ?? null;
+        }
+        return null;
+    }
+
+    /** @return list<array{cidr:string,prefix_len:int}> */
+    private static function rangeToCidrs(int $start, int $end): array
+    {
+        $out = [];
+        while ($start <= $end) {
+            $maxSize = $end - $start + 1;
+            $alignBits = 0;
+            if ($start === 0) {
+                $alignBits = 32;
+            } else {
+                $x = $start;
+                while (($x & 1) === 0 && $alignBits < 32) {
+                    $x >>= 1;
+                    $alignBits++;
+                }
+            }
+            $sizeBits = 0;
+            $s = $maxSize;
+            while ($s > 1) {
+                $s >>= 1;
+                $sizeBits++;
+            }
+            $blockBits = min($alignBits, $sizeBits, 24);
+            if ($blockBits < 0) {
+                $blockBits = 0;
+            }
+            $len = 32 - $blockBits;
+            $out[] = ['cidr' => self::intToIp($start) . '/' . $len, 'prefix_len' => $len];
+            $start += (1 << $blockBits);
+        }
+        return $out;
+    }
+
     /** @param array<string,mixed> $prefix */
     public static function nextFree(array $prefix): ?string
     {
@@ -872,7 +1031,7 @@ class IpamService
 
     /**
      * Subnet plan: each data row is a prefix (not a host IP).
-     * Optional parent/supernet/aggregate column nests smaller prefixes under a larger one.
+     * Nesting is not inferred. Optional "Load into prefix" on import sets parent_id.
      *
      * @param list<list<string>> $grid
      * @param array<string,mixed> $meta
@@ -887,11 +1046,9 @@ class IpamService
         $skipped = 0;
         $errors = [];
         $defaultLen = isset($meta['mask']) && ctype_digit((string)$meta['mask']) ? (int)$meta['mask'] : null;
-        $parentLen = isset($meta['supernet_len']) ? (int)$meta['supernet_len'] : 0;
         $headerAt = (int)$meta['header_row'];
         $forceParent = (int)($options['prefix_id'] ?? 0);
         $rowsOut = [];
-        $lastParent = '';
         for ($r = $headerAt + 1, $n = count($grid); $r < $n; $r++) {
             $row = $grid[$r];
             if (self::rowIsEmpty($row)) {
@@ -942,72 +1099,23 @@ class IpamService
             } else {
                 $vlan = '';
             }
-            $parentRaw = $cell('parent');
-            if ($parentRaw === '') {
-                $parentRaw = $cell('supernet');
-            }
-            if ($parentRaw !== '') {
-                $lastParent = $parentRaw;
-            } elseif ($lastParent !== '') {
-                $parentRaw = $lastParent;
-            }
-            $parentCidr = null;
-            if ($parentRaw !== '') {
-                $parentCidr = self::findCidrInText($parentRaw);
-                if ($parentCidr === null && $parentLen > 0) {
-                    $pn = self::canonicalIp($parentRaw) ?? self::findNetworkInText($parentRaw);
-                    if ($pn !== null) {
-                        $pp = self::parseCidr($pn . '/' . $parentLen);
-                        $parentCidr = $pp['cidr'] ?? null;
-                    }
-                }
-            }
             $rowsOut[] = [
                 'cidr' => $cidr,
                 'name' => $name,
                 'vlan' => $vlan,
-                'parent' => $parentCidr,
                 'notes' => $cell('notes'),
             ];
         }
 
-        $parentIds = [];
-        if ($forceParent > 0) {
-            $parentIds[''] = $forceParent;
-        }
-        foreach ($rowsOut as $one) {
-            $pc = $one['parent'];
-            if ($pc === null || $pc === $one['cidr'] || isset($parentIds[$pc])) {
-                continue;
-            }
-            try {
-                $res = self::upsertSubnetPrefix([
-                    'cidr' => $pc,
-                    'name' => $pc,
-                    'vrf' => 'default',
-                    'track' => 'subnets',
-                    'parent_id' => $forceParent,
-                    'description' => 'Parent prefix from ' . $sheetName,
-                ], $created, $updated);
-                $parentIds[$pc] = (int)$res['prefix_id'];
-            } catch (Throwable $e) {
-                $errors[] = $sheetName . ': ' . $e->getMessage();
-            }
-        }
-
         foreach ($rowsOut as $one) {
             try {
-                $parentId = $forceParent;
-                if (!empty($one['parent']) && isset($parentIds[$one['parent']]) && $one['cidr'] !== $one['parent']) {
-                    $parentId = $parentIds[$one['parent']];
-                }
                 self::upsertSubnetPrefix([
                     'cidr' => $one['cidr'],
                     'name' => $one['name'] !== '' ? $one['name'] : $one['cidr'],
                     'vlan_id' => $one['vlan'],
                     'vrf' => 'default',
                     'track' => 'subnets',
-                    'parent_id' => $parentId,
+                    'parent_id' => $forceParent,
                     'notes' => $one['notes'],
                     'description' => 'Imported from ' . $sheetName,
                 ], $created, $updated);
