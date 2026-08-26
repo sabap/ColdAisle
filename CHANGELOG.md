@@ -15,14 +15,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **IPAM search:** prefix list filters as you type (CIDR, name, VLAN, gateway) without a page reload.
-- **IPAM tracking modes:** each prefix is an <strong>address plan</strong> (individual IPs) or a <strong>subnet plan</strong> (nested prefixes only). Import can Auto-detect, or you pick the mode. A parent/supernet column nests smaller blocks; the top-level list shows parents only.
-- **Updates overlay:** Settings → Updates uses a GitHub → site transfer animation (same family as SNMP poll / OpenDCIM), not a green bar at the bottom of the card.
-
 ### Bug fixes
 
 ---
 
+## [0.3.171] - 2026-08-26
+
+### Enhancements
+
+- **IPAM search:** prefix list filters as you type (CIDR, name, VLAN, gateway) without a page reload.
+- **IPAM tracking modes:** each prefix is an <strong>address plan</strong> (individual IPs) or a <strong>subnet plan</strong> (nested prefixes only). Import can Auto-detect, or you pick the mode. A parent/supernet column nests smaller blocks; the top-level list shows parents only.
+- **Updates overlay:** Settings → Updates uses a GitHub → site transfer animation (same family as SNMP poll / OpenDCIM), not a green bar at the bottom of the card.
+
+---
 ## [0.3.170] - 2026-08-26
 
 ### Enhancements
