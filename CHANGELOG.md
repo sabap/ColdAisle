@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.168] - 2026-08-26
+
+### Bug fixes
+
 - **IPAM Excel import:** production PHP without `php_zip` can read `.xlsx` (in-process ZIP inflate; PowerShell unzip is last resort). Enable `extension=zip` still preferred.
 
 ---
-
 ## [0.3.167] - 2026-08-26
 
 ### New features
