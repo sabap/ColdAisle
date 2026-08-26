@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **IPAM containers:** a prefix is an address plan (host IPs) or a subnet plan (container). Nesting is manual: set Parent on the prefix. Opening a container lists child prefixes, unallocated holes, and next-free /n so you can carve a VLAN inside a site block. Import does not invent a tree.
-
 ### Bug fixes
 
 ---
 
+## [0.3.173] - 2026-08-26
+
+### Enhancements
+
+- **IPAM containers:** a prefix is an address plan (host IPs) or a subnet plan (container). Nesting is manual: set Parent on the prefix. Opening a container lists child prefixes, unallocated holes, and next-free /n so you can carve a VLAN inside a site block. Import does not invent a tree.
+
+---
 ## [0.3.172] - 2026-08-26
 
 ### Enhancements
