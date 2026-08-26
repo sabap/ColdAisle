@@ -44,7 +44,7 @@ Does **not** install SQL Server. Use Express/Standard/Enterprise or an existing 
 |------|--------|
 | IIS | Web Server + CGI/FastCGI, static content, request filtering, management console |
 | VC++ | Visual C++ 2015–2022 x64 redistributable |
-| PHP | Downloads **NTS x64** zip from windows.php.net, extracts, builds `php.ini` |
+| PHP | Downloads **NTS x64** zip from windows.php.net, extracts, builds `php.ini` (`curl`, `mbstring`, `zip`, …) |
 | IIS PHP | FastCGI app + `*.php` handler mapping + default docs |
 | ODBC | ODBC Driver 18 for SQL Server (for `pdo_odbc`) |
 | URL Rewrite | IIS URL Rewrite 2 (for `web.config` rules) |

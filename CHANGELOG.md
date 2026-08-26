@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Installer php_zip:** fresh IIS/PHP installs enable `extension=zip` with the other core modules (Excel import, backups, in-app updates). Re-run `Install-ColdAisle-Prereqs.ps1` to turn it on for an existing `C:\PHP`.
+
 ### Bug fixes
 
 ---

@@ -378,6 +378,19 @@ function Install-Php {
         Write-Warn "php.exe: $n"
     }
 
+    $zipDll = Join-Path $PhpInstallPath 'ext\php_zip.dll'
+    if (Test-Path $zipDll) {
+        Write-Ok 'php_zip.dll present'
+    } else {
+        Write-Warn "php_zip.dll missing under $PhpInstallPath\ext — use a full windows.php.net NTS zip"
+    }
+    $zipProbe = Invoke-NativeOutput { & $phpExe -r "echo extension_loaded('zip') ? 'zip_loaded=1' : 'zip_loaded=0';" }
+    if ($zipProbe -match 'zip_loaded=1') {
+        Write-Ok 'PHP zip extension loaded (Excel import, backups, in-app updates)'
+    } else {
+        Write-Warn 'PHP zip not loaded after php.ini update. Confirm extension=zip, then recycle the IIS app pool.'
+    }
+
     # PATH (machine) optional convenience
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     if ($machinePath -notlike "*$PhpInstallPath*") {
@@ -395,10 +408,12 @@ function Set-IniValue {
         [switch]$IsExtension
     )
     if ($IsExtension) {
-        # Uncomment extension=name or add it
-        $pattern = "(?m)^\s*;?\s*extension\s*=\s*(`"?)$([regex]::Escape($Name))(`"?)\s*$"
-        if ($Content -match $pattern) {
-            return [regex]::Replace($Content, $pattern, "extension=$Name", 1)
+        # Uncomment extension=name (or older Windows form extension=php_name.dll)
+        foreach ($n in @($Name, "php_$Name.dll", "php_$Name")) {
+            $pattern = "(?m)^\s*;?\s*extension\s*=\s*(`"?)$([regex]::Escape($n))(`"?)\s*$"
+            if ($Content -match $pattern) {
+                return [regex]::Replace($Content, $pattern, "extension=$Name", 1)
+            }
         }
         return $Content.TrimEnd() + "`r`nextension=$Name`r`n"
     }
@@ -434,8 +449,10 @@ function Configure-PhpIni([string]$IniPath) {
     $c = Set-IniValue $c 'sys_temp_dir' "`"$winTemp`""
     $c = Set-IniValue $c 'upload_tmp_dir' "`"$winTemp`""
 
-    # Built-in extensions commonly needed
-    foreach ($ext in @('curl', 'mbstring', 'openssl', 'fileinfo', 'gd', 'ldap', 'pdo_odbc')) {
+    # Built-in extensions (Windows PHP NTS zip ships these DLLs). zip is required for
+    # Excel IPAM import, pre-update backups, and in-app updates; fallbacks exist but
+    # php_zip is the supported path on a fresh install.
+    foreach ($ext in @('curl', 'mbstring', 'openssl', 'fileinfo', 'gd', 'ldap', 'pdo_odbc', 'zip')) {
         $c = Set-IniValue $c $ext -IsExtension
     }
 
@@ -446,12 +463,6 @@ function Configure-PhpIni([string]$IniPath) {
     $snmpDll = Join-Path $PhpInstallPath 'ext\php_snmp.dll'
     if (Test-Path $snmpDll) {
         $c = [regex]::Replace($c, '(?m)^\s*extension\s*=\s*"?snmp"?\s*$', ';extension=snmp')
-    }
-
-    # zip: pre-update / site backup packages (PowerShell Compress-Archive is fallback)
-    $zipDll = Join-Path $PhpInstallPath 'ext\php_zip.dll'
-    if (Test-Path $zipDll) {
-        $c = Set-IniValue $c 'zip' -IsExtension
     }
 
     # sqlsrv if present
@@ -1101,7 +1112,7 @@ function Invoke-PrereqVerification {
     if (Test-Path $phpExe) {
         Write-Ok "php.exe: $phpExe"
         $mods = & $phpExe -m 2>&1 | Out-String
-        foreach ($m in @('curl', 'mbstring', 'openssl', 'PDO')) {
+        foreach ($m in @('curl', 'mbstring', 'openssl', 'PDO', 'zip')) {
             if ($mods -match $m) { Write-Ok "PHP: $m" }
             else { Write-Warn "PHP module not listed: $m" }
         }
@@ -1170,7 +1181,7 @@ function Show-Summary {
 
   Verify:
     1.  & '$phpExe' -m
-        (should list curl, mbstring, openssl, pdo_odbc; optional ldap, pdo_sqlsrv)
+        (should list curl, mbstring, openssl, zip, pdo_odbc; optional ldap, pdo_sqlsrv)
     2.  Browse http://localhost/phpinfo-test.php
     3.  Browse http://localhost/setup.php         (ColdAisle web installer)
     4.  Delete phpinfo-test.php when done

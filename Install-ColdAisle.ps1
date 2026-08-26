@@ -259,7 +259,7 @@ function Invoke-PostInstallChecks {
 
     if (Test-Path $phpExe) {
         $modOut = & $phpExe -m 2>&1 | Out-String
-        foreach ($need in @('curl', 'mbstring', 'openssl', 'PDO')) {
+        foreach ($need in @('curl', 'mbstring', 'openssl', 'PDO', 'zip')) {
             if ($modOut -match [regex]::Escape($need)) {
                 Write-Ok "PHP module: $need"
             } else {
@@ -284,8 +284,6 @@ function Invoke-PostInstallChecks {
         } else {
             Write-Warn 'PHP snmp not in php.ini - OK for scheduled poll (run_poll_snmp.cmd). For web Discover: scripts\Enable-ColdAisle-Snmp.ps1 or -EnableSnmp'
         }
-        if ($modOut -match 'zip') { Write-Ok 'PHP module: zip (backups/updates)' }
-        else { Write-Warn 'PHP zip not loaded - site backup / updates use PowerShell Compress-Archive fallback when possible' }
     }
 
     if (-not (Test-Path (Join-Path $SitePath 'setup.php'))) {

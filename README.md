@@ -52,9 +52,9 @@ Each tagged release should have categorized notes in [`CHANGELOG.md`](CHANGELOG.
 ## Requirements
 
 - **Windows Server** (or Windows 10/11) with **IIS**
-- **PHP 8.0+** (FastCGI) with extensions: `pdo`, `json`, `mbstring`
+- **PHP 8.0+** (FastCGI) with extensions: `pdo`, `json`, `mbstring`, `curl`, `zip`
   - Database: `pdo_sqlsrv` **or** `pdo_odbc` + **ODBC Driver 17/18 for SQL Server**
-  - Optional: `ldap` (LDAPS), `snmp` (web Discover / in-app SNMP), `curl` (Entra SSO + updates), `zip` (backups/updates)
+  - Optional: `ldap` (LDAPS), `snmp` (web Discover / in-app SNMP)
 - **Microsoft SQL Server** 2016+ (Express is fine)
 
 The **scheduled poll worker** does not require `extension=snmp` in `php.ini` (it launches via `scripts/run_poll_snmp.cmd` with `php -n` and loads `php_snmp.dll` explicitly to avoid Windows Net-SNMP MIB hangs). The DLL must still be present under `C:\PHP\ext\`.
