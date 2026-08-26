@@ -15,13 +15,18 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **IPAM import per worksheet:** after an Excel upload, each tab is listed with a guess (address plan, subnet plan, or skip). You set tracking per worksheet so one workbook can mix host lists and prefix lists.
-- **Clear all IPAM:** Global Admin can purge every prefix and host record from Import (type CLEAR, then confirm). Inventory is unchanged.
-
 ### Bug fixes
 
 ---
 
+## [0.3.172] - 2026-08-26
+
+### Enhancements
+
+- **IPAM import per worksheet:** after an Excel upload, each tab is listed with a guess (address plan, subnet plan, or skip). You set tracking per worksheet so one workbook can mix host lists and prefix lists.
+- **Clear all IPAM:** Global Admin can purge every prefix and host record from Import (type CLEAR, then confirm). Inventory is unchanged.
+
+---
 ## [0.3.171] - 2026-08-26
 
 ### Enhancements
