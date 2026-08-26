@@ -13,16 +13,23 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+### Enhancements
+
+### Bug fixes
+
+---
+
+## [0.3.167] - 2026-08-26
+
+### New features
+
 - **IPAM:** address plan (prefixes + static/reserved records). Import an Excel workbook (each worksheet = a subnet) or CSV. Next-free, utilization, inventory link, and conflict/orphan list. DHCP is a range fence, not a server.
 
 ### Enhancements
 
 - **IIS Updates ACL:** prereqs grant Modify on the whole site folder (not only `config/` and `storage/`) so FastCGI impersonating `IUSR` can replace PHP files during Settings → Updates.
 
-### Bug fixes
-
 ---
-
 ## [0.3.166] - 2026-08-25
 
 ### Bug fixes
