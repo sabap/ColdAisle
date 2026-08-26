@@ -39,6 +39,7 @@ class SearchService
             ['pdus', 'PDUs', 'view_power', 'pages/power_pdus.php', fn () => self::searchPdus($q, $perType)],
             ['ups', 'UPS', 'view_power', 'pages/power_ups.php', fn () => self::searchUps($q, $perType)],
             ['cables', 'Cables', 'view_cables', 'pages/cables.php', fn () => self::searchCables($q, $perType)],
+            ['ipam', 'IPAM', 'view_ipam', 'pages/ipam.php', fn () => self::searchIpam($q, $perType)],
             ['work_orders', 'Work orders', 'view_work_orders', 'pages/work_orders.php', fn () => self::searchWorkOrders($q, $perType)],
             ['users', 'Users', 'manage_users', 'pages/users.php', fn () => self::searchUsers($q, $perType)],
         ];
@@ -250,6 +251,71 @@ class SearchService
                 'href' => App::url('pages/cables.php?q=' . rawurlencode($label !== ('#' . $id) ? $label : (string)$id)),
             ];
         });
+    }
+
+    /**
+     * @return list<array{id:int,title:string,subtitle:string,href:string}>
+     */
+    private static function searchIpam(string $q, int $limit): array
+    {
+        if (!class_exists('IpamService')) {
+            return [];
+        }
+        try {
+            IpamService::ensure();
+        } catch (Throwable $e) {
+            return [];
+        }
+        $like = self::like($q);
+        $hits = [];
+        try {
+            $sql = 'SELECT TOP ' . (int)$limit . '
+                        prefix_id, cidr, name, vlan_id, role
+                    FROM ipam_prefixes
+                    WHERE is_active = 1 AND (cidr LIKE ? OR ISNULL(name, \'\') LIKE ?
+                       OR CAST(vlan_id AS NVARCHAR(20)) = ? OR CAST(prefix_id AS NVARCHAR(20)) = ?)
+                    ORDER BY network_int';
+            $hits = self::mapRows($sql, [$like, $like, $q, $q], static function (array $row): array {
+                $id = (int)$row['prefix_id'];
+                $bits = array_filter([
+                    (string)($row['name'] ?? ''),
+                    !empty($row['vlan_id']) ? ('VLAN ' . $row['vlan_id']) : '',
+                    (string)($row['role'] ?? ''),
+                ]);
+                return [
+                    'id' => $id,
+                    'title' => (string)$row['cidr'],
+                    'subtitle' => $bits !== [] ? implode(' · ', $bits) : 'Prefix',
+                    'href' => App::url('pages/ipam.php?prefix_id=' . $id),
+                ];
+            });
+        } catch (Throwable $e) {
+            $hits = [];
+        }
+        if (count($hits) >= $limit) {
+            return $hits;
+        }
+        $rest = $limit - count($hits);
+        try {
+            $sql = 'SELECT TOP ' . (int)$rest . '
+                        a.address_id, a.ip, a.hostname, a.status, p.cidr, p.prefix_id
+                    FROM ipam_addresses a
+                    INNER JOIN ipam_prefixes p ON p.prefix_id = a.prefix_id
+                    WHERE a.ip LIKE ? OR ISNULL(a.hostname, \'\') LIKE ? OR ISNULL(a.description, \'\') LIKE ?
+                    ORDER BY a.ip_int';
+            $more = self::mapRows($sql, [$like, $like, $like], static function (array $row): array {
+                $id = (int)$row['address_id'];
+                return [
+                    'id' => $id,
+                    'title' => (string)$row['ip'],
+                    'subtitle' => trim((string)($row['hostname'] ?? '') . ' · ' . (string)($row['cidr'] ?? ''), ' ·'),
+                    'href' => App::url('pages/ipam.php?prefix_id=' . (int)$row['prefix_id'] . '&address_id=' . $id),
+                ];
+            });
+            $hits = array_merge($hits, $more);
+        } catch (Throwable $e) {
+        }
+        return $hits;
     }
 
     /**

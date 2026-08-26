@@ -221,6 +221,15 @@ class SiteTourService
                 'place' => 'right',
             ],
             [
+                'id' => 'nav-ipam',
+                'title' => 'IPAM',
+                'body' => 'Address plan: one prefix per subnet. Import an Excel workbook (each tab is a subnet) or CSV. Statics and reserved are stored; free space is counted. DHCP is a fence, not a server.',
+                'page' => 'pages/ipam.php',
+                'target' => '[data-tour="nav-ipam"]',
+                'nav' => 'ipam',
+                'place' => 'right',
+            ],
+            [
                 'id' => 'nav-snmp',
                 'title' => 'SNMP',
                 'body' => 'Discover, templates, and per-device poll. After a device or PDU has an IP, Discover maps OIDs. Settings → SNMP schedule is the Windows task that keeps history charts full.',
@@ -326,6 +335,7 @@ class SiteTourService
             'nav-power-ups' => 'Power',
             'nav-cooling' => 'Environment',
             'nav-cables' => 'Cabling',
+            'nav-ipam' => 'Operations',
             'nav-snmp' => 'Operations',
             'nav-work-orders' => 'Operations',
             'nav-disposals' => 'Operations',

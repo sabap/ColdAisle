@@ -683,6 +683,10 @@ Or add a Handler Mapping in IIS Manager: *.php -> FastCgiModule -> $phpCgi
             } else {
                 $identities = @('IIS AppPool\DefaultAppPool') + $identities
             }
+            # Whole site: in-app Updates must overwrite PHP (fastcgi.impersonate uses IUSR).
+            foreach ($identity in $identities) {
+                icacls $SitePhysicalPath /grant "${identity}:(OI)(CI)M" /T /Q | Out-Null
+            }
             foreach ($sub in @('config', 'storage', 'storage\logs', 'storage\uploads', 'storage\backups', 'storage\tmp')) {
                 $p = Join-Path $SitePhysicalPath $sub
                 if (-not (Test-Path $p)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
@@ -690,7 +694,7 @@ Or add a Handler Mapping in IIS Manager: *.php -> FastCgiModule -> $phpCgi
                     icacls $p /grant "${identity}:(OI)(CI)M" /T /Q | Out-Null
                 }
             }
-            Write-Ok "Granted Modify on config/ and storage/ to: $($identities -join ', ')"
+            Write-Ok "Granted Modify on site folder, config/, and storage/ to: $($identities -join ', ')"
         }
     } catch {
         Write-Warn "NTFS ACL grant failed: $($_.Exception.Message)"

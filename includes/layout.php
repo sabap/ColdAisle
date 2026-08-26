@@ -208,6 +208,7 @@ function layout_header(string $title, array $user, string $active = ''): void
                 'power' => ['Power', 'pages/power.php', '⚡', 'nav-power'],
                 'cooling' => ['Cooling', 'pages/cooling.php', '❄', 'nav-cooling'],
                 'cables' => ['Cabling', 'pages/cables.php', '🔌', 'nav-cables'],
+                'ipam' => ['IPAM', 'pages/ipam.php', '🔢', 'nav-ipam'],
                 'snmp' => ['SNMP', 'pages/snmp.php', '📡', 'nav-snmp'],
                 'work_orders' => ['Work orders', 'pages/work_orders.php', '📋', 'nav-work-orders'],
                 'disposals' => ['Decommission', 'pages/disposals.php', '🗑', 'nav-disposals'],

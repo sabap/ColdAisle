@@ -987,6 +987,8 @@ class Schema
             // Distinguish temp vs humidity series for combo probes
             self::ensureColumn('env_readings', 'metric', 'NVARCHAR(40) NULL');
 
+            self::ensureIpam();
+
             // Rare idempotent reshapes / backfills (not only ADD column)
             self::runIdempotentReshapes();
 
@@ -1117,6 +1119,14 @@ class Schema
             'cabinet_audits' => ['cabinet_audit_id', 'cabinet_id', 'audited_at', 'snapshot_json'],
             'cabinet_audit_photos' => ['photo_id', 'cabinet_audit_id', 'cabinet_id', 'rel_path'],
             'cabinets' => ['audit_interval_days'],
+            'ipam_prefixes' => [
+                'prefix_id', 'cidr', 'name', 'vlan_id', 'vrf', 'gateway', 'role',
+                'prefix_len', 'ip_version', 'network_int', 'dhcp_start', 'dhcp_end',
+            ],
+            'ipam_addresses' => [
+                'address_id', 'prefix_id', 'ip', 'ip_int', 'status', 'hostname',
+                'device_id', 'pdu_id', 'ups_id',
+            ],
             'role_group_maps' => ['map_id', 'role_id', 'auth_source', 'group_id'],
             'auth_sessions' => ['session_id', 'user_id', 'last_seen_at', 'expires_at'],
             'ups_units' => [
@@ -1449,6 +1459,58 @@ class Schema
         }
         $sql = "ALTER TABLE [{$table}] ADD [{$column}] {$definition}";
         Database::connection()->exec($sql);
+    }
+
+    /**
+     * IP address plan (statics + reserved + DHCP fences). Safe to call on every IPAM page load
+     * even when the version stamp already skipped the full ensure().
+     */
+    public static function ensureIpam(): void
+    {
+        self::ensureTable(
+            'ipam_prefixes',
+            "CREATE TABLE ipam_prefixes (
+                prefix_id INT IDENTITY(1,1) PRIMARY KEY,
+                cidr NVARCHAR(50) NOT NULL,
+                name NVARCHAR(150) NULL,
+                vlan_id INT NULL,
+                vrf NVARCHAR(80) NOT NULL CONSTRAINT DF_ipam_pfx_vrf DEFAULT 'default',
+                gateway NVARCHAR(45) NULL,
+                role NVARCHAR(40) NULL,
+                description NVARCHAR(500) NULL,
+                notes NVARCHAR(MAX) NULL,
+                prefix_len INT NOT NULL,
+                ip_version INT NOT NULL CONSTRAINT DF_ipam_pfx_ver DEFAULT 4,
+                network_int BIGINT NULL,
+                dhcp_start NVARCHAR(45) NULL,
+                dhcp_end NVARCHAR(45) NULL,
+                room_id INT NULL,
+                is_active BIT NOT NULL CONSTRAINT DF_ipam_pfx_active DEFAULT 1,
+                created_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_pfx_created DEFAULT SYSUTCDATETIME(),
+                updated_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_pfx_updated DEFAULT SYSUTCDATETIME()
+            )"
+        );
+        self::ensureTable(
+            'ipam_addresses',
+            "CREATE TABLE ipam_addresses (
+                address_id INT IDENTITY(1,1) PRIMARY KEY,
+                prefix_id INT NOT NULL,
+                ip NVARCHAR(45) NOT NULL,
+                ip_int BIGINT NULL,
+                vrf NVARCHAR(80) NOT NULL CONSTRAINT DF_ipam_addr_vrf DEFAULT 'default',
+                status NVARCHAR(20) NOT NULL CONSTRAINT DF_ipam_addr_st DEFAULT 'assigned',
+                hostname NVARCHAR(255) NULL,
+                mac_address NVARCHAR(64) NULL,
+                description NVARCHAR(500) NULL,
+                notes NVARCHAR(MAX) NULL,
+                device_id INT NULL,
+                pdu_id INT NULL,
+                ups_id INT NULL,
+                last_seen_at DATETIME2 NULL,
+                created_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_addr_created DEFAULT SYSUTCDATETIME(),
+                updated_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_addr_updated DEFAULT SYSUTCDATETIME()
+            )"
+        );
     }
 
     private static function ensureTable(string $table, string $createSql): void

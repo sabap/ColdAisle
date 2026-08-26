@@ -47,6 +47,7 @@ layout_header('Documentation', $user, 'docs');
         </div>
         <nav class="docs-jump" aria-label="Jump to section">
             <a class="settings-jump-chip" href="#floorplan">Floor planner</a>
+            <a class="settings-jump-chip" href="#ipam">IPAM</a>
             <a class="settings-jump-chip" href="#snmp-discover">SNMP Discover</a>
             <a class="settings-jump-chip" href="#work-orders">Work-order apply</a>
             <a class="settings-jump-chip" href="#tech-pwa">Tech / PWA</a>
@@ -63,6 +64,7 @@ layout_header('Documentation', $user, 'docs');
             <p class="docs-toc-label">Using ColdAisle</p>
             <ol class="docs-toc-list">
                 <li><a href="#floorplan">Floor planner</a></li>
+                <li><a href="#ipam">IPAM</a></li>
                 <li><a href="#snmp-discover">SNMP Discover</a></li>
                 <li><a href="#work-orders">Work-order apply</a></li>
                 <li><a href="#tech-pwa">Tech mode &amp; PWA</a></li>
@@ -132,6 +134,30 @@ layout_header('Documentation', $user, 'docs');
             </ul>
             <p class="text-muted" style="margin-bottom:0">
                 Planner edits use the logged-in session (CSRF). They are not part of the machine API.
+            </p>
+        </div>
+    </div>
+
+    <div class="card" id="ipam">
+        <div class="card-header flex-between">
+            <h2 style="margin:0">IPAM</h2>
+            <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/ipam.php')) ?>">Open IPAM</a>
+        </div>
+        <div class="card-body docs-prose">
+            <p>
+                The address <strong>plan</strong> — prefixes (subnets) and host records. Empty IPs are not stored;
+                utilization and <strong>Next free</strong> are computed. DHCP is a start/end fence on the prefix, not a DHCP server.
+            </p>
+            <h3 class="docs-h3">Import from Excel</h3>
+            <ul>
+                <li>One <strong>.xlsx workbook</strong> is enough. Each worksheet (tab) becomes a subnet.</li>
+                <li>Put the CIDR in the tab name (<code>10.12.40.0/24</code>) or in a Subnet/CIDR column. You do not need to save each tab as CSV.</li>
+                <li>CSV is the fallback: one subnet per file, or import into a prefix you already created.</li>
+                <li>Empty hostname rows are skipped. Status words like reserved, gateway, DHCP are mapped automatically.</li>
+            </ul>
+            <p class="text-muted" style="margin-bottom:0">
+                After import, <strong>Link inventory IPs</strong> matches device / PDU / UPS addresses into the plan.
+                Conflicts lists IPs on equipment that are not in any prefix.
             </p>
         </div>
     </div>
