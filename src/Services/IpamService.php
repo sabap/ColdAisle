@@ -550,6 +550,16 @@ class IpamService
         $prefixesTouched = 0;
 
         $meta = self::extractSheetMeta($grid, $sheetName);
+        if (!empty($meta['skip'])) {
+            return [
+                'ok' => true, 'created' => 0, 'updated' => 0, 'skipped' => 0, 'prefixes' => 0,
+                'errors' => [],
+                'message' => $sheetName . ': ' . (string)($meta['skip_reason'] ?? 'skipped (not a host list).'),
+            ];
+        }
+        if (!empty($meta['catalog'])) {
+            return self::importPrefixCatalog($grid, $meta, $sheetName, $options);
+        }
         $prefix = null;
         if ($prefixId && $prefixId > 0) {
             $prefix = Database::fetchOne('SELECT * FROM ipam_prefixes WHERE prefix_id = ?', [$prefixId]);
@@ -584,6 +594,8 @@ class IpamService
                         'gateway' => $meta['gateway'] ?? '',
                         'vrf' => $meta['vrf'] ?? 'default',
                         'role' => $meta['role'] ?? '',
+                        'dhcp_start' => $meta['dhcp_start'] ?? '',
+                        'dhcp_end' => $meta['dhcp_end'] ?? '',
                         'description' => 'Imported from ' . $sheetName,
                     ]);
                     $prefix = Database::fetchOne('SELECT * FROM ipam_prefixes WHERE prefix_id = ?', [$res['prefix_id']]);
@@ -625,8 +637,20 @@ class IpamService
                     continue;
                 }
                 $hostname = $cell('hostname');
+                if ($hostname === '') {
+                    $hostname = $cell('equipment');
+                }
                 $desc = $cell('description');
+                if ($desc === '') {
+                    $desc = $cell('use');
+                }
+                if ($desc === '') {
+                    $desc = $cell('device_function');
+                }
                 $notes = $cell('notes');
+                if (preg_match('/^(n\/a|network addy|network address|broadcast addy|broadcast address)$/i', $hostname)) {
+                    $hostname = '';
+                }
                 $statusRaw = strtolower($cell('status'));
                 $status = self::inferStatus($statusRaw, $hostname, $desc . ' ' . $notes);
                 if ($status === null) {
@@ -634,6 +658,10 @@ class IpamService
                     continue;
                 }
                 $parsedP = self::parseCidr((string)$prefix['cidr']);
+                if ($parsedP && ($ip === $parsedP['network'] || $ip === $parsedP['broadcast'])) {
+                    $skipped++;
+                    continue;
+                }
                 if ($parsedP && !self::cidrContains($parsedP, $ip)) {
                     throw new RuntimeException($ip . ' is not in ' . $prefix['cidr']);
                 }
@@ -679,6 +707,115 @@ class IpamService
             'prefixes' => $prefixesTouched,
             'errors' => $errors,
             'message' => $sheetName . ': ' . $created . ' new, ' . $updated . ' updated, ' . $skipped . ' skipped.',
+        ];
+    }
+
+    /**
+     * One row = one prefix (campus/VTI/supernet worksheets).
+     *
+     * @param list<list<string>> $grid
+     * @param array<string,mixed> $meta
+     * @param array{skip_empty?:bool} $options
+     * @return array{ok:bool,created:int,updated:int,skipped:int,prefixes:int,errors:list<string>,message:string}
+     */
+    private static function importPrefixCatalog(array $grid, array $meta, string $sheetName, array $options): array
+    {
+        $map = $meta['columns'];
+        $created = 0;
+        $updated = 0;
+        $skipped = 0;
+        $prefixes = 0;
+        $errors = [];
+        $defaultLen = isset($meta['mask']) && ctype_digit((string)$meta['mask']) ? (int)$meta['mask'] : null;
+        $headerAt = (int)$meta['header_row'];
+        for ($r = $headerAt + 1, $n = count($grid); $r < $n; $r++) {
+            $row = $grid[$r];
+            if (self::rowIsEmpty($row)) {
+                continue;
+            }
+            $cell = static function (string $key) use ($map, $row): string {
+                if (!isset($map[$key])) {
+                    return '';
+                }
+                return trim((string)($row[$map[$key]] ?? ''));
+            };
+            $netRaw = $cell('network');
+            if ($netRaw === '') {
+                $netRaw = $cell('cidr');
+            }
+            if ($netRaw === '') {
+                $netRaw = $cell('ip');
+            }
+            if ($netRaw === '' || $netRaw === '*') {
+                $skipped++;
+                continue;
+            }
+            $cidr = self::findCidrInText($netRaw);
+            if ($cidr === null) {
+                $len = self::maskToPrefixLen($cell('cidr'))
+                    ?? self::maskToPrefixLen($cell('mask'))
+                    ?? $defaultLen;
+                $net = self::canonicalIp($netRaw) ?? self::findNetworkInText($netRaw);
+                if ($net !== null && $len !== null) {
+                    $parsed = self::parseCidr($net . '/' . $len);
+                    $cidr = $parsed['cidr'] ?? null;
+                }
+            }
+            if ($cidr === null) {
+                $skipped++;
+                continue;
+            }
+            $name = $cell('hostname');
+            if ($name === '') {
+                $name = $cell('description');
+            }
+            $vlan = $cell('vlan');
+            if (preg_match('/(\d{1,4})/', $vlan, $vm)) {
+                $vlan = $vm[1];
+            }
+            $gw = self::canonicalIp($cell('gateway'));
+            $parsed = self::parseCidr($cidr);
+            if ($gw === null && $parsed && !empty($parsed['first_usable'])) {
+                $gw = $parsed['first_usable'];
+            }
+            try {
+                $existing = Database::fetchOne(
+                    'SELECT * FROM ipam_prefixes WHERE cidr = ? AND vrf = ? AND is_active = 1',
+                    [$cidr, 'default']
+                );
+                $post = [
+                    'cidr' => $cidr,
+                    'name' => $name !== '' ? $name : $cidr,
+                    'vlan_id' => $vlan,
+                    'gateway' => $gw ?? '',
+                    'vrf' => 'default',
+                    'description' => 'Imported from ' . $sheetName,
+                ];
+                if ($existing) {
+                    if (!empty($gw) && empty($existing['gateway'])) {
+                        Database::update('ipam_prefixes', [
+                            'gateway' => $gw,
+                            'updated_at' => date('Y-m-d H:i:s'),
+                        ], 'prefix_id = :id', [':id' => (int)$existing['prefix_id']]);
+                    }
+                    $updated++;
+                } else {
+                    self::savePrefix($post);
+                    $created++;
+                    $prefixes++;
+                }
+            } catch (Throwable $e) {
+                $errors[] = $sheetName . ' row ' . ($r + 1) . ': ' . $e->getMessage();
+            }
+        }
+        return [
+            'ok' => $created + $updated + $prefixes > 0 || $errors === [],
+            'created' => $created,
+            'updated' => $updated,
+            'skipped' => $skipped,
+            'prefixes' => $prefixes,
+            'errors' => $errors,
+            'message' => $sheetName . ': ' . $prefixes . ' prefix(es), ' . $skipped . ' skipped.',
         ];
     }
 
@@ -1224,60 +1361,471 @@ class IpamService
 
     /**
      * @param list<list<string>> $grid
-     * @return array{cidr:?string,name:string,vlan_id:string,gateway:?string,vrf:string,role:string,header_row:int,columns:array<string,int>}
+     * @return array{
+     *   cidr:?string,name:string,vlan_id:string,gateway:?string,vrf:string,role:string,
+     *   header_row:int,columns:array<string,int>,catalog?:bool,skip?:bool,skip_reason?:string,
+     *   dhcp_start:?string,dhcp_end:?string,mask:?string,network:?string
+     * }
      */
     private static function extractSheetMeta(array $grid, string $sheetName): array
     {
         $meta = [
             'cidr' => self::findCidrInText($sheetName),
-            'name' => $sheetName,
+            'name' => trim($sheetName),
             'vlan_id' => '',
             'gateway' => null,
             'vrf' => 'default',
             'role' => '',
             'header_row' => 0,
             'columns' => [],
+            'dhcp_start' => null,
+            'dhcp_end' => null,
+            'mask' => null,
+            'network' => self::findNetworkInText($sheetName),
+            'catalog' => false,
+            'skip' => false,
+            'skip_reason' => '',
         ];
-        $scan = min(12, count($grid));
+
+        $scan = min(40, count($grid));
         for ($i = 0; $i < $scan; $i++) {
-            $row = $grid[$i];
+            $row = $grid[$i] ?? [];
             $joined = strtolower(implode(' ', $row));
-            if ($meta['cidr'] === null) {
-                foreach ($row as $cell) {
-                    $c = self::findCidrInText((string)$cell);
-                    if ($c) {
-                        $meta['cidr'] = $c;
-                    }
-                }
+            self::absorbMetaFromText($meta, $joined);
+            foreach ($row as $cell) {
+                self::absorbMetaFromText($meta, (string)$cell);
             }
-            if (preg_match('/\bvlan\b[^0-9]{0,8}(\d{1,4})/i', $joined, $vm)) {
-                $meta['vlan_id'] = $vm[1];
-            }
+
             foreach ($row as $j => $cell) {
                 $k = self::headerKey((string)$cell);
                 $next = trim((string)($row[$j + 1] ?? ''));
-                if ($k === 'gateway' && self::canonicalIp($next)) {
-                    $meta['gateway'] = self::canonicalIp($next);
+                if ($k === 'gateway' && ($gw = self::canonicalIp($next)) && !str_starts_with($gw, '255.')) {
+                    $meta['gateway'] = $gw;
                 }
-                if ($k === 'cidr' && self::findCidrInText($next)) {
-                    $meta['cidr'] = self::findCidrInText($next);
+                if (in_array($k, ['cidr', 'network'], true) && ($c = self::findCidrInText($next))) {
+                    $meta['cidr'] = $c;
+                }
+                if (in_array($k, ['network', 'cidr'], true) && ($n = self::findNetworkInText($next))) {
+                    $meta['network'] = $n;
+                }
+                if ($k === 'mask' && ($len = self::maskToPrefixLen($next))) {
+                    $meta['mask'] = (string)$len;
                 }
                 if ($k === 'vlan' && ctype_digit($next)) {
                     $meta['vlan_id'] = $next;
                 }
             }
+
             $cols = self::detectColumns($row);
-            if (isset($cols['ip'])) {
-                $meta['header_row'] = $i;
-                $meta['columns'] = $cols;
-                break;
+            $isMetaHeader = isset($cols['mask']) || isset($cols['gateway']) || isset($cols['network'])
+                || isset($cols['range']);
+            if ($isMetaHeader && !isset($cols['ip'])) {
+                $nextRow = $grid[$i + 1] ?? [];
+                self::absorbMetaFromValueRow($meta, $cols, $nextRow);
+            }
+            if ($cols !== []) {
+                $isHost = isset($cols['ip']);
+                $isCat = isset($cols['network']) && (isset($cols['cidr']) || isset($cols['mask']) || isset($cols['broadcast']));
+                if ($isHost) {
+                    $meta['header_row'] = $i;
+                    $meta['columns'] = $cols;
+                } elseif ($meta['columns'] === [] && $isCat) {
+                    $meta['header_row'] = $i;
+                    $meta['columns'] = $cols;
+                }
+            }
+            if (self::looksLikeLegendHeader($cols, $joined)) {
+                $meta['skip'] = true;
+                $meta['skip_reason'] = 'closet / VLAN legend (not a host list)';
             }
         }
+
+        if (preg_match('/current ip scheme/i', $sheetName) || preg_match('/rfc1918\s+nat/i', $sheetName)) {
+            $meta['skip'] = true;
+            $meta['skip_reason'] = $meta['skip_reason'] !== '' ? $meta['skip_reason'] : 'summary / NAT table (not a single subnet)';
+        }
+
         if ($meta['columns'] === [] && isset($grid[0][0]) && self::canonicalIp((string)$grid[0][0])) {
             $meta['header_row'] = -1;
             $meta['columns'] = ['ip' => 0, 'hostname' => 1, 'notes' => 2];
         }
+
+        if (self::looksLikePrefixCatalog($meta, $grid)) {
+            $meta['catalog'] = true;
+            $meta['skip'] = false;
+        }
+
+        if ($meta['cidr'] === null) {
+            $meta['cidr'] = self::resolveSheetCidr($meta, $grid);
+        }
+        $meta['cidr'] = self::preferCidrMatchingHosts($meta, $grid);
+        if ($meta['cidr'] === null && empty($meta['catalog']) && empty($meta['skip'])) {
+            $meta['skip'] = true;
+            $meta['skip_reason'] = 'no CIDR found (name the tab 10.x.x.0/24, or add a mask / gateway block)';
+        }
+        if ($meta['gateway'] === null && !empty($meta['columns'])) {
+            $meta['gateway'] = self::gatewayFromHostRows($grid, $meta);
+        }
+        if ($meta['gateway'] === null && is_string($meta['cidr']) && $meta['cidr'] !== '') {
+            $parsed = self::parseCidr($meta['cidr']);
+            if ($parsed && !empty($parsed['first_usable']) && (int)$parsed['prefix_len'] <= 30) {
+                $top = strtolower(implode("\n", array_map(
+                    static fn ($r) => implode(' ', $r),
+                    array_slice($grid, 0, 8)
+                )));
+                if (!preg_match('/not\s+routed|unrouted|no\s+gateway/i', $top)) {
+                    $meta['gateway'] = $parsed['first_usable'];
+                }
+            }
+        }
+
         return $meta;
+    }
+
+    /** @param array<string,mixed> $meta */
+    private static function absorbMetaFromText(array &$meta, string $text): void
+    {
+        $text = trim($text);
+        if ($text === '') {
+            return;
+        }
+        if ($c = self::findCidrInText($text)) {
+            $meta['cidr'] = $c;
+        }
+        if (preg_match('/\bvlan\s*#?\s*(\d{1,4})\b/i', $text, $vm)) {
+            $meta['vlan_id'] = $vm[1];
+        }
+        if (preg_match('/\b(?:default\s+)?(?:gateway|gw|router)\s*:?\s*(\d{1,3}(?:\.\d{1,3}){3})\b/i', $text, $gm)) {
+            $gw = self::canonicalIp($gm[1]);
+            if ($gw && !str_starts_with($gw, '255.')) {
+                $meta['gateway'] = $gw;
+            }
+        }
+        if (preg_match('/\b(?:subnet\s*)?mask\s*:?\s*(255\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/i', $text, $mm)) {
+            if ($len = self::maskToPrefixLen($mm[1])) {
+                $meta['mask'] = (string)$len;
+            }
+        }
+        if (preg_match('/^255\.\d{1,3}\.\d{1,3}\.\d{1,3}$/', $text) && ($len = self::maskToPrefixLen($text))) {
+            $meta['mask'] = (string)$len;
+        }
+        if (preg_match('/^\/(\d{1,2})$/', $text, $pl2)) {
+            $len = (int)$pl2[1];
+            if ($len >= 8 && $len <= 32) {
+                $meta['mask'] = (string)$len;
+            }
+        }
+        if (preg_match('/\b(?:network(?:\s+address)?|ip\s+range)\s*:?\s*(\d{1,3}(?:\.\d{1,3}){3})\b/i', $text, $nm)) {
+            if ($n = self::canonicalIp($nm[1])) {
+                $meta['network'] = $n;
+            }
+        }
+        if (preg_match('/dhcp[^\d]{0,24}(\d{1,3}(?:\.\d{1,3}){3})\s*[-–]\s*(\d{1,3}(?:\.\d{1,3}){3})/i', $text, $dh)) {
+            $meta['dhcp_start'] = self::canonicalIp($dh[1]);
+            $meta['dhcp_end'] = self::canonicalIp($dh[2]);
+        }
+        if (preg_match('/(\d{1,3}(?:\.\d{1,3}){3})\s*[-–]\s*(\d{1,3}(?:\.\d{1,3}){3})/', $text, $rg)) {
+            $fromRange = self::cidrFromInclusiveRange($rg[1], $rg[2]);
+            if ($fromRange && $meta['cidr'] === null) {
+                $meta['cidr'] = $fromRange;
+            }
+        }
+        if (preg_match('/(?:^|\s)\/(\d{1,2})(?:\s|$)/', $text, $pl) && $meta['mask'] === null) {
+            $len = (int)$pl[1];
+            if ($len >= 8 && $len <= 32) {
+                $meta['mask'] = (string)$len;
+            }
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $meta
+     * @param array<string,int> $cols
+     * @param list<mixed> $row
+     */
+    private static function absorbMetaFromValueRow(array &$meta, array $cols, array $row): void
+    {
+        $val = static function (string $key) use ($cols, $row): string {
+            if (!isset($cols[$key])) {
+                return '';
+            }
+            return trim((string)($row[$cols[$key]] ?? ''));
+        };
+        if ($c = self::findCidrInText($val('cidr') . ' ' . $val('network'))) {
+            $meta['cidr'] = $c;
+        }
+        if ($n = self::findNetworkInText($val('network'))) {
+            $meta['network'] = $n;
+        }
+        if ($n = self::canonicalIp($val('network'))) {
+            $meta['network'] = $n;
+        }
+        if ($len = self::maskToPrefixLen($val('mask'))) {
+            $meta['mask'] = (string)$len;
+        }
+        $gwRaw = $val('gateway');
+        if (preg_match('/not\s+routed/i', $gwRaw)) {
+            $meta['gateway'] = null;
+            $meta['role'] = $meta['role'] !== '' ? $meta['role'] : 'interconnect';
+        } elseif (($gw = self::canonicalIp($gwRaw)) && !str_starts_with($gw, '255.')) {
+            $meta['gateway'] = $gw;
+        }
+        self::absorbMetaFromText($meta, implode(' ', $row));
+    }
+
+    /** @param array<string,int> $cols */
+    private static function looksLikeLegendHeader(array $cols, string $joined): bool
+    {
+        if (isset($cols['closet_names']) || isset($cols['address_ranges']) || isset($cols['address_ranges_per_closet_network'])) {
+            return true;
+        }
+        return (bool)preg_match('/closet names|address ranges per closet/i', $joined);
+    }
+
+    /**
+     * @param array<string,mixed> $meta
+     * @param list<list<string>> $grid
+     */
+    private static function looksLikePrefixCatalog(array $meta, array $grid): bool
+    {
+        $cols = $meta['columns'];
+        if (isset($cols['network']) && (isset($cols['cidr']) || isset($cols['mask']) || isset($cols['broadcast']))) {
+            $idx = $cols['cidr'] ?? $cols['mask'] ?? null;
+            if ($idx !== null) {
+                $slash = 0;
+                $n = 0;
+                $start = (int)$meta['header_row'] + 1;
+                $end = min(count($grid), $start + 20);
+                for ($r = $start; $r < $end; $r++) {
+                    $v = trim((string)($grid[$r][$idx] ?? ''));
+                    if ($v === '' || $v === '*') {
+                        continue;
+                    }
+                    $n++;
+                    if (preg_match('#^/?\d{1,2}$#', $v) || self::findCidrInText($v) !== null) {
+                        $slash++;
+                    }
+                }
+                if ($n >= 3 && $slash * 2 >= $n) {
+                    return true;
+                }
+            }
+            $netIdx = $cols['network'];
+            $cidrCells = 0;
+            $n = 0;
+            $start = (int)$meta['header_row'] + 1;
+            $end = min(count($grid), $start + 12);
+            for ($r = $start; $r < $end; $r++) {
+                $v = trim((string)($grid[$r][$netIdx] ?? ''));
+                if ($v === '') {
+                    continue;
+                }
+                $n++;
+                if (self::findCidrInText($v) !== null) {
+                    $cidrCells++;
+                }
+            }
+            if ($n >= 3 && $cidrCells * 2 >= $n) {
+                return true;
+            }
+        }
+        if (isset($cols['network'], $cols['broadcast'])) {
+            $maskLen = isset($meta['mask']) && ctype_digit((string)$meta['mask']) ? (int)$meta['mask'] : 0;
+            if (in_array($maskLen, [29, 30], true)) {
+                return true;
+            }
+        }
+        $name = strtolower((string)$meta['name']);
+        return (bool)preg_match('/\bvti\b|remote campus|clinic subnets/i', $name);
+    }
+
+    /**
+     * @param array<string,mixed> $meta
+     * @param list<list<string>> $grid
+     */
+    private static function resolveSheetCidr(array $meta, array $grid): ?string
+    {
+        $network = is_string($meta['network'] ?? null) ? self::canonicalIp((string)$meta['network']) : null;
+        $len = isset($meta['mask']) && ctype_digit((string)$meta['mask']) ? (int)$meta['mask'] : null;
+        if ($network && $len !== null) {
+            $p = self::parseCidr($network . '/' . $len);
+            return $p['cidr'] ?? null;
+        }
+        if ($network && $len === null) {
+            $p = self::parseCidr($network . '/24');
+            if ($p && self::sheetIpsFit($grid, $p, $meta, true)) {
+                return $p['cidr'];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * @param list<list<string>> $grid
+     * @param array<string,mixed> $parsed
+     * @param array<string,mixed> $meta
+     */
+    private static function sheetIpsFit(array $grid, array $parsed, array $meta, bool $requireIps = false): bool
+    {
+        $ipCol = $meta['columns']['ip'] ?? 0;
+        $checked = 0;
+        $fit = 0;
+        $start = (int)($meta['header_row'] ?? 0) + 1;
+        $scan = static function (int $from, int $limit) use ($grid, $ipCol, $parsed, &$checked, &$fit): void {
+            for ($r = $from, $n = count($grid); $r < $n && $checked < $limit; $r++) {
+                $ip = self::canonicalIp((string)($grid[$r][$ipCol] ?? ''));
+                if ($ip === null) {
+                    continue;
+                }
+                $checked++;
+                if (self::cidrContains($parsed, $ip)) {
+                    $fit++;
+                }
+            }
+        };
+        $scan($start, 40);
+        if ($checked < 3) {
+            $checked = 0;
+            $fit = 0;
+            $scan(0, 60);
+        }
+        if ($checked === 0) {
+            return !$requireIps;
+        }
+        return $fit * 2 >= $checked;
+    }
+
+    /**
+     * @param list<list<string>> $grid
+     * @param array<string,mixed> $meta
+     */
+    private static function gatewayFromHostRows(array $grid, array $meta): ?string
+    {
+        $cols = $meta['columns'];
+        if (!isset($cols['ip'])) {
+            return null;
+        }
+        $hostCol = $cols['hostname'] ?? $cols['description'] ?? null;
+        $start = (int)$meta['header_row'] + 1;
+        $end = min(count($grid), $start + 25);
+        for ($r = $start; $r < $end; $r++) {
+            $ip = self::canonicalIp((string)($grid[$r][$cols['ip']] ?? ''));
+            if ($ip === null) {
+                continue;
+            }
+            $label = '';
+            if ($hostCol !== null) {
+                $label = strtolower(trim((string)($grid[$r][$hostCol] ?? '')));
+            }
+            foreach ($grid[$r] as $c) {
+                $label .= ' ' . strtolower((string)$c);
+            }
+            $host = $hostCol !== null ? trim((string)($grid[$r][$hostCol] ?? '')) : '';
+            if (preg_match('/^(default\s+)?(gw|gateway)(\b|\/|\s|$)/i', $host)
+                || preg_match('/\bdefault\s+(gw|gateway|router)\b/i', $label)) {
+                return $ip;
+            }
+        }
+        return null;
+    }
+
+    public static function findNetworkInText(string $s): ?string
+    {
+        $s = trim($s);
+        $s = preg_replace('/\bX\b/i', '0', $s) ?? $s;
+        if (preg_match('/(\d{1,3}(?:\.\d{1,3}){3})/', $s, $m)) {
+            return self::canonicalIp($m[1]);
+        }
+        return null;
+    }
+
+    /**
+     * @param array<string,mixed> $meta
+     * @param list<list<string>> $grid
+     */
+    private static function preferCidrMatchingHosts(array $meta, array $grid): ?string
+    {
+        $cidr = is_string($meta['cidr'] ?? null) ? $meta['cidr'] : null;
+        $network = is_string($meta['network'] ?? null) ? self::canonicalIp((string)$meta['network']) : null;
+        $len = isset($meta['mask']) && ctype_digit((string)$meta['mask']) ? (int)$meta['mask'] : null;
+        $fromCidr = $cidr ? self::parseCidr($cidr) : null;
+        if ($network && $len !== null) {
+            $fromMask = self::parseCidr($network . '/' . $len);
+            if ($fromMask && (!$fromCidr || $fromMask['cidr'] !== $fromCidr['cidr'])) {
+                $maskFits = self::sheetIpsFit($grid, $fromMask, $meta, true);
+                $cidrFits = $fromCidr ? self::sheetIpsFit($grid, $fromCidr, $meta, true) : false;
+                if ($maskFits && !$cidrFits) {
+                    return $fromMask['cidr'];
+                }
+            }
+        }
+        if ($fromCidr && $network && !self::sheetIpsFit($grid, $fromCidr, $meta, true)) {
+            $wide = self::parseCidr($network . '/24');
+            if ($wide && (int)$fromCidr['prefix_len'] > 24 && self::sheetIpsFit($grid, $wide, $meta, true)) {
+                return $wide['cidr'];
+            }
+        }
+        return $cidr;
+    }
+
+    public static function maskToPrefixLen(string $mask): ?int
+    {
+        $mask = trim($mask);
+        if (preg_match('/^\/(\d{1,2})$/', $mask, $m) || preg_match('/^(\d{1,2})$/', $mask, $m)) {
+            $len = (int)$m[1];
+            // Bare "8" is usually a VLAN id; require dotted mask or /8 in text for /8-/9.
+            if (preg_match('/^\d{1,2}$/', $mask) && $len < 16) {
+                return null;
+            }
+            return ($len >= 8 && $len <= 32) ? $len : null;
+        }
+        $ip = self::canonicalIp($mask);
+        if ($ip === null) {
+            return null;
+        }
+        $n = self::ipToInt($ip);
+        if ($n === null) {
+            return null;
+        }
+        $bin = sprintf('%032b', $n);
+        if (!preg_match('/^1*0*$/', $bin)) {
+            return null;
+        }
+        $len = substr_count($bin, '1');
+        return ($len >= 8 && $len <= 32) ? $len : null;
+    }
+
+    public static function cidrFromInclusiveRange(string $a, string $b): ?string
+    {
+        $ia = self::ipToInt((string)self::canonicalIp($a));
+        $ib = self::ipToInt((string)self::canonicalIp($b));
+        if ($ia === null || $ib === null) {
+            return null;
+        }
+        if ($ia > $ib) {
+            [$ia, $ib] = [$ib, $ia];
+        }
+        $xor = $ia ^ $ib;
+        $len = 32;
+        while ($xor > 0) {
+            $xor >>= 1;
+            $len--;
+        }
+        if ($len < 8) {
+            return null;
+        }
+        $p = self::parseCidr(self::intToIp($ia) . '/' . $len);
+        if (!$p) {
+            return null;
+        }
+        $net = (int)$p['network_int'];
+        $bcast = (int)$p['broadcast_int'];
+        $isStart = $ia === $net || $ia === $net + 1;
+        $isEnd = $ib === $bcast || $ib === $bcast - 1;
+        if (!$isStart || !$isEnd) {
+            return null;
+        }
+        return $p['cidr'];
     }
 
     /** @param list<string> $row @return array<string,int> */
@@ -1300,18 +1848,29 @@ class IpamService
         $h = trim($h, '_');
         $aliases = [
             'ip' => 'ip', 'ip_address' => 'ip', 'address' => 'ip', 'host_ip' => 'ip',
-            'ipv4' => 'ip', 'host_address' => 'ip',
-            'hostname' => 'hostname', 'host' => 'hostname', 'name' => 'hostname',
-            'dns' => 'hostname', 'fqdn' => 'hostname', 'device' => 'hostname',
+            'ipv4' => 'ip', 'host_address' => 'ip', 'dmz_ip_address' => 'ip', 'dmz_ip' => 'ip',
+            'ethernet_address' => 'ip', 'server_ip' => 'ip',
+            'hostname' => 'hostname', 'host' => 'hostname', 'host_name' => 'hostname',
+            'name' => 'hostname', 'dns' => 'hostname', 'dns_name' => 'hostname',
+            'fqdn' => 'hostname', 'device' => 'hostname',
             'device_name' => 'hostname', 'label' => 'hostname', 'asset' => 'hostname',
+            'equipment' => 'hostname', 'ge_system_id' => 'hostname',
+            'server_name' => 'hostname', 'fatpipe_usage' => 'hostname',
+            'campus_clinic' => 'hostname', 'vendor_name' => 'hostname',
             'status' => 'status', 'state' => 'status', 'type' => 'status',
             'mac' => 'mac', 'mac_address' => 'mac',
             'description' => 'description', 'desc' => 'description', 'comment' => 'description',
-            'notes' => 'notes', 'note' => 'notes',
-            'vlan' => 'vlan', 'vlan_id' => 'vlan',
+            'notes' => 'notes', 'note' => 'notes', 'use' => 'description',
+            'device_function' => 'description',
+            'vlan' => 'vlan', 'vlan_id' => 'vlan', 'local_vlan' => 'vlan',
             'gateway' => 'gateway', 'gw' => 'gateway', 'default_gateway' => 'gateway',
-            'cidr' => 'cidr', 'subnet' => 'cidr', 'network' => 'cidr', 'prefix' => 'cidr',
-            'mask' => 'mask', 'netmask' => 'mask',
+            'default_router' => 'gateway',
+            'cidr' => 'cidr', 'prefix' => 'cidr',
+            'network' => 'network', 'network_address' => 'network',
+            'ip_range' => 'network', 'network_address' => 'network',
+            'subnet' => 'mask', 'mask' => 'mask', 'netmask' => 'mask', 'subnet_mask' => 'mask',
+            'broadcast' => 'broadcast', 'broadcast_address' => 'broadcast',
+            'usable_host_range' => 'range',
         ];
         return $aliases[$h] ?? $h;
     }

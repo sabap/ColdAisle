@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **IPAM Excel import:** reads common DC spreadsheet layouts — tab names like `172.17.1.0` (infer /24 or dotted mask), Gateway / Subnet Mask header blocks, DHCP ranges, VLAN labels, and prefix-catalog sheets (one subnet per row). Closet legends and NAT tables are skipped instead of failing the workbook.
+
 ### Bug fixes
 
 ---

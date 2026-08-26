@@ -207,7 +207,9 @@ $keep = class_exists('SearchService') ? ['q' => $q] : [];
         <p>
             <strong>Excel (.xlsx):</strong> keep one workbook. Each <em>worksheet</em> (tab) is a subnet.
             Put the CIDR in the tab name (<code>10.12.40.0/24</code> or <code>ILO 10.12.40.0/24</code>)
-            or in a Subnet/CIDR column. You do <strong>not</strong> need a CSV per tab.
+            or in a Subnet/CIDR column. Tabs named <code>172.17.1.0</code> (network only) are treated as /24
+            when the sheet has <code>255.255.255.0</code>, a Gateway cell, or host IPs in that net.
+            You do <strong>not</strong> need a CSV per tab.
         </p>
         <p>
             <strong>CSV:</strong> one subnet per file. Import into an existing prefix, or include a
