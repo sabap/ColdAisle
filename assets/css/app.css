@@ -2580,6 +2580,142 @@ body.restore-working-open .ldaps-modal:not(.restore-working-modal) {
   100% { transform: translateX(280%); width: 35%; }
 }
 
+/* Settings → Updates: GitHub zip → this site */
+.ca-upd-panel { width: min(28rem, calc(100vw - 1.5rem)); }
+.ca-upd-body { text-align: center; padding: 1rem 1.15rem 1.35rem; }
+.ca-upd-anim {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .85rem;
+  margin: .25rem auto 1.1rem;
+  min-height: 5.5rem;
+}
+.ca-upd-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .4rem;
+  min-width: 4.2rem;
+}
+.ca-upd-node-label {
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.78);
+}
+.ca-upd-gh {
+  width: 3.15rem;
+  height: 3.15rem;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: .82rem;
+  letter-spacing: .04em;
+  color: #f8fafc;
+  background: linear-gradient(160deg, #334155 0%, #0f172a 100%);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+}
+.ca-upd-app {
+  position: relative;
+  width: 3.15rem;
+  height: 3.15rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ca-upd-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid rgba(56, 189, 248, 0.22);
+  border-top-color: #38bdf8;
+  border-right-color: #7dd3fc;
+}
+.ca-upd-core {
+  font-weight: 800;
+  font-size: .78rem;
+  color: #e0f2fe;
+  text-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
+}
+.ca-upd-lane {
+  position: relative;
+  flex: 1;
+  height: 2.6rem;
+  min-width: 6.5rem;
+  max-width: 10rem;
+  overflow: hidden;
+}
+.ca-upd-lane::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(125, 211, 252, 0.28) 0 7px,
+    transparent 7px 14px
+  );
+}
+.ca-upd-pkt {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  margin-top: -0.7rem;
+  padding: .12rem .38rem;
+  border-radius: 4px;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: #0f172a;
+  background: #7dd3fc;
+  box-shadow: 0 2px 8px rgba(14, 165, 233, 0.35);
+  opacity: 0;
+}
+.ca-upd-pkt-2 { background: #86efac; }
+.ca-upd-pkt-3 { background: #fde68a; }
+.ca-upd-pkt-4 { background: #c4b5fd; }
+.ca-upd-anim-running .ca-upd-ring {
+  animation: restore-working-spin 0.9s linear infinite;
+}
+.ca-upd-anim-running .ca-upd-lane::before {
+  animation: od-xfer-dash 0.75s linear infinite;
+}
+.ca-upd-anim-running .ca-upd-pkt {
+  animation: ca-upd-fly 2.2s ease-in-out infinite;
+}
+.ca-upd-anim-running .ca-upd-pkt-2 { animation-delay: .45s; }
+.ca-upd-anim-running .ca-upd-pkt-3 { animation-delay: .9s; }
+.ca-upd-anim-running .ca-upd-pkt-4 { animation-delay: 1.35s; }
+.ca-upd-status {
+  margin: 0 0 .4rem;
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: #f8fafc;
+  min-height: 1.4em;
+}
+.ca-upd-detail {
+  margin: 0;
+  font-size: .82rem;
+  line-height: 1.45;
+}
+@keyframes ca-upd-fly {
+  0% { left: 0; opacity: 0; transform: translateY(0) scale(0.85); }
+  12% { opacity: 1; }
+  50% { transform: translateY(-5px) scale(1); }
+  88% { opacity: 1; }
+  100% { left: calc(100% - 2.2rem); opacity: 0; transform: translateY(0) scale(0.9); }
+}
+table.data tr[hidden] { display: none !important; }
+
 /* OpenDCIM migration — file-transfer activity indicator (not a progress %) */
 .od-xfer {
   display: flex;

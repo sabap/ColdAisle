@@ -311,6 +311,70 @@
       }
     },
     /**
+     * Full-screen activity overlay for Settings → Updates (GitHub zip → this site).
+     */
+    showUpdateOverlay: function (opts) {
+      opts = opts || {};
+      const version = opts.version ? String(opts.version) : '';
+      const tips = opts.tips || [
+        'Creating a recovery backup…',
+        'Downloading v' + (version || 'the release') + ' from GitHub…',
+        'Unpacking the release zip…',
+        'Applying files on this site…',
+        'Almost done — keep this tab open…',
+      ];
+      let overlay = document.getElementById('caAppUpdateModal');
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'caAppUpdateModal';
+        overlay.className = 'modal-overlay modal-overlay-glass ca-upd-overlay';
+        overlay.hidden = true;
+        overlay.innerHTML =
+          '<div class="modal-panel modal-panel-glass ca-upd-panel" role="dialog" aria-modal="true" aria-labelledby="caAppUpdateTitle">'
+          + '  <div class="modal-header"><h2 id="caAppUpdateTitle">Updating ColdAisle</h2></div>'
+          + '  <div class="modal-body ca-upd-body">'
+          + '    <div class="ca-upd-anim ca-upd-anim-running" aria-hidden="true">'
+          + '      <div class="ca-upd-node">'
+          + '        <div class="ca-upd-gh"><span>GH</span></div>'
+          + '        <span class="ca-upd-node-label">GitHub</span>'
+          + '      </div>'
+          + '      <div class="ca-upd-lane">'
+          + '        <span class="ca-upd-pkt ca-upd-pkt-1">zip</span>'
+          + '        <span class="ca-upd-pkt ca-upd-pkt-2">PHP</span>'
+          + '        <span class="ca-upd-pkt ca-upd-pkt-3">CSS</span>'
+          + '        <span class="ca-upd-pkt ca-upd-pkt-4">SQL</span>'
+          + '      </div>'
+          + '      <div class="ca-upd-node">'
+          + '        <div class="ca-upd-app"><span class="ca-upd-ring"></span><span class="ca-upd-core">CA</span></div>'
+          + '        <span class="ca-upd-node-label">This site</span>'
+          + '      </div>'
+          + '    </div>'
+          + '    <p class="ca-upd-status" id="caAppUpdateStatus" aria-live="polite">Updating…</p>'
+          + '    <p class="ca-upd-detail text-muted" id="caAppUpdateDetail"></p>'
+          + '  </div>'
+          + '</div>';
+        document.body.appendChild(overlay);
+      }
+      const statusEl = document.getElementById('caAppUpdateStatus');
+      const detailEl = document.getElementById('caAppUpdateDetail');
+      const titleEl = document.getElementById('caAppUpdateTitle');
+      if (titleEl) {
+        titleEl.textContent = version ? ('Updating to v' + version) : 'Updating ColdAisle';
+      }
+      if (detailEl) {
+        detailEl.textContent = 'Backup, download, apply — usually 1–3 minutes. Do not close this tab.';
+      }
+      let tipIdx = 0;
+      if (statusEl) statusEl.textContent = tips[0];
+      if (overlay._updTip) clearInterval(overlay._updTip);
+      overlay._updTip = setInterval(function () {
+        tipIdx = (tipIdx + 1) % tips.length;
+        if (statusEl) statusEl.textContent = tips[tipIdx];
+      }, 2400);
+      overlay.hidden = false;
+      document.body.classList.add('modal-open');
+    },
+    /**
      * Animated SNMP poll overlay (device ↔ ColdAisle GET packets).
      * Usage:
      *   ColdAisle.runSnmpPoll({
@@ -1489,6 +1553,55 @@
     window.ColdAisle.renderSnmpCandidates = renderSnmpCandidates;
   }
 
+  function initLiveListFilters() {
+    document.querySelectorAll('form.list-search-form[data-live-rows]').forEach(function (form) {
+      if (form.dataset.liveBound) return;
+      form.dataset.liveBound = '1';
+      const input = form.querySelector('input[name="q"], input[type="search"]');
+      const rowSel = form.getAttribute('data-live-rows');
+      const emptySel = form.getAttribute('data-live-empty');
+      const countSel = form.getAttribute('data-live-count');
+      if (!input || !rowSel) return;
+      const submitBtn = form.querySelector('button[type="submit"]');
+      if (submitBtn) submitBtn.hidden = true;
+      function apply() {
+        const q = (input.value || '').trim().toLowerCase();
+        const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
+        const rows = document.querySelectorAll(rowSel);
+        let shown = 0;
+        rows.forEach(function (row) {
+          const hay = (row.getAttribute('data-haystack') || row.textContent || '').toLowerCase();
+          const ok = tokens.every(function (tok) { return hay.indexOf(tok) !== -1; });
+          row.hidden = !ok;
+          if (ok) shown++;
+        });
+        const emptyEl = emptySel ? document.querySelector(emptySel) : null;
+        if (emptyEl) {
+          emptyEl.hidden = !(tokens.length && shown === 0 && rows.length);
+        }
+        const countEl = countSel ? document.querySelector(countSel) : null;
+        if (countEl) {
+          countEl.textContent = tokens.length
+            ? ('(' + shown + ' of ' + rows.length + ')')
+            : (rows.length ? ('(' + rows.length + ')') : '');
+        }
+      }
+      input.addEventListener('input', apply);
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        apply();
+        try {
+          const url = new URL(window.location.href);
+          const q = (input.value || '').trim();
+          if (q) url.searchParams.set('q', q);
+          else url.searchParams.delete('q');
+          history.replaceState(null, '', url);
+        } catch (err) { /* ignore */ }
+      });
+      apply();
+    });
+  }
+
   // Sidebar toggle + timezone widgets
   document.addEventListener('DOMContentLoaded', function () {
     const btn = document.getElementById('sidebarToggle');
@@ -1506,6 +1619,7 @@
     initSettingsCollapsible();
     initGlobalSearch();
     initPageJump();
+    initLiveListFilters();
     // First paint of browser metrics at DCL; refine on full load
     paintDevRequestTimer();
   });

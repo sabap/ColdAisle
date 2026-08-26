@@ -388,8 +388,9 @@ function layout_search_palette(): void
  * GET ?q= box used on inventory list pages.
  *
  * @param array<string,scalar|null> $keepGet Extra query params preserved on Search and Clear.
+ * @param array{rows?:string,empty?:string,count?:string} $live Client-side filter as you type (CSS selectors).
  */
-function layout_search_form(string $placeholder, string $q, string $clearPath, array $keepGet = []): void
+function layout_search_form(string $placeholder, string $q, string $clearPath, array $keepGet = [], array $live = []): void
 {
     $keep = [];
     foreach ($keepGet as $k => $v) {
@@ -403,7 +404,11 @@ function layout_search_form(string $placeholder, string $q, string $clearPath, a
         $clearHref .= (str_contains($clearHref, '?') ? '&' : '?') . http_build_query($keep);
     }
     ?>
-    <form method="get" class="list-search-form" role="search">
+    <form method="get" class="list-search-form<?= $live !== [] ? ' is-live' : '' ?>" role="search"
+        <?php if (!empty($live['rows'])): ?> data-live-rows="<?= App::e((string)$live['rows']) ?>"<?php endif; ?>
+        <?php if (!empty($live['empty'])): ?> data-live-empty="<?= App::e((string)$live['empty']) ?>"<?php endif; ?>
+        <?php if (!empty($live['count'])): ?> data-live-count="<?= App::e((string)$live['count']) ?>"<?php endif; ?>
+        >
         <?php foreach ($keep as $k => $v):
             if ($k === 'q') {
                 continue;
@@ -569,7 +574,7 @@ function layout_footer(): void
     $licenseUrl = $githubUrl . '/blob/main/LICENSE';
     $timerOn = class_exists('App', false) && App::requestTimerEnabled();
     $timing = $timerOn ? App::requestTimingSnapshot() : null;
-    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '24';
+    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '25';
 
     if ($tech):
         $nav = (class_exists('TechMode') && $user)

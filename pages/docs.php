@@ -145,15 +145,17 @@ layout_header('Documentation', $user, 'docs');
         </div>
         <div class="card-body docs-prose">
             <p>
-                The address <strong>plan</strong> — prefixes (subnets) and host records. Empty IPs are not stored;
-                utilization and <strong>Next free</strong> are computed. DHCP is a start/end fence on the prefix, not a DHCP server.
+                Two tracking modes. An <strong>address plan</strong> is a prefix plus host records (empty IPs are not stored;
+                <strong>Next free</strong> is computed). A <strong>subnet plan</strong> tracks prefixes only — a supernet and
+                the smaller blocks carved from it — with no host list. Nested prefixes sit under a parent and stay off the top-level list.
+                DHCP on an address plan is a start/end fence, not a DHCP server.
             </p>
             <h3 class="docs-h3">Import from Excel</h3>
             <ul>
-                <li>One <strong>.xlsx workbook</strong> is enough. Each worksheet (tab) becomes a subnet.</li>
-                <li>Put the CIDR in the tab name (<code>10.12.40.0/24</code>) or in a Subnet/CIDR column. You do not need to save each tab as CSV. Tabs named <code>172.17.1.0</code> (no slash) still work when the sheet has a dotted mask, a Gateway cell, or host IPs in that /24.</li>
-                <li>CSV is the fallback: one subnet per file, or import into a prefix you already created. Excel import does not require PHP’s zip extension.</li>
-                <li>Empty hostname rows are skipped. Status words like reserved, gateway, DHCP are mapped automatically.</li>
+                <li>One <strong>.xlsx workbook</strong> is enough. Import → Tracking: Auto, address plan (each row is an IP), or subnet plan (each row is a prefix).</li>
+                <li>Subnet-plan sheets typically have Network / CIDR (or mask). An optional parent or supernet column nests rows under a larger prefix.</li>
+                <li>Address-plan sheets have host IPs and names. Empty hostname rows are skipped. CIDR can be the tab name or a column.</li>
+                <li>CSV is the fallback. Excel import does not require PHP’s zip extension.</li>
             </ul>
             <p class="text-muted" style="margin-bottom:0">
                 After import, <strong>Link inventory IPs</strong> matches device / PDU / UPS addresses into the plan.

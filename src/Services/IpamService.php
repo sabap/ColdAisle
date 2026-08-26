@@ -23,6 +23,20 @@ class IpamService
     }
 
     /** @return array<string,string> */
+    public static function tracks(): array
+    {
+        return [
+            'hosts' => 'Address plan — track individual IPs',
+            'subnets' => 'Subnet plan — track prefixes only (no host list)',
+        ];
+    }
+
+    public static function isSubnetTrack(array $prefix): bool
+    {
+        return strtolower(trim((string)($prefix['track'] ?? 'hosts'))) === 'subnets';
+    }
+
+    /** @return array<string,string> */
     public static function roles(): array
     {
         return [
@@ -158,6 +172,11 @@ class IpamService
         $dhcpE = self::canonicalIp((string)($post['dhcp_end'] ?? ''));
         $vlan = trim((string)($post['vlan_id'] ?? ''));
         $name = trim((string)($post['name'] ?? ''));
+        $track = strtolower(trim((string)($post['track'] ?? 'hosts')));
+        if (!isset(self::tracks()[$track])) {
+            $track = 'hosts';
+        }
+        $parentId = (int)($post['parent_id'] ?? 0);
         return [
             'cidr' => $parsed['cidr'],
             'name' => $name !== '' ? $name : $parsed['cidr'],
@@ -173,6 +192,8 @@ class IpamService
             'dhcp_start' => $dhcpS,
             'dhcp_end' => $dhcpE,
             'room_id' => !empty($post['room_id']) ? (int)$post['room_id'] : null,
+            'track' => $track,
+            'parent_id' => $parentId > 0 ? $parentId : null,
             'is_active' => 1,
             'updated_at' => date('Y-m-d H:i:s'),
         ];
@@ -208,6 +229,7 @@ class IpamService
     public static function deletePrefix(int $prefixId): array
     {
         $n = (int)Database::fetchValue('SELECT COUNT(*) FROM ipam_addresses WHERE prefix_id = ?', [$prefixId]);
+        Database::query('UPDATE ipam_prefixes SET parent_id = NULL WHERE parent_id = ?', [$prefixId]);
         Database::delete('ipam_addresses', 'prefix_id = ?', [$prefixId]);
         Database::delete('ipam_prefixes', 'prefix_id = ?', [$prefixId]);
         return ['ok' => true, 'message' => 'Prefix deleted' . ($n > 0 ? " ({$n} address record(s) removed)." : '.')];
@@ -308,6 +330,27 @@ class IpamService
         $parsed = self::parseCidr((string)($prefix['cidr'] ?? ''));
         $usable = $parsed['usable'] ?? 0;
         $pid = (int)($prefix['prefix_id'] ?? 0);
+        if (self::isSubnetTrack($prefix) && $parsed) {
+            $kids = self::childPrefixes($pid);
+            $span = max(1, (int)$parsed['broadcast_int'] - (int)$parsed['network_int'] + 1);
+            $alloc = 0;
+            foreach ($kids as $kid) {
+                $kp = self::parseCidr((string)($kid['cidr'] ?? ''));
+                if ($kp) {
+                    $alloc += (int)$kp['broadcast_int'] - (int)$kp['network_int'] + 1;
+                }
+            }
+            $pct = round(100 * min($span, $alloc) / $span, 1);
+            return [
+                'used' => count($kids),
+                'reserved' => 0,
+                'dhcp' => 0,
+                'usable' => $span,
+                'free' => max(0, $span - $alloc),
+                'pct' => $pct,
+                'mode' => 'subnets',
+            ];
+        }
         $counts = ['assigned' => 0, 'reserved' => 0, 'dhcp' => 0, 'deprecated' => 0];
         if ($pid > 0) {
             $rows = Database::fetchAll(
@@ -336,7 +379,20 @@ class IpamService
             'usable' => $usable,
             'free' => $free,
             'pct' => $pct,
+            'mode' => 'hosts',
         ];
+    }
+
+    /** @return list<array<string,mixed>> */
+    public static function childPrefixes(int $parentId): array
+    {
+        if ($parentId < 1) {
+            return [];
+        }
+        return Database::fetchAll(
+            'SELECT * FROM ipam_prefixes WHERE is_active = 1 AND parent_id = ? ORDER BY network_int, prefix_len',
+            [$parentId]
+        ) ?: [];
     }
 
     /** @param array<string,mixed> $prefix */
@@ -557,7 +613,8 @@ class IpamService
                 'message' => $sheetName . ': ' . (string)($meta['skip_reason'] ?? 'skipped (not a host list).'),
             ];
         }
-        if (!empty($meta['catalog'])) {
+        $mode = strtolower(trim((string)($options['track'] ?? 'auto')));
+        if ($mode === 'subnets' || ($mode !== 'hosts' && !empty($meta['catalog']))) {
             return self::importPrefixCatalog($grid, $meta, $sheetName, $options);
         }
         $prefix = null;
@@ -594,6 +651,7 @@ class IpamService
                         'gateway' => $meta['gateway'] ?? '',
                         'vrf' => $meta['vrf'] ?? 'default',
                         'role' => $meta['role'] ?? '',
+                        'track' => 'hosts',
                         'dhcp_start' => $meta['dhcp_start'] ?? '',
                         'dhcp_end' => $meta['dhcp_end'] ?? '',
                         'description' => 'Imported from ' . $sheetName,
@@ -711,7 +769,8 @@ class IpamService
     }
 
     /**
-     * One row = one prefix (campus/VTI/supernet worksheets).
+     * Subnet plan: each data row is a prefix (not a host IP).
+     * Optional parent/supernet/aggregate column nests smaller prefixes under a larger one.
      *
      * @param list<list<string>> $grid
      * @param array<string,mixed> $meta
@@ -724,10 +783,13 @@ class IpamService
         $created = 0;
         $updated = 0;
         $skipped = 0;
-        $prefixes = 0;
         $errors = [];
         $defaultLen = isset($meta['mask']) && ctype_digit((string)$meta['mask']) ? (int)$meta['mask'] : null;
+        $parentLen = isset($meta['supernet_len']) ? (int)$meta['supernet_len'] : 0;
         $headerAt = (int)$meta['header_row'];
+        $forceParent = (int)($options['prefix_id'] ?? 0);
+        $rowsOut = [];
+        $lastParent = '';
         for ($r = $headerAt + 1, $n = count($grid); $r < $n; $r++) {
             $row = $grid[$r];
             if (self::rowIsEmpty($row)) {
@@ -766,57 +828,144 @@ class IpamService
                 continue;
             }
             $name = $cell('hostname');
-            if ($name === '') {
+            if ($name === '' || $name === '--') {
                 $name = $cell('description');
+            }
+            if ($name === '--') {
+                $name = '';
             }
             $vlan = $cell('vlan');
             if (preg_match('/(\d{1,4})/', $vlan, $vm)) {
                 $vlan = $vm[1];
+            } else {
+                $vlan = '';
             }
-            $gw = self::canonicalIp($cell('gateway'));
-            $parsed = self::parseCidr($cidr);
-            if ($gw === null && $parsed && !empty($parsed['first_usable'])) {
-                $gw = $parsed['first_usable'];
+            $parentRaw = $cell('parent');
+            if ($parentRaw === '') {
+                $parentRaw = $cell('supernet');
+            }
+            if ($parentRaw !== '') {
+                $lastParent = $parentRaw;
+            } elseif ($lastParent !== '') {
+                $parentRaw = $lastParent;
+            }
+            $parentCidr = null;
+            if ($parentRaw !== '') {
+                $parentCidr = self::findCidrInText($parentRaw);
+                if ($parentCidr === null && $parentLen > 0) {
+                    $pn = self::canonicalIp($parentRaw) ?? self::findNetworkInText($parentRaw);
+                    if ($pn !== null) {
+                        $pp = self::parseCidr($pn . '/' . $parentLen);
+                        $parentCidr = $pp['cidr'] ?? null;
+                    }
+                }
+            }
+            $rowsOut[] = [
+                'cidr' => $cidr,
+                'name' => $name,
+                'vlan' => $vlan,
+                'parent' => $parentCidr,
+                'notes' => $cell('notes'),
+            ];
+        }
+
+        $parentIds = [];
+        if ($forceParent > 0) {
+            $parentIds[''] = $forceParent;
+        }
+        foreach ($rowsOut as $one) {
+            $pc = $one['parent'];
+            if ($pc === null || $pc === $one['cidr'] || isset($parentIds[$pc])) {
+                continue;
             }
             try {
-                $existing = Database::fetchOne(
-                    'SELECT * FROM ipam_prefixes WHERE cidr = ? AND vrf = ? AND is_active = 1',
-                    [$cidr, 'default']
-                );
-                $post = [
-                    'cidr' => $cidr,
-                    'name' => $name !== '' ? $name : $cidr,
-                    'vlan_id' => $vlan,
-                    'gateway' => $gw ?? '',
+                $res = self::upsertSubnetPrefix([
+                    'cidr' => $pc,
+                    'name' => $pc,
                     'vrf' => 'default',
-                    'description' => 'Imported from ' . $sheetName,
-                ];
-                if ($existing) {
-                    if (!empty($gw) && empty($existing['gateway'])) {
-                        Database::update('ipam_prefixes', [
-                            'gateway' => $gw,
-                            'updated_at' => date('Y-m-d H:i:s'),
-                        ], 'prefix_id = :id', [':id' => (int)$existing['prefix_id']]);
-                    }
-                    $updated++;
-                } else {
-                    self::savePrefix($post);
-                    $created++;
-                    $prefixes++;
-                }
+                    'track' => 'subnets',
+                    'parent_id' => $forceParent,
+                    'description' => 'Parent prefix from ' . $sheetName,
+                ], $created, $updated);
+                $parentIds[$pc] = (int)$res['prefix_id'];
             } catch (Throwable $e) {
-                $errors[] = $sheetName . ' row ' . ($r + 1) . ': ' . $e->getMessage();
+                $errors[] = $sheetName . ': ' . $e->getMessage();
             }
         }
+
+        foreach ($rowsOut as $one) {
+            try {
+                $parentId = $forceParent;
+                if (!empty($one['parent']) && isset($parentIds[$one['parent']]) && $one['cidr'] !== $one['parent']) {
+                    $parentId = $parentIds[$one['parent']];
+                }
+                self::upsertSubnetPrefix([
+                    'cidr' => $one['cidr'],
+                    'name' => $one['name'] !== '' ? $one['name'] : $one['cidr'],
+                    'vlan_id' => $one['vlan'],
+                    'vrf' => 'default',
+                    'track' => 'subnets',
+                    'parent_id' => $parentId,
+                    'notes' => $one['notes'],
+                    'description' => 'Imported from ' . $sheetName,
+                ], $created, $updated);
+            } catch (Throwable $e) {
+                $errors[] = $sheetName . ': ' . $e->getMessage();
+            }
+        }
+
+        $nPref = $created + $updated;
         return [
-            'ok' => $created + $updated + $prefixes > 0 || $errors === [],
+            'ok' => $nPref > 0 || $errors === [],
             'created' => $created,
             'updated' => $updated,
             'skipped' => $skipped,
-            'prefixes' => $prefixes,
+            'prefixes' => $created,
             'errors' => $errors,
-            'message' => $sheetName . ': ' . $prefixes . ' prefix(es), ' . $skipped . ' skipped.',
+            'message' => $sheetName . ': ' . $created . ' prefix(es) new, ' . $updated . ' updated, '
+                . $skipped . ' skipped (subnet plan).',
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $post
+     * @return array{prefix_id:int,created:bool}
+     */
+    private static function upsertSubnetPrefix(array $post, int &$created, int &$updated): array
+    {
+        $post['track'] = 'subnets';
+        $vrf = (string)($post['vrf'] ?? 'default');
+        $parsed = self::parseCidr((string)($post['cidr'] ?? ''));
+        if (!$parsed) {
+            throw new RuntimeException('Invalid CIDR in subnet catalog.');
+        }
+        $existing = Database::fetchOne(
+            'SELECT * FROM ipam_prefixes WHERE cidr = ? AND vrf = ? AND is_active = 1',
+            [$parsed['cidr'], $vrf]
+        );
+        $parentId = (int)($post['parent_id'] ?? 0);
+        if ($existing) {
+            $patch = [
+                'track' => 'subnets',
+                'updated_at' => date('Y-m-d H:i:s'),
+            ];
+            if ($parentId > 0 && (int)($existing['parent_id'] ?? 0) !== $parentId
+                && (int)$existing['prefix_id'] !== $parentId) {
+                $patch['parent_id'] = $parentId;
+            }
+            if (empty($existing['name']) && !empty($post['name'])) {
+                $patch['name'] = $post['name'];
+            }
+            if (empty($existing['vlan_id']) && !empty($post['vlan_id'])) {
+                $patch['vlan_id'] = max(1, min(4094, (int)$post['vlan_id']));
+            }
+            Database::update('ipam_prefixes', $patch, 'prefix_id = :id', [':id' => (int)$existing['prefix_id']]);
+            $updated++;
+            return ['prefix_id' => (int)$existing['prefix_id'], 'created' => false];
+        }
+        $res = self::savePrefix($post);
+        $created++;
+        return ['prefix_id' => (int)$res['prefix_id'], 'created' => true];
     }
 
     /**
@@ -1385,6 +1534,8 @@ class IpamService
             'catalog' => false,
             'skip' => false,
             'skip_reason' => '',
+            'supernet_len' => null,
+            'title' => trim($sheetName),
         ];
 
         $scan = min(40, count($grid));
@@ -1416,6 +1567,23 @@ class IpamService
                 }
             }
 
+            foreach ($row as $cell) {
+                if (preg_match('/\/(\d{1,2})\s*supernet/i', (string)$cell, $sm)) {
+                    $meta['supernet_len'] = (int)$sm[1];
+                }
+            }
+            if ($i === 0) {
+                $titleBits = [];
+                foreach ($row as $cell) {
+                    $t = trim((string)$cell);
+                    if ($t !== '' && !self::canonicalIp($t) && self::findCidrInText($t) === null) {
+                        $titleBits[] = $t;
+                    }
+                }
+                if ($titleBits !== []) {
+                    $meta['title'] = implode(' ', $titleBits);
+                }
+            }
             $cols = self::detectColumns($row);
             $isMetaHeader = isset($cols['mask']) || isset($cols['gateway']) || isset($cols['network'])
                 || isset($cols['range']);
@@ -1629,14 +1797,7 @@ class IpamService
                 return true;
             }
         }
-        if (isset($cols['network'], $cols['broadcast'])) {
-            $maskLen = isset($meta['mask']) && ctype_digit((string)$meta['mask']) ? (int)$meta['mask'] : 0;
-            if (in_array($maskLen, [29, 30], true)) {
-                return true;
-            }
-        }
-        $name = strtolower((string)$meta['name']);
-        return (bool)preg_match('/\bvti\b|remote campus|clinic subnets/i', $name);
+        return false;
     }
 
     /**
@@ -1846,6 +2007,10 @@ class IpamService
         $h = strtolower(trim($raw));
         $h = preg_replace('/[^a-z0-9]+/', '_', $h) ?? $h;
         $h = trim($h, '_');
+        if ($h === 'parent' || $h === 'parent_cidr' || $h === 'aggregate'
+            || $h === 'supernet' || str_ends_with($h, '_supernet') || str_ends_with($h, 'supernet')) {
+            return 'parent';
+        }
         $aliases = [
             'ip' => 'ip', 'ip_address' => 'ip', 'address' => 'ip', 'host_ip' => 'ip',
             'ipv4' => 'ip', 'host_address' => 'ip', 'dmz_ip_address' => 'ip', 'dmz_ip' => 'ip',

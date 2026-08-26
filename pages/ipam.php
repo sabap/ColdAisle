@@ -78,8 +78,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 throw new RuntimeException('File must be between 1 byte and 8 MB.');
             }
             $into = (int)($_POST['into_prefix_id'] ?? 0);
+            $track = strtolower(trim((string)($_POST['track'] ?? 'auto')));
+            if (!in_array($track, ['auto', 'hosts', 'subnets'], true)) {
+                $track = 'auto';
+            }
             $res = IpamService::importFile((string)$file['tmp_name'], (string)($file['name'] ?? 'import.csv'), [
                 'prefix_id' => $into > 0 ? $into : 0,
+                'track' => $track,
             ]);
             if (class_exists('AuditService')) {
                 AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'import', 'ipam', 0, [
@@ -104,6 +109,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
 }
 
 $roles = IpamService::roles();
+$tracks = IpamService::tracks();
 $statuses = IpamService::statuses();
 $rooms = [];
 try {
@@ -145,25 +151,20 @@ if ($prefixId > 0 && strtolower((string)($_GET['export'] ?? '')) === 'csv') {
     }
 }
 
-$like = $q !== '' ? ('%' . $q . '%') : '';
-$prefixes = [];
+$allPrefixes = [];
 try {
-    if ($q !== '') {
-        $prefixes = Database::fetchAll(
-            'SELECT * FROM ipam_prefixes
-             WHERE is_active = 1 AND (cidr LIKE ? OR ISNULL(name, \'\') LIKE ? OR ISNULL(description, \'\') LIKE ?
-                OR CAST(vlan_id AS NVARCHAR(20)) = ? OR CAST(prefix_id AS NVARCHAR(20)) = ?)
-             ORDER BY network_int, prefix_len',
-            [$like, $like, $like, $q, $q]
-        );
-    } else {
-        $prefixes = Database::fetchAll(
-            'SELECT * FROM ipam_prefixes WHERE is_active = 1 ORDER BY network_int, prefix_len'
-        );
-    }
+    $allPrefixes = Database::fetchAll(
+        'SELECT * FROM ipam_prefixes WHERE is_active = 1 ORDER BY network_int, prefix_len'
+    );
 } catch (Throwable $e) {
-    $prefixes = [];
+    $allPrefixes = [];
 }
+$childrenByParent = [];
+foreach ($allPrefixes as $p) {
+    $pp = (int)($p['parent_id'] ?? 0);
+    $childrenByParent[$pp][] = $p;
+}
+$prefixes = $childrenByParent[0] ?? [];
 
 $current = null;
 if ($prefixId > 0) {
@@ -180,17 +181,21 @@ if ($addressId > 0) {
 }
 
 layout_header('IPAM', $user, 'ipam');
-$keep = class_exists('SearchService') ? ['q' => $q] : [];
 ?>
 <p class="text-muted" style="margin-top:0">
-    Address <strong>plan</strong> for statics — one prefix per subnet (the tabs in your spreadsheet).
-    Available space is counted, not stored as empty rows. DHCP is a range you mark “hands off,” not a server.
+    Two kinds of prefix: an <strong>address plan</strong> (individual IPs — statics and reserved; empty addresses are not stored)
+    or a <strong>subnet plan</strong> (prefixes only — supernets and the smaller blocks carved from them; no host list).
+    DHCP on an address plan is a range fence, not a server.
     <?php if ($canEdit): ?>
         <a href="<?= App::e(App::url('pages/ipam.php?view=import')) ?>">Import Excel or CSV</a>.
     <?php endif; ?>
 </p>
 <div class="flex-between mb-2" style="flex-wrap:wrap;gap:.5rem">
-    <?php layout_search_form('Search CIDR, name, VLAN…', $q, 'pages/ipam.php', []); ?>
+    <?php layout_search_form('Search CIDR, name, VLAN…', $q, 'pages/ipam.php', [], [
+        'rows' => '#ipamPrefixBody tr.ipam-prefix-row',
+        'empty' => '#ipamPrefixEmpty',
+        'count' => '#ipamPrefixCount',
+    ]); ?>
     <div class="flex gap-1" style="flex-wrap:wrap">
         <a class="btn btn-secondary" href="<?= App::e(App::url('pages/ipam.php?view=conflicts')) ?>">Conflicts</a>
         <?php if ($canEdit): ?>
@@ -205,10 +210,9 @@ $keep = class_exists('SearchService') ? ['q' => $q] : [];
     <div class="card-header"><h2>Import spreadsheet</h2></div>
     <div class="card-body docs-prose">
         <p>
-            <strong>Excel (.xlsx):</strong> keep one workbook. Each <em>worksheet</em> (tab) is a subnet.
-            Put the CIDR in the tab name (<code>10.12.40.0/24</code> or <code>ILO 10.12.40.0/24</code>)
-            or in a Subnet/CIDR column. Tabs named <code>172.17.1.0</code> (network only) are treated as /24
-            when the sheet has <code>255.255.255.0</code>, a Gateway cell, or host IPs in that net.
+            <strong>Excel (.xlsx):</strong> keep one workbook. Choose tracking below if Auto is unsure.
+            Address-plan tabs have host IPs (device/hostname columns). Subnet-plan tabs list prefixes
+            (network + CIDR or mask). An optional parent/supernet column nests smaller blocks under a larger one.
             You do <strong>not</strong> need a CSV per tab.
         </p>
         <p>
@@ -227,7 +231,14 @@ $keep = class_exists('SearchService') ? ['q' => $q] : [];
                 <input class="form-control" type="file" name="sheet" required
                        accept=".xlsx,.xlsm,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
             </div>
-            <div class="form-row full"><label>Load into prefix (CSV, or force one sheet)</label>
+            <div class="form-row full"><label>Tracking</label>
+                <select class="form-control" name="track">
+                    <option value="auto">Auto — host tabs vs prefix-list tabs</option>
+                    <option value="hosts">Address plan — each row is an IP</option>
+                    <option value="subnets">Subnet plan — each row is a prefix (no host IPs)</option>
+                </select>
+            </div>
+            <div class="form-row full"><label>Load into prefix (optional parent)</label>
                 <select class="form-control" name="into_prefix_id">
                     <option value="">— Create/match from CIDR on each sheet —</option>
                     <?php foreach ($prefixes as $p): ?>
@@ -307,6 +318,16 @@ endif; ?>
 
 <?php if ($view === 'prefix' || ($current && isset($_GET['edit']))):
     $edit = ($view === 'prefix' && $prefixId < 1) ? [] : ($current ?? []);
+    if ($view === 'prefix' && $prefixId < 1) {
+        if (!empty($_GET['parent_id'])) {
+            $edit['parent_id'] = (int)$_GET['parent_id'];
+        }
+        if (!empty($_GET['track'])) {
+            $edit['track'] = (string)$_GET['track'];
+        } elseif (!empty($edit['parent_id'])) {
+            $edit['track'] = 'subnets';
+        }
+    }
     ?>
 <div class="card">
     <div class="card-header"><h2><?= $edit ? 'Edit prefix' : 'New prefix' ?></h2></div>
@@ -316,6 +337,9 @@ endif; ?>
             <input type="hidden" name="action" value="save_prefix">
             <?php if (!empty($edit['prefix_id'])): ?>
                 <input type="hidden" name="prefix_id" value="<?= (int)$edit['prefix_id'] ?>">
+            <?php endif; ?>
+            <?php if (!empty($edit['parent_id'])): ?>
+                <input type="hidden" name="parent_id" value="<?= (int)$edit['parent_id'] ?>">
             <?php endif; ?>
             <div class="form-row"><label>CIDR *</label>
                 <input class="form-control" name="cidr" required placeholder="10.12.40.0/24"
@@ -339,6 +363,14 @@ endif; ?>
             </div>
             <div class="form-row"><label>VRF</label>
                 <input class="form-control" name="vrf" value="<?= App::e((string)($edit['vrf'] ?? 'default')) ?>"></div>
+            <div class="form-row full"><label>Tracking</label>
+                <select class="form-control" name="track">
+                    <?php foreach ($tracks as $tk => $tl): ?>
+                        <option value="<?= App::e($tk) ?>" <?= ($edit['track'] ?? 'hosts') === $tk ? 'selected' : '' ?>><?= App::e($tl) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <span class="text-muted" style="font-size:.8rem">Address plan stores host records. Subnet plan stores nested prefixes only.</span>
+            </div>
             <div class="form-row"><label>DHCP pool start</label>
                 <input class="form-control" name="dhcp_start" placeholder="Leave empty if all static"
                        value="<?= App::e((string)($edit['dhcp_start'] ?? '')) ?>"></div>
@@ -370,34 +402,69 @@ endif; ?>
 
 <div class="split-2">
     <div class="card">
-        <div class="card-header"><h2>Prefixes</h2></div>
+        <div class="card-header flex-between">
+            <h2 style="margin:0">Prefixes <span id="ipamPrefixCount" class="text-muted" style="font-weight:500;font-size:.8rem"></span></h2>
+        </div>
         <div class="card-body flush">
             <table class="data">
                 <thead>
                 <tr><th>Prefix</th><th>VLAN</th><th>Role</th><th>Use</th></tr>
                 </thead>
-                <tbody>
+                <tbody id="ipamPrefixBody">
                 <?php foreach ($prefixes as $p):
                     $util = IpamService::utilization($p);
-                    $activeRow = $current && (int)$current['prefix_id'] === (int)$p['prefix_id'];
+                    $kids = $childrenByParent[(int)$p['prefix_id']] ?? [];
+                    $curId = $current ? (int)$current['prefix_id'] : 0;
+                    $curParent = $current ? (int)($current['parent_id'] ?? 0) : 0;
+                    $activeRow = $curId === (int)$p['prefix_id'] || $curParent === (int)$p['prefix_id'];
+                    $hayBits = [
+                        (string)($p['cidr'] ?? ''),
+                        (string)($p['name'] ?? ''),
+                        (string)($p['description'] ?? ''),
+                        (string)($p['gateway'] ?? ''),
+                        (string)($p['role'] ?? ''),
+                        (string)($p['vlan_id'] ?? ''),
+                        (string)($p['vrf'] ?? ''),
+                        (string)($p['track'] ?? ''),
+                    ];
+                    foreach ($kids as $kid) {
+                        $hayBits[] = (string)($kid['cidr'] ?? '');
+                        $hayBits[] = (string)($kid['name'] ?? '');
+                        $hayBits[] = (string)($kid['vlan_id'] ?? '');
+                    }
+                    $hay = strtolower(trim(implode(' ', $hayBits)));
+                    $subnetPlan = IpamService::isSubnetTrack($p);
                     ?>
-                    <tr class="<?= $activeRow ? 'is-selected' : '' ?>">
+                    <tr class="ipam-prefix-row<?= $activeRow ? ' is-selected' : '' ?>" data-haystack="<?= App::e($hay) ?>">
                         <td>
                             <a href="<?= App::e(App::url('pages/ipam.php?prefix_id=' . (int)$p['prefix_id'])) ?>">
                                 <code><?= App::e((string)$p['cidr']) ?></code>
                             </a>
                             <div class="text-muted" style="font-size:.75rem"><?= App::e((string)($p['name'] ?? '')) ?></div>
+                            <?php if ($subnetPlan): ?>
+                                <span class="badge" title="Subnet plan">Subnets</span>
+                            <?php endif; ?>
                         </td>
                         <td><?= !empty($p['vlan_id']) ? (int)$p['vlan_id'] : '—' ?></td>
                         <td><?= App::e($roles[$p['role'] ?? ''] ?? ($p['role'] ?? '—')) ?></td>
                         <td style="min-width:7rem">
-                            <div class="ipam-bar" title="<?= (int)$util['used'] ?> assigned · <?= (int)$util['free'] ?> free of <?= (int)$util['usable'] ?>">
-                                <span style="width:<?= min(100, (float)$util['pct']) ?>%"></span>
-                            </div>
-                            <span class="text-muted" style="font-size:.72rem"><?= App::e((string)$util['pct']) ?>%</span>
+                            <?php if ($subnetPlan): ?>
+                                <div class="ipam-bar" title="<?= count($kids) ?> child prefix(es) · <?= (int)$util['pct'] ?>% of block allocated">
+                                    <span style="width:<?= min(100, (float)$util['pct']) ?>%"></span>
+                                </div>
+                                <span class="text-muted" style="font-size:.72rem"><?= count($kids) ?> nested</span>
+                            <?php else: ?>
+                                <div class="ipam-bar" title="<?= (int)$util['used'] ?> assigned · <?= (int)$util['free'] ?> free of <?= (int)$util['usable'] ?>">
+                                    <span style="width:<?= min(100, (float)$util['pct']) ?>%"></span>
+                                </div>
+                                <span class="text-muted" style="font-size:.72rem"><?= App::e((string)$util['pct']) ?>%</span>
+                            <?php endif; ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>
+                <tr id="ipamPrefixEmpty" hidden>
+                    <td colspan="4" class="text-muted">No prefixes match that search.</td>
+                </tr>
                 <?php if (!$prefixes): ?>
                     <tr><td colspan="4" class="text-muted">
                         No prefixes yet.
@@ -414,29 +481,38 @@ endif; ?>
 
     <div class="card">
         <?php if (!$current): ?>
-            <div class="card-header"><h2>Addresses</h2></div>
+            <div class="card-header"><h2>Detail</h2></div>
             <div class="card-body">
-                <p class="text-muted" style="margin:0">Select a prefix. Empty IPs are not listed — use <strong>Next free</strong> after you open one.</p>
+                <p class="text-muted" style="margin:0">Select a prefix. Address plans list host records. Subnet plans list nested prefixes.</p>
             </div>
         <?php else:
             $util = IpamService::utilization($current);
             $next = IpamService::nextFree($current);
             $parsed = IpamService::parseCidr((string)$current['cidr']);
-            $addrSql = 'SELECT a.*, d.label AS device_label, p.name AS pdu_name, u.name AS ups_name
-                FROM ipam_addresses a
-                LEFT JOIN devices d ON d.device_id = a.device_id
-                LEFT JOIN pdus p ON p.pdu_id = a.pdu_id
-                LEFT JOIN ups_units u ON u.ups_id = a.ups_id
-                WHERE a.prefix_id = ?';
-            $addrParams = [(int)$current['prefix_id']];
-            if ($q !== '') {
-                $addrSql .= ' AND (a.ip LIKE ? OR ISNULL(a.hostname, \'\') LIKE ? OR ISNULL(a.description, \'\') LIKE ?)';
-                $addrParams[] = $like;
-                $addrParams[] = $like;
-                $addrParams[] = $like;
+            $subnetPlan = IpamService::isSubnetTrack($current);
+            $kids = $childrenByParent[(int)$current['prefix_id']] ?? [];
+            $parentRow = null;
+            if (!empty($current['parent_id'])) {
+                foreach ($allPrefixes as $cand) {
+                    if ((int)$cand['prefix_id'] === (int)$current['parent_id']) {
+                        $parentRow = $cand;
+                        break;
+                    }
+                }
             }
-            $addrSql .= ' ORDER BY a.ip_int, a.ip';
-            $addresses = Database::fetchAll($addrSql, $addrParams);
+            $addresses = [];
+            if (!$subnetPlan) {
+                $addresses = Database::fetchAll(
+                    'SELECT a.*, d.label AS device_label, p.name AS pdu_name, u.name AS ups_name
+                    FROM ipam_addresses a
+                    LEFT JOIN devices d ON d.device_id = a.device_id
+                    LEFT JOIN pdus p ON p.pdu_id = a.pdu_id
+                    LEFT JOIN ups_units u ON u.ups_id = a.ups_id
+                    WHERE a.prefix_id = ?
+                    ORDER BY a.ip_int, a.ip',
+                    [(int)$current['prefix_id']]
+                );
+            }
             ?>
             <div class="card-header flex-between">
                 <h2 style="margin:0"><code><?= App::e((string)$current['cidr']) ?></code>
@@ -450,16 +526,36 @@ endif; ?>
                 </div>
             </div>
             <div class="card-body" style="padding-bottom:.5rem">
+                <?php if ($parentRow): ?>
+                    <p style="margin:0 0 .45rem;font-size:.85rem">
+                        <a href="<?= App::e(App::url('pages/ipam.php?prefix_id=' . (int)$parentRow['prefix_id'])) ?>">
+                            <?= App::e((string)$parentRow['cidr']) ?></a>
+                        › <?= App::e((string)$current['cidr']) ?>
+                    </p>
+                <?php endif; ?>
                 <p class="text-muted" style="font-size:.85rem;margin:0 0 .5rem">
-                    VLAN <?= !empty($current['vlan_id']) ? (int)$current['vlan_id'] : '—' ?>
-                    · GW <?= App::e((string)($current['gateway'] ?? '—')) ?>
-                    · <?= (int)$util['used'] ?> assigned · <?= (int)$util['reserved'] ?> reserved
-                    · <?= (int)$util['free'] ?> free of <?= (int)$util['usable'] ?> usable
-                    <?php if ($next): ?>
-                        · Next free <code><?= App::e($next) ?></code>
+                    <?php if ($subnetPlan): ?>
+                        Subnet plan
+                        · <?= count($kids) ?> nested prefix(es)
+                        · <?= App::e((string)$util['pct']) ?>% of this block allocated
+                        <?php if (!empty($current['vlan_id'])): ?>
+                            · VLAN <?= (int)$current['vlan_id'] ?>
+                        <?php endif; ?>
+                    <?php else: ?>
+                        VLAN <?= !empty($current['vlan_id']) ? (int)$current['vlan_id'] : '—' ?>
+                        · GW <?= App::e((string)($current['gateway'] ?? '—')) ?>
+                        · <?= (int)$util['used'] ?> assigned · <?= (int)$util['reserved'] ?> reserved
+                        · <?= (int)$util['free'] ?> free of <?= (int)$util['usable'] ?> usable
+                        <?php if ($next): ?>
+                            · Next free <code><?= App::e($next) ?></code>
+                        <?php endif; ?>
                     <?php endif; ?>
                 </p>
-                <?php if ($canEdit): ?>
+                <?php if ($subnetPlan): ?>
+                    <?php if ($canEdit): ?>
+                        <a class="btn btn-sm btn-primary" href="<?= App::e(App::url('pages/ipam.php?view=prefix&track=subnets&parent_id=' . (int)$current['prefix_id'])) ?>">+ Nested prefix</a>
+                    <?php endif; ?>
+                <?php elseif ($canEdit): ?>
                 <form method="post" class="form-grid" style="margin-bottom:.75rem">
                     <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                     <input type="hidden" name="action" value="save_address">
@@ -492,6 +588,37 @@ endif; ?>
                 </form>
                 <?php endif; ?>
             </div>
+            <?php if ($subnetPlan): ?>
+            <div class="card-body flush">
+                <table class="data">
+                    <thead>
+                    <tr><th>Prefix</th><th>Name</th><th>VLAN</th><th>Len</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($kids as $kid):
+                        $kutil = IpamService::utilization($kid);
+                        $grand = $childrenByParent[(int)$kid['prefix_id']] ?? [];
+                        ?>
+                        <tr>
+                            <td><a href="<?= App::e(App::url('pages/ipam.php?prefix_id=' . (int)$kid['prefix_id'])) ?>">
+                                <code><?= App::e((string)$kid['cidr']) ?></code></a></td>
+                            <td><?= App::e((string)($kid['name'] ?? '—')) ?>
+                                <?php if ($grand): ?>
+                                    <div class="text-muted" style="font-size:.75rem"><?= count($grand) ?> nested</div>
+                                <?php endif; ?>
+                            </td>
+                            <td><?= !empty($kid['vlan_id']) ? (int)$kid['vlan_id'] : '—' ?></td>
+                            <td>/<?= (int)($kid['prefix_len'] ?? 0) ?></td>
+                            <td class="text-muted" style="font-size:.75rem"><?= App::e((string)$kutil['pct']) ?>%</td>
+                        </tr>
+                    <?php endforeach; ?>
+                    <?php if (!$kids): ?>
+                        <tr><td colspan="5" class="text-muted">No nested prefixes yet — this block is unallocated.</td></tr>
+                    <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php else: ?>
             <div class="card-body flush">
                 <table class="data">
                     <thead>
@@ -545,13 +672,16 @@ endif; ?>
                     </tbody>
                 </table>
             </div>
+            <?php endif; ?>
             <?php if ($canEdit): ?>
             <div class="card-body flex gap-1" style="flex-wrap:wrap">
+                <?php if (!$subnetPlan): ?>
                 <form method="post" style="display:inline">
                     <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                     <input type="hidden" name="action" value="reconcile">
                     <button class="btn btn-secondary btn-sm" type="submit">Link inventory IPs</button>
                 </form>
+                <?php endif; ?>
                 <form method="post" style="display:inline" onsubmit="return confirm('Delete this prefix and its address records?');">
                     <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                     <input type="hidden" name="action" value="delete_prefix">

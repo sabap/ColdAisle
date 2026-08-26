@@ -1122,6 +1122,7 @@ class Schema
             'ipam_prefixes' => [
                 'prefix_id', 'cidr', 'name', 'vlan_id', 'vrf', 'gateway', 'role',
                 'prefix_len', 'ip_version', 'network_int', 'dhcp_start', 'dhcp_end',
+                'track', 'parent_id',
             ],
             'ipam_addresses' => [
                 'address_id', 'prefix_id', 'ip', 'ip_int', 'status', 'hostname',
@@ -1485,6 +1486,8 @@ class Schema
                 dhcp_start NVARCHAR(45) NULL,
                 dhcp_end NVARCHAR(45) NULL,
                 room_id INT NULL,
+                track NVARCHAR(20) NOT NULL CONSTRAINT DF_ipam_pfx_track DEFAULT 'hosts',
+                parent_id INT NULL,
                 is_active BIT NOT NULL CONSTRAINT DF_ipam_pfx_active DEFAULT 1,
                 created_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_pfx_created DEFAULT SYSUTCDATETIME(),
                 updated_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_pfx_updated DEFAULT SYSUTCDATETIME()
@@ -1511,6 +1514,12 @@ class Schema
                 updated_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_addr_updated DEFAULT SYSUTCDATETIME()
             )"
         );
+        self::ensureColumn(
+            'ipam_prefixes',
+            'track',
+            "NVARCHAR(20) NOT NULL CONSTRAINT DF_ipam_pfx_track DEFAULT 'hosts'"
+        );
+        self::ensureColumn('ipam_prefixes', 'parent_id', 'INT NULL');
     }
 
     private static function ensureTable(string $table, string $createSql): void

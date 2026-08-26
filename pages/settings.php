@@ -3533,13 +3533,6 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
             </form>
             <?php endif; ?>
         </div>
-        <div id="update-progress" class="alert alert-success" style="display:none;margin-top:.75rem" role="status" aria-live="polite">
-            <strong>Updating…</strong>
-            <span id="update-progress-text"> Creating backup, downloading release, applying files. This can take 1–3 minutes — keep this tab open.</span>
-            <div style="margin-top:.5rem;height:6px;background:var(--surface-2,#1e293b);border-radius:4px;overflow:hidden">
-                <div id="update-progress-bar" style="height:100%;width:30%;background:var(--accent,#3b82f6);border-radius:4px;animation:coldaisle-indeterminate 1.2s ease-in-out infinite"></div>
-            </div>
-        </div>
         <p class="text-muted" style="font-size:.75rem;margin:.75rem 0 0">
             <strong>Pre-update recovery zips</strong> (<code>backup_YYYYMMDD_…_vX.Y.Z.zip</code>) are written to
             <code>storage/backups/</code> automatically when you use <em>Update to v…</em> above
@@ -3552,13 +3545,6 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
             The IIS app pool needs <strong>Modify</strong> on the whole site folder (not only <code>config</code>/<code>storage</code>) for updates to replace application files.
             See also <a href="#housekeeping">Storage housekeeping</a>.
         </p>
-        <style>
-            @keyframes coldaisle-indeterminate {
-                0% { transform: translateX(-100%); width: 40%; }
-                50% { width: 60%; }
-                100% { transform: translateX(250%); width: 40%; }
-            }
-        </style>
         <script>
         function coldAisleStartUpdate(form, version) {
             var msg = 'Backup this install and update to v' + version + '? The site may be briefly unavailable.';
@@ -3569,9 +3555,7 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
             if (!confirm(msg)) {
                 return false;
             }
-            var prog = document.getElementById('update-progress');
             var btn = document.getElementById('btn-update-apply');
-            if (prog) prog.style.display = 'block';
             if (btn) {
                 btn.disabled = true;
                 btn.textContent = 'Updating to v' + version + '…';
@@ -3579,6 +3563,9 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
             document.querySelectorAll('#update-actions button').forEach(function (b) {
                 if (b !== btn) b.disabled = true;
             });
+            if (window.ColdAisle && typeof ColdAisle.showUpdateOverlay === 'function') {
+                ColdAisle.showUpdateOverlay({ version: version });
+            }
             // Stay on Settings: POST via fetch so a flushed keepalive body cannot
             // replace the tab with a blank white page. Always navigate after apply.
             var dest = (window.ColdAisle && ColdAisle.baseUrl)
