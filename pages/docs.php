@@ -152,10 +152,11 @@ layout_header('Documentation', $user, 'docs');
             </p>
             <h3 class="docs-h3">Import from Excel</h3>
             <ul>
-                <li>One <strong>.xlsx workbook</strong> is enough. Import → Tracking: Auto, address plan (each row is an IP), or subnet plan (each row is a prefix).</li>
+                <li>One <strong>.xlsx workbook</strong> is enough. After upload, each worksheet is listed so you can set Address plan or Subnet plan (or Skip) per tab — mixed workbooks are supported.</li>
                 <li>Subnet-plan sheets typically have Network / CIDR (or mask). An optional parent or supernet column nests rows under a larger prefix.</li>
                 <li>Address-plan sheets have host IPs and names. Empty hostname rows are skipped. CIDR can be the tab name or a column.</li>
                 <li>CSV is the fallback. Excel import does not require PHP’s zip extension.</li>
+                <li>Global Admin can <strong>Clear all IPAM</strong> on the Import page (type <code>CLEAR</code>, then confirm) before a clean re-import. Devices and PDUs are not deleted.</li>
             </ul>
             <p class="text-muted" style="margin-bottom:0">
                 After import, <strong>Link inventory IPs</strong> matches device / PDU / UPS addresses into the plan.

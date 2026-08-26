@@ -236,6 +236,26 @@ class IpamService
     }
 
     /**
+     * Remove every prefix and host record. Inventory devices/PDUs/UPS are not touched.
+     *
+     * @return array{ok:bool,prefixes:int,addresses:int,message:string}
+     */
+    public static function purgeAll(): array
+    {
+        self::ensure();
+        $addresses = (int)Database::fetchValue('SELECT COUNT(*) FROM ipam_addresses');
+        $prefixes = (int)Database::fetchValue('SELECT COUNT(*) FROM ipam_prefixes');
+        Database::query('DELETE FROM ipam_addresses');
+        Database::query('DELETE FROM ipam_prefixes');
+        return [
+            'ok' => true,
+            'prefixes' => $prefixes,
+            'addresses' => $addresses,
+            'message' => 'Cleared IPAM: ' . $prefixes . ' prefix(es), ' . $addresses . ' address record(s). Devices and PDUs were not changed.',
+        ];
+    }
+
+    /**
      * @param array<string,mixed> $post
      */
     public static function saveAddress(array $post, ?int $addressId = null): array
@@ -566,6 +586,81 @@ class IpamService
     }
 
     /**
+     * Classify each worksheet so the operator can pick address vs subnet plan.
+     *
+     * @return list<array{index:int,name:string,rows:int,guess:string,hint:string}>
+     */
+    public static function previewWorkbook(string $path): array
+    {
+        $sheets = self::xlsxSheets($path);
+        $out = [];
+        foreach ($sheets as $i => $sheet) {
+            $meta = self::extractSheetMeta($sheet['rows'], $sheet['name']);
+            $guess = 'hosts';
+            $hint = 'Looks like host IPs.';
+            if (!empty($meta['skip'])) {
+                $guess = 'skip';
+                $hint = (string)($meta['skip_reason'] ?? 'Not a host or prefix list.');
+            } elseif (!empty($meta['catalog'])) {
+                $guess = 'subnets';
+                $hint = 'Looks like a prefix list (network + CIDR or mask).';
+            } elseif (empty($meta['cidr'])) {
+                $hint = 'Host IPs; no CIDR found on the tab yet.';
+            }
+            $out[] = [
+                'index' => $i,
+                'name' => $sheet['name'],
+                'rows' => count($sheet['rows']),
+                'guess' => $guess,
+                'hint' => $hint,
+            ];
+        }
+        return $out;
+    }
+
+    /** @return array{id:string,path:string,name:string} */
+    public static function stageImportFile(string $src, string $originalName): array
+    {
+        $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        if (!in_array($ext, ['xlsx', 'xlsm', 'csv'], true)) {
+            throw new RuntimeException('Use .xlsx, .xlsm, or .csv.');
+        }
+        $dir = (class_exists('App') ? App::ROOT : dirname(__DIR__, 2)) . '/storage/tmp';
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new RuntimeException('Cannot write storage/tmp for import.');
+        }
+        $id = bin2hex(random_bytes(8));
+        $dest = $dir . DIRECTORY_SEPARATOR . 'ipam-imp-' . $id . '.' . $ext;
+        if (!@copy($src, $dest)) {
+            throw new RuntimeException('Could not stage the upload.');
+        }
+        return ['id' => $id, 'path' => $dest, 'name' => $originalName];
+    }
+
+    public static function stagedImportPath(string $id): ?string
+    {
+        if (!preg_match('/^[a-f0-9]{16}$/', $id)) {
+            return null;
+        }
+        $dir = (class_exists('App') ? App::ROOT : dirname(__DIR__, 2)) . '/storage/tmp';
+        foreach (['xlsx', 'xlsm', 'csv'] as $ext) {
+            $p = $dir . DIRECTORY_SEPARATOR . 'ipam-imp-' . $id . '.' . $ext;
+            if (is_file($p)) {
+                return $p;
+            }
+        }
+        return null;
+    }
+
+    public static function clearStagedImport(string $id): void
+    {
+        $p = self::stagedImportPath($id);
+        if ($p) {
+            @unlink($p);
+        }
+    }
+
+    /**
      * Import CSV (one subnet) or XLSX (each worksheet = a subnet).
      *
      * @param array{prefix_id?:int,skip_empty?:bool} $options
@@ -606,14 +701,21 @@ class IpamService
         $prefixesTouched = 0;
 
         $meta = self::extractSheetMeta($grid, $sheetName);
-        if (!empty($meta['skip'])) {
+        $mode = strtolower(trim((string)($options['track'] ?? 'auto')));
+        if ($mode === 'skip') {
+            return [
+                'ok' => true, 'created' => 0, 'updated' => 0, 'skipped' => 0, 'prefixes' => 0,
+                'errors' => [],
+                'message' => $sheetName . ': skipped.',
+            ];
+        }
+        if ($mode === 'auto' && !empty($meta['skip'])) {
             return [
                 'ok' => true, 'created' => 0, 'updated' => 0, 'skipped' => 0, 'prefixes' => 0,
                 'errors' => [],
                 'message' => $sheetName . ': ' . (string)($meta['skip_reason'] ?? 'skipped (not a host list).'),
             ];
         }
-        $mode = strtolower(trim((string)($options['track'] ?? 'auto')));
         if ($mode === 'subnets' || ($mode !== 'hosts' && !empty($meta['catalog']))) {
             return self::importPrefixCatalog($grid, $meta, $sheetName, $options);
         }
@@ -984,9 +1086,14 @@ class IpamService
         }
         $tot = ['ok' => true, 'created' => 0, 'updated' => 0, 'skipped' => 0, 'prefixes' => 0, 'errors' => [], 'message' => ''];
         $forcePrefix = (int)($options['prefix_id'] ?? 0);
-        foreach ($sheets as $sheet) {
+        $perSheet = is_array($options['sheet_tracks'] ?? null) ? $options['sheet_tracks'] : null;
+        foreach ($sheets as $i => $sheet) {
             $pid = $forcePrefix > 0 ? $forcePrefix : null;
-            $one = self::importGrid($sheet['rows'], $pid, $sheet['name'], $options);
+            $opts = $options;
+            if ($perSheet !== null) {
+                $opts['track'] = (string)($perSheet[$i] ?? $perSheet[(string)$sheet['name']] ?? 'skip');
+            }
+            $one = self::importGrid($sheet['rows'], $pid, $sheet['name'], $opts);
             $tot['created'] += $one['created'];
             $tot['updated'] += $one['updated'];
             $tot['skipped'] += $one['skipped'];

@@ -10,6 +10,7 @@ App::boot();
 $user = App::requirePermission('view_ipam');
 IpamService::ensure();
 $canEdit = AuthManager::can($user, 'edit_ipam') || AuthManager::isAdmin($user);
+$isAdmin = AuthManager::isAdmin($user);
 
 $prefixId = isset($_GET['prefix_id']) ? (int)$_GET['prefix_id'] : 0;
 $addressId = isset($_GET['address_id']) ? (int)$_GET['address_id'] : 0;
@@ -64,6 +65,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             );
             App::redirect('pages/ipam.php' . ($prefixId ? '?prefix_id=' . $prefixId : '?view=conflicts'));
         }
+        if ($action === 'clear_ipam') {
+            if (!AuthManager::isAdmin($user)) {
+                throw new RuntimeException('Only a Global Admin can clear all IPAM data.');
+            }
+            $typed = strtoupper(trim((string)($_POST['confirm_text'] ?? '')));
+            if ($typed !== 'CLEAR') {
+                throw new RuntimeException('Type CLEAR in the confirmation box to purge IPAM.');
+            }
+            $res = IpamService::purgeAll();
+            if (class_exists('AuditService')) {
+                AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'purge', 'ipam', 0, [
+                    'prefixes' => $res['prefixes'],
+                    'addresses' => $res['addresses'],
+                ]);
+            }
+            App::flash('success', $res['message']);
+            App::redirect('pages/ipam.php?view=import');
+        }
+        if ($action === 'import_cancel') {
+            $id = (string)($_SESSION['ipam_import']['id'] ?? '');
+            if ($id !== '') {
+                IpamService::clearStagedImport($id);
+            }
+            unset($_SESSION['ipam_import']);
+            App::flash('success', 'Import cancelled.');
+            App::redirect('pages/ipam.php?view=import');
+        }
+        if ($action === 'import_apply') {
+            $staged = $_SESSION['ipam_import'] ?? null;
+            $id = is_array($staged) ? (string)($staged['id'] ?? '') : '';
+            $path = $id !== '' ? IpamService::stagedImportPath($id) : null;
+            $orig = is_array($staged) ? (string)($staged['name'] ?? 'import.xlsx') : 'import.xlsx';
+            $into = is_array($staged) ? (int)($staged['into'] ?? 0) : 0;
+            if ($path === null) {
+                throw new RuntimeException('Upload expired. Choose the file again.');
+            }
+            $tracks = $_POST['sheet_track'] ?? [];
+            if (!is_array($tracks)) {
+                $tracks = [];
+            }
+            $clean = [];
+            foreach ($tracks as $idx => $mode) {
+                $mode = strtolower(trim((string)$mode));
+                if (!in_array($mode, ['hosts', 'subnets', 'skip'], true)) {
+                    $mode = 'skip';
+                }
+                $clean[(int)$idx] = $mode;
+            }
+            $res = IpamService::importFile($path, $orig, [
+                'prefix_id' => $into > 0 ? $into : 0,
+                'sheet_tracks' => $clean,
+            ]);
+            IpamService::clearStagedImport($id);
+            unset($_SESSION['ipam_import']);
+            if (class_exists('AuditService')) {
+                AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'import', 'ipam', 0, [
+                    'created' => $res['created'], 'updated' => $res['updated'],
+                ]);
+            }
+            if (!empty($res['ok'])) {
+                App::flash('success', (string)$res['message']);
+            } else {
+                App::flash('error', (string)($res['message'] ?? 'Import failed.'));
+            }
+            $errs = $res['errors'] ?? [];
+            if (is_array($errs) && $errs !== []) {
+                App::flash('error', implode(' ', array_slice($errs, 0, 8)) . (count($errs) > 8 ? ' …' : ''));
+            }
+            App::redirect('pages/ipam.php');
+        }
         if ($action === 'import') {
             $file = $_FILES['sheet'] ?? null;
             $err = (int)($file['error'] ?? UPLOAD_ERR_NO_FILE);
@@ -78,11 +149,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 throw new RuntimeException('File must be between 1 byte and 8 MB.');
             }
             $into = (int)($_POST['into_prefix_id'] ?? 0);
+            $orig = (string)($file['name'] ?? 'import.csv');
+            $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+            if ($ext === 'xlsx' || $ext === 'xlsm') {
+                $old = (string)($_SESSION['ipam_import']['id'] ?? '');
+                if ($old !== '') {
+                    IpamService::clearStagedImport($old);
+                }
+                $st = IpamService::stageImportFile((string)$file['tmp_name'], $orig);
+                $_SESSION['ipam_import'] = [
+                    'id' => $st['id'],
+                    'name' => $st['name'],
+                    'into' => $into,
+                ];
+                App::redirect('pages/ipam.php?view=import');
+            }
             $track = strtolower(trim((string)($_POST['track'] ?? 'auto')));
             if (!in_array($track, ['auto', 'hosts', 'subnets'], true)) {
                 $track = 'auto';
             }
-            $res = IpamService::importFile((string)$file['tmp_name'], (string)($file['name'] ?? 'import.csv'), [
+            $res = IpamService::importFile((string)$file['tmp_name'], $orig, [
                 'prefix_id' => $into > 0 ? $into : 0,
                 'track' => $track,
             ]);
@@ -205,24 +291,91 @@ layout_header('IPAM', $user, 'ipam');
     </div>
 </div>
 
-<?php if ($view === 'import' && $canEdit): ?>
+<?php if ($view === 'import' && $canEdit):
+    $staged = $_SESSION['ipam_import'] ?? null;
+    $stagedId = is_array($staged) ? (string)($staged['id'] ?? '') : '';
+    $stagedPath = $stagedId !== '' ? IpamService::stagedImportPath($stagedId) : null;
+    $sheetPreview = [];
+    if ($stagedPath) {
+        try {
+            $sheetPreview = IpamService::previewWorkbook($stagedPath);
+        } catch (Throwable $e) {
+            $sheetPreview = [];
+            App::flash('error', 'Could not read the staged workbook: ' . $e->getMessage());
+            IpamService::clearStagedImport($stagedId);
+            unset($_SESSION['ipam_import']);
+            $stagedPath = null;
+        }
+    }
+    ?>
 <div class="card">
     <div class="card-header"><h2>Import spreadsheet</h2></div>
     <div class="card-body docs-prose">
+        <?php if ($stagedPath && $sheetPreview !== []): ?>
+            <p>
+                <strong><?= App::e((string)($staged['name'] ?? 'workbook.xlsx')) ?></strong>
+                has <?= count($sheetPreview) ?> worksheet(s). Set <strong>Address plan</strong> (host IPs)
+                or <strong>Subnet plan</strong> (prefixes only) on each tab — mixed files are expected.
+            </p>
+            <form method="post">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="import_apply">
+                <p class="text-muted" style="font-size:.85rem">
+                    Guess is from columns only. Skip legends and junk tabs.
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="ipamSetTracks('hosts')">All address</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="ipamSetTracks('subnets')">All subnet</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="ipamSetTracks('skip')">All skip</button>
+                </p>
+                <table class="data">
+                    <thead>
+                    <tr><th>Worksheet</th><th>Rows</th><th>Guess</th><th>Import as</th></tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($sheetPreview as $sh):
+                        $guess = (string)$sh['guess'];
+                        ?>
+                        <tr>
+                            <td>
+                                <?= App::e((string)$sh['name']) ?>
+                                <div class="text-muted" style="font-size:.75rem"><?= App::e((string)$sh['hint']) ?></div>
+                            </td>
+                            <td><?= (int)$sh['rows'] ?></td>
+                            <td><?= $guess === 'subnets' ? 'Subnet plan' : ($guess === 'skip' ? 'Skip' : 'Address plan') ?></td>
+                            <td>
+                                <select class="form-control ipam-sheet-track" name="sheet_track[<?= (int)$sh['index'] ?>]">
+                                    <option value="hosts" <?= $guess === 'hosts' ? 'selected' : '' ?>>Address plan</option>
+                                    <option value="subnets" <?= $guess === 'subnets' ? 'selected' : '' ?>>Subnet plan</option>
+                                    <option value="skip" <?= $guess === 'skip' ? 'selected' : '' ?>>Skip</option>
+                                </select>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <div class="flex gap-1" style="margin-top:.85rem;flex-wrap:wrap">
+                    <button class="btn btn-primary" type="submit">Import selected worksheets</button>
+                    <button class="btn btn-ghost" type="submit" name="action" value="import_cancel">Cancel</button>
+                </div>
+            </form>
+            <script>
+            function ipamSetTracks(v) {
+                document.querySelectorAll('select.ipam-sheet-track').forEach(function (el) { el.value = v; });
+            }
+            </script>
+        <?php else: ?>
         <p>
-            <strong>Excel (.xlsx):</strong> keep one workbook. Choose tracking below if Auto is unsure.
-            Address-plan tabs have host IPs (device/hostname columns). Subnet-plan tabs list prefixes
-            (network + CIDR or mask). An optional parent/supernet column nests smaller blocks under a larger one.
-            You do <strong>not</strong> need a CSV per tab.
+            <strong>Excel (.xlsx):</strong> one workbook, any mix of host tabs and prefix-list tabs.
+            After upload you will set Address plan or Subnet plan <em>per worksheet</em>.
+            An optional parent/supernet column on a subnet tab nests smaller blocks under a larger one.
         </p>
         <p>
             <strong>CSV:</strong> one subnet per file. Import into an existing prefix, or include a
             <code>cidr</code> column. <a href="<?= App::e(App::url('pages/ipam.php?export=csv_template')) ?>">Download column template</a>.
         </p>
         <p class="text-muted" style="font-size:.85rem">
-            Columns (flexible names): IP, hostname/device, status, MAC, description, notes, VLAN, gateway, CIDR.
-            Empty host rows are skipped (those IPs stay available). Gateway / reserved / DHCP in the status column are mapped automatically.
-            Matching device, PDU, or UPS names are linked when unique. Format the IP column as text in Excel.
+            Address-plan columns: IP, hostname/device, status, MAC, description, notes, VLAN, gateway, CIDR.
+            Subnet-plan columns: network/CIDR (or mask), name, VLAN, optional parent/supernet.
+            Empty host rows are skipped. Format the IP column as text in Excel.
         </p>
         <form method="post" enctype="multipart/form-data" class="form-grid">
             <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
@@ -231,11 +384,11 @@ layout_header('IPAM', $user, 'ipam');
                 <input class="form-control" type="file" name="sheet" required
                        accept=".xlsx,.xlsm,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
             </div>
-            <div class="form-row full"><label>Tracking</label>
+            <div class="form-row full"><label>CSV tracking (Excel chooses per tab next)</label>
                 <select class="form-control" name="track">
-                    <option value="auto">Auto — host tabs vs prefix-list tabs</option>
+                    <option value="auto">Auto</option>
                     <option value="hosts">Address plan — each row is an IP</option>
-                    <option value="subnets">Subnet plan — each row is a prefix (no host IPs)</option>
+                    <option value="subnets">Subnet plan — each row is a prefix</option>
                 </select>
             </div>
             <div class="form-row full"><label>Load into prefix (optional parent)</label>
@@ -248,11 +401,43 @@ layout_header('IPAM', $user, 'ipam');
                     <?php endforeach; ?>
                 </select>
             </div>
-            <div class="form-row"><button class="btn btn-primary" type="submit">Import</button>
+            <div class="form-row"><button class="btn btn-primary" type="submit">Continue</button>
                 <a class="btn btn-ghost" href="<?= App::e(App::url('pages/ipam.php')) ?>">Cancel</a></div>
         </form>
+        <?php endif; ?>
     </div>
 </div>
+<?php if ($isAdmin): ?>
+<div class="card" style="margin-top:1rem;border-color:rgba(248,113,113,.45)">
+    <div class="card-header"><h2>Clear all IPAM</h2></div>
+    <div class="card-body docs-prose">
+        <p>
+            Global Admin only. Deletes <strong>every prefix and host record</strong> so you can re-import from a spreadsheet.
+            Cabinets, devices, PDUs, and UPS are not touched.
+        </p>
+        <form method="post" class="form-grid" onsubmit="return ipamConfirmPurge(this);">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="action" value="clear_ipam">
+            <div class="form-row full"><label>Type <code>CLEAR</code> to confirm</label>
+                <input class="form-control" name="confirm_text" autocomplete="off" spellcheck="false"
+                       placeholder="CLEAR"></div>
+            <div class="form-row">
+                <button class="btn btn-danger" type="submit">Purge all prefixes and addresses</button>
+            </div>
+        </form>
+        <script>
+        function ipamConfirmPurge(form) {
+            var typed = ((form.confirm_text && form.confirm_text.value) || '').trim().toUpperCase();
+            if (typed !== 'CLEAR') {
+                alert('Type CLEAR in the box to confirm.');
+                return false;
+            }
+            return confirm('Permanently delete ALL IPAM prefixes and address records? This cannot be undone. Inventory (devices, PDUs, UPS) is kept.');
+        }
+        </script>
+    </div>
+</div>
+<?php endif; ?>
 <?php layout_footer();
     exit;
 endif; ?>
