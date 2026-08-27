@@ -230,6 +230,7 @@ class IpamService
     {
         $n = (int)Database::fetchValue('SELECT COUNT(*) FROM ipam_addresses WHERE prefix_id = ?', [$prefixId]);
         Database::query('UPDATE ipam_prefixes SET parent_id = NULL WHERE parent_id = ?', [$prefixId]);
+        Database::delete('ipam_align_members', 'prefix_id = ?', [$prefixId]);
         Database::delete('ipam_addresses', 'prefix_id = ?', [$prefixId]);
         Database::delete('ipam_prefixes', 'prefix_id = ?', [$prefixId]);
         return ['ok' => true, 'message' => 'Prefix deleted' . ($n > 0 ? " ({$n} address record(s) removed)." : '.')];
@@ -245,6 +246,9 @@ class IpamService
         self::ensure();
         $addresses = (int)Database::fetchValue('SELECT COUNT(*) FROM ipam_addresses');
         $prefixes = (int)Database::fetchValue('SELECT COUNT(*) FROM ipam_prefixes');
+        Database::query('DELETE FROM ipam_align_slots');
+        Database::query('DELETE FROM ipam_align_members');
+        Database::query('DELETE FROM ipam_align_groups');
         Database::query('DELETE FROM ipam_addresses');
         Database::query('DELETE FROM ipam_prefixes');
         return [
@@ -253,6 +257,310 @@ class IpamService
             'addresses' => $addresses,
             'message' => 'Cleared IPAM: ' . $prefixes . ' prefix(es), ' . $addresses . ' address record(s). Devices and PDUs were not changed.',
         ];
+    }
+
+    /** @return list<array<string,mixed>> */
+    public static function alignGroups(): array
+    {
+        self::ensure();
+        return Database::fetchAll(
+            'SELECT * FROM ipam_align_groups ORDER BY name'
+        ) ?: [];
+    }
+
+    public static function alignGroup(int $groupId): ?array
+    {
+        self::ensure();
+        $g = Database::fetchOne('SELECT * FROM ipam_align_groups WHERE group_id = ?', [$groupId]);
+        return $g ?: null;
+    }
+
+    /** @return list<array<string,mixed>> */
+    public static function alignMembers(int $groupId): array
+    {
+        return Database::fetchAll(
+            'SELECT m.*, p.cidr, p.name AS prefix_name, p.vrf
+             FROM ipam_align_members m
+             INNER JOIN ipam_prefixes p ON p.prefix_id = m.prefix_id
+             WHERE m.group_id = ?
+             ORDER BY m.sort_order, m.member_id',
+            [$groupId]
+        ) ?: [];
+    }
+
+    /**
+     * @param array<string,mixed> $post
+     * @return array{ok:bool,group_id:int,message:string}
+     */
+    public static function saveAlignGroup(array $post, ?int $groupId = null): array
+    {
+        self::ensure();
+        $name = trim((string)($post['name'] ?? ''));
+        if ($name === '') {
+            throw new InvalidArgumentException('A group name is required.');
+        }
+        $from = (int)($post['idx_from'] ?? 1);
+        $to = (int)($post['idx_to'] ?? 254);
+        if ($from < 0) {
+            $from = 0;
+        }
+        if ($to > 254) {
+            $to = 254;
+        }
+        if ($to < $from) {
+            throw new InvalidArgumentException('Index range is inverted.');
+        }
+        $fields = [
+            'name' => $name,
+            'description' => ($d = trim((string)($post['description'] ?? ''))) !== '' ? $d : null,
+            'vrf' => ($v = trim((string)($post['vrf'] ?? 'default'))) !== '' ? $v : 'default',
+            'idx_from' => $from,
+            'idx_to' => $to,
+            'updated_at' => date('Y-m-d H:i:s'),
+        ];
+        if ($groupId && $groupId > 0) {
+            Database::update('ipam_align_groups', $fields, 'group_id = :id', [':id' => $groupId]);
+            $id = $groupId;
+        } else {
+            $id = (int)Database::insert('ipam_align_groups', $fields);
+        }
+        $ids = $post['prefix_id'] ?? [];
+        $labels = $post['member_label'] ?? [];
+        if (!is_array($ids)) {
+            $ids = [];
+        }
+        if (!is_array($labels)) {
+            $labels = [];
+        }
+        Database::delete('ipam_align_members', 'group_id = ?', [$id]);
+        $order = 0;
+        $seen = [];
+        foreach ($ids as $i => $rawPid) {
+            $pid = (int)$rawPid;
+            if ($pid < 1 || isset($seen[$pid])) {
+                continue;
+            }
+            $pfx = Database::fetchOne('SELECT prefix_id, name, cidr FROM ipam_prefixes WHERE prefix_id = ?', [$pid]);
+            if (!$pfx) {
+                continue;
+            }
+            $seen[$pid] = true;
+            $label = trim((string)($labels[$i] ?? ''));
+            if ($label === '') {
+                $label = (string)($pfx['name'] ?? $pfx['cidr']);
+            }
+            Database::insert('ipam_align_members', [
+                'group_id' => $id,
+                'prefix_id' => $pid,
+                'label' => $label,
+                'sort_order' => $order,
+            ]);
+            $order++;
+        }
+        return ['ok' => true, 'group_id' => $id, 'message' => 'Aligned group saved.'];
+    }
+
+    public static function deleteAlignGroup(int $groupId): array
+    {
+        Database::delete('ipam_align_slots', 'group_id = ?', [$groupId]);
+        Database::delete('ipam_align_members', 'group_id = ?', [$groupId]);
+        Database::delete('ipam_align_groups', 'group_id = ?', [$groupId]);
+        return ['ok' => true, 'message' => 'Aligned group removed. Host records were left in place.'];
+    }
+
+    public static function ipAtOffset(array $prefix, int $idx): ?string
+    {
+        $parsed = self::parseCidr((string)($prefix['cidr'] ?? ''));
+        if (!$parsed) {
+            return null;
+        }
+        $ipInt = (int)$parsed['network_int'] + $idx;
+        if ($ipInt < (int)$parsed['network_int'] || $ipInt > (int)$parsed['broadcast_int']) {
+            return null;
+        }
+        return self::intToIp($ipInt);
+    }
+
+    /**
+     * Assign the same host index across every member prefix (writes address records).
+     *
+     * @return array{ok:bool,message:string}
+     */
+    public static function assignAlignSlot(int $groupId, int $idx, string $hostname, string $notes = ''): array
+    {
+        $group = self::alignGroup($groupId);
+        if (!$group) {
+            throw new RuntimeException('Aligned group not found.');
+        }
+        $hostname = trim($hostname);
+        if ($hostname === '') {
+            throw new InvalidArgumentException('A site / hostname is required.');
+        }
+        $from = (int)$group['idx_from'];
+        $to = (int)$group['idx_to'];
+        if ($idx < $from || $idx > $to) {
+            throw new InvalidArgumentException('Index is outside this group’s range.');
+        }
+        $members = self::alignMembers($groupId);
+        if (count($members) < 2) {
+            throw new RuntimeException('Add at least two prefixes to the group first.');
+        }
+        foreach ($members as $m) {
+            $ip = self::ipAtOffset($m, $idx);
+            if ($ip === null) {
+                throw new RuntimeException('Offset ' . $idx . ' is outside ' . $m['cidr'] . '.');
+            }
+            $vrf = (string)($m['vrf'] ?? $group['vrf'] ?? 'default');
+            $existing = Database::fetchOne(
+                'SELECT address_id, prefix_id, hostname FROM ipam_addresses WHERE ip = ? AND vrf = ?',
+                [$ip, $vrf]
+            );
+            $fields = [
+                'prefix_id' => (int)$m['prefix_id'],
+                'ip' => $ip,
+                'ip_int' => self::ipToInt($ip),
+                'vrf' => $vrf,
+                'status' => 'assigned',
+                'hostname' => $hostname,
+                'description' => (string)($m['label'] ?? ''),
+                'notes' => $notes !== '' ? $notes : null,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ];
+            if ($existing) {
+                if ((int)$existing['prefix_id'] !== (int)$m['prefix_id']) {
+                    throw new RuntimeException($ip . ' already exists in another prefix.');
+                }
+                Database::update('ipam_addresses', $fields, 'address_id = :id', [':id' => (int)$existing['address_id']]);
+            } else {
+                Database::insert('ipam_addresses', $fields);
+            }
+        }
+        $slot = Database::fetchOne(
+            'SELECT slot_id FROM ipam_align_slots WHERE group_id = ? AND idx = ?',
+            [$groupId, $idx]
+        );
+        $slotFields = [
+            'group_id' => $groupId,
+            'idx' => $idx,
+            'hostname' => $hostname,
+            'notes' => $notes !== '' ? $notes : null,
+            'updated_at' => date('Y-m-d H:i:s'),
+        ];
+        if ($slot) {
+            Database::update('ipam_align_slots', $slotFields, 'slot_id = :id', [':id' => (int)$slot['slot_id']]);
+        } else {
+            Database::insert('ipam_align_slots', $slotFields);
+        }
+        $ips = [];
+        foreach ($members as $m) {
+            $ips[] = self::ipAtOffset($m, $idx);
+        }
+        return [
+            'ok' => true,
+            'message' => $hostname . ' → index ' . $idx . ' (' . implode(', ', array_filter($ips)) . ').',
+        ];
+    }
+
+    public static function clearAlignSlot(int $groupId, int $idx): array
+    {
+        $members = self::alignMembers($groupId);
+        $slot = Database::fetchOne(
+            'SELECT hostname FROM ipam_align_slots WHERE group_id = ? AND idx = ?',
+            [$groupId, $idx]
+        );
+        $host = $slot['hostname'] ?? '';
+        foreach ($members as $m) {
+            $ip = self::ipAtOffset($m, $idx);
+            if ($ip === null) {
+                continue;
+            }
+            $row = Database::fetchOne(
+                'SELECT address_id, hostname FROM ipam_addresses WHERE prefix_id = ? AND ip = ?',
+                [(int)$m['prefix_id'], $ip]
+            );
+            if ($row && (string)($row['hostname'] ?? '') === (string)$host) {
+                Database::delete('ipam_addresses', 'address_id = ?', [(int)$row['address_id']]);
+            }
+        }
+        Database::delete('ipam_align_slots', 'group_id = ? AND idx = ?', [$groupId, $idx]);
+        return ['ok' => true, 'message' => 'Index ' . $idx . ' cleared.'];
+    }
+
+    /**
+     * Spreadsheet-style grid: one row per index, one column per member prefix.
+     *
+     * @return array{group:array,members:list<array>,rows:list<array>,next:?int}
+     */
+    public static function alignGrid(int $groupId, bool $unused = false): array
+    {
+        $group = self::alignGroup($groupId);
+        if (!$group) {
+            throw new RuntimeException('Aligned group not found.');
+        }
+        $members = self::alignMembers($groupId);
+        $slots = [];
+        foreach (Database::fetchAll(
+            'SELECT * FROM ipam_align_slots WHERE group_id = ?',
+            [$groupId]
+        ) ?: [] as $s) {
+            $slots[(int)$s['idx']] = $s;
+        }
+        $addrMap = [];
+        $pids = [];
+        foreach ($members as $m) {
+            $pids[] = (int)$m['prefix_id'];
+        }
+        if ($pids !== []) {
+            $in = implode(',', array_map('intval', $pids));
+            foreach (Database::fetchAll(
+                "SELECT prefix_id, ip, hostname, status FROM ipam_addresses WHERE prefix_id IN ($in)"
+            ) ?: [] as $a) {
+                $addrMap[(int)$a['prefix_id'] . '|' . (string)$a['ip']] = $a;
+            }
+        }
+        $from = (int)$group['idx_from'];
+        $to = (int)$group['idx_to'];
+        $rows = [];
+        $next = null;
+        for ($i = $from; $i <= $to; $i++) {
+            $slot = $slots[$i] ?? null;
+            $cells = [];
+            foreach ($members as $m) {
+                $ip = self::ipAtOffset($m, $i);
+                $addr = ($ip !== null) ? ($addrMap[(int)$m['prefix_id'] . '|' . $ip] ?? null) : null;
+                $cells[] = [
+                    'ip' => $ip,
+                    'hostname' => $addr['hostname'] ?? null,
+                    'status' => $addr['status'] ?? null,
+                ];
+            }
+            $hostsFound = [];
+            foreach ($cells as $c) {
+                $h = trim((string)($c['hostname'] ?? ''));
+                if ($h !== '') {
+                    $hostsFound[$h] = true;
+                }
+            }
+            $name = trim((string)($slot['hostname'] ?? ''));
+            if ($name === '' && $hostsFound !== []) {
+                $name = (string)array_key_first($hostsFound);
+            }
+            $used = $name !== '' || $slot !== null;
+            if (!$used && $next === null) {
+                $next = $i;
+            }
+            if ($used || $unused || $next === $i) {
+                $rows[] = [
+                    'idx' => $i,
+                    'hostname' => $name,
+                    'notes' => $slot['notes'] ?? '',
+                    'used' => $used,
+                    'mismatch' => count($hostsFound) > 1,
+                    'cells' => $cells,
+                ];
+            }
+        }
+        return ['group' => $group, 'members' => $members, 'rows' => $rows, 'next' => $next];
     }
 
     /**

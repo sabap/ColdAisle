@@ -151,13 +151,27 @@ layout_header('Documentation', $user, 'docs');
                 Set <strong>Parent</strong> on a prefix to nest it. Opening a container shows children, leftover ranges, and next-free /n.
                 Import does not build that tree for you. DHCP on an address plan is a start/end fence, not a DHCP server.
             </p>
+            <h3 class="docs-h3">Aligned groups</h3>
+            <p>
+                Use an aligned group when several prefixes should share a memorable host number.
+                Add two or more prefixes, then assign a site name to an <strong>index</strong>.
+                The index is the offset from each prefix’s network address — on a /24 that is the last octet.
+                Example: Metro-E /24s per ISP (<code>10.250.0.0/24</code>, <code>10.250.1.0/24</code>, <code>10.250.2.0/24</code>);
+                a clinic at index 10 gets <code>10.250.0.10</code>, <code>10.250.1.10</code>, and <code>10.250.2.10</code> in one step
+                so OSPF equal-cost paths stay obvious. Same pattern for a server VLAN plus iDRAC.
+            </p>
+            <p>
+                Create the prefixes first, then IPAM → <strong>Aligned</strong> → + Group.
+                The grid is spreadsheet-style (assigned rows plus the next free index; <strong>Show unused</strong> lists every index).
+                Clearing a slot removes those host records if the hostname still matches. Deleting the group leaves the IPs in place.
+            </p>
             <h3 class="docs-h3">Import from Excel</h3>
             <ul>
                 <li>One <strong>.xlsx workbook</strong> is enough. After upload, each worksheet is listed so you can set Address plan or Subnet plan (or Skip) per tab — mixed workbooks are supported.</li>
                 <li>Subnet-plan sheets typically have Network / CIDR (or mask). An optional parent or supernet column nests rows under a larger prefix.</li>
                 <li>Address-plan sheets have host IPs and names. Empty hostname rows are skipped. CIDR can be the tab name or a column.</li>
                 <li>CSV is the fallback. Excel import does not require PHP’s zip extension.</li>
-                <li>Global Admin can <strong>Clear all IPAM</strong> on the Import page (type <code>CLEAR</code>, then confirm) before a clean re-import. Devices and PDUs are not deleted.</li>
+                <li>Global Admin can <strong>Clear all IPAM</strong> on the Import page (type <code>CLEAR</code>, then confirm) before a clean re-import. Prefixes, host records, and aligned groups are removed. Devices and PDUs are not deleted.</li>
             </ul>
             <p class="text-muted" style="margin-bottom:0">
                 After import, <strong>Link inventory IPs</strong> matches device / PDU / UPS addresses into the plan.

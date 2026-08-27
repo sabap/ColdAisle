@@ -1128,6 +1128,9 @@ class Schema
                 'address_id', 'prefix_id', 'ip', 'ip_int', 'status', 'hostname',
                 'device_id', 'pdu_id', 'ups_id',
             ],
+            'ipam_align_groups' => ['group_id', 'name', 'vrf', 'idx_from', 'idx_to'],
+            'ipam_align_members' => ['member_id', 'group_id', 'prefix_id', 'label', 'sort_order'],
+            'ipam_align_slots' => ['slot_id', 'group_id', 'idx', 'hostname'],
             'role_group_maps' => ['map_id', 'role_id', 'auth_source', 'group_id'],
             'auth_sessions' => ['session_id', 'user_id', 'last_seen_at', 'expires_at'],
             'ups_units' => [
@@ -1520,6 +1523,41 @@ class Schema
             "NVARCHAR(20) NOT NULL CONSTRAINT DF_ipam_pfx_track DEFAULT 'hosts'"
         );
         self::ensureColumn('ipam_prefixes', 'parent_id', 'INT NULL');
+        self::ensureTable(
+            'ipam_align_groups',
+            "CREATE TABLE ipam_align_groups (
+                group_id INT IDENTITY(1,1) PRIMARY KEY,
+                name NVARCHAR(150) NOT NULL,
+                description NVARCHAR(500) NULL,
+                vrf NVARCHAR(80) NOT NULL CONSTRAINT DF_ipam_ag_vrf DEFAULT 'default',
+                idx_from INT NOT NULL CONSTRAINT DF_ipam_ag_from DEFAULT 1,
+                idx_to INT NOT NULL CONSTRAINT DF_ipam_ag_to DEFAULT 254,
+                created_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_ag_created DEFAULT SYSUTCDATETIME(),
+                updated_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_ag_updated DEFAULT SYSUTCDATETIME()
+            )"
+        );
+        self::ensureTable(
+            'ipam_align_members',
+            "CREATE TABLE ipam_align_members (
+                member_id INT IDENTITY(1,1) PRIMARY KEY,
+                group_id INT NOT NULL,
+                prefix_id INT NOT NULL,
+                label NVARCHAR(80) NULL,
+                sort_order INT NOT NULL CONSTRAINT DF_ipam_am_sort DEFAULT 0
+            )"
+        );
+        self::ensureTable(
+            'ipam_align_slots',
+            "CREATE TABLE ipam_align_slots (
+                slot_id INT IDENTITY(1,1) PRIMARY KEY,
+                group_id INT NOT NULL,
+                idx INT NOT NULL,
+                hostname NVARCHAR(255) NOT NULL,
+                notes NVARCHAR(500) NULL,
+                created_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_as_created DEFAULT SYSUTCDATETIME(),
+                updated_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_as_updated DEFAULT SYSUTCDATETIME()
+            )"
+        );
     }
 
     private static function ensureTable(string $table, string $createSql): void

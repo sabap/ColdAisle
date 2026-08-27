@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **IPAM aligned groups:** pin the same host index across two or more prefixes (Metro-E per ISP, server VLAN + iDRAC). Assign a site to index N and every member prefix gets that host record. Grid is spreadsheet-style: one row per index, one column per prefix.
+
 ### Enhancements
 
 ### Bug fixes

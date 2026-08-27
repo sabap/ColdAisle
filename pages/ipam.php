@@ -14,6 +14,7 @@ $isAdmin = AuthManager::isAdmin($user);
 
 $prefixId = isset($_GET['prefix_id']) ? (int)$_GET['prefix_id'] : 0;
 $addressId = isset($_GET['address_id']) ? (int)$_GET['address_id'] : 0;
+$groupId = isset($_GET['group_id']) ? (int)$_GET['group_id'] : 0;
 $view = strtolower(trim((string)($_GET['view'] ?? '')));
 $q = class_exists('SearchService') ? SearchService::queryFromRequest() : trim((string)($_GET['q'] ?? ''));
 
@@ -188,8 +189,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             }
             App::redirect('pages/ipam.php?view=import');
         }
+        if ($action === 'save_align_group') {
+            $gid = !empty($_POST['group_id']) ? (int)$_POST['group_id'] : null;
+            $res = IpamService::saveAlignGroup($_POST, $gid);
+            if (class_exists('AuditService')) {
+                AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'save', 'ipam_align', (int)$res['group_id'], [
+                    'name' => (string)($_POST['name'] ?? ''),
+                ]);
+            }
+            App::flash('success', $res['message']);
+            App::redirect('pages/ipam.php?view=aligned&group_id=' . (int)$res['group_id']);
+        }
+        if ($action === 'delete_align_group') {
+            $gid = (int)($_POST['group_id'] ?? 0);
+            $res = IpamService::deleteAlignGroup($gid);
+            if (class_exists('AuditService')) {
+                AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'delete', 'ipam_align', $gid, []);
+            }
+            App::flash('success', $res['message']);
+            App::redirect('pages/ipam.php?view=aligned');
+        }
+        if ($action === 'assign_align_slot') {
+            $gid = (int)($_POST['group_id'] ?? 0);
+            $res = IpamService::assignAlignSlot(
+                $gid,
+                (int)($_POST['idx'] ?? 0),
+                (string)($_POST['hostname'] ?? ''),
+                (string)($_POST['notes'] ?? '')
+            );
+            if (class_exists('AuditService')) {
+                AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'assign', 'ipam_align', $gid, [
+                    'idx' => (int)($_POST['idx'] ?? 0),
+                    'hostname' => (string)($_POST['hostname'] ?? ''),
+                ]);
+            }
+            App::flash('success', $res['message']);
+            $u = !empty($_POST['unused']) ? '&unused=1' : '';
+            App::redirect('pages/ipam.php?view=aligned&group_id=' . $gid . $u);
+        }
+        if ($action === 'clear_align_slot') {
+            $gid = (int)($_POST['group_id'] ?? 0);
+            $res = IpamService::clearAlignSlot($gid, (int)($_POST['idx'] ?? 0));
+            App::flash('success', $res['message']);
+            $u = !empty($_POST['unused']) ? '&unused=1' : '';
+            App::redirect('pages/ipam.php?view=aligned&group_id=' . $gid . $u);
+        }
     } catch (Throwable $e) {
         App::flash('error', $e->getMessage());
+    }
+    if (str_contains($action, 'align')) {
+        $gid = (int)($_POST['group_id'] ?? $groupId);
+        App::redirect('pages/ipam.php?view=aligned' . ($gid > 0 ? '&group_id=' . $gid : ''));
     }
     App::redirect('pages/ipam.php' . ($prefixId ? '?prefix_id=' . $prefixId : ''));
 }
@@ -273,6 +323,8 @@ layout_header('IPAM', $user, 'ipam');
 <p class="text-muted" style="margin-top:0">
     Two kinds of prefix: an <strong>address plan</strong> (individual IPs) or a <strong>subnet plan</strong> (a container you carve into smaller prefixes).
     Nesting is optional: set <strong>Parent</strong> when you add a prefix (for example a site /21, then VLAN /24s under it).
+    <a href="<?= App::e(App::url('pages/ipam.php?view=aligned')) ?>">Aligned groups</a>
+    pin the same host index across two or more prefixes (Metro-E per ISP, or LAN + iDRAC).
     DHCP on an address plan is a range fence, not a server.
     <?php if ($canEdit): ?>
         <a href="<?= App::e(App::url('pages/ipam.php?view=import')) ?>">Import Excel or CSV</a>.
@@ -286,6 +338,7 @@ layout_header('IPAM', $user, 'ipam');
     ]); ?>
     <div class="flex gap-1" style="flex-wrap:wrap">
         <a class="btn btn-secondary" href="<?= App::e(App::url('pages/ipam.php?view=conflicts')) ?>">Conflicts</a>
+        <a class="btn btn-secondary" href="<?= App::e(App::url('pages/ipam.php?view=aligned')) ?>">Aligned</a>
         <?php if ($canEdit): ?>
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/ipam.php?view=import')) ?>">Import</a>
             <a class="btn btn-primary" href="<?= App::e(App::url('pages/ipam.php?view=prefix')) ?>">+ Prefix</a>
@@ -414,7 +467,7 @@ layout_header('IPAM', $user, 'ipam');
     <div class="card-header"><h2>Clear all IPAM</h2></div>
     <div class="card-body docs-prose">
         <p>
-            Global Admin only. Deletes <strong>every prefix and host record</strong> so you can re-import from a spreadsheet.
+            Global Admin only. Deletes <strong>every prefix, host record, and aligned group</strong> so you can re-import from a spreadsheet.
             Cabinets, devices, PDUs, and UPS are not touched.
         </p>
         <form method="post" class="form-grid" onsubmit="return ipamConfirmPurge(this);">
@@ -499,6 +552,310 @@ endif; ?>
         <?php endif; ?>
     </div>
 </div>
+<?php layout_footer();
+    exit;
+endif; ?>
+
+<?php if ($view === 'aligned'):
+    $showUnused = isset($_GET['unused']) && (string)$_GET['unused'] !== '0' && (string)$_GET['unused'] !== '';
+    $alignGroups = IpamService::alignGroups();
+    $alignGroup = $groupId > 0 ? IpamService::alignGroup($groupId) : null;
+    if ($groupId > 0 && !$alignGroup) {
+        $groupId = 0;
+        $alignGroup = null;
+    }
+    $alignForm = $alignGroup ?? [];
+    $alignMembers = $alignGroup ? IpamService::alignMembers($groupId) : [];
+    $openNew = isset($_GET['new']);
+    $openEdit = $alignGroup && isset($_GET['edit']);
+    $hostPrefixes = $allPrefixes;
+    ?>
+<?php if ($alignGroup && !$openEdit):
+    $grid = IpamService::alignGrid($groupId, $showUnused);
+    $members = $grid['members'];
+    $nextIdx = $grid['next'];
+    ?>
+<div class="card mb-2">
+    <div class="card-header flex-between" style="flex-wrap:wrap;gap:.5rem">
+        <h2 style="margin:0"><?= App::e((string)$alignGroup['name']) ?>
+            <span class="text-muted" style="font-weight:500;font-size:.85rem">index <?= (int)$alignGroup['idx_from'] ?>–<?= (int)$alignGroup['idx_to'] ?></span>
+        </h2>
+        <div class="flex gap-1" style="flex-wrap:wrap">
+            <a class="btn btn-sm btn-ghost" href="<?= App::e(App::url('pages/ipam.php?view=aligned')) ?>">All groups</a>
+            <?php if ($showUnused): ?>
+                <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/ipam.php?view=aligned&group_id=' . $groupId)) ?>">Hide unused</a>
+            <?php else: ?>
+                <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/ipam.php?view=aligned&group_id=' . $groupId . '&unused=1')) ?>">Show unused</a>
+            <?php endif; ?>
+            <?php if ($canEdit): ?>
+                <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/ipam.php?view=aligned&group_id=' . $groupId . '&edit=1')) ?>">Edit group</a>
+            <?php endif; ?>
+        </div>
+    </div>
+    <div class="card-body docs-prose">
+        <?php if (!empty($alignGroup['description'])): ?>
+            <p><?= App::e((string)$alignGroup['description']) ?></p>
+        <?php endif; ?>
+        <p class="text-muted" style="margin-bottom:<?= $canEdit ? '.5rem' : '0' ?>">
+            Index is the offset from each prefix’s network address.
+            On a /24 that is the last octet — index 10 is
+            <?php
+            $ex = [];
+            foreach (array_slice($members, 0, 3) as $m) {
+                $ip = IpamService::ipAtOffset($m, 10);
+                if ($ip) {
+                    $ex[] = $ip;
+                }
+            }
+            echo $ex ? '<code>' . App::e(implode(', ', $ex)) . '</code>' : 'the same last octet on every member';
+            ?>.
+            Assign once; every member prefix gets that host record.
+        </p>
+        <?php if ($canEdit): ?>
+            <?php if (count($members) < 2): ?>
+                <p class="text-muted">Add at least two prefixes on <a href="<?= App::e(App::url('pages/ipam.php?view=aligned&group_id=' . $groupId . '&edit=1')) ?>">Edit group</a> before assigning.</p>
+            <?php else: ?>
+            <form method="post" class="form-grid" style="margin:0">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="assign_align_slot">
+                <input type="hidden" name="group_id" value="<?= $groupId ?>">
+                <?php if ($showUnused): ?><input type="hidden" name="unused" value="1"><?php endif; ?>
+                <div class="form-row"><label>Index</label>
+                    <input class="form-control" type="number" name="idx" required min="<?= (int)$alignGroup['idx_from'] ?>" max="<?= (int)$alignGroup['idx_to'] ?>"
+                           value="<?= $nextIdx !== null ? (int)$nextIdx : (int)$alignGroup['idx_from'] ?>"></div>
+                <div class="form-row"><label>Site / hostname</label>
+                    <input class="form-control" name="hostname" required placeholder="VMC"></div>
+                <div class="form-row"><label>Notes</label>
+                    <input class="form-control" name="notes" placeholder="optional"></div>
+                <div class="form-row">
+                    <button class="btn btn-primary" type="submit">Assign on all prefixes</button>
+                </div>
+            </form>
+            <?php endif; ?>
+        <?php endif; ?>
+    </div>
+    <div class="card-body flush" style="overflow:auto">
+        <?php if (!$members): ?>
+            <p class="text-muted" style="padding:.85rem">No member prefixes yet.</p>
+        <?php else: ?>
+        <table class="data">
+            <thead>
+            <tr>
+                <th>Index</th>
+                <th>Site</th>
+                <?php foreach ($members as $m): ?>
+                    <th>
+                        <?= App::e((string)($m['label'] ?: $m['cidr'])) ?>
+                        <div class="text-muted" style="font-weight:400;font-size:.72rem">
+                            <a href="<?= App::e(App::url('pages/ipam.php?prefix_id=' . (int)$m['prefix_id'])) ?>"><?= App::e((string)$m['cidr']) ?></a>
+                        </div>
+                    </th>
+                <?php endforeach; ?>
+                <?php if ($canEdit): ?><th></th><?php endif; ?>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($grid['rows'] as $row):
+                $isNext = !$row['used'] && $nextIdx !== null && (int)$row['idx'] === (int)$nextIdx;
+                ?>
+                <tr class="<?= $row['used'] ? '' : 'ipam-align-free' ?><?= !empty($row['mismatch']) ? ' ipam-align-mismatch' : '' ?>">
+                    <td><code><?= (int)$row['idx'] ?></code></td>
+                    <td>
+                        <?= $row['hostname'] !== '' ? App::e((string)$row['hostname']) : ($isNext ? '<span class="text-muted">next free</span>' : '—') ?>
+                        <?php if (!empty($row['mismatch'])): ?>
+                            <div class="text-muted" style="font-size:.72rem">Hostnames differ across prefixes</div>
+                        <?php endif; ?>
+                        <?php if (!empty($row['notes'])): ?>
+                            <div class="text-muted" style="font-size:.72rem"><?= App::e((string)$row['notes']) ?></div>
+                        <?php endif; ?>
+                    </td>
+                    <?php foreach ($row['cells'] as $cell): ?>
+                        <td>
+                            <?php if ($cell['ip']): ?>
+                                <code><?= App::e((string)$cell['ip']) ?></code>
+                                <?php if (!empty($cell['status']) && $cell['status'] !== 'assigned'): ?>
+                                    <div class="text-muted" style="font-size:.72rem"><?= App::e((string)($statuses[$cell['status']] ?? $cell['status'])) ?></div>
+                                <?php endif; ?>
+                            <?php else: ?>
+                                <span class="text-muted">out of range</span>
+                            <?php endif; ?>
+                        </td>
+                    <?php endforeach; ?>
+                    <?php if ($canEdit): ?>
+                        <td style="white-space:nowrap">
+                            <?php if ($row['used']): ?>
+                                <form method="post" style="display:inline" onsubmit="return confirm('Clear index <?= (int)$row['idx'] ?> on every member prefix?');">
+                                    <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                                    <input type="hidden" name="action" value="clear_align_slot">
+                                    <input type="hidden" name="group_id" value="<?= $groupId ?>">
+                                    <input type="hidden" name="idx" value="<?= (int)$row['idx'] ?>">
+                                    <?php if ($showUnused): ?><input type="hidden" name="unused" value="1"><?php endif; ?>
+                                    <button class="btn btn-sm btn-ghost" type="submit">Clear</button>
+                                </form>
+                            <?php endif; ?>
+                        </td>
+                    <?php endif; ?>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$grid['rows']): ?>
+                <tr><td colspan="<?= 2 + count($members) + ($canEdit ? 1 : 0) ?>" class="text-muted">No indexes in this range.</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+    </div>
+</div>
+<style>
+.ipam-align-free td { color: var(--muted); }
+.ipam-align-mismatch td { background: rgba(250, 204, 21, .12); }
+</style>
+<?php layout_footer();
+    exit;
+endif; ?>
+
+<div class="split-2">
+    <div class="card">
+        <div class="card-header flex-between">
+            <h2 style="margin:0">Aligned groups</h2>
+            <?php if ($canEdit && !$openNew): ?>
+                <a class="btn btn-sm btn-primary" href="<?= App::e(App::url('pages/ipam.php?view=aligned&new=1')) ?>">+ Group</a>
+            <?php endif; ?>
+        </div>
+        <div class="card-body flush">
+            <table class="data">
+                <thead>
+                <tr><th>Name</th><th>Prefixes</th><th>Range</th></tr>
+                </thead>
+                <tbody>
+                <?php foreach ($alignGroups as $g):
+                    $gm = IpamService::alignMembers((int)$g['group_id']);
+                    $labs = [];
+                    foreach ($gm as $m) {
+                        $labs[] = (string)($m['label'] ?: $m['cidr']);
+                    }
+                    ?>
+                    <tr class="<?= $groupId === (int)$g['group_id'] ? 'is-selected' : '' ?>">
+                        <td>
+                            <a href="<?= App::e(App::url('pages/ipam.php?view=aligned&group_id=' . (int)$g['group_id'])) ?>">
+                                <?= App::e((string)$g['name']) ?></a>
+                            <?php if (!empty($g['description'])): ?>
+                                <div class="text-muted" style="font-size:.75rem"><?= App::e((string)$g['description']) ?></div>
+                            <?php endif; ?>
+                        </td>
+                        <td class="text-muted" style="font-size:.85rem"><?= $labs ? App::e(implode(' · ', $labs)) : '—' ?></td>
+                        <td class="text-muted"><?= (int)$g['idx_from'] ?>–<?= (int)$g['idx_to'] ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                <?php if (!$alignGroups): ?>
+                    <tr><td colspan="3" class="text-muted">None yet. Create a group, add the Metro-E (or other) prefixes, then assign a site to an index.</td></tr>
+                <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <?php if ($canEdit && ($openNew || $openEdit)):
+            $memberSlots = $alignMembers;
+            while (count($memberSlots) < count($alignMembers) + 3) {
+                $memberSlots[] = ['prefix_id' => 0, 'label' => ''];
+            }
+            if (!$memberSlots) {
+                $memberSlots = array_fill(0, 3, ['prefix_id' => 0, 'label' => '']);
+            }
+            ?>
+            <div class="card-header"><h2><?= $openEdit ? 'Edit group' : 'New aligned group' ?></h2></div>
+            <div class="card-body">
+                <p class="text-muted" style="font-size:.85rem;margin-top:0">
+                    Same host index on every member prefix. Example: Mediacom <code>10.250.0.0/24</code>,
+                    Hargray <code>10.250.1.0/24</code>, AT&amp;T <code>10.250.2.0/24</code> — a clinic at index 10
+                    receives <code>.10</code> on each.
+                </p>
+                <form method="post" class="form-grid">
+                    <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                    <input type="hidden" name="action" value="save_align_group">
+                    <?php if ($openEdit): ?>
+                        <input type="hidden" name="group_id" value="<?= $groupId ?>">
+                    <?php endif; ?>
+                    <div class="form-row"><label>Name *</label>
+                        <input class="form-control" name="name" required placeholder="L3 Metro-E OSPF"
+                               value="<?= App::e((string)($alignForm['name'] ?? '')) ?>"></div>
+                    <div class="form-row"><label>VRF</label>
+                        <input class="form-control" name="vrf" value="<?= App::e((string)($alignForm['vrf'] ?? 'default')) ?>"></div>
+                    <div class="form-row"><label>Index from</label>
+                        <input class="form-control" type="number" name="idx_from" min="0" max="254"
+                               value="<?= (int)($alignForm['idx_from'] ?? 1) ?>"></div>
+                    <div class="form-row"><label>Index to</label>
+                        <input class="form-control" type="number" name="idx_to" min="0" max="254"
+                               value="<?= (int)($alignForm['idx_to'] ?? 254) ?>"></div>
+                    <div class="form-row full"><label>Description</label>
+                        <input class="form-control" name="description"
+                               placeholder="Same last octet on each ISP Metro-E /24"
+                               value="<?= App::e((string)($alignForm['description'] ?? '')) ?>"></div>
+                    <div class="form-row full">
+                        <label>Member prefixes (column per ISP / fabric)</label>
+                        <table class="data" id="ipamAlignMembers">
+                            <thead><tr><th>Prefix</th><th>Column label</th></tr></thead>
+                            <tbody>
+                            <?php foreach ($memberSlots as $slot): ?>
+                                <tr>
+                                    <td>
+                                        <select class="form-control" name="prefix_id[]">
+                                            <option value="">—</option>
+                                            <?php foreach ($hostPrefixes as $hp): ?>
+                                                <option value="<?= (int)$hp['prefix_id'] ?>" <?= (int)($slot['prefix_id'] ?? 0) === (int)$hp['prefix_id'] ? 'selected' : '' ?>>
+                                                    <?= App::e((string)$hp['cidr']) ?><?php if (!empty($hp['name'])): ?> · <?= App::e((string)$hp['name']) ?><?php endif; ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <input class="form-control" name="member_label[]" placeholder="Mediacom Metro-E"
+                                               value="<?= App::e((string)($slot['label'] ?? '')) ?>">
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                        <p class="text-muted" style="font-size:.8rem;margin:.4rem 0 0">
+                            Empty rows are ignored. Saving replaces the member list; host records stay. Address-plan prefixes are typical.
+                        </p>
+                    </div>
+                    <div class="form-row">
+                        <button class="btn btn-primary" type="submit">Save group</button>
+                        <a class="btn btn-ghost" href="<?= App::e(App::url('pages/ipam.php?view=aligned' . ($openEdit ? '&group_id=' . $groupId : ''))) ?>">Cancel</a>
+                    </div>
+                </form>
+                <?php if ($openEdit): ?>
+                    <form method="post" style="margin-top:1rem" onsubmit="return confirm('Remove this aligned group? Host IP records are kept.');">
+                        <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                        <input type="hidden" name="action" value="delete_align_group">
+                        <input type="hidden" name="group_id" value="<?= $groupId ?>">
+                        <button class="btn btn-ghost btn-sm" type="submit">Delete group</button>
+                    </form>
+                <?php endif; ?>
+            </div>
+        <?php else: ?>
+            <div class="card-header"><h2>What this is</h2></div>
+            <div class="card-body docs-prose">
+                <p>
+                    When several prefixes should share a memorable host number, put them in one group.
+                    Assigning a site to index <strong>N</strong> writes that hostname on every member prefix at offset N.
+                </p>
+                <ul>
+                    <li><strong>Metro-E / OSPF:</strong> one /24 per provider; each clinic uses the same last octet so equal-cost paths are obvious.</li>
+                    <li><strong>Server + iDRAC:</strong> production VLAN and OOB VLAN keep the same last octet per host.</li>
+                </ul>
+                <p class="text-muted" style="margin-bottom:0">
+                    Create the prefixes first (import or + Prefix), then the group. This is not a parent/child subnet tree.
+                </p>
+            </div>
+        <?php endif; ?>
+    </div>
+</div>
+<style>
+tr.is-selected td { background: var(--accent-dim); }
+</style>
 <?php layout_footer();
     exit;
 endif; ?>
