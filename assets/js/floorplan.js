@@ -85,6 +85,7 @@
     let racewayFilter = 'all';
     let racewayDraw = null; // { points: [{x,y}], media_class, path_kind, name }
     let selectedPathId = null;
+    let racewayUndoStack = []; // {type:'geom'|'merge', ...} — in-memory; not written until Save
     /** Multi-hop cable routes to overlay (from Show cable path). */
     let cableRoutes = []; // list of route objects from CableRouteService
     let cableRoutesMeta = { label: '', calculated: false };
@@ -921,15 +922,73 @@
           });
           if (idx >= 0) cablePaths[idx] = data.path;
           else cablePaths.push(data.path);
-          selectedPathId = data.path.path_id;
-          renderRacewayProps(data.path, data.junction_index);
+          const live = idx >= 0 ? cablePaths[idx] : data.path;
+          captureSavedWaypoints(live);
+          live._lastMergeVertex = data.junction_index;
+          rememberRacewayUndo({
+            type: 'merge',
+            keepId: Number(live.path_id),
+            junctionIndex: Number(data.junction_index),
+          });
+          selectedPathId = live.path_id;
+          renderRacewayProps(live, data.junction_index);
         }
         setRacewayUi();
         draw();
         if (typeof refresh3d === 'function') refresh3d();
-        ColdAisle.toast(data.message || 'Merged — drag yellow ◆ into the corner for the curve', 'success');
+        ColdAisle.toast(
+          (data.message || 'Merged') + ' — Ctrl+Z or Split at the junction undoes the join',
+          'success'
+        );
       }).catch(function (err) {
         ColdAisle.toast((err && err.message) || 'Merge failed', 'error');
+      });
+    }
+
+    function splitRacewayAtVertex(path, vertexIndex, opts) {
+      opts = opts || {};
+      if (!path || !path.path_id) return;
+      const idx = Number(vertexIndex);
+      const pts = pathPoints(path);
+      if (!(idx > 0) || idx >= pts.length - 1) {
+        ColdAisle.toast('Click an interior corner first (not an endpoint), then Split', 'info');
+        return;
+      }
+      const code = path.path_code || path.name || ('#' + path.path_id);
+      if (!opts.skipConfirm && !window.confirm(
+        'Split ' + code + ' at corner #' + (idx + 1) + '?\n\n'
+        + 'This path keeps its id (cables stay attached). '
+        + 'Points after the corner become a new raceway you can reshape separately.'
+      )) {
+        return;
+      }
+      ColdAisle.api('api/floorplan.php?action=split_cable_path', {
+        method: 'POST',
+        body: { path_id: path.path_id, vertex_index: idx },
+      }).then(function (data) {
+        if (data.path) {
+          const iKeep = cablePaths.findIndex(function (x) {
+            return Number(x.path_id) === Number(data.path.path_id);
+          });
+          if (iKeep >= 0) cablePaths[iKeep] = data.path;
+          captureSavedWaypoints(iKeep >= 0 ? cablePaths[iKeep] : data.path);
+          if (iKeep >= 0) delete cablePaths[iKeep]._lastMergeVertex;
+        }
+        if (data.new_path) {
+          captureSavedWaypoints(data.new_path);
+          cablePaths.push(data.new_path);
+        }
+        selectedPathId = data.path && data.path.path_id ? data.path.path_id : path.path_id;
+        const keep = cablePaths.find(function (x) {
+          return Number(x.path_id) === Number(selectedPathId);
+        });
+        if (keep) renderRacewayProps(keep);
+        setRacewayUi();
+        draw();
+        if (typeof refresh3d === 'function') refresh3d();
+        ColdAisle.toast(data.message || 'Split — cables still on the original path', 'success');
+      }).catch(function (err) {
+        ColdAisle.toast((err && err.message) || 'Split failed', 'error');
       });
     }
 
@@ -1011,10 +1070,18 @@
           const idx = cablePaths.findIndex(function (x) {
             return Number(x.path_id) === Number(data.path.path_id);
           });
+          const prevMerge = idx >= 0 ? cablePaths[idx]._lastMergeVertex : p._lastMergeVertex;
           if (idx >= 0) cablePaths[idx] = data.path;
+          const live = idx >= 0 ? cablePaths[idx] : data.path;
+          captureSavedWaypoints(live);
+          if (prevMerge != null) live._lastMergeVertex = prevMerge;
+          const savedId = Number(live.path_id);
+          racewayUndoStack = racewayUndoStack.filter(function (e) {
+            return !(e.type === 'geom' && Number(e.pathId) === savedId);
+          });
           if (!opts.skipSelect) {
             selectedPathId = data.path.path_id;
-            renderRacewayProps(data.path);
+            renderRacewayProps(live);
           } else {
             // Keep local dims in sync when bulk-updating without reselect
             if (idx >= 0) {
@@ -1022,6 +1089,8 @@
               if (p.elevation_m != null) cablePaths[idx].elevation_m = p.elevation_m;
             }
           }
+        } else {
+          captureSavedWaypoints(p);
         }
         if (!opts.silent) {
           setRacewayUi();
@@ -1037,6 +1106,113 @@
         }
         throw err;
       });
+    }
+
+    function cloneRacewayWaypoints(pts) {
+      return (pts || []).map(function (pt) {
+        return {
+          x: Number(pt.x) || 0,
+          y: Number(pt.y) || 0,
+          z: pt.z,
+          corner: pt.corner,
+          radius_m: pt.radius_m,
+        };
+      });
+    }
+
+    function captureSavedWaypoints(p) {
+      if (!p) return;
+      p._savedWaypoints = cloneRacewayWaypoints(pathPoints(p));
+      p._dirty = false;
+    }
+
+    function anyRacewayDirty() {
+      return cablePaths.some(function (p) { return !!(p && p._dirty); });
+    }
+
+    function beginRacewayEdit(p) {
+      if (!p || !p.path_id) return;
+      rememberRacewayUndo({
+        type: 'geom',
+        pathId: Number(p.path_id),
+        waypoints: cloneRacewayWaypoints(pathPoints(p)),
+      });
+      p._dirty = true;
+    }
+
+    function rememberRacewayUndo(entry) {
+      if (!entry) return;
+      racewayUndoStack.push(entry);
+      if (racewayUndoStack.length > 30) racewayUndoStack.shift();
+    }
+
+    function revertRacewayPath(p) {
+      if (!p || !p._savedWaypoints) return false;
+      p.waypoints_list = cloneRacewayWaypoints(p._savedWaypoints);
+      p._dirty = false;
+      return true;
+    }
+
+    function revertAllDirtyRaceways() {
+      cablePaths.forEach(function (p) {
+        if (p && p._dirty) revertRacewayPath(p);
+      });
+      racewayUndoStack = [];
+    }
+
+    function confirmDiscardDirtyRaceways(reason) {
+      if (!anyRacewayDirty()) return true;
+      if (!window.confirm(
+        (reason || 'Unsaved raceway moves will be discarded.')
+        + '\n\nOK discards them. Cancel stays here so you can click Save this path.'
+      )) {
+        return false;
+      }
+      revertAllDirtyRaceways();
+      return true;
+    }
+
+    function undoRacewayEdit() {
+      if (racewayDraw) {
+        undoRacewayPoint();
+        return;
+      }
+      const last = racewayUndoStack.pop();
+      if (!last) {
+        ColdAisle.toast('Nothing to undo', 'info');
+        return;
+      }
+      if (last.type === 'merge') {
+        const keep = cablePaths.find(function (x) {
+          return Number(x.path_id) === Number(last.keepId);
+        });
+        if (!keep) {
+          ColdAisle.toast('Merged path is gone — cannot undo join', 'error');
+          return;
+        }
+        splitRacewayAtVertex(keep, last.junctionIndex, { skipConfirm: true });
+        return;
+      }
+      const p = cablePaths.find(function (x) { return Number(x.path_id) === Number(last.pathId); });
+      if (!p) {
+        ColdAisle.toast('Path no longer loaded', 'info');
+        return;
+      }
+      p.waypoints_list = cloneRacewayWaypoints(last.waypoints);
+      p._dirty = true;
+      if (p._savedWaypoints && JSON.stringify(p.waypoints_list) === JSON.stringify(p._savedWaypoints)) {
+        p._dirty = false;
+      }
+      selectedPathId = p.path_id;
+      renderRacewayProps(p);
+      setRacewayUi();
+      draw();
+      ColdAisle.toast(
+        p._dirty
+          ? 'Undid raceway move — not written to the database. Save this path to keep, or revert.'
+          : 'Raceway restored to last saved geometry',
+        'info'
+      );
     }
 
     function toggleVertexFillet(target) {
@@ -1311,7 +1487,8 @@
         drawCompass();
       }
 
-      const dimEquip = !!racewayDraw || !!pendingAirflow || !!selectedAirflowId;
+      const airflowEdit = !!pendingAirflow || !!selectedAirflowId;
+      const dimEquip = !!racewayDraw || airflowEdit;
       if (dimEquip) {
         ctx.save();
         ctx.globalAlpha = 0.22;
@@ -1437,15 +1614,30 @@
         }
       }
 
-      // Vents / returns on top so they stay selectable over racks
-      airflowAnchors.forEach(function (a) {
-        drawAirflowAnchor(a);
-      });
-
-      // Raceways on top (full opacity) during draw mode and normal view
-      if (showRaceways || racewayDraw) {
-        drawCablePaths();
-        drawMergeHints();
+      // Isolate vent drawing so dash/alpha/transform cannot leak into raceway strokes.
+      const paintAirflow = function () {
+        ctx.save();
+        airflowAnchors.forEach(function (a) {
+          drawAirflowAnchor(a);
+        });
+        ctx.restore();
+        ctx.beginPath();
+      };
+      const paintRaceways = function () {
+        if (showRaceways || racewayDraw) {
+          drawCablePaths();
+          drawMergeHints();
+        }
+      };
+      // Normal / raceway-draw: raceways paint last so vertices stay joined on top.
+      // Airflow place/select: vents on top of dimmed racks *and* raceways so a
+      // click grabs the marker instead of dragging the whole path.
+      if (airflowEdit && !racewayDraw) {
+        paintRaceways();
+        paintAirflow();
+      } else {
+        paintAirflow();
+        paintRaceways();
       }
 
       // Opt-in connection routes (media jacket color + speed end dots)
@@ -1711,10 +1903,10 @@
         hud.innerHTML =
           '<div class="hud-title">Raceway selected</div>' +
           '<ol class="hud-steps">' +
-          '<li>Drag a <em>round</em> vertex to reshape that corner (others stay put).</li>' +
-          '<li>Drag the path <em>line</em> to move the whole run.</li>' +
-          '<li>Yellow diamond on a 90° corner: <strong>inward</strong> = curve, <strong>out</strong> = sharp.</li>' +
-          '<li>Endpoints that meet at ~90° (green ring) can merge. <strong>Delete path</strong> or <kbd>Delete</kbd> removes it.</li>' +
+          '<li>Drag a <em>round</em> vertex to reshape. Moves are <strong>not saved</strong> until <em>Save this path</em>.</li>' +
+          '<li><kbd>Ctrl+Z</kbd> undoes the last move or a merge (split). Click a corner then <em>Split</em> to un-join.</li>' +
+          '<li>Yellow diamond: <strong>inward</strong> = curve, <strong>out</strong> = sharp.</li>' +
+          '<li>Green rings: endpoints that can merge. Do not delete a path that cables still use.</li>' +
           '</ol>';
         return;
       }
@@ -2032,22 +2224,34 @@
       ctx.restore();
     }
 
-    /**
-     * @returns {{type:'cabinet', obj:object}|{type:'pdu', obj:object}|{type:'cooling', obj:object}|null}
-     */
-    function hitTest(mx, my) {
-      // Vents/returns first — they sit on cabinets in plan view
+    function hitTestAirflow(mx, my) {
       for (let i = airflowAnchors.length - 1; i >= 0; i--) {
         const r = airflowRect(airflowAnchors[i]);
         if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.d) {
-          return { type: 'airflow', obj: airflowAnchors[i] };
+          return airflowAnchors[i];
         }
+      }
+      return null;
+    }
+
+    /**
+     * @returns {{type:'cabinet', obj:object}|{type:'pdu', obj:object}|{type:'cooling', obj:object}|{type:'airflow', obj:object}|{type:'ups', obj:object}|null}
+     */
+    function hitTest(mx, my) {
+      const airflowFirst = !!pendingAirflow || !!selectedAirflowId;
+      if (airflowFirst) {
+        const aFirst = hitTestAirflow(mx, my);
+        if (aFirst) return { type: 'airflow', obj: aFirst };
       }
       for (let i = cabinets.length - 1; i >= 0; i--) {
         const r = cabRect(cabinets[i]);
         if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.d) {
           return { type: 'cabinet', obj: cabinets[i] };
         }
+      }
+      if (!airflowFirst) {
+        const aNorm = hitTestAirflow(mx, my);
+        if (aNorm) return { type: 'airflow', obj: aNorm };
       }
       for (let i = floorPdus.length - 1; i >= 0; i--) {
         const r = pduRect(floorPdus[i]);
@@ -2129,7 +2333,9 @@
       selectedPduId = null;
       selectedUpsId = null;
       selectedCoolingId = null;
+      selectedPathId = null;
       selectedAirflowId = a ? Number(a.anchor_id) : null;
+      setRacewayUi();
       renderProps();
       draw();
     }
@@ -3823,7 +4029,11 @@
         horizontal: 'Horizontal only',
       };
       const code = p.path_code || p.name || 'Path';
+      const dirty = !!p._dirty;
       const canMerge = !!(findEndpointMergeCandidate(p, 0) || findEndpointMergeCandidate(p, 1));
+      const canUndoMerge = p._lastMergeVertex != null
+        && Number(p._lastMergeVertex) > 0
+        && Number(p._lastMergeVertex) < pts.length - 1;
       const kind = p.path_kind || 'ladder';
       const feed = p.feed_to || 'overhead';
       const widthM = p.width_m != null && p.width_m !== ''
@@ -3845,7 +4055,9 @@
       });
       vertHtml += '</ul>';
       propsEl.innerHTML =
-        '<h3 style="margin-top:0">Raceway</h3>' +
+        '<h3 style="margin-top:0">Raceway'
+        + (dirty ? ' <span class="badge" style="background:#b45309;color:#fff;font-size:.7rem;vertical-align:middle">unsaved</span>' : '')
+        + '</h3>' +
         '<p style="margin:.25rem 0"><strong>' + esc(code) + '</strong>'
         + (p.name && p.name !== code ? ' <span class="text-muted">(' + esc(p.name) + ')</span>' : '')
         + '</p>' +
@@ -3868,14 +4080,23 @@
         + 'U-channel is typically ladder + 0.254 m (10″). Underfloor: negative.</p></div>' +
         '</div>' +
         '<p class="text-muted" style="font-size:.78rem;margin:.5rem 0 0">' +
-        'Drag a <strong>round vertex</strong> to reshape. Drag the <strong>yellow diamond</strong> into the corner for a 90° curve; drag out to sharp. Drag the <strong>path line</strong> to move the whole raceway.</p>' +
+        'Drag a <strong>round vertex</strong> to reshape. Drag the <strong>yellow diamond</strong> into the corner for a 90° curve; drag out to sharp. Drag the <strong>path line</strong> to move the whole raceway. '
+        + '<strong>Nothing is written to the database until you Save this path</strong> (or confirm a merge). <kbd>Ctrl+Z</kbd> undoes the last drag or a join.</p>' +
         vertHtml +
         '<p class="text-muted" style="font-size:.78rem">Dashed = underfloor. '
         + '<a href="' + (window.ColdAisle && window.ColdAisle.baseUrl
           ? String(window.ColdAisle.baseUrl).replace(/\/$/, '') + '/' : '') +
         'pages/cables.php">Cabling</a></p>' +
         '<div class="form-actions" style="flex-wrap:wrap;gap:.35rem;margin-top:.5rem">' +
-        '<button type="button" class="btn btn-sm btn-primary" id="btnSavePathProps">Save this path</button>' +
+        '<button type="button" class="btn btn-sm btn-primary" id="btnSavePathProps">'
+        + (dirty ? 'Save this path (unsaved moves)' : 'Save this path') + '</button>' +
+        (dirty
+          ? '<button type="button" class="btn btn-sm btn-secondary" id="btnRevertPathGeom">Revert moves</button>'
+          : '') +
+        (canUndoMerge
+          ? '<button type="button" class="btn btn-sm btn-secondary" id="btnUndoMergeProp" title="Split back into two raceways at the last join">' +
+            'Undo merge</button>'
+          : '') +
         (cablePaths.length > 1
           ? '<button type="button" class="btn btn-sm btn-secondary" id="btnApplyElevAll" title="Set this elevation on every raceway in this room">' +
             'Apply elev. to all (' + cablePaths.length + ')</button>'
@@ -3892,11 +4113,18 @@
         (canMerge
           ? '<button type="button" class="btn btn-sm btn-primary" id="btnMergePathProp">Merge nearby endpoint</button>'
           : '') +
+        (focusVertex > 0 && focusVertex < pts.length - 1 && pts.length >= 3
+          ? '<button type="button" class="btn btn-sm btn-secondary" id="btnSplitPathProp" title="Undo a merge: keep this path_id for cables, create a second path from the remaining points">' +
+            'Split at corner #' + (focusVertex + 1) + '</button>'
+          : '') +
         '<button type="button" class="btn btn-sm btn-danger" id="btnDeletePathProp">Delete path</button>' +
         '</div>' +
         (canMerge
           ? '<p class="text-muted" style="font-size:.75rem;margin:.4rem 0 0">Green rings mark endpoints ready to join at ~90°.</p>'
           : '<p class="text-muted" style="font-size:.75rem;margin:.4rem 0 0">To merge: drag this path’s end near another path’s end at roughly 90°.</p>') +
+        '<p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">' +
+        'Do <strong>not</strong> delete a raceway that cables still use — reshape vertices or ' +
+        '<strong>click a corner then Split</strong> to undo a join. Same path_id keeps cable hops.</p>' +
         '<p class="text-muted" style="font-size:.75rem;margin:.35rem 0 0">' +
         '<strong>Clone as U-channel</strong> copies the exact plan route (incl. 90° curves), centered on this path, '
         + 'yellow fiber U-channel ~10″ higher — then tweak elevation if needed.</p>';
@@ -3916,7 +4144,23 @@
           const d = readPropDims();
           p.width_m = d.width_m;
           p.elevation_m = d.elevation_m;
-          persistRacewayPath(p, 'Raceway elevation/width saved');
+          persistRacewayPath(p, dirty ? 'Raceway saved' : 'Raceway elevation/width saved');
+        });
+      }
+      const revertBtn = propsEl.querySelector('#btnRevertPathGeom');
+      if (revertBtn) {
+        revertBtn.addEventListener('click', function () {
+          if (revertRacewayPath(p)) {
+            renderRacewayProps(p);
+            draw();
+            ColdAisle.toast('Reverted to last saved geometry (database unchanged)', 'info');
+          }
+        });
+      }
+      const undoMergeBtn = propsEl.querySelector('#btnUndoMergeProp');
+      if (undoMergeBtn) {
+        undoMergeBtn.addEventListener('click', function () {
+          splitRacewayAtVertex(p, p._lastMergeVertex);
         });
       }
       const elevAllBtn = propsEl.querySelector('#btnApplyElevAll');
@@ -3946,6 +4190,12 @@
       if (mergeBtn) {
         mergeBtn.addEventListener('click', function () {
           mergeEndpointsForPath(p);
+        });
+      }
+      const splitBtn = propsEl.querySelector('#btnSplitPathProp');
+      if (splitBtn) {
+        splitBtn.addEventListener('click', function () {
+          splitRacewayAtVertex(p, focusVertex);
         });
       }
       const delBtn = propsEl.querySelector('#btnDeletePathProp');
@@ -4889,6 +5139,8 @@
           }
           return p;
         });
+        cablePaths.forEach(captureSavedWaypoints);
+        racewayUndoStack = [];
         if (!opts.keepCableRoutes && !opts.skipRouteReload) {
           // Keep routes only when reloading room for show_routes flow
         }
@@ -4901,6 +5153,8 @@
         selectedPduId = null;
         selectedCoolingId = null;
         selectedUpsId = null;
+        selectedAirflowId = null;
+        selectedPathId = null;
         northEdge = String((room && room.north_edge) || 'top').toLowerCase();
         if (data.units === 'imperial' || data.units === 'metric') {
           units = data.units;
@@ -6122,6 +6376,9 @@
         cancelRacewayDraw();
         return;
       }
+      if (!confirmDiscardDirtyRaceways('Start drawing a new raceway? Unsaved moves on existing paths will be discarded.')) {
+        return;
+      }
       if (show3d) {
         ColdAisle.toast('Drawing is on the 2D plan — leaving 3D.', 'info');
         setPlanner3d(false);
@@ -6243,17 +6500,21 @@
 
       if (!isLeft) return;
 
-      // Prefer raceway handles / vertices / body over cabinets so saved paths stay editable
-      if (!racewayDraw && showRaceways) {
+      // Prefer raceway handles / vertices over cabinets so saved paths stay editable.
+      // Do not start a whole-path drag when the pointer is on a vent/return — that
+      // persisted raceway moves (and pulled vertices apart) while placing airflow.
+      if (!racewayDraw && showRaceways && !pendingAirflow) {
+        const afAtPointer = hitTestAirflow(pt.x, pt.y);
         // 1) Fillet curve handle (yellow diamond) — drag inward/outward
         const filHit = hitTestFilletHandle(pt.x, pt.y);
-        if (filHit && !filHit.draft && filHit.path) {
+        if (filHit && !filHit.draft && filHit.path && !(selectedAirflowId && afAtPointer)) {
           e.preventDefault();
           selectedPathId = filHit.path.path_id;
           selectedId = null;
           selectedPduId = null;
           selectedCoolingId = null;
           selectedUpsId = null;
+          selectedAirflowId = null;
           selectedIds.clear();
           const pts = pathPoints(filHit.path);
           filHit.path.waypoints_list = pts;
@@ -6281,13 +6542,14 @@
           return;
         }
         const vtxPref = hitTestRacewayVertex(pt.x, pt.y);
-        if (vtxPref && !vtxPref.draft && vtxPref.path && !(e.altKey)) {
+        if (vtxPref && !vtxPref.draft && vtxPref.path && !(e.altKey) && !(selectedAirflowId && afAtPointer)) {
           e.preventDefault();
           selectedPathId = vtxPref.path.path_id;
           selectedId = null;
           selectedPduId = null;
           selectedCoolingId = null;
           selectedUpsId = null;
+          selectedAirflowId = null;
           selectedIds.clear();
           renderRacewayProps(vtxPref.path, vtxPref.index);
           setRacewayUi();
@@ -6306,8 +6568,8 @@
           draw();
           return;
         }
-        // Drag whole path by grabbing a segment (not a vertex or handle)
-        const segHit = hitTestRacewaySegment(pt.x, pt.y);
+        // Drag whole path by grabbing a segment (not a vertex, handle, or vent)
+        const segHit = !afAtPointer ? hitTestRacewaySegment(pt.x, pt.y) : null;
         if (segHit && segHit.path && !hitTestRacewayVertex(pt.x, pt.y) && !hitTestFilletHandle(pt.x, pt.y)) {
           e.preventDefault();
           const p = segHit.path;
@@ -6316,6 +6578,7 @@
           selectedPduId = null;
           selectedCoolingId = null;
           selectedUpsId = null;
+          selectedAirflowId = null;
           selectedIds.clear();
           const pts = pathPoints(p);
           p.waypoints_list = pts.map(function (pt0) {
@@ -6654,17 +6917,19 @@
       // Hover cursor when not dragging
       if (!drag && !pan) {
         const pt = canvasPoint(e);
-        if (racewayDraw || showRaceways) {
-          if (hitTestFilletHandle(pt.x, pt.y)) {
+        if ((racewayDraw || showRaceways) && !pendingAirflow) {
+          const afHover = hitTestAirflow(pt.x, pt.y);
+          const preferVent = !!(selectedAirflowId && afHover);
+          if (!preferVent && hitTestFilletHandle(pt.x, pt.y)) {
             canvas.style.cursor = 'pointer';
             return;
           }
-          const vtxH = hitTestRacewayVertex(pt.x, pt.y);
+          const vtxH = !preferVent ? hitTestRacewayVertex(pt.x, pt.y) : null;
           if (vtxH) {
             canvas.style.cursor = 'grab';
             return;
           }
-          if (!racewayDraw && hitTestRacewaySegment(pt.x, pt.y)) {
+          if (!racewayDraw && !afHover && hitTestRacewaySegment(pt.x, pt.y)) {
             canvas.style.cursor = 'move';
             return;
           }
@@ -6703,6 +6968,10 @@
           const dy = wpt.canvas.y - drag.startY;
           if ((dx * dx + dy * dy) < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) return;
           drag.active = true;
+          if (!drag.draft) {
+            const pEdit = cablePaths.find(function (x) { return Number(x.path_id) === Number(drag.pathId); });
+            beginRacewayEdit(pEdit);
+          }
         }
         const cur = pts[drag.index];
         // Preserve corner metadata; only move this vertex
@@ -6733,6 +7002,10 @@
           const dy = wpt.canvas.y - drag.startY;
           if ((dx * dx + dy * dy) < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) return;
           drag.active = true;
+          if (!drag.draft) {
+            const pEdit = cablePaths.find(function (x) { return Number(x.path_id) === Number(drag.pathId); });
+            beginRacewayEdit(pEdit);
+          }
         }
         // Project pointer onto inward bisector from corner
         const vx = wpt.x - drag.cornerX;
@@ -6760,6 +7033,7 @@
           const dy = wpt.canvas.y - drag.startY;
           if ((dx * dx + dy * dy) < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) return;
           drag.active = true;
+          beginRacewayEdit(p);
         }
         const dxW = wpt.x - drag.startWorld.x;
         const dyW = wpt.y - drag.startWorld.y;
@@ -6963,26 +7237,24 @@
           return;
         }
         updateCanvasCursor();
-        // If dragged an endpoint near another path, offer merge after save
+        renderRacewayProps(p, d.index);
+        draw();
+        ColdAisle.toast('Vertex moved — not saved yet. Save this path, or Ctrl+Z to undo.', 'info');
         const isEnd = d.index === 0 || (p.waypoints_list && d.index === p.waypoints_list.length - 1)
           || (pathPoints(p).length && (d.index === 0 || d.index === pathPoints(p).length - 1));
-        persistRacewayPath(p, 'Vertex anchored').then(function () {
-          const fresh = cablePaths.find(function (x) { return Number(x.path_id) === Number(d.pathId); }) || p;
-          if (!isEnd) return;
+        if (isEnd) {
           const endFlag = d.index === 0 ? 0 : 1;
-          const cand = findEndpointMergeCandidate(fresh, endFlag);
-          if (cand) {
-            if (window.confirm(
-              'Endpoint is near ' + (cand.path.path_code || cand.path.name || 'another path')
-              + ' at ~' + Math.round(cand.angleDeg) + '°.\n\nMerge into a single raceway for a smooth 90° bend?'
-            )) {
+          const cand = findEndpointMergeCandidate(p, endFlag);
+          if (cand && window.confirm(
+            'Endpoint is near ' + (cand.path.path_code || cand.path.name || 'another path')
+            + ' at ~' + Math.round(cand.angleDeg) + '°.\n\nSave this geometry and merge into a single raceway?'
+          )) {
+            persistRacewayPath(p, null, { silent: true }).then(function () {
+              const fresh = cablePaths.find(function (x) { return Number(x.path_id) === Number(d.pathId); }) || p;
               mergeEndpointsForPath(fresh);
-            } else {
-              renderRacewayProps(fresh, d.index);
-              draw();
-            }
+            }).catch(function () { /* persistRacewayPath already toasted */ });
           }
-        });
+        }
         return;
       }
 
@@ -7015,9 +7287,12 @@
         const pt = pts[d.index];
         const r = pt && String(pt.corner) === 'fillet' ? (pt.radius_m || 0) : 0;
         updateCanvasCursor();
-        persistRacewayPath(
-          p,
-          r > 0.05 ? ('Curve saved r≈' + Number(r).toFixed(2) + ' m') : 'Corner sharp (hard stop)'
+        renderRacewayProps(p, d.index);
+        draw();
+        ColdAisle.toast(
+          (r > 0.05 ? ('Curve r≈' + Number(r).toFixed(2) + ' m') : 'Corner sharp')
+          + ' — not saved yet. Save this path, or Ctrl+Z to undo.',
+          'info'
         );
         return;
       }
@@ -7037,7 +7312,9 @@
           return;
         }
         updateCanvasCursor();
-        persistRacewayPath(p, 'Path location saved');
+        renderRacewayProps(p);
+        draw();
+        ColdAisle.toast('Path moved — not saved yet. Save this path, or Ctrl+Z to undo.', 'info');
         return;
       }
 
@@ -7276,6 +7553,10 @@
     }
 
     roomSelect.addEventListener('change', function () {
+      if (!confirmDiscardDirtyRaceways('Switch rooms? Unsaved raceway moves will be discarded.')) {
+        if (room && room.room_id) roomSelect.value = String(room.room_id);
+        return;
+      }
       loadRoom(roomSelect.value);
     });
 
@@ -7394,11 +7675,24 @@
       });
     }
 
+    window.addEventListener('beforeunload', function (e) {
+      if (!root.isConnected) return;
+      if (!anyRacewayDirty()) return;
+      e.preventDefault();
+      e.returnValue = '';
+    });
+
     // Arrow keys nudge (ignore when typing in fields)
     document.addEventListener('keydown', function (e) {
       if (!root.isConnected) return;
       const t = e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        if (show3d) return;
+        e.preventDefault();
+        undoRacewayEdit();
         return;
       }
       // Only when floor planner is visible / has selection context

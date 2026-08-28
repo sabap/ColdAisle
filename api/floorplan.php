@@ -815,6 +815,31 @@ try {
         ]);
     }
 
+    // Split a raceway at an interior vertex (undo a merge without deleting cables)
+    if ($method === 'POST' && (($_GET['action'] ?? '') === 'split_cable_path')) {
+        api_require_permission('edit_infrastructure');
+        api_require_csrf();
+        if (!class_exists('CablePlantService')) {
+            App::json(['error' => 'CablePlantService unavailable'], 500);
+        }
+        $data = api_read_json();
+        $pathId = (int)($data['path_id'] ?? 0);
+        $vertex = (int)($data['vertex_index'] ?? $data['index'] ?? -1);
+        $res = CablePlantService::splitPathAtVertex($pathId, $vertex);
+        if (empty($res['ok'])) {
+            App::json(['error' => $res['message'] ?? 'Split failed'], 400);
+        }
+        AuditService::log(
+            (int)$user['user_id'],
+            $user['username'],
+            'split',
+            'cable_path',
+            $pathId,
+            ['new_path_id' => (int)($res['new_path_id'] ?? 0), 'vertex_index' => $vertex]
+        );
+        App::json($res);
+    }
+
     // Delete raceway / pathway (shared CablePlantService)
     if ($method === 'POST' && (($_GET['action'] ?? '') === 'delete_cable_path')) {
         api_require_permission('edit_infrastructure');

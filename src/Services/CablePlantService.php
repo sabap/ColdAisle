@@ -1095,6 +1095,116 @@ class CablePlantService
     }
 
     /**
+     * Undo a merge: split one polyline at an interior vertex into two paths.
+     * Keeps the original path_id (and cable links) on the first piece.
+     *
+     * @return array{ok:bool,message:string,path_id:int,new_path_id:int,path?:array<string,mixed>,new_path?:array<string,mixed>}
+     */
+    public static function splitPathAtVertex(int $pathId, int $vertexIndex): array
+    {
+        if ($pathId < 1) {
+            return ['ok' => false, 'message' => 'Invalid path.', 'path_id' => 0, 'new_path_id' => 0];
+        }
+        try {
+            $src = Database::fetchOne('SELECT * FROM cable_paths WHERE path_id = ?', [$pathId]);
+        } catch (Throwable $e) {
+            return ['ok' => false, 'message' => $e->getMessage(), 'path_id' => 0, 'new_path_id' => 0];
+        }
+        if (!$src) {
+            return ['ok' => false, 'message' => 'Path not found.', 'path_id' => 0, 'new_path_id' => 0];
+        }
+        $pts = self::parseWaypoints($src['waypoints'] ?? null);
+        $n = count($pts);
+        if ($n < 3) {
+            return [
+                'ok' => false,
+                'message' => 'Need at least three vertices to split (two legs).',
+                'path_id' => $pathId,
+                'new_path_id' => 0,
+            ];
+        }
+        if ($vertexIndex < 1 || $vertexIndex > $n - 2) {
+            return [
+                'ok' => false,
+                'message' => 'Click an interior corner (not an endpoint) to split there.',
+                'path_id' => $pathId,
+                'new_path_id' => 0,
+            ];
+        }
+
+        $keepPts = array_slice($pts, 0, $vertexIndex + 1);
+        $newPts = array_slice($pts, $vertexIndex);
+        if (count($keepPts) < 2 || count($newPts) < 2) {
+            return ['ok' => false, 'message' => 'Split would leave a path with fewer than two points.', 'path_id' => $pathId, 'new_path_id' => 0];
+        }
+
+        $srcCode = trim((string)($src['path_code'] ?? $src['name'] ?? ''));
+        $newCode = self::uniquePathCodeInRoom((int)($src['room_id'] ?? 0), ($srcCode !== '' ? $srcCode : 'PATH') . '.2');
+
+        $newData = [
+            'room_id' => (int)($src['room_id'] ?? 0),
+            'path_code' => $newCode,
+            'name' => $newCode,
+            'path_kind' => $src['path_kind'] ?? 'ladder',
+            'media_class' => $src['media_class'] ?? 'mixed',
+            'feed_to' => $src['feed_to'] ?? 'overhead',
+            'color_hex' => $src['color_hex'] ?? '#38bdf8',
+            'width_m' => $src['width_m'] ?? null,
+            'elevation_m' => $src['elevation_m'] ?? null,
+            'segment_class' => $src['segment_class'] ?? null,
+            'waypoints_list' => $newPts,
+            'notes' => 'Split from ' . ($srcCode !== '' ? $srcCode : ('#' . $pathId))
+                . ' at vertex ' . ($vertexIndex + 1),
+            'is_active' => 1,
+        ];
+        $created = self::savePath($newData, null);
+        if (empty($created['ok'])) {
+            return [
+                'ok' => false,
+                'message' => $created['message'] ?? 'Could not create the second path.',
+                'path_id' => $pathId,
+                'new_path_id' => 0,
+            ];
+        }
+        $newId = (int)$created['path_id'];
+
+        try {
+            Database::update(
+                'cable_paths',
+                ['waypoints' => self::encodeWaypoints($keepPts)],
+                'path_id = :id',
+                [':id' => $pathId]
+            );
+        } catch (Throwable $e) {
+            try {
+                Database::delete('cable_paths', 'path_id = ?', [$newId]);
+            } catch (Throwable $e2) {
+            }
+            return ['ok' => false, 'message' => $e->getMessage(), 'path_id' => $pathId, 'new_path_id' => 0];
+        }
+
+        $keepRow = Database::fetchOne('SELECT * FROM cable_paths WHERE path_id = ?', [$pathId]);
+        $newRow = Database::fetchOne('SELECT * FROM cable_paths WHERE path_id = ?', [$newId]);
+        if ($keepRow) {
+            $keepRow['waypoints_list'] = self::parseWaypoints($keepRow['waypoints'] ?? null);
+        }
+        if ($newRow) {
+            $newRow['waypoints_list'] = self::parseWaypoints($newRow['waypoints'] ?? null);
+        }
+
+        return [
+            'ok' => true,
+            'message' => 'Split ' . ($srcCode !== '' ? $srcCode : ('#' . $pathId))
+                . ' at corner #' . ($vertexIndex + 1)
+                . '. Original path kept (cables still attached). New path: ' . $newCode . '.',
+            'path_id' => $pathId,
+            'new_path_id' => $newId,
+            'path' => $keepRow ?: null,
+            'new_path' => $newRow ?: null,
+        ];
+    }
+
+    /**
      * Find other-path endpoint within snap of a given path endpoint.
      *
      * @return array{path_id:int,end:int,distance:float,angle_deg:float}|null

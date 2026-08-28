@@ -13,9 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Recovery backups include the database:** *Update to v…* and *Create recovery backup* write a full `coldaisle-site_…` package (SQL inventory + uploads) **and** an application-files `backup_…` zip. Restore raceways/cabinets from the site package. Housekeeping can **Download** either file.
+- **Undo raceway joins:** after a merge, **Undo merge** / **Ctrl+Z** splits at the junction. Click any interior corner then **Split at corner #n** to un-join without deleting. Original `path_id` (and cable hops) stay on the first piece.
+
 ### Enhancements
 
+- **Raceway geometry is not saved on mouse-up.** Dragging a vertex, curve, or whole path only changes the plan until **Save this path**. **Revert moves** and **Ctrl+Z** discard unsaved drags. Leaving the page warns if anything is unsaved.
+
 ### Bug fixes
+
+- **Floor planner raceways vs airflow:** placing or selecting a vent no longer starts a raceway path/vertex drag. Raceway strokes paint above vents again except while a marker is being placed or selected.
 
 ---
 

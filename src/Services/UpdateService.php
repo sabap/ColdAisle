@@ -5,7 +5,8 @@
  * Flow: check API → (optional) backup → download zipball → extract over app
  * root while preserving config/config.php and storage runtime data → Schema::ensure().
  *
- * Pre-update zips: storage/backups/backup_YYYYMMDD_…_vX.Y.Z.zip
+ * Pre-update recovery: a full site package (database + uploads, coldaisle-site_…)
+ * plus an application-files zip (backup_YYYYMMDD_…_vX.Y.Z.zip).
  * Housekeeping: StorageHousekeepingService (Settings → Storage housekeeping).
  */
 declare(strict_types=1);
@@ -735,12 +736,28 @@ class UpdateService
     }
 
     /**
-     * Full-app recovery zip under storage/backups/backup_YYYYMMDD_HHMMSS_vX.Y.Z.zip
-     * Always produces a real .zip (ZipArchive, or PowerShell Compress-Archive on Windows).
-     * Called at the start of applyUpdate(); also available from Settings for a dry-run test.
+     * Recovery snapshot before an update (or from Settings).
+     * Always writes a full site package (SQL inventory + uploads) first, then an
+     * application-files zip. The site package is what restores raceways/cabinets.
+     *
+     * @return array{code_zip:string,site_package:string,code_bytes:int,site_bytes:int}
      */
-    public static function createBackup(): string
+    public static function createRecoveryBackup(): array
     {
+        if (!class_exists('SiteBackupService')) {
+            throw new RuntimeException(
+                'SiteBackupService unavailable — cannot create a database backup.'
+            );
+        }
+        $sitePath = SiteBackupService::export([
+            'include_audit' => true,
+            'include_readings' => false,
+        ]);
+        if (!is_file($sitePath)) {
+            throw new RuntimeException('Site (database) backup was not created.');
+        }
+        $siteBytes = (int)@filesize($sitePath);
+
         $dir = App::ROOT . '/storage/backups';
         if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
             throw new RuntimeException('Cannot create storage/backups for pre-update backup.');
@@ -770,39 +787,56 @@ class UpdateService
         }
 
         if (!is_file($path)) {
-            throw new RuntimeException('Pre-update backup zip was not created at ' . $path);
-        }
-        // Optional DR copy (Settings → Site backup → SMB)
-        if (class_exists('SmbBackupService')) {
-            try {
-                SmbBackupService::maybeCopy($path, 'update_backup');
-            } catch (Throwable $e) {
-                App::log('SMB copy after pre-update backup: ' . $e->getMessage(), 'warning');
-            }
+            throw new RuntimeException('Application-files zip was not created at ' . $path);
         }
         $size = (int)@filesize($path);
         if ($size < 200) {
             @unlink($path);
             throw new RuntimeException(
-                'Pre-update backup zip is empty or too small (' . $size . ' bytes). '
+                'Application-files zip is empty or too small (' . $size . ' bytes). '
                 . 'Check PHP zip extension and Modify permission on storage/backups.'
             );
         }
         if ($filesAdded < 5) {
-            // zip may still be valid; warn in log but keep if size is reasonable
             App::log(
-                'Pre-update backup has only ' . $filesAdded . ' file entries: ' . basename($path),
+                'Pre-update files zip has only ' . $filesAdded . ' file entries: ' . basename($path),
                 'warning'
             );
         }
 
+        if (class_exists('SmbBackupService')) {
+            foreach ([$sitePath, $path] as $copyPath) {
+                try {
+                    SmbBackupService::maybeCopy($copyPath, 'update_backup');
+                } catch (Throwable $e) {
+                    App::log('SMB copy after recovery backup: ' . $e->getMessage(), 'warning');
+                }
+            }
+        }
+
         App::log(
-            'Pre-update backup created: ' . basename($path)
-            . ' (' . self::formatBytes($size) . ', ~' . $filesAdded . ' files)',
+            'Recovery backup created: ' . basename($sitePath)
+            . ' (' . self::formatBytes($siteBytes) . ' database+uploads) and '
+            . basename($path) . ' (' . self::formatBytes($size) . ' app files, ~' . $filesAdded . ' files)',
             'info'
         );
 
-        return $path;
+        return [
+            'code_zip' => $path,
+            'site_package' => $sitePath,
+            'code_bytes' => $size,
+            'site_bytes' => $siteBytes,
+        ];
+    }
+
+    /**
+     * Application-files zip path (also creates the full site package).
+     * Prefer createRecoveryBackup() when the caller needs both paths.
+     */
+    public static function createBackup(): string
+    {
+        $r = self::createRecoveryBackup();
+        return $r['code_zip'];
     }
 
     /** Paths excluded from pre-update recovery zips (runtime / recursive). */

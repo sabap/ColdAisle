@@ -597,27 +597,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
 
         if ($section === 'update_backup_now') {
             @set_time_limit(600);
-            $path = UpdateService::createBackup();
-            $bytes = is_file($path) ? (int)@filesize($path) : 0;
+            $pack = method_exists('UpdateService', 'createRecoveryBackup')
+                ? UpdateService::createRecoveryBackup()
+                : ['code_zip' => UpdateService::createBackup(), 'site_package' => '', 'code_bytes' => 0, 'site_bytes' => 0];
+            $codePath = (string)($pack['code_zip'] ?? '');
+            $sitePath = (string)($pack['site_package'] ?? '');
+            $codeBytes = (int)($pack['code_bytes'] ?? (is_file($codePath) ? filesize($codePath) : 0));
+            $siteBytes = (int)($pack['site_bytes'] ?? (is_file($sitePath) ? filesize($sitePath) : 0));
             AuditService::log((int)$user['user_id'], $user['username'], 'update_backup_now', 'system', null, [
-                'file' => basename($path),
-                'bytes' => $bytes,
+                'file' => basename($codePath),
+                'site_package' => $sitePath !== '' ? basename($sitePath) : null,
+                'bytes' => $codeBytes,
+                'site_bytes' => $siteBytes,
             ]);
-            $sizeLabel = class_exists('StorageHousekeepingService')
-                ? StorageHousekeepingService::formatBytes($bytes)
-                : ($bytes . ' bytes');
-            $msg = 'Recovery backup created: ' . basename($path) . ' (' . $sizeLabel . ') in storage/backups/.';
-            App::flash('success', $msg);
-            if (class_exists('SmbBackupService')) {
-                $smb = SmbBackupService::maybeCopy($path, 'update_backup');
-                if (empty($smb['skipped'])) {
-                    if (!empty($smb['ok'])) {
-                        App::flash('success', (string)($smb['message'] ?? 'Also copied to SMB share.'));
-                    } else {
-                        App::flash('error', 'Local recovery ZIP is fine; SMB copy failed: ' . ($smb['message'] ?? 'unknown error'));
-                    }
-                }
+            $fmt = static function (int $n): string {
+                return class_exists('StorageHousekeepingService')
+                    ? StorageHousekeepingService::formatBytes($n)
+                    : ($n . ' bytes');
+            };
+            $msg = 'Recovery backup created in storage/backups/: ';
+            if ($sitePath !== '') {
+                $msg .= basename($sitePath) . ' (database + uploads, ' . $fmt($siteBytes) . ')';
+                $msg .= $codePath !== '' ? ' and ' : '';
             }
+            if ($codePath !== '') {
+                $msg .= basename($codePath) . ' (application files, ' . $fmt($codeBytes) . ').';
+            }
+            $msg .= ' Restore inventory from the coldaisle-site_ package — the backup_ zip is files only.';
+            App::flash('success', $msg);
             App::redirect('pages/settings.php#housekeeping');
         }
 
@@ -837,6 +844,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             App::redirect('pages/settings.php#housekeeping');
         }
 
+        if ($section === 'housekeeping_download_backup') {
+            if (!class_exists('StorageHousekeepingService')) {
+                require_once dirname(__DIR__) . '/src/Services/StorageHousekeepingService.php';
+            }
+            $name = basename((string)($_POST['backup_name'] ?? ''));
+            $dir = realpath(App::ROOT . '/storage/backups');
+            $path = $dir ? realpath($dir . DIRECTORY_SEPARATOR . $name) : false;
+            $dirPrefix = $dir !== false ? rtrim($dir, "\\/") . DIRECTORY_SEPARATOR : '';
+            $pathOk = $dir !== false && $path !== false
+                && (str_starts_with($path, $dirPrefix) || strcasecmp($path, $dir) === 0);
+            if ($name === '' || $name === '.' || $name === '..' || !$pathOk || !is_file($path)) {
+                throw new RuntimeException('Backup file not found under storage/backups/.');
+            }
+            $lower = strtolower($name);
+            $isEnc = str_ends_with($lower, '.caisle');
+            header('Content-Type: ' . ($isEnc ? 'application/octet-stream' : 'application/zip'));
+            header('Content-Disposition: attachment; filename="' . $name . '"');
+            header('Content-Length: ' . (string)filesize($path));
+            header('Cache-Control: no-store');
+            readfile($path);
+            exit;
+        }
+
         if ($section === 'housekeeping_delete_backup') {
             if (!class_exists('StorageHousekeepingService')) {
                 require_once dirname(__DIR__) . '/src/Services/StorageHousekeepingService.php';
@@ -925,7 +955,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             'update_check', 'update_apply', 'update_backup_now', 'install_ca_bundle', 'export_site_backup', 'restore_site_backup', 'test_ldaps', 'test_mail',
             'power_alerts', 'env_alerts', 'alerts_hub', 'alert_subscription_save', 'alert_subscription_delete',
             'snmp_threshold_save', 'snmp_threshold_delete',
-            'noc', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup',
+            'noc', 'snmp_schedule', 'housekeeping_save', 'housekeeping_run', 'housekeeping_delete_backup', 'housekeeping_download_backup',
             'diagnostics', 'schema_ensure', 'smb_backup_save', 'smb_backup_test',
             'sdp', 'itsm', 'test_sdp', 'test_itsm', 'sdp_exchange_code',
         ], true)) {
@@ -3502,7 +3532,7 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
                 <button class="btn btn-secondary" type="submit">Check for updates</button>
             </form>
             <form method="post" style="display:inline"
-                  onsubmit="return confirm('Create a pre-update recovery ZIP in storage/backups/ now? (Does not apply an update.)');">
+                  onsubmit="return confirm('Create a recovery backup now? This writes a full site package (database + uploads) and an application-files zip to storage/backups/. Does not apply an update.');">
                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
                 <input type="hidden" name="section" value="update_backup_now">
                 <button class="btn btn-secondary" type="submit">Create recovery backup</button>
@@ -3534,9 +3564,12 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
             <?php endif; ?>
         </div>
         <p class="text-muted" style="font-size:.75rem;margin:.75rem 0 0">
-            <strong>Pre-update recovery zips</strong> (<code>backup_YYYYMMDD_…_vX.Y.Z.zip</code>) are written to
-            <code>storage/backups/</code> automatically when you use <em>Update to v…</em> above
-            (or <em>Create recovery backup</em>). Direct file copies / installer deploys do not create those zips.
+            <strong>Recovery backups</strong> now include a full <code>coldaisle-site_…</code> package
+            (database + uploads — raceways, cabinets, IPAM, …) <em>and</em> an application-files
+            <code>backup_YYYYMMDD_…</code> zip. Both are written to
+            <code>storage/backups/</code> on <em>Update to v…</em> and <em>Create recovery backup</em>.
+            Restore inventory from the site package (dropdown below / Download in housekeeping).
+            The <code>backup_</code> zip cannot rewind SQL. Direct file copies / installer deploys do not create those files.
             PHP zip:
             <?= extension_loaded('zip')
                 ? '<span class="badge badge-success">loaded</span>'
@@ -3701,7 +3734,10 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
             Roll this install back to a prior <strong>site backup</strong> package without reinstalling.
             Replaces database inventory and uploads; keeps <strong>this server’s SQL connection</strong> and base URL.
             You will be signed out and must log in with an account from the backup.
-            Use a <code>coldaisle-site_…</code> package (not a short pre-update <code>backup_…</code> recovery zip).
+            Use a <code>coldaisle-site_…</code> package (includes the SQL inventory).
+            <em>Update to v…</em> and <em>Create recovery backup</em> now write one of these alongside the files-only
+            <code>backup_…</code> zip. Only the site package is listed here (it is what restores raceways).
+            Download either file from <a href="#housekeeping">Storage housekeeping → Backups on disk</a>.
         </p>
         <?php
         $localPackages = class_exists('SiteBackupService')
@@ -4187,7 +4223,15 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
                         <td><span class="badge"><?= App::e($b['kind']) ?></span></td>
                         <td><?= App::e(StorageHousekeepingService::formatBytes((int)$b['bytes'])) ?></td>
                         <td style="font-size:.85rem"><?= $b['mtime'] ? App::e(date('Y-m-d H:i', (int)$b['mtime'])) : '—' ?></td>
-                        <td class="actions">
+                        <td class="actions" style="white-space:nowrap">
+                            <?php if (!empty($b['kind']) && $b['kind'] !== 'staging' && is_file($b['path'] ?? '')): ?>
+                            <form method="post" style="display:inline">
+                                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                                <input type="hidden" name="section" value="housekeeping_download_backup">
+                                <input type="hidden" name="backup_name" value="<?= App::e($b['name']) ?>">
+                                <button type="submit" class="btn btn-sm btn-secondary">Download</button>
+                            </form>
+                            <?php endif; ?>
                             <form method="post" style="display:inline"
                                   onsubmit="return confirm('Permanently delete <?= App::e(addslashes($b['name'])) ?>?');">
                                 <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
