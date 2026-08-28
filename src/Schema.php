@@ -1401,6 +1401,7 @@ class Schema
     /**
      * Upsert platform roles (Viewer, Department Admin, Data Center Admin, Global Admin).
      * Legacy Administrator / Operator / Auditor kept and refreshed where present.
+     * Existing non-admin role permission JSON is left alone (Users → Platform roles matrix).
      */
     public static function ensureRoles(): void
     {
@@ -1432,12 +1433,18 @@ class Schema
         foreach ($defs as $name => $def) {
             $json = json_encode($def['permissions'], JSON_UNESCAPED_UNICODE);
             $existing = Database::fetchOne('SELECT role_id FROM roles WHERE name = ?', [$name]);
+            $star = in_array($name, ['Global Admin', 'Administrator'], true);
             if ($existing) {
-                Database::update('roles', [
+                $fields = [
                     'description' => $def['description'],
-                    'permissions' => $json,
                     'is_system' => 1,
-                ], 'role_id = :id', [':id' => (int)$existing['role_id']]);
+                ];
+                // Global Admin stays full access. Other system roles keep the matrix
+                // (Users → Platform roles); do not wipe checkmarks on schema ensure.
+                if ($star) {
+                    $fields['permissions'] = json_encode(['*']);
+                }
+                Database::update('roles', $fields, 'role_id = :id', [':id' => (int)$existing['role_id']]);
             } else {
                 Database::insert('roles', [
                     'name' => $name,

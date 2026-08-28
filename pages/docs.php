@@ -156,14 +156,16 @@ layout_header('Documentation', $user, 'docs');
                 Use an aligned group when several prefixes should share a memorable host number.
                 Add two or more prefixes, then assign a site name to an <strong>index</strong>.
                 The index is the offset from each prefix’s network address — on a /24 that is the last octet.
-                Example: Metro-E /24s per ISP (<code>10.250.0.0/24</code>, <code>10.250.1.0/24</code>, <code>10.250.2.0/24</code>);
-                a clinic at index 10 gets <code>10.250.0.10</code>, <code>10.250.1.10</code>, and <code>10.250.2.10</code> in one step
-                so OSPF equal-cost paths stay obvious. Same pattern for a server VLAN plus iDRAC.
+                Example: one /24 per WAN provider (<code>10.10.0.0/24</code>, <code>10.10.1.0/24</code>, <code>10.10.2.0/24</code>);
+                a site at index 10 gets <code>10.10.0.10</code>, <code>10.10.1.10</code>, and <code>10.10.2.10</code> in one step
+                so equal-cost paths stay obvious. Same pattern for a server VLAN plus iDRAC.
             </p>
             <p>
                 Create the prefixes first, then IPAM → <strong>Aligned</strong> → + Group.
                 The grid is spreadsheet-style (assigned rows plus the next free index; <strong>Show unused</strong> lists every index).
                 Clearing a slot removes those host records if the hostname still matches. Deleting the group leaves the IPs in place.
+                Viewer can open IPAM but cannot assign addresses or change prefixes; Data Center Admin and Global Admin can.
+                Refine View / Edit on <strong>Users → Platform roles</strong>.
             </p>
             <h3 class="docs-h3">Import from Excel</h3>
             <ul>

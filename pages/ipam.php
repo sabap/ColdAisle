@@ -9,7 +9,7 @@ require_once dirname(__DIR__) . '/includes/layout.php';
 App::boot();
 $user = App::requirePermission('view_ipam');
 IpamService::ensure();
-$canEdit = AuthManager::can($user, 'edit_ipam') || AuthManager::isAdmin($user);
+$canEdit = AuthManager::canEditIpam($user);
 $isAdmin = AuthManager::isAdmin($user);
 
 $prefixId = isset($_GET['prefix_id']) ? (int)$_GET['prefix_id'] : 0;
@@ -324,7 +324,7 @@ layout_header('IPAM', $user, 'ipam');
     Two kinds of prefix: an <strong>address plan</strong> (individual IPs) or a <strong>subnet plan</strong> (a container you carve into smaller prefixes).
     Nesting is optional: set <strong>Parent</strong> when you add a prefix (for example a site /21, then VLAN /24s under it).
     <a href="<?= App::e(App::url('pages/ipam.php?view=aligned')) ?>">Aligned groups</a>
-    pin the same host index across two or more prefixes (Metro-E per ISP, or LAN + iDRAC).
+    pin the same host index across two or more prefixes (multi-homed WAN, or LAN + iDRAC).
     DHCP on an address plan is a range fence, not a server.
     <?php if ($canEdit): ?>
         <a href="<?= App::e(App::url('pages/ipam.php?view=import')) ?>">Import Excel or CSV</a>.
@@ -624,7 +624,7 @@ endif; ?>
                     <input class="form-control" type="number" name="idx" required min="<?= (int)$alignGroup['idx_from'] ?>" max="<?= (int)$alignGroup['idx_to'] ?>"
                            value="<?= $nextIdx !== null ? (int)$nextIdx : (int)$alignGroup['idx_from'] ?>"></div>
                 <div class="form-row"><label>Site / hostname</label>
-                    <input class="form-control" name="hostname" required placeholder="VMC"></div>
+                    <input class="form-control" name="hostname" required placeholder="site-01"></div>
                 <div class="form-row"><label>Notes</label>
                     <input class="form-control" name="notes" placeholder="optional"></div>
                 <div class="form-row">
@@ -747,7 +747,7 @@ endif; ?>
                     </tr>
                 <?php endforeach; ?>
                 <?php if (!$alignGroups): ?>
-                    <tr><td colspan="3" class="text-muted">None yet. Create a group, add the Metro-E (or other) prefixes, then assign a site to an index.</td></tr>
+                    <tr><td colspan="3" class="text-muted">None yet. Create a group, add the prefixes, then assign a site to an index.</td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>
@@ -767,8 +767,8 @@ endif; ?>
             <div class="card-header"><h2><?= $openEdit ? 'Edit group' : 'New aligned group' ?></h2></div>
             <div class="card-body">
                 <p class="text-muted" style="font-size:.85rem;margin-top:0">
-                    Same host index on every member prefix. Example: Mediacom <code>10.250.0.0/24</code>,
-                    Hargray <code>10.250.1.0/24</code>, AT&amp;T <code>10.250.2.0/24</code> — a clinic at index 10
+                    Same host index on every member prefix. Example: <code>10.10.0.0/24</code>,
+                    <code>10.10.1.0/24</code>, <code>10.10.2.0/24</code> — a site at index 10
                     receives <code>.10</code> on each.
                 </p>
                 <form method="post" class="form-grid">
@@ -778,7 +778,7 @@ endif; ?>
                         <input type="hidden" name="group_id" value="<?= $groupId ?>">
                     <?php endif; ?>
                     <div class="form-row"><label>Name *</label>
-                        <input class="form-control" name="name" required placeholder="L3 Metro-E OSPF"
+                        <input class="form-control" name="name" required placeholder="Aligned WAN"
                                value="<?= App::e((string)($alignForm['name'] ?? '')) ?>"></div>
                     <div class="form-row"><label>VRF</label>
                         <input class="form-control" name="vrf" value="<?= App::e((string)($alignForm['vrf'] ?? 'default')) ?>"></div>
@@ -790,10 +790,10 @@ endif; ?>
                                value="<?= (int)($alignForm['idx_to'] ?? 254) ?>"></div>
                     <div class="form-row full"><label>Description</label>
                         <input class="form-control" name="description"
-                               placeholder="Same last octet on each ISP Metro-E /24"
+                               placeholder="Same last octet on each member prefix"
                                value="<?= App::e((string)($alignForm['description'] ?? '')) ?>"></div>
                     <div class="form-row full">
-                        <label>Member prefixes (column per ISP / fabric)</label>
+                        <label>Member prefixes (one column each)</label>
                         <table class="data" id="ipamAlignMembers">
                             <thead><tr><th>Prefix</th><th>Column label</th></tr></thead>
                             <tbody>
@@ -810,7 +810,7 @@ endif; ?>
                                         </select>
                                     </td>
                                     <td>
-                                        <input class="form-control" name="member_label[]" placeholder="Mediacom Metro-E"
+                                        <input class="form-control" name="member_label[]" placeholder="Provider A"
                                                value="<?= App::e((string)($slot['label'] ?? '')) ?>">
                                     </td>
                                 </tr>
@@ -843,7 +843,7 @@ endif; ?>
                     Assigning a site to index <strong>N</strong> writes that hostname on every member prefix at offset N.
                 </p>
                 <ul>
-                    <li><strong>Metro-E / OSPF:</strong> one /24 per provider; each clinic uses the same last octet so equal-cost paths are obvious.</li>
+                    <li><strong>Multi-homed WAN:</strong> one /24 per provider; each site uses the same last octet so equal-cost paths are obvious.</li>
                     <li><strong>Server + iDRAC:</strong> production VLAN and OOB VLAN keep the same last octet per host.</li>
                 </ul>
                 <p class="text-muted" style="margin-bottom:0">

@@ -336,6 +336,85 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 App::flash('success', 'Role group mapping removed.');
             }
         }
+        if ($action === 'save_role_permissions' || $action === 'reset_role_permissions') {
+            if (!AuthManager::isAdmin($user)) {
+                throw new RuntimeException('Only a Global Admin can change role permissions.');
+            }
+            $defs = AuthManager::systemRoleDefinitions();
+            $allowed = array_flip(AuthManager::PERMISSIONS);
+            $privileged = array_flip(AuthManager::privilegedPermissionKeys());
+            $names = ['Viewer', 'Department Admin', 'Data Center Admin', 'Global Admin'];
+            $posted = $_POST['perm'] ?? [];
+            if (!is_array($posted)) {
+                $posted = [];
+            }
+            foreach ($names as $name) {
+                $row = Database::fetchOne('SELECT role_id, name, permissions FROM roles WHERE name = ?', [$name]);
+                if (!$row) {
+                    continue;
+                }
+                $rid = (int)$row['role_id'];
+                if ($name === 'Global Admin') {
+                    Database::update('roles', [
+                        'permissions' => json_encode(['*']),
+                    ], 'role_id = :id', [':id' => $rid]);
+                    continue;
+                }
+                if ($action === 'reset_role_permissions') {
+                    $only = (int)($_POST['role_id'] ?? 0);
+                    if ($only > 0 && $only !== $rid) {
+                        continue;
+                    }
+                    $json = json_encode($defs[$name]['permissions'] ?? [], JSON_UNESCAPED_UNICODE);
+                    Database::update('roles', ['permissions' => $json], 'role_id = :id', [':id' => $rid]);
+                    continue;
+                }
+                $keys = $posted[$rid] ?? $posted[(string)$rid] ?? [];
+                if (!is_array($keys)) {
+                    $keys = [];
+                }
+                $clean = [];
+                foreach ($keys as $k) {
+                    $k = (string)$k;
+                    if (!isset($allowed[$k]) || isset($privileged[$k])) {
+                        continue;
+                    }
+                    $clean[$k] = true;
+                }
+                foreach (AuthManager::permissionModules() as $mod) {
+                    $view = $mod['view'] ?? null;
+                    if ($view && (
+                        (!empty($mod['edit']) && isset($clean[$mod['edit']]))
+                        || (!empty($mod['edit_dept']) && isset($clean[$mod['edit_dept']]))
+                    )) {
+                        $clean[$view] = true;
+                    }
+                }
+                Database::update(
+                    'roles',
+                    ['permissions' => json_encode(array_keys($clean), JSON_UNESCAPED_UNICODE)],
+                    'role_id = :id',
+                    [':id' => $rid]
+                );
+            }
+            if (class_exists('AuditService')) {
+                AuditService::log(
+                    (int)$user['user_id'],
+                    $user['username'] ?? '',
+                    $action === 'reset_role_permissions' ? 'reset' : 'update',
+                    'roles',
+                    0,
+                    ['action' => $action]
+                );
+            }
+            App::flash(
+                'success',
+                $action === 'reset_role_permissions'
+                    ? 'Role permissions restored to defaults.'
+                    : 'Role permissions saved.'
+            );
+            App::redirect('pages/users.php#roles');
+        }
     } catch (Throwable $e) {
         App::flash('error', $e->getMessage());
     }
@@ -456,34 +535,150 @@ layout_header('Users & Departments', $user, 'users');
 </div>
 
 <p class="text-muted mb-2" style="font-size:.9rem">
-    <strong>Roles:</strong> Viewer (read-only) · Department Admin (edit own department’s devices) ·
-    Data Center Admin (infrastructure + all devices + power) · Global Admin (settings &amp; users).
-    Department colors outline devices in the rack view. AD/Entra group maps assign roles/departments at login later.
+    <strong>Roles:</strong> Viewer (read-only, including IPAM) · Department Admin (edit own department’s devices) ·
+    Data Center Admin (infrastructure + all devices + power + IPAM) · Global Admin (settings &amp; users).
+    Tick View / Edit below to refine. Department colors outline devices in the rack view.
+    AD/Entra group maps assign roles/departments at login later.
 </p>
 
-<div class="card mb-2">
-    <div class="card-header"><h2>Platform roles</h2></div>
-    <div class="card-body flush">
-        <table class="data">
-            <thead><tr><th>Role</th><th>Description</th><th>Permissions</th></tr></thead>
-            <tbody>
-            <?php foreach ($roles as $r):
-                if (!in_array($r['name'], ['Viewer', 'Department Admin', 'Data Center Admin', 'Global Admin', 'Administrator'], true)) {
-                    continue;
-                }
-                $perms = json_decode($r['permissions'] ?? '[]', true) ?: [];
-                $permLabel = in_array('*', $perms, true) ? 'Full (*)' : (count($perms) . ' keys');
-                ?>
+<?php
+$matrixOrder = ['Viewer' => 1, 'Department Admin' => 2, 'Data Center Admin' => 3, 'Global Admin' => 4];
+$matrixRoles = [];
+foreach ($roles as $r) {
+    if (isset($matrixOrder[$r['name'] ?? ''])) {
+        $matrixRoles[] = $r;
+    }
+}
+usort($matrixRoles, static function ($a, $b) use ($matrixOrder) {
+    return ($matrixOrder[$a['name']] ?? 50) <=> ($matrixOrder[$b['name']] ?? 50);
+});
+$modules = AuthManager::permissionModules();
+$privilegedKeys = array_flip(AuthManager::privilegedPermissionKeys());
+?>
+<div class="card mb-2" id="roles">
+    <div class="card-header flex-between" style="flex-wrap:wrap;gap:.5rem">
+        <h2 style="margin:0">Platform roles</h2>
+        <?php if ($isGlobalAdmin): ?>
+            <form method="post" style="margin:0" onsubmit="return confirm('Restore Viewer, Department Admin, and Data Center Admin to the built-in defaults? Global Admin stays full access.');">
+                <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                <input type="hidden" name="action" value="reset_role_permissions">
+                <button class="btn btn-sm btn-ghost" type="submit">Restore defaults</button>
+            </form>
+        <?php endif; ?>
+    </div>
+    <div class="card-body" style="padding-bottom:.35rem">
+        <p class="text-muted" style="font-size:.85rem;margin:0 0 .75rem">
+            <strong>Viewer</strong> is the visitor role: view IPAM, cannot assign addresses or change prefixes.
+            Floor plan, datacenters, and cabinets share one Edit permission. Users and Settings stay Global Admin only.
+        </p>
+    </div>
+    <div class="card-body flush" style="overflow:auto">
+        <form method="post">
+            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+            <input type="hidden" name="action" value="save_role_permissions">
+            <table class="data role-perm-matrix">
+                <thead>
                 <tr>
-                    <td><strong><?= App::e($r['name']) ?></strong></td>
-                    <td style="font-size:.88rem"><?= App::e($r['description'] ?? '') ?></td>
-                    <td><span class="badge badge-info"><?= App::e($permLabel) ?></span></td>
+                    <th rowspan="2" style="vertical-align:bottom">Area</th>
+                    <?php foreach ($matrixRoles as $mr): ?>
+                        <th colspan="2" class="role-perm-role"><?= App::e((string)$mr['name']) ?></th>
+                    <?php endforeach; ?>
                 </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
+                <tr>
+                    <?php foreach ($matrixRoles as $mr): ?>
+                        <th class="role-perm-sub">View</th>
+                        <th class="role-perm-sub">Edit</th>
+                    <?php endforeach; ?>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($modules as $mod):
+                    $viewKey = $mod['view'] ?? null;
+                    $editKey = $mod['edit'] ?? null;
+                    $deptKey = $mod['edit_dept'] ?? null;
+                    $viewPriv = $viewKey && isset($privilegedKeys[$viewKey]);
+                    $editPriv = $editKey && isset($privilegedKeys[$editKey]);
+                    ?>
+                    <tr>
+                        <td><?= App::e((string)$mod['label']) ?></td>
+                        <?php foreach ($matrixRoles as $mr):
+                            $rid = (int)$mr['role_id'];
+                            $plist = json_decode((string)($mr['permissions'] ?? '[]'), true) ?: [];
+                            $isStar = in_array('*', $plist, true) || ($mr['name'] ?? '') === 'Global Admin';
+                            $locked = $isStar || !$isGlobalAdmin;
+                            $hasView = $isStar || ($viewKey && in_array($viewKey, $plist, true));
+                            $hasEdit = $isStar || ($editKey && in_array($editKey, $plist, true));
+                            $hasDept = $isStar || ($deptKey && in_array($deptKey, $plist, true));
+                            $viewLocked = $locked || $viewPriv;
+                            $editLocked = $locked || $editPriv;
+                            ?>
+                            <td class="role-perm-cell">
+                                <?php if ($viewKey): ?>
+                                    <input type="checkbox"
+                                           name="perm[<?= $rid ?>][]"
+                                           value="<?= App::e((string)$viewKey) ?>"
+                                           <?= $hasView ? 'checked' : '' ?>
+                                           <?= $viewLocked ? 'disabled' : '' ?>
+                                           title="View">
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td class="role-perm-cell">
+                                <?php if ($deptKey): ?>
+                                    <label class="role-perm-mini">
+                                        <input type="checkbox"
+                                               name="perm[<?= $rid ?>][]"
+                                               value="<?= App::e((string)$deptKey) ?>"
+                                               <?= $hasDept ? 'checked' : '' ?>
+                                               <?= $editLocked ? 'disabled' : '' ?>>
+                                        Own dept
+                                    </label>
+                                    <label class="role-perm-mini">
+                                        <input type="checkbox"
+                                               name="perm[<?= $rid ?>][]"
+                                               value="<?= App::e((string)$editKey) ?>"
+                                               <?= $hasEdit ? 'checked' : '' ?>
+                                               <?= $editLocked ? 'disabled' : '' ?>>
+                                        All
+                                    </label>
+                                <?php elseif ($editKey): ?>
+                                    <input type="checkbox"
+                                           name="perm[<?= $rid ?>][]"
+                                           value="<?= App::e((string)$editKey) ?>"
+                                           <?= $hasEdit ? 'checked' : '' ?>
+                                           <?= $editLocked ? 'disabled' : '' ?>
+                                           <?= $editKey === 'edit_infrastructure' ? 'data-sync="infra-' . $rid . '"' : '' ?>
+                                           title="Edit">
+                                <?php else: ?>
+                                    <span class="text-muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                        <?php endforeach; ?>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+            <?php if ($isGlobalAdmin): ?>
+                <div style="padding:.75rem .85rem">
+                    <button class="btn btn-primary" type="submit">Save role permissions</button>
+                </div>
+            <?php endif; ?>
+        </form>
     </div>
 </div>
+<script>
+(function () {
+    document.querySelectorAll('input[data-sync]').forEach(function (el) {
+        el.addEventListener('change', function () {
+            var key = el.getAttribute('data-sync');
+            document.querySelectorAll('input[data-sync="' + key + '"]').forEach(function (o) {
+                o.checked = el.checked;
+            });
+        });
+    });
+})();
+</script>
 
 <div class="users-admin-stack">
     <!-- Departments -->
@@ -1184,6 +1379,14 @@ layout_header('Users & Departments', $user, 'users');
   width: 100%;
   max-width: 100%;
   min-width: 0;
+}
+.role-perm-matrix { min-width: 52rem; }
+.role-perm-matrix th.role-perm-role { text-align: center; white-space: nowrap; }
+.role-perm-matrix th.role-perm-sub { text-align: center; font-weight: 500; font-size: .75rem; }
+.role-perm-matrix td.role-perm-cell { text-align: center; vertical-align: middle; }
+.role-perm-mini {
+  display: flex; align-items: center; justify-content: center; gap: .3rem;
+  font-size: .72rem; font-weight: 400; white-space: nowrap;
 }
 table.data.table-fit {
   width: 100%;

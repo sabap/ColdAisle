@@ -99,7 +99,7 @@ class AuthManager
 
         return [
             'Viewer' => [
-                'description' => 'General view-only — inventory, power, reports (no changes)',
+                'description' => 'General view-only — inventory, power, IPAM, reports (no changes)',
                 'permissions' => $viewAll,
             ],
             'Department Admin' => [
@@ -531,9 +531,7 @@ class AuthManager
             'power' => ['view_power', 'edit_power'],
             'cooling' => ['view_cooling', 'edit_cooling'],
             'cables' => ['view_cables', 'edit_cables'],
-            'ipam' => ['view_ipam', 'edit_ipam', 'view_dashboard'],
-            'view_ipam' => ['view_dashboard', 'view_devices', 'edit_ipam'],
-            'edit_ipam' => ['edit_infrastructure', 'edit_cables'],
+            'ipam' => ['view_ipam', 'edit_ipam'],
             'reports' => ['view_reports'],
             'audits' => ['view_audits', 'edit_audits'],
             'disposals' => ['view_disposals', 'edit_disposals'],
@@ -648,6 +646,46 @@ class AuthManager
     public static function canEditCables(array $user): bool
     {
         return self::can($user, 'edit_cables');
+    }
+
+    public static function canEditIpam(array $user): bool
+    {
+        return self::can($user, 'edit_ipam');
+    }
+
+    /**
+     * Modules shown on Users → role permission matrix (View / Edit checkmarks).
+     *
+     * @return list<array{label:string,view:?string,edit:?string,edit_dept:?string}>
+     */
+    public static function permissionModules(): array
+    {
+        return [
+            ['label' => 'Dashboard', 'view' => 'view_dashboard', 'edit' => null, 'edit_dept' => null],
+            ['label' => 'Floor plan', 'view' => 'view_floorplan', 'edit' => 'edit_infrastructure', 'edit_dept' => null],
+            ['label' => 'Datacenters / rooms', 'view' => 'view_datacenters', 'edit' => 'edit_infrastructure', 'edit_dept' => null],
+            ['label' => 'Cabinets', 'view' => 'view_cabinets', 'edit' => 'edit_infrastructure', 'edit_dept' => null],
+            ['label' => 'Devices', 'view' => 'view_devices', 'edit' => 'edit_devices_all', 'edit_dept' => 'edit_devices_dept'],
+            ['label' => 'Power', 'view' => 'view_power', 'edit' => 'edit_power', 'edit_dept' => null],
+            ['label' => 'Cooling', 'view' => 'view_cooling', 'edit' => 'edit_cooling', 'edit_dept' => null],
+            ['label' => 'Cables', 'view' => 'view_cables', 'edit' => 'edit_cables', 'edit_dept' => null],
+            ['label' => 'IPAM', 'view' => 'view_ipam', 'edit' => 'edit_ipam', 'edit_dept' => null],
+            ['label' => 'SNMP', 'view' => 'view_snmp', 'edit' => 'edit_snmp', 'edit_dept' => null],
+            ['label' => 'Disposals', 'view' => 'view_disposals', 'edit' => 'edit_disposals', 'edit_dept' => null],
+            ['label' => 'Work orders', 'view' => 'view_work_orders', 'edit' => 'edit_work_orders', 'edit_dept' => null],
+            ['label' => 'Audits', 'view' => 'view_audits', 'edit' => 'edit_audits', 'edit_dept' => null],
+            ['label' => 'Reports', 'view' => 'view_reports', 'edit' => null, 'edit_dept' => null],
+            ['label' => 'Notifications', 'view' => 'view_notifications', 'edit' => null, 'edit_dept' => null],
+            ['label' => 'Device / PDU templates', 'view' => null, 'edit' => 'edit_templates', 'edit_dept' => null],
+            ['label' => 'Users', 'view' => 'manage_users', 'edit' => 'manage_users', 'edit_dept' => null],
+            ['label' => 'Settings', 'view' => 'manage_settings', 'edit' => 'manage_settings', 'edit_dept' => null],
+        ];
+    }
+
+    /** Keys only Global Admin may hold (matrix will not grant these to other roles). */
+    public static function privilegedPermissionKeys(): array
+    {
+        return ['manage_users', 'manage_settings'];
     }
 
     public static function canEditDisposals(array $user): bool
