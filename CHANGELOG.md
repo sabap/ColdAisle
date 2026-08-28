@@ -13,6 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+### Enhancements
+
+### Bug fixes
+
+---
+
+## [0.3.175] - 2026-08-28
+
+### New features
+
 - **Role permission matrix:** Users → Platform roles has View / Edit checkmarks per area (including IPAM). Viewer stays read-only unless you tick Edit. Restore defaults is available. Users and Settings remain Global Admin only.
 
 ### Enhancements
@@ -20,10 +30,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **IPAM aligned groups:** field placeholders and examples are generic (no ISP or site names).
 - **IPAM permissions:** view and edit are independent keys. Dashboard, cabling, or infrastructure rights no longer imply IPAM access. Visitors (Viewer) can look, not assign.
 
-### Bug fixes
-
 ---
-
 ## [0.3.174] - 2026-08-27
 
 ### New features
