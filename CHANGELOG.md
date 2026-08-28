@@ -13,6 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+### Enhancements
+
+### Bug fixes
+
+---
+
+## [0.3.181] - 2026-08-28
+
+### New features
+
 - **Recovery backups include the database:** *Update to v…* and *Create recovery backup* write a full `coldaisle-site_…` package (SQL inventory + uploads) **and** an application-files `backup_…` zip. Restore raceways/cabinets from the site package. Housekeeping can **Download** either file.
 - **Undo raceway joins:** after a merge, **Undo merge** / **Ctrl+Z** splits at the junction. Click any interior corner then **Split at corner #n** to un-join without deleting. Original `path_id` (and cable hops) stay on the first piece.
 
@@ -25,7 +35,6 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **Floor planner raceways vs airflow:** placing or selecting a vent no longer starts a raceway path/vertex drag. Raceway strokes paint above vents again except while a marker is being placed or selected.
 
 ---
-
 ## [0.3.180] - 2026-08-28
 
 ### Bug fixes
