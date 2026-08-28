@@ -15,6 +15,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+### Bug fixes
+
+---
+
+## [0.3.179] - 2026-08-28
+
+### Enhancements
+
 - **Airflow height:** each supply/return has Height above floor (default 3 m).
 - **Denser particles:** a second layer of finer motes is mixed with the main stream.
 
@@ -23,7 +31,6 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **Airflow nudge:** arrow keys move a selected unlocked vent or return (same as cabinets).
 
 ---
-
 ## [0.3.178] - 2026-08-28
 
 ### Enhancements
