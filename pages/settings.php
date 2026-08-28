@@ -88,6 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             SettingsService::set('noc_access_token', $tok, 'noc');
             SettingsService::set('noc_show_labels', !empty($_POST['noc_show_labels']) ? '1' : '0', 'noc');
             SettingsService::set('noc_show_raceways', !empty($_POST['noc_show_raceways']) ? '1' : '0', 'noc');
+            SettingsService::set('noc_show_airflow', !empty($_POST['noc_show_airflow']) ? '1' : '0', 'noc');
             SettingsService::set('noc_auto_rotate', !empty($_POST['noc_auto_rotate']) ? '1' : '0', 'noc');
             $panelSec = (int)($_POST['noc_panel_rotate_sec'] ?? 20);
             $allowedPanel = [5, 10, 20, 30, 40, 50, 60];
@@ -1339,6 +1340,7 @@ if ($nocToken !== '') {
 }
 $nocShowLabels = SettingsService::get('noc_show_labels', '1') === '1';
 $nocShowRaceways = SettingsService::get('noc_show_raceways', '1') === '1';
+$nocShowAirflow = SettingsService::get('noc_show_airflow', '1') === '1';
 $nocAutoRotate = SettingsService::get('noc_auto_rotate', '1') === '1';
 $nocPanelSec = (int)SettingsService::get('noc_panel_rotate_sec', '20');
 if (!in_array($nocPanelSec, [5, 10, 20, 30, 40, 50, 60], true)) {
@@ -1359,6 +1361,7 @@ $nocPreviewScene = [
     'ups' => [],
     'rooms' => [],
     'cable_paths' => [],
+    'airflow_anchors' => [],
 ];
 try {
     $nocPreviewScene['rooms'] = Database::fetchAll(
@@ -1366,7 +1369,7 @@ try {
          FROM rooms r WHERE r.is_active = 1 ORDER BY r.name'
     );
     $nocPreviewScene['cabinets'] = Database::fetchAll(
-        'SELECT TOP 40 c.cabinet_id, c.name, c.pos_x, c.pos_y, c.pos_z, c.rotation_deg,
+        'SELECT TOP 40 c.cabinet_id, c.name, c.pos_x, c.pos_y, c.pos_z, c.rotation_deg, c.front_facing,
                 c.u_height, c.width_mm, c.depth_mm, c.color_hex,
                 r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth
          FROM cabinets c
@@ -1413,6 +1416,17 @@ try {
         }
     } catch (Throwable $eP) {
         $nocPreviewScene['cable_paths'] = [];
+    }
+    try {
+        $nocPreviewScene['airflow_anchors'] = Database::fetchAll(
+            'SELECT TOP 24 anchor_id, room_id, kind, name, pos_x, pos_y, pos_z,
+                    width_m, depth_m, rotation_deg, shape, color_hex, is_active
+             FROM airflow_anchors
+             WHERE is_active = 1
+             ORDER BY kind, name, anchor_id'
+        ) ?: [];
+    } catch (Throwable $eAf) {
+        $nocPreviewScene['airflow_anchors'] = [];
     }
 } catch (Throwable $e) {
     // preview optional
@@ -1464,6 +1478,12 @@ try {
                 <span class="text-muted" style="font-size:.75rem;margin-left:1.6rem">Cable plant paths in the NOC 3D scene.</span>
             </div>
             <div class="form-row full"><label class="toggle-row" style="display:flex;align-items:center;gap:.55rem;cursor:pointer">
+                <input type="checkbox" name="noc_show_airflow" value="1" <?= $nocShowAirflow ? 'checked' : '' ?> id="noc_show_airflow">
+                <span>Show air particles</span>
+            </label>
+                <span class="text-muted" style="font-size:.75rem;margin-left:1.6rem">Supply-to-return motes through cabinet fronts in the NOC 3D view. Vents and returns still render.</span>
+            </div>
+            <div class="form-row full"><label class="toggle-row" style="display:flex;align-items:center;gap:.55rem;cursor:pointer">
                 <input type="checkbox" name="noc_auto_rotate" value="1" <?= $nocAutoRotate ? 'checked' : '' ?> id="noc_auto_rotate">
                 <span>Auto-rotate 3D view</span>
             </label>
@@ -1481,6 +1501,7 @@ try {
                              data-scene="<?= App::e(json_encode($nocPreviewScene, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>"
                              data-labels="<?= $nocShowLabels ? '1' : '0' ?>"
                              data-raceways="<?= $nocShowRaceways ? '1' : '0' ?>"
+                             data-airflow="<?= $nocShowAirflow ? '1' : '0' ?>"
                              data-tilt="<?= (int)$nocCamTiltPct ?>"
                              data-zoom="<?= (int)$nocCamZoomPct ?>"></div>
                         <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 0;text-align:center">Live preview</p>
@@ -1632,7 +1653,7 @@ try {
     </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=33"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=34"></script>
 <script>
 (function () {
   var el = document.getElementById('nocCamPreview');
@@ -1641,12 +1662,14 @@ try {
   var tiltOut = document.getElementById('noc_cam_tilt_out');
   var zoomOut = document.getElementById('noc_cam_zoom_out');
   var rotEl = document.getElementById('noc_auto_rotate');
+  var airEl = document.getElementById('noc_show_airflow');
   if (!el || !window.THREE || !window.ColdAisle3D) return;
 
   var scene = {};
   try { scene = JSON.parse(el.getAttribute('data-scene') || '{}'); } catch (e) { scene = {}; }
   var labelsOn = el.getAttribute('data-labels') === '1';
   var racewaysOn = el.getAttribute('data-raceways') === '1';
+  var airflowOn = el.getAttribute('data-airflow') === '1';
   var tilt = parseInt(el.getAttribute('data-tilt') || '63', 10);
   var zoom = parseInt(el.getAttribute('data-zoom') || '72', 10);
   if (isNaN(tilt)) tilt = 63;
@@ -1671,6 +1694,9 @@ try {
       cablePaths: racewaysOn ? (scene.cable_paths || []) : [],
       showRaceways: racewaysOn,
       showObjectLabels: labelsOn,
+      airflowAnchors: scene.airflow_anchors || [],
+      airflowOverlay: airflowOn,
+      airflowColor: 'blue',
       envSensors: [],
       heatOverlay: false,
       interactive: false,
@@ -1703,6 +1729,11 @@ try {
   if (rotEl && view && typeof view.setAutoRotate === 'function') {
     rotEl.addEventListener('change', function () {
       view.setAutoRotate(!!rotEl.checked);
+    });
+  }
+  if (airEl && view && typeof view.setAirflowOverlay === 'function') {
+    airEl.addEventListener('change', function () {
+      view.setAirflowOverlay(!!airEl.checked);
     });
   }
   // Match stage size after layout

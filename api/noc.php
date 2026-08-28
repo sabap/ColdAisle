@@ -562,6 +562,7 @@ try {
 // NOC wall display options (Settings → NOC wall display)
 $nocShowLabels = true;
 $nocShowRaceways = true;
+$nocShowAirflow = true;
 $nocAutoRotate = true;
 $nocPanelSec = 20;
 $nocClearedTtl = 120;
@@ -570,6 +571,7 @@ $nocCamZoomPct = 72;
 try {
     $nocShowLabels = SettingsService::get('noc_show_labels', '1') === '1';
     $nocShowRaceways = SettingsService::get('noc_show_raceways', '1') === '1';
+    $nocShowAirflow = SettingsService::get('noc_show_airflow', '1') === '1';
     $nocAutoRotate = SettingsService::get('noc_auto_rotate', '1') === '1';
     $nocPanelSec = (int)SettingsService::get('noc_panel_rotate_sec', '20');
     if (!in_array($nocPanelSec, [5, 10, 20, 30, 40, 50, 60], true)) {
@@ -624,6 +626,7 @@ $out = [
     'noc' => [
         'show_labels' => $nocShowLabels,
         'show_raceways' => $nocShowRaceways,
+        'show_airflow' => $nocShowAirflow,
         'auto_rotate' => $nocAutoRotate,
         'panel_rotate_sec' => $nocPanelSec,
         'panel_rotate_ms' => $nocPanelSec * 1000,
@@ -651,7 +654,7 @@ if ($includeScene) {
     $envSensors3d = [];
     try {
         $cabinets3d = Database::fetchAll(
-            'SELECT c.cabinet_id, c.name, c.pos_x, c.pos_y, c.pos_z, c.rotation_deg,
+            'SELECT c.cabinet_id, c.name, c.pos_x, c.pos_y, c.pos_z, c.rotation_deg, c.front_facing,
                     c.u_height, c.width_mm, c.depth_mm, c.color_hex,
                     r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth,
                     (SELECT COUNT(*) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1) AS device_count,

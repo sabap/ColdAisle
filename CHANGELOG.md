@@ -13,9 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Raceway pack (lab → production):** `scripts/raceway_pack.php` / `scripts/Raceway-Pack.ps1` export `cable_paths` centerlines to JSON and re-insert them by `path_id` (geometry + optional codes). Snow Globe-renamed LAD-/UCH- codes are flagged; waypoints stay the original layout.
+- **Import raceways from a site zip (SQL):** `scripts/Import-RacewaysFromSiteBackup.ps1` reads `cable_paths` from a `coldaisle-site_*.zip` (e.g. v0.3.148 pre–Snow Globe) and upserts names + waypoints by `path_id`. Dry-run by default; `-Apply` after a SQL snapshot. Credentials are filled in the script.
+
 ### Enhancements
 
+- **NOC air particles toggle:** Settings → NOC wall display has **Show air particles** (on by default). Uncheck to hide motes on the wall; vents and returns stay.
+
 ### Bug fixes
+
+- **Dashboard / NOC airflow:** particles now use each cabinet's front facing (same cold-aisle inlet to hot-aisle exhaust path as Floor planner 3D). Dashboard 3D no longer includes unplaced racks at the origin.
 
 ---
 

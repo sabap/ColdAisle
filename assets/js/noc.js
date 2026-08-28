@@ -15,6 +15,7 @@
   var statusMode = 'wait'; // ok | wait | err
   var nocShowLabels = cfg.showLabels !== false;
   var nocShowRaceways = cfg.showRaceways !== false;
+  var nocShowAirflow = cfg.showAirflow !== false;
   var nocAutoRotate = cfg.autoRotate !== false;
   var nocClearedTtlSec = Number(cfg.clearedAlertTtlSec);
   if (!isFinite(nocClearedTtlSec)) nocClearedTtlSec = 120;
@@ -833,6 +834,7 @@
     var prevPanel = panelRotateMs;
     if (typeof nocCfg.show_labels === 'boolean') nocShowLabels = nocCfg.show_labels;
     if (typeof nocCfg.show_raceways === 'boolean') nocShowRaceways = nocCfg.show_raceways;
+    if (typeof nocCfg.show_airflow === 'boolean') nocShowAirflow = nocCfg.show_airflow;
     if (typeof nocCfg.auto_rotate === 'boolean') nocAutoRotate = nocCfg.auto_rotate;
     if (nocCfg.panel_rotate_ms != null) {
       var ms = Number(nocCfg.panel_rotate_ms);
@@ -862,6 +864,9 @@
       }
       if (typeof view3d.setRacewaysVisible === 'function') {
         view3d.setRacewaysVisible(nocShowRaceways);
+      }
+      if (typeof view3d.setAirflowOverlay === 'function') {
+        view3d.setAirflowOverlay(nocShowAirflow);
       }
       if (typeof view3d.setAutoRotate === 'function') {
         view3d.setAutoRotate(nocAutoRotate);
@@ -1002,7 +1007,7 @@
           rooms: rooms,
           envSensors: envSensors,
           airflowAnchors: airflowAnchors,
-          airflowOverlay: airflowAnchors.length > 0,
+          airflowOverlay: nocShowAirflow && airflowAnchors.length > 0,
           airflowColor: 'blue',
           cablePaths: nocShowRaceways ? cablePaths : [],
           showRaceways: nocShowRaceways,
@@ -1028,6 +1033,7 @@
       if (view3d) {
         if (typeof view3d.setObjectLabels === 'function') view3d.setObjectLabels(nocShowLabels);
         if (typeof view3d.setRacewaysVisible === 'function') view3d.setRacewaysVisible(nocShowRaceways);
+        if (typeof view3d.setAirflowOverlay === 'function') view3d.setAirflowOverlay(nocShowAirflow);
         if (typeof view3d.setAutoRotate === 'function') view3d.setAutoRotate(nocAutoRotate);
       }
       // Reflow after flex layout (3D stage + alert grid)

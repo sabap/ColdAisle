@@ -77,14 +77,14 @@ $recentAudit = Database::fetchAll(
 );
 
 $cabinets3d = Database::fetchAll(
-    'SELECT c.cabinet_id, c.name, c.pos_x, c.pos_y, c.pos_z, c.rotation_deg,
+    'SELECT c.cabinet_id, c.name, c.pos_x, c.pos_y, c.pos_z, c.rotation_deg, c.front_facing,
             c.u_height, c.width_mm, c.depth_mm, c.color_hex,
             r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth,
             (SELECT COUNT(*) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1) AS device_count,
             (SELECT ISNULL(SUM(d.u_height),0) FROM devices d WHERE d.cabinet_id = c.cabinet_id AND d.is_active = 1 AND d.position_u IS NOT NULL AND d.parent_device_id IS NULL) AS u_used
      FROM cabinets c
      INNER JOIN rooms r ON r.room_id = c.room_id
-     WHERE c.is_active = 1
+     WHERE c.is_active = 1 AND c.pos_x IS NOT NULL AND c.pos_y IS NOT NULL
      ORDER BY c.name'
 );
 $cabinets3d = Cabinet3dData::withDevices($cabinets3d);
@@ -517,7 +517,7 @@ if (class_exists('SiteTourService')) {
     if (!el) return;
     el.classList.add('dash-3d-loading');
     var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=33') ?>;
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=34') ?>;
     loadScript(threeUrl)
       .then(function () { return loadScript(app3d); })
       .then(function () {

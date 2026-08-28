@@ -2055,10 +2055,16 @@
       if (f === 'south' || f === 's') return { dx: 0, dz: 1 };
       if (f === 'east' || f === 'e') return { dx: 1, dz: 0 };
       if (f === 'west' || f === 'w') return { dx: -1, dz: 0 };
+      if (f === 'north' || f === 'n') return { dx: 0, dz: -1 };
+      var deg = ((Number(c.rotation_deg) || 0) % 360 + 360) % 360;
+      if (deg >= 45 && deg < 135) return { dx: 1, dz: 0 };
+      if (deg >= 135 && deg < 225) return { dx: 0, dz: 1 };
+      if (deg >= 225 && deg < 315) return { dx: -1, dz: 0 };
       return { dx: 0, dz: -1 };
     }
 
     function cabAirInfo(c) {
+      if (c.pos_x == null || c.pos_x === '' || c.pos_y == null || c.pos_y === '') return null;
       var w = mmToM(c.width_mm) || 0.6;
       var d = mmToM(c.depth_mm) || 1.2;
       var uH = Number(c.u_height);

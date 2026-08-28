@@ -9,6 +9,8 @@
 /storage/snmp/mibs/*
 !/storage/snmp/mibs/.gitkeep
 
+/storage/tmp/raceway_pack.json
+
 # Backups / dumps (local)
 *.bak
 *.sql.gz
