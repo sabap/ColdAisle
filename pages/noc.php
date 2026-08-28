@@ -39,7 +39,7 @@ if ($gotToken !== '') {
 $cssUrl = App::url('assets/css/noc.css') . '?v=12';
 $jsUrl = App::url('assets/js/noc.js') . '?v=17';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=30';
+$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=31';
 $org = '';
 $nocPanelSec = 20;
 $nocShowLabels = true;

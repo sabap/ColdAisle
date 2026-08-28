@@ -421,6 +421,10 @@ try {
             if ($d < 0.2) {
                 $d = 0.6;
             }
+            $shape = strtolower(trim((string)($data['shape'] ?? '')));
+            if (!in_array($shape, ['circle', 'slot'], true)) {
+                $shape = (max($w, $d) / max(0.01, min($w, $d)) >= 1.7) ? 'slot' : 'circle';
+            }
             $color = trim((string)($data['color_hex'] ?? ''));
             if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $color)) {
                 $color = $kind === 'return' ? '#fb923c' : '#38bdf8';
@@ -437,6 +441,7 @@ try {
                 'pos_z' => $z,
                 'width_m' => $w,
                 'depth_m' => $d,
+                'shape' => $shape,
                 'rotation_deg' => (float)($data['rotation_deg'] ?? 0),
                 'color_hex' => $color,
                 'cooling_unit_id' => $cid > 0 ? $cid : null,
@@ -471,6 +476,12 @@ try {
             foreach (['pos_x', 'pos_y', 'pos_z', 'width_m', 'depth_m', 'rotation_deg'] as $col) {
                 if (array_key_exists($col, $data) && $data[$col] !== '') {
                     $fields[$col] = round((float)$data[$col], 3);
+                }
+            }
+            if (array_key_exists('shape', $data)) {
+                $sh = strtolower(trim((string)$data['shape']));
+                if (in_array($sh, ['circle', 'slot'], true)) {
+                    $fields['shape'] = $sh;
                 }
             }
             if (array_key_exists('color_hex', $data) && preg_match('/^#[0-9A-Fa-f]{6}$/', (string)$data['color_hex'])) {

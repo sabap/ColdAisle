@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Airflow is cabinet-aware:** particles spawn along round or long slot vents, drop into nearby rack **fronts**, pass through to the **rear**, then all streams are pulled into the returns — with swirl so it does not look like a single line.
+
 ### Bug fixes
 
 ---
@@ -26,6 +28,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **Floor planner Airflow palette:** Supply vent and Return grille are real clickable tiles in the left pane (not an empty heading). Cache-bust floorplan.js.
 
 ---
+
 ## [0.3.176] - 2026-08-28
 
 ### New features

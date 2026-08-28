@@ -1148,7 +1148,7 @@ class Schema
                 'room_id', 'pos_x', 'pos_y', 'snmp_enabled', 'primary_ip',
             ],
             'airflow_anchors' => [
-                'anchor_id', 'room_id', 'kind', 'name', 'pos_x', 'pos_y', 'pos_z',
+                'anchor_id', 'room_id', 'kind', 'name', 'shape', 'pos_x', 'pos_y', 'pos_z',
             ],
             'env_sensors' => [
                 'sensor_id', 'name', 'sensor_kind', 'host_type', 'room_id',
@@ -1598,6 +1598,11 @@ class Schema
                 created_at DATETIME2 NOT NULL CONSTRAINT DF_af_created DEFAULT SYSUTCDATETIME(),
                 updated_at DATETIME2 NOT NULL CONSTRAINT DF_af_updated DEFAULT SYSUTCDATETIME()
             )"
+        );
+        self::ensureColumn(
+            'airflow_anchors',
+            'shape',
+            "NVARCHAR(20) NOT NULL CONSTRAINT DF_af_shape DEFAULT 'circle'"
         );
     }
 

@@ -105,7 +105,7 @@ layout_header('Documentation', $user, 'docs');
                 <li>Open Floor planner and pick the room. <strong>Edit Room / North</strong> adjusts size, grid, and which way is north.</li>
                 <li><strong>+ Cabinet</strong> or drag a model from the left palette (catalog uses published external W×D). Blue edge is the front of the rack — set <strong>Front faces</strong> after placing.</li>
                 <li>Drag to move. <strong>Grid</strong> / <strong>Snap</strong> keep aisles straight. Arrow keys <strong>nudge</strong> a selected unlocked object by the amount in the toolbar.</li>
-                <li>Place row PDUs from presets or drag an unplaced PDU onto the plan. Cooling and UPS have the same idea. Under <strong>Airflow</strong>, place ceiling <strong>supply vents</strong> and <strong>returns</strong> — 3D shows particles (blue or white until live temps are wired).</li>
+                <li>Place row PDUs from presets or drag an unplaced PDU onto the plan. Cooling and UPS have the same idea. Under <strong>Airflow</strong>, place round or long <strong>supply</strong> / <strong>return</strong> slots on the ceiling. 3D air is pulled into nearby cabinet fronts, out the rear, then into the returns.</li>
             </ol>
             <h3 class="docs-h3">Navigate</h3>
             <ul>

@@ -2031,8 +2031,20 @@
         z: (Number(a.pos_y) || 0) + d / 2,
         w: w,
         d: d,
+        rot: ((Number(a.rotation_deg) || 0) * Math.PI) / 180,
         y: (a.pos_z != null && a.pos_z !== '' && isFinite(Number(a.pos_z))) ? Number(a.pos_z) : 3.0,
+        shape: airflowShape(a),
+        raw: a,
       };
+    }
+
+    function airflowShape(a) {
+      var s = String(a && a.shape ? a.shape : '').toLowerCase();
+      if (s === 'slot' || s === 'rect' || s === 'linear') return 'slot';
+      var w = Number(a && a.width_m) || 0.6;
+      var d = Number(a && a.depth_m) || 0.6;
+      var lo = Math.max(0.05, Math.min(w, d));
+      return Math.max(w, d) / lo >= 1.7 ? 'slot' : 'circle';
     }
 
     function cabFrontDir(c) {
@@ -2043,28 +2055,93 @@
       return { dx: 0, dz: -1 };
     }
 
-    function aisleMeans(cabs) {
-      var cold = { x: 0, z: 0, n: 0 };
-      var hot = { x: 0, z: 0, n: 0 };
-      (cabs || []).forEach(function (c) {
-        var w = mmToM(c.width_mm) || 0.6;
-        var d = mmToM(c.depth_mm) || 1.2;
-        var cx = (Number(c.pos_x) || 0) + w / 2;
-        var cz = (Number(c.pos_y) || 0) + d / 2;
-        var dir = cabFrontDir(c);
-        var reach = Math.max(w, d) / 2 + 0.45;
-        cold.x += cx + dir.dx * reach;
-        cold.z += cz + dir.dz * reach;
-        cold.n++;
-        hot.x += cx - dir.dx * reach;
-        hot.z += cz - dir.dz * reach;
-        hot.n++;
-      });
-      if (!cold.n) return null;
+    function cabAirInfo(c) {
+      var w = mmToM(c.width_mm) || 0.6;
+      var d = mmToM(c.depth_mm) || 1.2;
+      var uH = Number(c.u_height);
+      if (!isFinite(uH) || uH < 8) uH = 42;
+      var h = Math.max(1.4, uH * 0.04445);
+      var cx = (Number(c.pos_x) || 0) + w / 2;
+      var cz = (Number(c.pos_y) || 0) + d / 2;
+      var dir = cabFrontDir(c);
+      var reach = Math.max(w, d) / 2 + 0.38;
       return {
-        cold: { x: cold.x / cold.n, z: cold.z / cold.n },
-        hot: { x: hot.x / hot.n, z: hot.z / hot.n },
+        inlet: { x: cx + dir.dx * reach, z: cz + dir.dz * reach },
+        core: { x: cx, z: cz },
+        exhaust: { x: cx - dir.dx * reach, z: cz - dir.dz * reach },
+        dir: dir,
+        h: h,
+        w: w,
+        d: d,
       };
+    }
+
+    function spawnOnVent(info) {
+      var hw = info.w / 2;
+      var hd = info.d / 2;
+      var u;
+      var v;
+      if (info.shape === 'slot') {
+        u = (Math.random() * 2 - 1) * hw * 0.92;
+        v = (Math.random() * 2 - 1) * hd * 0.55;
+      } else {
+        var ang = Math.random() * Math.PI * 2;
+        var r = Math.sqrt(Math.random()) * Math.min(hw, hd) * 0.88;
+        u = Math.cos(ang) * r;
+        v = Math.sin(ang) * r;
+      }
+      var cos = Math.cos(info.rot);
+      var sin = Math.sin(info.rot);
+      return {
+        x: info.x + u * cos - v * sin,
+        y: info.y,
+        z: info.z + u * sin + v * cos,
+      };
+    }
+
+    function weightedPick(items, weightFn) {
+      if (!items || !items.length) return null;
+      var sum = 0;
+      var ws = [];
+      for (var i = 0; i < items.length; i++) {
+        var w = weightFn(items[i], i);
+        if (!(w > 0)) w = 0.0001;
+        ws.push(w);
+        sum += w;
+      }
+      var r = Math.random() * sum;
+      for (var j = 0; j < items.length; j++) {
+        r -= ws[j];
+        if (r <= 0) return items[j];
+      }
+      return items[items.length - 1];
+    }
+
+    function catmull(p0, p1, p2, p3, t) {
+      var t2 = t * t;
+      var t3 = t2 * t;
+      return {
+        x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+        y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
+        z: 0.5 * ((2 * p1.z) + (-p0.z + p2.z) * t + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2 + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3),
+      };
+    }
+
+    function densifyPath(pts, perSeg) {
+      if (!pts || pts.length < 2) return pts || [];
+      perSeg = perSeg || 8;
+      var out = [];
+      for (var i = 0; i < pts.length - 1; i++) {
+        var p0 = pts[Math.max(0, i - 1)];
+        var p1 = pts[i];
+        var p2 = pts[i + 1];
+        var p3 = pts[Math.min(pts.length - 1, i + 2)];
+        for (var k = 0; k < perSeg; k++) {
+          out.push(catmull(p0, p1, p2, p3, k / perSeg));
+        }
+      }
+      out.push(pts[pts.length - 1]);
+      return out;
     }
 
     function polylineLen(pts) {
@@ -2114,27 +2191,33 @@
         if (a.color_hex && /^#[0-9A-Fa-f]{6}$/.test(String(a.color_hex))) {
           col = new THREE.Color(a.color_hex).getHex();
         }
-        var disc = new THREE.Mesh(
-          new THREE.CylinderGeometry(Math.max(c.w, c.d) * 0.45, Math.max(c.w, c.d) * 0.45, 0.04, 20),
-          new THREE.MeshStandardMaterial({
-            color: col,
-            transparent: true,
-            opacity: 0.85,
-            roughness: 0.4,
-            metalness: 0.15,
-            emissive: col,
-            emissiveIntensity: 0.25,
-          })
-        );
-        disc.position.set(c.x, c.y, c.z);
-        disc.userData = { airflow: a, kind: kind };
-        airflowGroup.add(disc);
-        var arrowDir = isRet ? 1 : -1;
+        var mat = new THREE.MeshStandardMaterial({
+          color: col,
+          transparent: true,
+          opacity: 0.82,
+          roughness: 0.4,
+          metalness: 0.12,
+          emissive: col,
+          emissiveIntensity: 0.22,
+        });
+        var mesh;
+        if (c.shape === 'slot') {
+          mesh = new THREE.Mesh(new THREE.BoxGeometry(c.w, 0.05, c.d), mat);
+          mesh.rotation.y = c.rot;
+        } else {
+          mesh = new THREE.Mesh(
+            new THREE.CylinderGeometry(Math.max(c.w, c.d) * 0.45, Math.max(c.w, c.d) * 0.45, 0.05, 22),
+            mat
+          );
+        }
+        mesh.position.set(c.x, c.y, c.z);
+        mesh.userData = { airflow: a, kind: kind };
+        airflowGroup.add(mesh);
         var cone = new THREE.Mesh(
-          new THREE.ConeGeometry(0.08, 0.18, 8),
+          new THREE.ConeGeometry(0.07, 0.16, 8),
           new THREE.MeshBasicMaterial({ color: col })
         );
-        cone.position.set(c.x, c.y + arrowDir * 0.16, c.z);
+        cone.position.set(c.x, c.y + (isRet ? 0.16 : -0.16), c.z);
         if (isRet) cone.rotation.x = Math.PI;
         airflowGroup.add(cone);
         if (isRet) returns.push(c);
@@ -2142,66 +2225,110 @@
       });
 
       if (!supplies.length || !returns.length) return;
-      var aisles = aisleMeans(cabinets);
-      var aisleY = 1.2;
-      var paths = [];
-      supplies.forEach(function (s) {
-        var best = returns[0];
-        var bestD = Infinity;
-        returns.forEach(function (r) {
-          var dx = r.x - s.x;
-          var dz = r.z - s.z;
-          var dd = dx * dx + dz * dz;
-          if (dd < bestD) {
-            bestD = dd;
-            best = r;
-          }
-        });
-        var pts = [
-          { x: s.x, y: s.y, z: s.z },
-          { x: s.x, y: aisleY, z: s.z },
-        ];
-        if (aisles) {
-          pts.push({ x: aisles.cold.x, y: aisleY, z: aisles.cold.z });
-          pts.push({ x: aisles.hot.x, y: aisleY, z: aisles.hot.z });
-        }
-        pts.push({ x: best.x, y: aisleY, z: best.z });
-        pts.push({ x: best.x, y: best.y, z: best.z });
-        var len = polylineLen(pts);
-        if (len < 0.2) return;
-        paths.push({
-          pts: pts,
-          len: len,
-          // tempC: { supply, cold, hot, return } — fill from poll later
-          tempC: null,
-        });
-      });
-      if (!paths.length) return;
 
-      var nPart = Math.min(640, Math.max(48, paths.length * 56));
+      var cabInfos = (cabinets || []).map(cabAirInfo).filter(function (info) {
+        return info && isFinite(info.inlet.x);
+      });
+
+      function nearestReturn(from) {
+        return weightedPick(returns, function (r) {
+          var dx = r.x - from.x;
+          var dz = r.z - from.z;
+          return 1 / (dx * dx + dz * dz + 0.4);
+        }) || returns[0];
+      }
+
+      function nearbyCabs(from, n) {
+        if (!cabInfos.length) return [];
+        var scored = cabInfos.map(function (info) {
+          var dx = info.inlet.x - from.x;
+          var dz = info.inlet.z - from.z;
+          return { info: info, d2: dx * dx + dz * dz };
+        });
+        scored.sort(function (a, b) { return a.d2 - b.d2; });
+        return scored.slice(0, n || 6);
+      }
+
+      function buildStream(spawn, cab, ret) {
+        var inletY = cab ? (0.55 + Math.random() * cab.h * 0.45) : (0.9 + Math.random() * 0.5);
+        var midY = cab ? Math.min(cab.h * 0.72, inletY + 0.15) : inletY;
+        var dropY = Math.max(inletY + 0.35, spawn.y * 0.45);
+        var pts = [{ x: spawn.x, y: spawn.y, z: spawn.z }];
+        if (cab) {
+          pts.push({
+            x: spawn.x * 0.55 + cab.inlet.x * 0.45,
+            y: dropY,
+            z: spawn.z * 0.55 + cab.inlet.z * 0.45,
+          });
+          pts.push({ x: cab.inlet.x, y: inletY, z: cab.inlet.z });
+          pts.push({ x: cab.core.x, y: midY, z: cab.core.z });
+          pts.push({ x: cab.exhaust.x, y: inletY, z: cab.exhaust.z });
+          pts.push({
+            x: cab.exhaust.x * 0.65 + ret.x * 0.35,
+            y: Math.max(inletY, 1.35),
+            z: cab.exhaust.z * 0.65 + ret.z * 0.35,
+          });
+        } else {
+          pts.push({ x: spawn.x, y: dropY, z: spawn.z });
+          pts.push({
+            x: spawn.x * 0.4 + ret.x * 0.6,
+            y: 1.15,
+            z: spawn.z * 0.4 + ret.z * 0.6,
+          });
+        }
+        pts.push({ x: ret.x, y: Math.max(1.6, ret.y * 0.55), z: ret.z });
+        pts.push({ x: ret.x, y: ret.y, z: ret.z });
+        var dense = densifyPath(pts, 7);
+        var len = polylineLen(dense);
+        if (len < 0.4) return null;
+        return { pts: dense, len: len, tempC: null };
+      }
+
+      var streams = [];
+      var nSpawn = Math.min(220, Math.max(48, supplies.length * 28 + cabInfos.length * 6));
+      for (var si = 0; si < nSpawn; si++) {
+        var vent = supplies[si % supplies.length];
+        var spawn = spawnOnVent(vent);
+        var near = nearbyCabs(spawn, 5);
+        var cab = near.length
+          ? (weightedPick(near, function (row) { return 1 / (row.d2 + 0.25); }) || near[0]).info
+          : null;
+        var from = cab ? cab.exhaust : spawn;
+        var ret = nearestReturn(from);
+        var stream = buildStream(spawn, cab, ret);
+        if (stream) streams.push(stream);
+      }
+      if (!streams.length) return;
+
+      var nPart = Math.min(1400, Math.max(280, streams.length * 5));
       var positions = new Float32Array(nPart * 3);
       var colors = new Float32Array(nPart * 3);
       var geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      var mat = new THREE.PointsMaterial({
-        size: 0.07,
+      var matP = new THREE.PointsMaterial({
+        size: 0.055,
         vertexColors: true,
         transparent: true,
-        opacity: 0.88,
+        opacity: 0.78,
         depthWrite: false,
         sizeAttenuation: true,
+        blending: THREE.AdditiveBlending,
       });
-      airflowParticles = new THREE.Points(geo, mat);
+      airflowParticles = new THREE.Points(geo, matP);
       airflowParticles.frustumCulled = false;
       airflowGroup.add(airflowParticles);
       var tint = airflowTintFromTemp(null);
       for (var i = 0; i < nPart; i++) {
-        var path = paths[i % paths.length];
+        var path = streams[i % streams.length];
         airflowParticleState.push({
           path: path,
-          t: (i / nPart) * path.len,
-          speed: 0.55 + (i % 7) * 0.04,
+          t: Math.random() * path.len,
+          speed: 0.38 + Math.random() * 0.34,
+          phase: Math.random() * Math.PI * 2,
+          phase2: Math.random() * Math.PI * 2,
+          amp: 0.06 + Math.random() * 0.11,
+          ampY: 0.03 + Math.random() * 0.06,
         });
         colors[i * 3] = tint.r;
         colors[i * 3 + 1] = tint.g;
@@ -2214,20 +2341,27 @@
       if (!airflowParticles || !airflowGroup.visible) return;
       var pos = airflowParticles.geometry.attributes.position;
       var col = airflowParticles.geometry.attributes.color;
+      var tNow = performance.now() * 0.001;
       for (var i = 0; i < airflowParticleState.length; i++) {
         var st = airflowParticleState[i];
         st.t += st.speed * dt;
         if (st.t > st.path.len) st.t -= st.path.len;
         var p = pointOnPoly(st.path.pts, st.t);
-        pos.setXYZ(i, p.x, p.y, p.z);
-        // When path.tempC is set, blend by progress. Until then, stay blue/white.
+        var wob = Math.sin(tNow * 2.1 + st.phase + st.t * 1.7) * st.amp;
+        var wob2 = Math.cos(tNow * 1.6 + st.phase2 + st.t * 1.2) * st.amp;
+        pos.setXYZ(
+          i,
+          p.x + wob,
+          p.y + Math.sin(tNow * 2.8 + st.phase2) * st.ampY,
+          p.z + wob2
+        );
         if (st.path.tempC) {
           var u = st.path.len > 0 ? st.t / st.path.len : 0;
           var tc = st.path.tempC;
           var sample = tc.supply;
-          if (u > 0.25 && tc.cold != null) sample = tc.cold;
+          if (u > 0.22 && tc.cold != null) sample = tc.cold;
           if (u > 0.5 && tc.hot != null) sample = tc.hot;
-          if (u > 0.8 && tc.return != null) sample = tc.return;
+          if (u > 0.78 && tc.return != null) sample = tc.return;
           var c3 = airflowTintFromTemp(sample);
           col.setXYZ(i, c3.r, c3.g, c3.b);
         }

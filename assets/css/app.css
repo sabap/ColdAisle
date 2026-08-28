@@ -1354,6 +1354,11 @@ table.table-env-sensors .col-name a:hover {
   background: #fb923c;
   border-color: #ffedd5;
 }
+.palette-item.airflow-preset .airflow-icon.slot {
+  width: 46px;
+  height: 16px;
+  border-radius: 8px;
+}
 .palette-item .palette-title {
   font-weight: 600;
   font-size: .8rem;

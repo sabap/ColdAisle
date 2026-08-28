@@ -134,7 +134,7 @@ layout_header('Floor Planner', $user, 'floorplan');
 
             <h3 style="margin-top:1rem;font-size:.95rem">Airflow</h3>
             <p class="text-muted" style="font-size:.72rem;margin:.25rem 0 .5rem">
-                Click a marker, then click the floor (cold aisle = supply, hot aisle / CRAC = return).
+                Round or long slot. Supply over the cold aisle; return over the hot aisle. Air is pulled into cabinet fronts and out the rear, then to the returns.
             </p>
             <div id="airflowPresetList" class="palette-list palette-list-compact">
                 <div class="palette-item airflow-preset" draggable="true" role="button" tabindex="0"
@@ -343,9 +343,9 @@ layout_header('Floor Planner', $user, 'floorplan');
   window.ColdAisle.lengthUnits = <?= json_encode($units) ?>;
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=30"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=31"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=41"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=42"></script>
 <script>
 (function () {
   var c2 = document.getElementById('rwFinishCancel2');

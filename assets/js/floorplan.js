@@ -42,8 +42,10 @@
   ];
 
   const AIRFLOW_PRESETS = [
-    { key: 'supply', kind: 'supply_vent', name: 'Supply vent (ceiling)', color_hex: '#38bdf8', width_m: 0.6, depth_m: 0.6 },
-    { key: 'return', kind: 'return', name: 'Return grille (ceiling)', color_hex: '#fb923c', width_m: 0.6, depth_m: 0.6 },
+    { key: 'supply', kind: 'supply_vent', shape: 'circle', name: 'Supply vent (round)', color_hex: '#38bdf8', width_m: 0.6, depth_m: 0.6 },
+    { key: 'supply_slot', kind: 'supply_vent', shape: 'slot', name: 'Supply slot (linear)', color_hex: '#38bdf8', width_m: 2.4, depth_m: 0.35 },
+    { key: 'return', kind: 'return', shape: 'circle', name: 'Return grille (round)', color_hex: '#fb923c', width_m: 0.6, depth_m: 0.6 },
+    { key: 'return_slot', kind: 'return', shape: 'slot', name: 'Return slot (linear)', color_hex: '#fb923c', width_m: 2.4, depth_m: 0.35 },
   ];
 
   const UPS_TEMPLATES = [
@@ -1961,16 +1963,36 @@
       const r = airflowRect(a);
       const selected = Number(selectedAirflowId) === Number(a.anchor_id);
       const isRet = String(a.kind || '') === 'return';
+      const shape = String(a.shape || '').toLowerCase();
+      const isSlot = shape === 'slot' || shape === 'rect' || (r.w / Math.max(1, r.d) >= 1.7) || (r.d / Math.max(1, r.w) >= 1.7);
       const body = a.color_hex || (isRet ? '#fb923c' : '#38bdf8');
+      const rot = ((Number(a.rotation_deg) || 0) * Math.PI) / 180;
       ctx.save();
       ctx.translate(r.x + r.w / 2, r.y + r.d / 2);
+      ctx.rotate(rot);
       ctx.strokeStyle = selected ? '#fbbf24' : body;
       ctx.fillStyle = body;
-      ctx.globalAlpha = 0.22;
+      ctx.globalAlpha = 0.28;
       ctx.lineWidth = selected ? 3 : 1.6;
       ctx.setLineDash([5, 3]);
       ctx.beginPath();
-      ctx.arc(0, 0, Math.min(r.w, r.d) / 2, 0, Math.PI * 2);
+      if (isSlot) {
+        const rr = Math.min(6, Math.min(r.w, r.d) * 0.25);
+        const x0 = -r.w / 2;
+        const y0 = -r.d / 2;
+        ctx.moveTo(x0 + rr, y0);
+        ctx.lineTo(x0 + r.w - rr, y0);
+        ctx.quadraticCurveTo(x0 + r.w, y0, x0 + r.w, y0 + rr);
+        ctx.lineTo(x0 + r.w, y0 + r.d - rr);
+        ctx.quadraticCurveTo(x0 + r.w, y0 + r.d, x0 + r.w - rr, y0 + r.d);
+        ctx.lineTo(x0 + rr, y0 + r.d);
+        ctx.quadraticCurveTo(x0, y0 + r.d, x0, y0 + r.d - rr);
+        ctx.lineTo(x0, y0 + rr);
+        ctx.quadraticCurveTo(x0, y0, x0 + rr, y0);
+        ctx.closePath();
+      } else {
+        ctx.arc(0, 0, Math.min(r.w, r.d) / 2, 0, Math.PI * 2);
+      }
       ctx.fill();
       ctx.globalAlpha = 1;
       ctx.stroke();
@@ -1993,15 +2015,17 @@
         ctx.lineTo(s * 0.55, s * 0.15);
       }
       ctx.stroke();
+      ctx.restore();
+      ctx.save();
       ctx.fillStyle = '#e2e8f0';
       ctx.font = 'bold ' + Math.max(8, Math.round(9 * Math.min(zoom, 1.3))) + 'px Segoe UI';
       ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(String(a.name || (isRet ? 'Return' : 'Supply')).slice(0, 12), 0, r.d / 2 + 8);
+      ctx.textBaseline = 'top';
+      ctx.fillText(String(a.name || (isRet ? 'Return' : 'Supply')).slice(0, 16), r.x + r.w / 2, r.y + r.d + 2);
       if (selected && !isAirflowLocked(a)) {
         ctx.fillStyle = '#22c55e';
         ctx.font = 'bold 11px Segoe UI';
-        ctx.fillText('🔓', r.w / 2 - 8, -r.d / 2 + 10);
+        ctx.fillText('🔓', r.x + r.w - 8, r.y + 4);
       }
       ctx.restore();
     }
@@ -3179,21 +3203,31 @@
       }
       const locked = isAirflowLocked(a);
       const isRet = String(a.kind || '') === 'return';
+      const shape = String(a.shape || '').toLowerCase() === 'slot' ? 'slot' : 'circle';
       propsEl.innerHTML =
-        '<h3 style="margin-top:0">' + (isRet ? 'Return grille' : 'Supply vent') + '</h3>' +
-        '<p class="text-muted" style="font-size:.8rem;margin-top:0">Ceiling marker for 3D airflow. Particles are blue/white until polled temps exist.</p>' +
+        '<h3 style="margin-top:0">' + (isRet ? 'Return' : 'Supply vent') + '</h3>' +
+        '<p class="text-muted" style="font-size:.8rem;margin-top:0">Ceiling marker. Air drops into nearby <strong>cabinet fronts</strong>, through to the rear, then is pulled into returns.</p>' +
         '<div class="form-row"><label>Name</label>' +
         '<input class="form-control" id="af_name" value="' + esc(a.name || '') + '"></div>' +
         '<div class="form-row"><label>Kind</label>' +
         '<select class="form-control" id="af_kind">' +
         '<option value="supply_vent"' + (!isRet ? ' selected' : '') + '>Supply vent</option>' +
         '<option value="return"' + (isRet ? ' selected' : '') + '>Return</option></select></div>' +
+        '<div class="form-row"><label>Shape</label>' +
+        '<select class="form-control" id="af_shape">' +
+        '<option value="circle"' + (shape !== 'slot' ? ' selected' : '') + '>Round</option>' +
+        '<option value="slot"' + (shape === 'slot' ? ' selected' : '') + '>Long slot</option></select></div>' +
+        '<div class="form-row"><label>Length (' + lengthLabel() + ')</label>' +
+        '<input class="form-control" id="af_w" type="number" step="0.01" value="' + fmtLen(a.width_m || 0.6) + '"></div>' +
+        '<div class="form-row"><label>Width (' + lengthLabel() + ')</label>' +
+        '<input class="form-control" id="af_d" type="number" step="0.01" value="' + fmtLen(a.depth_m || 0.6) + '"></div>' +
         '<div class="form-row"><label>X (' + lengthLabel() + ')</label>' +
         '<input class="form-control" id="af_x" value="' + fmtLen(a.pos_x) + '"' + (locked ? ' readonly' : '') + '></div>' +
         '<div class="form-row"><label>Y (' + lengthLabel() + ')</label>' +
         '<input class="form-control" id="af_y" value="' + fmtLen(a.pos_y) + '"' + (locked ? ' readonly' : '') + '></div>' +
         '<div class="form-actions" style="display:flex;flex-wrap:wrap;gap:.4rem">' +
         '<button type="button" class="btn btn-primary btn-sm" id="af_save">Save</button>' +
+        '<button type="button" class="btn btn-secondary btn-sm" id="af_rot" title="Rotate 90°">90°</button>' +
         '<button type="button" class="btn btn-secondary btn-sm" id="af_lock">' + (locked ? 'Unlock' : 'Lock') + '</button>' +
         '<button type="button" class="btn btn-danger btn-sm" id="af_del">Delete</button>' +
         '</div>';
@@ -3207,6 +3241,11 @@
       };
       const delBtn = propsEl.querySelector('#af_del');
       if (delBtn) delBtn.onclick = function () { deleteAirflowAnchor(a); };
+      const rotBtn = propsEl.querySelector('#af_rot');
+      if (rotBtn) rotBtn.onclick = function () {
+        a.rotation_deg = ((Number(a.rotation_deg) || 0) + 90) % 360;
+        saveAirflowAnchor(a);
+      };
     }
 
     async function saveAirflowAnchor(a) {
@@ -3215,12 +3254,19 @@
       const xEl = propsEl.querySelector('#af_x');
       const yEl = propsEl.querySelector('#af_y');
       try {
+        const shapeEl = propsEl.querySelector('#af_shape');
+        const wEl = propsEl.querySelector('#af_w');
+        const dEl = propsEl.querySelector('#af_d');
         const body = {
           anchor_id: Number(a.anchor_id),
           name: nameEl ? nameEl.value : a.name,
           kind: kindEl ? kindEl.value : a.kind,
+          shape: shapeEl ? shapeEl.value : (a.shape || 'circle'),
+          rotation_deg: Number(a.rotation_deg) || 0,
           is_locked: isAirflowLocked(a) ? 1 : 0,
         };
+        if (wEl) body.width_m = displayToM(parseFloat(wEl.value));
+        if (dEl) body.depth_m = displayToM(parseFloat(dEl.value));
         if (xEl && !isAirflowLocked(a)) body.pos_x = displayToM(parseFloat(xEl.value));
         if (yEl && !isAirflowLocked(a)) body.pos_y = displayToM(parseFloat(yEl.value));
         const res = await ColdAisle.api('api/floorplan.php?action=update_airflow_anchor', {
@@ -5148,6 +5194,7 @@
       const kind = el.dataset.airflowKind || 'supply_vent';
       return {
         kind: kind === 'return' ? 'return' : 'supply_vent',
+        shape: el.dataset.shape === 'slot' ? 'slot' : 'circle',
         name: el.dataset.name || (kind === 'return' ? 'Return grille' : 'Supply vent'),
         color_hex: el.dataset.color || (kind === 'return' ? '#fb923c' : '#38bdf8'),
         width_m: parseFloat(el.dataset.widthM || '0.6') || 0.6,
@@ -5187,24 +5234,27 @@
     function renderAirflowPresetPalette() {
       const list = root.querySelector('#airflowPresetList');
       if (!list) return;
-      const existing = list.querySelectorAll('.airflow-preset');
-      if (existing.length) {
-        existing.forEach(bindAirflowPaletteItem);
-        return;
-      }
+      list.innerHTML = '';
       AIRFLOW_PRESETS.forEach(function (pr) {
         const el = document.createElement('div');
-        el.className = 'palette-item airflow-preset';
+        el.className = 'palette-item airflow-preset' + (pr.shape === 'slot' ? ' airflow-slot' : '');
         el.dataset.airflowKind = pr.kind;
+        el.dataset.shape = pr.shape || 'circle';
         el.dataset.name = pr.name;
         el.dataset.color = pr.color_hex;
         el.dataset.widthM = String(pr.width_m);
         el.dataset.depthM = String(pr.depth_m);
+        const slot = pr.shape === 'slot';
         el.innerHTML =
-          '<div class="rack-icon airflow-icon' + (pr.kind === 'return' ? ' return' : ' supply') + '"></div>' +
-          '<div class="palette-title">' + esc(pr.kind === 'return' ? 'Return grille' : 'Supply vent') + '</div>' +
+          '<div class="rack-icon airflow-icon' +
+          (pr.kind === 'return' ? ' return' : ' supply') +
+          (slot ? ' slot' : '') + '"></div>' +
+          '<div class="palette-title">' + esc(slot
+            ? (pr.kind === 'return' ? 'Return slot' : 'Supply slot')
+            : (pr.kind === 'return' ? 'Return grille' : 'Supply vent')) + '</div>' +
           '<small class="text-muted palette-size">' +
-          (pr.kind === 'return' ? 'Ceiling · hot aisle' : 'Ceiling · cold aisle') + '</small>';
+          (slot ? 'Linear · along aisle' : (pr.kind === 'return' ? 'Round · hot aisle' : 'Round · cold aisle')) +
+          '</small>';
         list.appendChild(el);
         bindAirflowPaletteItem(el);
       });
@@ -5229,6 +5279,7 @@
           body: {
             room_id: roomId(),
             kind: defs.kind === 'return' ? 'return' : 'supply_vent',
+            shape: defs.shape === 'slot' ? 'slot' : 'circle',
             name: defs.name || (defs.kind === 'return' ? 'Return' : 'Supply vent'),
             pos_x: sn.x,
             pos_y: sn.y,
