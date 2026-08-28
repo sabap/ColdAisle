@@ -13,6 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+### Enhancements
+
+### Bug fixes
+
+---
+
+## [0.3.176] - 2026-08-28
+
+### New features
+
 - **Airflow vents & particles:** Floor planner palette for ceiling supply vents and return grilles. 3D (dashboard, planner, NOC) draws markers and blue/white particles along supply → aisle → return. Toggle on the dashboard. Particle color is ready for polled temperatures later (no cooling SNMP required).
 
 ### Enhancements
@@ -20,10 +30,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **Snow Globe IPAM:** `scripts/snow_globe.php --ipam-only` remaps prefixes to demo RFC1918 / TEST-NET-3 and rewrites hostnames so screenshots do not leak real ISP blocks or site names. Full snow-globe runs include this step.
 - **Gap list G-B4-net:** IPAM v1 is closed (address/subnet plans, aligned groups). Switch-interface inventory, IPv6, and DDI stay out of default scope.
 
-### Bug fixes
-
 ---
-
 ## [0.3.175] - 2026-08-28
 
 ### New features
