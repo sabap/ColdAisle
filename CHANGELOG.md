@@ -17,6 +17,9 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Airflow height stuck at 3 m:** values below 0.3 m (e.g. 0.1 m on the bottom of an AC unit) were forced back to 3 m on save. Floor height now allows 0.05–12 m.
+- **Airflow vs cabinets in 2D:** vents/returns draw and hit-test on top of racks. While placing or selecting a marker, cabinets are dimmed.
+
 ---
 
 ## [0.3.179] - 2026-08-28

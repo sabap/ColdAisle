@@ -1311,7 +1311,7 @@
         drawCompass();
       }
 
-      const dimEquip = !!racewayDraw;
+      const dimEquip = !!racewayDraw || !!pendingAirflow || !!selectedAirflowId;
       if (dimEquip) {
         ctx.save();
         ctx.globalAlpha = 0.22;
@@ -1320,10 +1320,6 @@
       // Cooling under PDUs / cabinets
       floorCooling.forEach(function (u) {
         drawFloorCooling(u);
-      });
-
-      airflowAnchors.forEach(function (a) {
-        drawAirflowAnchor(a);
       });
 
       // UPS frames (in-row) under cabinets
@@ -1433,12 +1429,18 @@
 
       if (dimEquip) {
         ctx.restore(); // end equipment dim alpha
-        // Semi-opaque veil so raceways read clearly above inventory
-        ctx.save();
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.52)';
-        ctx.fillRect(ORIGIN, ORIGIN, roomW() * scale(), roomD() * scale());
-        ctx.restore();
+        if (racewayDraw) {
+          ctx.save();
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.52)';
+          ctx.fillRect(ORIGIN, ORIGIN, roomW() * scale(), roomD() * scale());
+          ctx.restore();
+        }
       }
+
+      // Vents / returns on top so they stay selectable over racks
+      airflowAnchors.forEach(function (a) {
+        drawAirflowAnchor(a);
+      });
 
       // Raceways on top (full opacity) during draw mode and normal view
       if (showRaceways || racewayDraw) {
@@ -2034,17 +2036,17 @@
      * @returns {{type:'cabinet', obj:object}|{type:'pdu', obj:object}|{type:'cooling', obj:object}|null}
      */
     function hitTest(mx, my) {
-      // Cabinets first (drawn on top)
-      for (let i = cabinets.length - 1; i >= 0; i--) {
-        const r = cabRect(cabinets[i]);
-        if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.d) {
-          return { type: 'cabinet', obj: cabinets[i] };
-        }
-      }
+      // Vents/returns first — they sit on cabinets in plan view
       for (let i = airflowAnchors.length - 1; i >= 0; i--) {
         const r = airflowRect(airflowAnchors[i]);
         if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.d) {
           return { type: 'airflow', obj: airflowAnchors[i] };
+        }
+      }
+      for (let i = cabinets.length - 1; i >= 0; i--) {
+        const r = cabRect(cabinets[i]);
+        if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.d) {
+          return { type: 'cabinet', obj: cabinets[i] };
         }
       }
       for (let i = floorPdus.length - 1; i >= 0; i--) {
@@ -3226,9 +3228,9 @@
         '<div class="form-row"><label>Y (' + lengthLabel() + ')</label>' +
         '<input class="form-control" id="af_y" value="' + fmtLen(a.pos_y) + '"' + (locked ? ' readonly' : '') + '></div>' +
         '<div class="form-row"><label>Height above floor (' + lengthLabel() + ')</label>' +
-        '<input class="form-control" id="af_z" type="number" step="0.01" min="0.3" value="' +
-        fmtLen((a.pos_z != null && a.pos_z !== '' && Number(a.pos_z) > 0) ? Number(a.pos_z) : 3) + '">' +
-        '<p class="text-muted" style="font-size:.75rem;margin:.2rem 0 0">Ceiling / grille height in 3D. Default 3 m (about 10 ft).</p></div>' +
+        '<input class="form-control" id="af_z" type="number" step="0.01" min="0.05" value="' +
+        fmtLen((a.pos_z != null && a.pos_z !== '' && isFinite(Number(a.pos_z))) ? Number(a.pos_z) : 3) + '">' +
+        '<p class="text-muted" style="font-size:.75rem;margin:.2rem 0 0">Height in 3D (floor = 0). Use ~0.1 m for a grille on the bottom of an AC unit; ~3 m for a ceiling vent.</p></div>' +
         '<div class="form-actions" style="display:flex;flex-wrap:wrap;gap:.4rem">' +
         '<button type="button" class="btn btn-primary btn-sm" id="af_save">Save</button>' +
         '<button type="button" class="btn btn-secondary btn-sm" id="af_rot" title="Rotate 90°">90°</button>' +
@@ -3276,7 +3278,8 @@
         if (yEl && !isAirflowLocked(a)) body.pos_y = displayToM(parseFloat(yEl.value));
         if (zEl) {
           var zM = displayToM(parseFloat(zEl.value));
-          if (!isFinite(zM) || zM < 0.3) zM = 3;
+          if (!isFinite(zM)) zM = 3;
+          if (zM < 0.05) zM = 0.05;
           if (zM > 12) zM = 12;
           body.pos_z = zM;
         }
@@ -5226,6 +5229,8 @@
         pendingTemplate = null;
         root.querySelectorAll('.palette-item').forEach(function (x) { x.classList.remove('selected'); });
         el.classList.add('selected');
+        draw();
+        updatePlannerHud();
         ColdAisle.toast('Click the floor to place: ' + pendingAirflow.name, 'info');
       });
       el.addEventListener('keydown', function (e) {

@@ -2031,7 +2031,11 @@
         w: w,
         d: d,
         rot: ((Number(a.rotation_deg) || 0) * Math.PI) / 180,
-        y: (a.pos_z != null && a.pos_z !== '' && isFinite(Number(a.pos_z))) ? Number(a.pos_z) : 3.0,
+        y: (function () {
+          var z = Number(a.pos_z);
+          if (a.pos_z == null || a.pos_z === '' || !isFinite(z)) return 3.0;
+          return Math.max(0.05, z);
+        })(),
         shape: airflowShape(a),
         raw: a,
       };

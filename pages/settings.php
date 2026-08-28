@@ -1602,7 +1602,7 @@ try {
     </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=32"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=33"></script>
 <script>
 (function () {
   var el = document.getElementById('nocCamPreview');
