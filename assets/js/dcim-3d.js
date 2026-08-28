@@ -2009,8 +2009,7 @@
     airflowGroup.name = 'airflow';
     airflowGroup.visible = !!airflowOverlay;
     scene.add(airflowGroup);
-    var airflowParticles = null;
-    var airflowParticleState = [];
+    var airflowParticleSets = [];
     var airflowBaseColor = airflowColorMode === 'white' ? 0xe2e8f0 : 0x7dd3fc;
 
     function airflowTintFromTemp(t) {
@@ -2300,75 +2299,86 @@
       }
       if (!streams.length) return;
 
-      var nPart = Math.min(1400, Math.max(280, streams.length * 5));
-      var positions = new Float32Array(nPart * 3);
-      var colors = new Float32Array(nPart * 3);
-      var geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      var matP = new THREE.PointsMaterial({
-        size: 0.055,
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.78,
-        depthWrite: false,
-        sizeAttenuation: true,
-        blending: THREE.AdditiveBlending,
-      });
-      airflowParticles = new THREE.Points(geo, matP);
-      airflowParticles.frustumCulled = false;
-      airflowGroup.add(airflowParticles);
       var tint = airflowTintFromTemp(null);
-      for (var i = 0; i < nPart; i++) {
-        var path = streams[i % streams.length];
-        airflowParticleState.push({
-          path: path,
-          t: Math.random() * path.len,
-          speed: 0.38 + Math.random() * 0.34,
-          phase: Math.random() * Math.PI * 2,
-          phase2: Math.random() * Math.PI * 2,
-          amp: 0.06 + Math.random() * 0.11,
-          ampY: 0.03 + Math.random() * 0.06,
+      function addCloud(nPart, size, opacity, ampScale) {
+        var positions = new Float32Array(nPart * 3);
+        var colors = new Float32Array(nPart * 3);
+        var geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        var matP = new THREE.PointsMaterial({
+          size: size,
+          vertexColors: true,
+          transparent: true,
+          opacity: opacity,
+          depthWrite: false,
+          sizeAttenuation: true,
+          blending: THREE.AdditiveBlending,
         });
-        colors[i * 3] = tint.r;
-        colors[i * 3 + 1] = tint.g;
-        colors[i * 3 + 2] = tint.b;
+        var pts = new THREE.Points(geo, matP);
+        pts.frustumCulled = false;
+        airflowGroup.add(pts);
+        var state = [];
+        for (var i = 0; i < nPart; i++) {
+          var path = streams[i % streams.length];
+          state.push({
+            path: path,
+            t: Math.random() * path.len,
+            speed: 0.38 + Math.random() * 0.34,
+            phase: Math.random() * Math.PI * 2,
+            phase2: Math.random() * Math.PI * 2,
+            amp: (0.06 + Math.random() * 0.11) * ampScale,
+            ampY: (0.03 + Math.random() * 0.06) * ampScale,
+          });
+          colors[i * 3] = tint.r;
+          colors[i * 3 + 1] = tint.g;
+          colors[i * 3 + 2] = tint.b;
+        }
+        geo.attributes.color.needsUpdate = true;
+        airflowParticleSets.push({ points: pts, state: state });
       }
-      geo.attributes.color.needsUpdate = true;
+      var nMain = Math.min(1100, Math.max(220, streams.length * 4));
+      var nFine = Math.min(1600, Math.max(320, streams.length * 6));
+      addCloud(nMain, 0.055, 0.78, 1);
+      addCloud(nFine, 0.022, 0.55, 1.25);
     })();
 
     function tickAirflow(dt) {
-      if (!airflowParticles || !airflowGroup.visible) return;
-      var pos = airflowParticles.geometry.attributes.position;
-      var col = airflowParticles.geometry.attributes.color;
+      if (!airflowGroup.visible || !airflowParticleSets.length) return;
       var tNow = performance.now() * 0.001;
-      for (var i = 0; i < airflowParticleState.length; i++) {
-        var st = airflowParticleState[i];
-        st.t += st.speed * dt;
-        if (st.t > st.path.len) st.t -= st.path.len;
-        var p = pointOnPoly(st.path.pts, st.t);
-        var wob = Math.sin(tNow * 2.1 + st.phase + st.t * 1.7) * st.amp;
-        var wob2 = Math.cos(tNow * 1.6 + st.phase2 + st.t * 1.2) * st.amp;
-        pos.setXYZ(
-          i,
-          p.x + wob,
-          p.y + Math.sin(tNow * 2.8 + st.phase2) * st.ampY,
-          p.z + wob2
-        );
-        if (st.path.tempC) {
-          var u = st.path.len > 0 ? st.t / st.path.len : 0;
-          var tc = st.path.tempC;
-          var sample = tc.supply;
-          if (u > 0.22 && tc.cold != null) sample = tc.cold;
-          if (u > 0.5 && tc.hot != null) sample = tc.hot;
-          if (u > 0.78 && tc.return != null) sample = tc.return;
-          var c3 = airflowTintFromTemp(sample);
-          col.setXYZ(i, c3.r, c3.g, c3.b);
+      for (var s = 0; s < airflowParticleSets.length; s++) {
+        var set = airflowParticleSets[s];
+        var pos = set.points.geometry.attributes.position;
+        var col = set.points.geometry.attributes.color;
+        var state = set.state;
+        for (var i = 0; i < state.length; i++) {
+          var st = state[i];
+          st.t += st.speed * dt;
+          if (st.t > st.path.len) st.t -= st.path.len;
+          var p = pointOnPoly(st.path.pts, st.t);
+          var wob = Math.sin(tNow * 2.1 + st.phase + st.t * 1.7) * st.amp;
+          var wob2 = Math.cos(tNow * 1.6 + st.phase2 + st.t * 1.2) * st.amp;
+          pos.setXYZ(
+            i,
+            p.x + wob,
+            p.y + Math.sin(tNow * 2.8 + st.phase2) * st.ampY,
+            p.z + wob2
+          );
+          if (st.path.tempC) {
+            var u = st.path.len > 0 ? st.t / st.path.len : 0;
+            var tc = st.path.tempC;
+            var sample = tc.supply;
+            if (u > 0.22 && tc.cold != null) sample = tc.cold;
+            if (u > 0.5 && tc.hot != null) sample = tc.hot;
+            if (u > 0.78 && tc.return != null) sample = tc.return;
+            var c3 = airflowTintFromTemp(sample);
+            col.setXYZ(i, c3.r, c3.g, c3.b);
+          }
         }
-      }
-      pos.needsUpdate = true;
-      if (airflowParticleState.length && airflowParticleState[0].path.tempC) {
-        col.needsUpdate = true;
+        pos.needsUpdate = true;
+        if (state.length && state[0].path.tempC) {
+          col.needsUpdate = true;
+        }
       }
     }
 

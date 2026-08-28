@@ -3225,6 +3225,10 @@
         '<input class="form-control" id="af_x" value="' + fmtLen(a.pos_x) + '"' + (locked ? ' readonly' : '') + '></div>' +
         '<div class="form-row"><label>Y (' + lengthLabel() + ')</label>' +
         '<input class="form-control" id="af_y" value="' + fmtLen(a.pos_y) + '"' + (locked ? ' readonly' : '') + '></div>' +
+        '<div class="form-row"><label>Height above floor (' + lengthLabel() + ')</label>' +
+        '<input class="form-control" id="af_z" type="number" step="0.01" min="0.3" value="' +
+        fmtLen((a.pos_z != null && a.pos_z !== '' && Number(a.pos_z) > 0) ? Number(a.pos_z) : 3) + '">' +
+        '<p class="text-muted" style="font-size:.75rem;margin:.2rem 0 0">Ceiling / grille height in 3D. Default 3 m (about 10 ft).</p></div>' +
         '<div class="form-actions" style="display:flex;flex-wrap:wrap;gap:.4rem">' +
         '<button type="button" class="btn btn-primary btn-sm" id="af_save">Save</button>' +
         '<button type="button" class="btn btn-secondary btn-sm" id="af_rot" title="Rotate 90°">90°</button>' +
@@ -3265,10 +3269,17 @@
           rotation_deg: Number(a.rotation_deg) || 0,
           is_locked: isAirflowLocked(a) ? 1 : 0,
         };
+        const zEl = propsEl.querySelector('#af_z');
         if (wEl) body.width_m = displayToM(parseFloat(wEl.value));
         if (dEl) body.depth_m = displayToM(parseFloat(dEl.value));
         if (xEl && !isAirflowLocked(a)) body.pos_x = displayToM(parseFloat(xEl.value));
         if (yEl && !isAirflowLocked(a)) body.pos_y = displayToM(parseFloat(yEl.value));
+        if (zEl) {
+          var zM = displayToM(parseFloat(zEl.value));
+          if (!isFinite(zM) || zM < 0.3) zM = 3;
+          if (zM > 12) zM = 12;
+          body.pos_z = zM;
+        }
         const res = await ColdAisle.api('api/floorplan.php?action=update_airflow_anchor', {
           method: 'POST',
           body: body,
@@ -5283,6 +5294,7 @@
             name: defs.name || (defs.kind === 'return' ? 'Return' : 'Supply vent'),
             pos_x: sn.x,
             pos_y: sn.y,
+            pos_z: 3,
             width_m: Number(defs.width_m) || 0.6,
             depth_m: Number(defs.depth_m) || 0.6,
             color_hex: defs.color_hex || (defs.kind === 'return' ? '#fb923c' : '#38bdf8'),
@@ -7394,7 +7406,7 @@
       };
       const d = map[e.key];
       if (!d) return;
-      if (!selectedIds.size && !selectedPduId && !selectedCoolingId && !selectedUpsId) return;
+      if (!selectedIds.size && !selectedPduId && !selectedCoolingId && !selectedUpsId && !selectedAirflowId) return;
       e.preventDefault();
       nudgeSelected(d[0], d[1]);
     });
