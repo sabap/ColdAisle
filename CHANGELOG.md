@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.177] - 2026-08-28
+
+### Bug fixes
+
 - **Floor planner Airflow palette:** Supply vent and Return grille are real clickable tiles in the left pane (not an empty heading). Cache-bust floorplan.js.
 
 ---
-
 ## [0.3.176] - 2026-08-28
 
 ### New features
