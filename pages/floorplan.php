@@ -134,9 +134,24 @@ layout_header('Floor Planner', $user, 'floorplan');
 
             <h3 style="margin-top:1rem;font-size:.95rem">Airflow</h3>
             <p class="text-muted" style="font-size:.72rem;margin:.25rem 0 .5rem">
-                Ceiling <strong>supply vents</strong> and <strong>returns</strong> for 3D particles (blue/white for now).
+                Click a marker, then click the floor (cold aisle = supply, hot aisle / CRAC = return).
             </p>
-            <div id="airflowPresetList" class="palette-list palette-list-compact"></div>
+            <div id="airflowPresetList" class="palette-list palette-list-compact">
+                <div class="palette-item airflow-preset" draggable="true" role="button" tabindex="0"
+                     data-airflow-kind="supply_vent" data-name="Supply vent (ceiling)"
+                     data-color="#38bdf8" data-width-m="0.6" data-depth-m="0.6">
+                    <div class="rack-icon airflow-icon supply" aria-hidden="true"></div>
+                    <div class="palette-title">Supply vent</div>
+                    <small class="text-muted palette-size">Ceiling · cold aisle</small>
+                </div>
+                <div class="palette-item airflow-preset" draggable="true" role="button" tabindex="0"
+                     data-airflow-kind="return" data-name="Return grille (ceiling)"
+                     data-color="#fb923c" data-width-m="0.6" data-depth-m="0.6">
+                    <div class="rack-icon airflow-icon return" aria-hidden="true"></div>
+                    <div class="palette-title">Return grille</div>
+                    <small class="text-muted palette-size">Ceiling · hot aisle</small>
+                </div>
+            </div>
 
             <h3 style="margin-top:1rem;font-size:.95rem">UPS</h3>
             <p class="text-muted" style="font-size:.72rem;margin:.25rem 0 .5rem">
@@ -328,9 +343,9 @@ layout_header('Floor Planner', $user, 'floorplan');
   window.ColdAisle.lengthUnits = <?= json_encode($units) ?>;
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=29"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=30"></script>
 <script src="<?= App::e(App::url('assets/js/rack-catalog.js')) ?>?v=1"></script>
-<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=40"></script>
+<script src="<?= App::e(App::url('assets/js/floorplan.js')) ?>?v=41"></script>
 <script>
 (function () {
   var c2 = document.getElementById('rwFinishCancel2');

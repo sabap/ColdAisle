@@ -5144,53 +5144,69 @@
       });
     }
 
+    function airflowPayloadFromItem(el) {
+      const kind = el.dataset.airflowKind || 'supply_vent';
+      return {
+        kind: kind === 'return' ? 'return' : 'supply_vent',
+        name: el.dataset.name || (kind === 'return' ? 'Return grille' : 'Supply vent'),
+        color_hex: el.dataset.color || (kind === 'return' ? '#fb923c' : '#38bdf8'),
+        width_m: parseFloat(el.dataset.widthM || '0.6') || 0.6,
+        depth_m: parseFloat(el.dataset.depthM || '0.6') || 0.6,
+      };
+    }
+
+    function bindAirflowPaletteItem(el) {
+      if (!el || el.dataset.afBound === '1') return;
+      el.dataset.afBound = '1';
+      el.draggable = true;
+      el.setAttribute('role', 'button');
+      el.addEventListener('click', function () {
+        pendingAirflow = airflowPayloadFromItem(el);
+        pendingCooling = null;
+        pendingPdu = null;
+        pendingUps = null;
+        pendingTemplate = null;
+        root.querySelectorAll('.palette-item').forEach(function (x) { x.classList.remove('selected'); });
+        el.classList.add('selected');
+        ColdAisle.toast('Click the floor to place: ' + pendingAirflow.name, 'info');
+      });
+      el.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          el.click();
+        }
+      });
+      el.addEventListener('dragstart', function (e) {
+        const payload = JSON.stringify(airflowPayloadFromItem(el));
+        try { e.dataTransfer.setData(DRAG_MIME_AIRFLOW, payload); } catch (err) { /* ignore */ }
+        try { e.dataTransfer.setData('text/plain', DRAG_TEXT_PREFIX_AIRFLOW + payload); } catch (err2) { /* ignore */ }
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+    }
+
     function renderAirflowPresetPalette() {
       const list = root.querySelector('#airflowPresetList');
       if (!list) return;
-      list.innerHTML = '';
+      const existing = list.querySelectorAll('.airflow-preset');
+      if (existing.length) {
+        existing.forEach(bindAirflowPaletteItem);
+        return;
+      }
       AIRFLOW_PRESETS.forEach(function (pr) {
         const el = document.createElement('div');
         el.className = 'palette-item airflow-preset';
-        el.draggable = true;
         el.dataset.airflowKind = pr.kind;
         el.dataset.name = pr.name;
         el.dataset.color = pr.color_hex;
         el.dataset.widthM = String(pr.width_m);
         el.dataset.depthM = String(pr.depth_m);
         el.innerHTML =
-          '<div class="rack-icon" style="width:28px;height:28px;border-radius:50%;margin:0 auto .25rem;border:2px dashed ' +
-          pr.color_hex + ';background:transparent"></div>' +
-          '<div class="palette-title">' + esc(pr.name) + '</div>' +
-          '<small class="text-muted palette-size">Ceiling · 3D particles</small>';
+          '<div class="rack-icon airflow-icon' + (pr.kind === 'return' ? ' return' : ' supply') + '"></div>' +
+          '<div class="palette-title">' + esc(pr.kind === 'return' ? 'Return grille' : 'Supply vent') + '</div>' +
+          '<small class="text-muted palette-size">' +
+          (pr.kind === 'return' ? 'Ceiling · hot aisle' : 'Ceiling · cold aisle') + '</small>';
         list.appendChild(el);
-        el.addEventListener('click', function () {
-          pendingAirflow = {
-            kind: pr.kind,
-            name: pr.name,
-            color_hex: pr.color_hex,
-            width_m: pr.width_m,
-            depth_m: pr.depth_m,
-          };
-          pendingCooling = null;
-          pendingPdu = null;
-          pendingUps = null;
-          pendingTemplate = null;
-          root.querySelectorAll('.palette-item').forEach(function (x) { x.classList.remove('selected'); });
-          el.classList.add('selected');
-          ColdAisle.toast('Click on the floor plan to place: ' + pr.name, 'info');
-        });
-        el.addEventListener('dragstart', function (e) {
-          const payload = JSON.stringify({
-            kind: pr.kind,
-            name: pr.name,
-            color_hex: pr.color_hex,
-            width_m: pr.width_m,
-            depth_m: pr.depth_m,
-          });
-          try { e.dataTransfer.setData(DRAG_MIME_AIRFLOW, payload); } catch (err) { /* ignore */ }
-          try { e.dataTransfer.setData('text/plain', DRAG_TEXT_PREFIX_AIRFLOW + payload); } catch (err2) { /* ignore */ }
-          e.dataTransfer.effectAllowed = 'copy';
-        });
+        bindAirflowPaletteItem(el);
       });
     }
 

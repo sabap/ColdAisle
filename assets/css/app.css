@@ -1338,6 +1338,22 @@ table.table-env-sensors .col-name a:hover {
   border: 2px solid #64748b; border-radius: 3px;
   pointer-events: none;
 }
+.palette-item.airflow-preset {
+  cursor: pointer;
+  border-style: solid;
+}
+.palette-item.airflow-preset .airflow-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  margin: 0 auto .3rem;
+  background: #38bdf8;
+  border: 2px dashed #e0f2fe;
+}
+.palette-item.airflow-preset .airflow-icon.return {
+  background: #fb923c;
+  border-color: #ffedd5;
+}
 .palette-item .palette-title {
   font-weight: 600;
   font-size: .8rem;
