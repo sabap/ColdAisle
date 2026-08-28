@@ -95,7 +95,7 @@ layout_header('Documentation', $user, 'docs');
         </div>
         <div class="card-body docs-prose">
             <p>
-                Spatial canvas for a hall: cabinets, floor PDUs, UPS, cooling footprints, and cable raceways.
+                Spatial canvas for a hall: cabinets, floor PDUs, UPS, cooling footprints, ceiling supply vents / returns, and cable raceways.
                 2D is for drawing; 3D is for checking aisles and troughs. Geometry is stored in
                 <strong>meters</strong> on the room (width / depth). Display units (m vs ft) only change labels.
             </p>
@@ -105,7 +105,7 @@ layout_header('Documentation', $user, 'docs');
                 <li>Open Floor planner and pick the room. <strong>Edit Room / North</strong> adjusts size, grid, and which way is north.</li>
                 <li><strong>+ Cabinet</strong> or drag a model from the left palette (catalog uses published external W×D). Blue edge is the front of the rack — set <strong>Front faces</strong> after placing.</li>
                 <li>Drag to move. <strong>Grid</strong> / <strong>Snap</strong> keep aisles straight. Arrow keys <strong>nudge</strong> a selected unlocked object by the amount in the toolbar.</li>
-                <li>Place row PDUs from presets or drag an unplaced PDU onto the plan. Cooling and UPS have the same idea.</li>
+                <li>Place row PDUs from presets or drag an unplaced PDU onto the plan. Cooling and UPS have the same idea. Under <strong>Airflow</strong>, place ceiling <strong>supply vents</strong> and <strong>returns</strong> — 3D shows particles (blue or white until live temps are wired).</li>
             </ol>
             <h3 class="docs-h3">Navigate</h3>
             <ul>

@@ -20,8 +20,10 @@
   const DRAG_MIME_PDU = 'application/x-coldaisle-pdu';
   const DRAG_TEXT_PREFIX_PDU = 'COLDAISLE_PDU:';
   const DRAG_MIME_COOLING = 'application/x-coldaisle-cooling';
+  const DRAG_MIME_AIRFLOW = 'application/x-coldaisle-airflow';
   const DRAG_MIME_UPS = 'application/x-coldaisle-ups';
   const DRAG_TEXT_PREFIX_COOLING = 'COLDAISLE_COOL:';
+  const DRAG_TEXT_PREFIX_AIRFLOW = 'COLDAISLE_AIR:';
 
   /** Thin footprint presets for row/room power (not cabinet SKUs). */
   const PDU_FOOTPRINT_PRESETS = [
@@ -37,6 +39,11 @@
     { key: 'in_row', name: 'In-row cooler', unit_type: 'in_row', cooling_medium: 'chilled_water', width_mm: 300, depth_mm: 1200, height_mm: 2000, color_hex: '#38bdf8', unit_role: 'primary' },
     { key: 'cw_pump', name: 'Chilled-water pump', unit_type: 'chilled_water_pump', cooling_medium: 'chilled_water', width_mm: 600, depth_mm: 600, height_mm: 1200, color_hex: '#0369a1', unit_role: 'shared' },
     { key: 'ac_pump', name: 'AC / condenser pump', unit_type: 'ac_pump', cooling_medium: 'dx', width_mm: 600, depth_mm: 600, height_mm: 1200, color_hex: '#0c4a6e', unit_role: 'shared' },
+  ];
+
+  const AIRFLOW_PRESETS = [
+    { key: 'supply', kind: 'supply_vent', name: 'Supply vent (ceiling)', color_hex: '#38bdf8', width_m: 0.6, depth_m: 0.6 },
+    { key: 'return', kind: 'return', name: 'Return grille (ceiling)', color_hex: '#fb923c', width_m: 0.6, depth_m: 0.6 },
   ];
 
   const UPS_TEMPLATES = [
@@ -64,6 +71,7 @@
     let unplacedPdus = []; // available to place
     let floorCooling = []; // placed cooling units
     let unplacedCooling = []; // available to place
+    let airflowAnchors = []; // ceiling supply vents / returns
     let floorUps = []; // placed UPS
     let unplacedUps = [];
     let envSensors3d = []; // heat spheres for 3D view
@@ -81,6 +89,7 @@
     let selectedId = null; // primary cabinet selection (props panel focus)
     let selectedPduId = null; // selected floor PDU (exclusive with cabinets)
     let selectedCoolingId = null; // selected cooling unit
+    let selectedAirflowId = null;
     let selectedUpsId = null;
     const selectedIds = new Set(); // multi-select cabinets (SHIFT+click)
     let drag = null;
@@ -91,6 +100,7 @@
     let pendingTemplate = null; // cabinet template
     let pendingPdu = null; // { kind: 'preset'|'existing', ... }
     let pendingCooling = null; // { kind: 'preset'|'existing', ... }
+    let pendingAirflow = null; // { kind: supply_vent|return, ... }
     let pendingUps = null;
     let zoom = 1;
     let showGrid = true;
@@ -104,6 +114,7 @@
     const unlockedPduIds = new Set();
     /** Cooling unit IDs unlocked for drag/move. */
     const unlockedCoolingIds = new Set();
+    const unlockedAirflowIds = new Set();
     /** UPS IDs unlocked for drag/move. */
     const unlockedUpsIds = new Set();
     const DRAG_THRESHOLD_PX = 6; // ignore tiny pointer jitter when unlocked
@@ -1309,6 +1320,10 @@
         drawFloorCooling(u);
       });
 
+      airflowAnchors.forEach(function (a) {
+        drawAirflowAnchor(a);
+      });
+
       // UPS frames (in-row) under cabinets
       floorUps.forEach(function (u) {
         drawFloorUps(u);
@@ -1677,9 +1692,10 @@
           '</ul>';
         return;
       }
-      if (pendingTemplate || pendingPdu || pendingCooling || pendingUps) {
+      if (pendingTemplate || pendingPdu || pendingCooling || pendingUps || pendingAirflow) {
         let msg = 'Click on the floor to place the selected template…';
-        if (pendingUps) msg = 'Click on the floor to place: ' + (pendingUps.name || 'UPS');
+        if (pendingAirflow) msg = 'Click on the floor to place: ' + (pendingAirflow.name || 'vent');
+        else if (pendingUps) msg = 'Click on the floor to place: ' + (pendingUps.name || 'UPS');
         else if (pendingCooling) msg = 'Click on the floor to place: ' + (pendingCooling.name || 'Cooling');
         else if (pendingPdu) msg = 'Click on the floor to place: ' + (pendingPdu.name || 'PDU');
         hud.hidden = false;
@@ -1930,6 +1946,66 @@
       ctx.restore();
     }
 
+    function airflowRect(a) {
+      const w = (Number(a.width_m) > 0 ? Number(a.width_m) : 0.6) * scale();
+      const d = (Number(a.depth_m) > 0 ? Number(a.depth_m) : 0.6) * scale();
+      return {
+        x: ORIGIN + (Number(a.pos_x) || 0) * scale(),
+        y: ORIGIN + (Number(a.pos_y) || 0) * scale(),
+        w: w,
+        d: d,
+      };
+    }
+
+    function drawAirflowAnchor(a) {
+      const r = airflowRect(a);
+      const selected = Number(selectedAirflowId) === Number(a.anchor_id);
+      const isRet = String(a.kind || '') === 'return';
+      const body = a.color_hex || (isRet ? '#fb923c' : '#38bdf8');
+      ctx.save();
+      ctx.translate(r.x + r.w / 2, r.y + r.d / 2);
+      ctx.strokeStyle = selected ? '#fbbf24' : body;
+      ctx.fillStyle = body;
+      ctx.globalAlpha = 0.22;
+      ctx.lineWidth = selected ? 3 : 1.6;
+      ctx.setLineDash([5, 3]);
+      ctx.beginPath();
+      ctx.arc(0, 0, Math.min(r.w, r.d) / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = body;
+      ctx.lineWidth = 1.4;
+      const s = Math.min(r.w, r.d) * 0.28;
+      ctx.beginPath();
+      if (isRet) {
+        ctx.moveTo(0, s);
+        ctx.lineTo(0, -s);
+        ctx.moveTo(-s * 0.55, -s * 0.15);
+        ctx.lineTo(0, -s);
+        ctx.lineTo(s * 0.55, -s * 0.15);
+      } else {
+        ctx.moveTo(0, -s);
+        ctx.lineTo(0, s);
+        ctx.moveTo(-s * 0.55, s * 0.15);
+        ctx.lineTo(0, s);
+        ctx.lineTo(s * 0.55, s * 0.15);
+      }
+      ctx.stroke();
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = 'bold ' + Math.max(8, Math.round(9 * Math.min(zoom, 1.3))) + 'px Segoe UI';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(a.name || (isRet ? 'Return' : 'Supply')).slice(0, 12), 0, r.d / 2 + 8);
+      if (selected && !isAirflowLocked(a)) {
+        ctx.fillStyle = '#22c55e';
+        ctx.font = 'bold 11px Segoe UI';
+        ctx.fillText('🔓', r.w / 2 - 8, -r.d / 2 + 10);
+      }
+      ctx.restore();
+    }
+
     /**
      * @returns {{type:'cabinet', obj:object}|{type:'pdu', obj:object}|{type:'cooling', obj:object}|null}
      */
@@ -1939,6 +2015,12 @@
         const r = cabRect(cabinets[i]);
         if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.d) {
           return { type: 'cabinet', obj: cabinets[i] };
+        }
+      }
+      for (let i = airflowAnchors.length - 1; i >= 0; i--) {
+        const r = airflowRect(airflowAnchors[i]);
+        if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.d) {
+          return { type: 'airflow', obj: airflowAnchors[i] };
         }
       }
       for (let i = floorPdus.length - 1; i >= 0; i--) {
@@ -1995,7 +2077,33 @@
       selectedId = null;
       selectedPduId = null;
       selectedUpsId = null;
+      selectedAirflowId = null;
       selectedCoolingId = u ? Number(u.cooling_unit_id) : null;
+      renderProps();
+      draw();
+    }
+
+    function isAirflowLocked(aOrId) {
+      if (aOrId == null) return true;
+      const id = typeof aOrId === 'object' ? Number(aOrId.anchor_id) : Number(aOrId);
+      if (!id) return true;
+      return !unlockedAirflowIds.has(id);
+    }
+
+    function setAirflowLocked(aOrId, locked) {
+      const id = typeof aOrId === 'object' ? Number(aOrId.anchor_id) : Number(aOrId);
+      if (!id) return;
+      if (locked) unlockedAirflowIds.delete(id);
+      else unlockedAirflowIds.add(id);
+    }
+
+    function selectAirflow(a) {
+      selectedIds.clear();
+      selectedId = null;
+      selectedPduId = null;
+      selectedUpsId = null;
+      selectedCoolingId = null;
+      selectedAirflowId = a ? Number(a.anchor_id) : null;
       renderProps();
       draw();
     }
@@ -2005,6 +2113,7 @@
       selectedId = null;
       selectedPduId = null;
       selectedCoolingId = null;
+      selectedAirflowId = null;
       selectedUpsId = u ? Number(u.ups_id) : null;
       renderProps();
       draw();
@@ -2028,6 +2137,7 @@
     function selectPdu(p) {
       selectedIds.clear();
       selectedCoolingId = null;
+      selectedAirflowId = null;
       selectedUpsId = null;
       selectedId = null;
       selectedPduId = p ? Number(p.pdu_id) : null;
@@ -2055,6 +2165,7 @@
       const additive = !!opts.additive;
       selectedPduId = null; // exclusive with PDU selection
       selectedCoolingId = null;
+      selectedAirflowId = null;
       selectedUpsId = null;
       if (!c) {
         if (!additive) {
@@ -2113,6 +2224,40 @@
       const dx = (dirX || 0) * step;
       const dy = (dirY || 0) * step;
       const unitLabel = nudgeAmount + ' ' + nudgeUnit;
+
+      if (selectedAirflowId) {
+        const a = airflowAnchors.find(function (x) {
+          return Number(x.anchor_id) === Number(selectedAirflowId);
+        });
+        if (!a) {
+          ColdAisle.toast('Select a vent or return first', 'error');
+          return;
+        }
+        if (isAirflowLocked(a)) {
+          ColdAisle.toast('Marker is locked — Unlock first', 'error');
+          return;
+        }
+        const cl = clampCabinetPosition(
+          (Number(a.pos_x) || 0) + dx,
+          (Number(a.pos_y) || 0) + dy,
+          {
+            width_mm: Math.round((Number(a.width_m) || 0.6) * 1000),
+            depth_mm: Math.round((Number(a.depth_m) || 0.6) * 1000),
+            pos_x: a.pos_x,
+            pos_y: a.pos_y,
+            front_facing: 'north',
+          }
+        );
+        a.pos_x = cl.x;
+        a.pos_y = cl.y;
+        const xEl = propsEl.querySelector('#af_x');
+        const yEl = propsEl.querySelector('#af_y');
+        if (xEl) xEl.value = fmtLen(a.pos_x);
+        if (yEl) yEl.value = fmtLen(a.pos_y);
+        draw();
+        ColdAisle.toast('Nudged marker by ' + unitLabel + ' — Save to keep', 'info');
+        return;
+      }
 
       // UPS selection
       if (selectedUpsId) {
@@ -2553,6 +2698,10 @@
       }
       if (selectedPduId) {
         renderPduProps();
+        return;
+      }
+      if (selectedAirflowId) {
+        renderAirflowProps();
         return;
       }
       const multi = getSelectedCabinets();
@@ -3018,6 +3167,96 @@
         ColdAisle.toast('PDU removed from plan (still in Power → PDUs)', 'success');
       } catch (e) {
         ColdAisle.toast(e.message || 'Unplace failed', 'error');
+      }
+    }
+
+    function renderAirflowProps() {
+      const a = airflowAnchors.find(function (x) { return Number(x.anchor_id) === Number(selectedAirflowId); });
+      if (!a) {
+        selectedAirflowId = null;
+        renderProps();
+        return;
+      }
+      const locked = isAirflowLocked(a);
+      const isRet = String(a.kind || '') === 'return';
+      propsEl.innerHTML =
+        '<h3 style="margin-top:0">' + (isRet ? 'Return grille' : 'Supply vent') + '</h3>' +
+        '<p class="text-muted" style="font-size:.8rem;margin-top:0">Ceiling marker for 3D airflow. Particles are blue/white until polled temps exist.</p>' +
+        '<div class="form-row"><label>Name</label>' +
+        '<input class="form-control" id="af_name" value="' + esc(a.name || '') + '"></div>' +
+        '<div class="form-row"><label>Kind</label>' +
+        '<select class="form-control" id="af_kind">' +
+        '<option value="supply_vent"' + (!isRet ? ' selected' : '') + '>Supply vent</option>' +
+        '<option value="return"' + (isRet ? ' selected' : '') + '>Return</option></select></div>' +
+        '<div class="form-row"><label>X (' + lengthLabel() + ')</label>' +
+        '<input class="form-control" id="af_x" value="' + fmtLen(a.pos_x) + '"' + (locked ? ' readonly' : '') + '></div>' +
+        '<div class="form-row"><label>Y (' + lengthLabel() + ')</label>' +
+        '<input class="form-control" id="af_y" value="' + fmtLen(a.pos_y) + '"' + (locked ? ' readonly' : '') + '></div>' +
+        '<div class="form-actions" style="display:flex;flex-wrap:wrap;gap:.4rem">' +
+        '<button type="button" class="btn btn-primary btn-sm" id="af_save">Save</button>' +
+        '<button type="button" class="btn btn-secondary btn-sm" id="af_lock">' + (locked ? 'Unlock' : 'Lock') + '</button>' +
+        '<button type="button" class="btn btn-danger btn-sm" id="af_del">Delete</button>' +
+        '</div>';
+      const saveBtn = propsEl.querySelector('#af_save');
+      if (saveBtn) saveBtn.onclick = function () { saveAirflowAnchor(a); };
+      const lockBtn = propsEl.querySelector('#af_lock');
+      if (lockBtn) lockBtn.onclick = function () {
+        setAirflowLocked(a, !isAirflowLocked(a));
+        renderAirflowProps();
+        draw();
+      };
+      const delBtn = propsEl.querySelector('#af_del');
+      if (delBtn) delBtn.onclick = function () { deleteAirflowAnchor(a); };
+    }
+
+    async function saveAirflowAnchor(a) {
+      const nameEl = propsEl.querySelector('#af_name');
+      const kindEl = propsEl.querySelector('#af_kind');
+      const xEl = propsEl.querySelector('#af_x');
+      const yEl = propsEl.querySelector('#af_y');
+      try {
+        const body = {
+          anchor_id: Number(a.anchor_id),
+          name: nameEl ? nameEl.value : a.name,
+          kind: kindEl ? kindEl.value : a.kind,
+          is_locked: isAirflowLocked(a) ? 1 : 0,
+        };
+        if (xEl && !isAirflowLocked(a)) body.pos_x = displayToM(parseFloat(xEl.value));
+        if (yEl && !isAirflowLocked(a)) body.pos_y = displayToM(parseFloat(yEl.value));
+        const res = await ColdAisle.api('api/floorplan.php?action=update_airflow_anchor', {
+          method: 'POST',
+          body: body,
+        });
+        const updated = (res && res.anchor) || null;
+        if (updated) {
+          const i = airflowAnchors.findIndex(function (x) { return Number(x.anchor_id) === Number(a.anchor_id); });
+          if (i >= 0) airflowAnchors[i] = updated;
+          if (isAirflowLocked(a)) setAirflowLocked(updated, true);
+        }
+        draw();
+        refresh3d();
+        ColdAisle.toast('Airflow marker saved', 'success');
+      } catch (err) {
+        ColdAisle.toast((err && err.message) || 'Save failed', 'error');
+      }
+    }
+
+    async function deleteAirflowAnchor(a) {
+      if (!a || !confirm('Delete this vent / return marker?')) return;
+      try {
+        await ColdAisle.api('api/floorplan.php?action=delete_airflow_anchor', {
+          method: 'POST',
+          body: { anchor_id: Number(a.anchor_id) },
+        });
+        airflowAnchors = airflowAnchors.filter(function (x) { return Number(x.anchor_id) !== Number(a.anchor_id); });
+        unlockedAirflowIds.delete(Number(a.anchor_id));
+        selectedAirflowId = null;
+        renderProps();
+        draw();
+        refresh3d();
+        ColdAisle.toast('Airflow marker removed', 'success');
+      } catch (err) {
+        ColdAisle.toast((err && err.message) || 'Delete failed', 'error');
       }
     }
 
@@ -4551,6 +4790,7 @@
         unplacedPdus = [];
         floorCooling = [];
         unplacedCooling = [];
+        airflowAnchors = [];
         floorUps = [];
         unplacedUps = [];
         envSensors3d = [];
@@ -4571,6 +4811,7 @@
         unplacedPdus = data.unplaced_pdus || [];
         floorCooling = data.placed_cooling || [];
         unplacedCooling = data.unplaced_cooling || [];
+        airflowAnchors = data.airflow_anchors || [];
         floorUps = data.placed_ups || [];
         unplacedUps = data.unplaced_ups || [];
         envSensors3d = data.env_sensors || [];
@@ -4670,6 +4911,7 @@
         renderUnplacedPduPalette();
         renderCoolingPresetPalette();
         renderUnplacedCoolingPalette();
+        renderAirflowPresetPalette();
         renderUpsPalette();
         renderProps();
         resizeCanvas();
@@ -4900,6 +5142,97 @@
         list.appendChild(el);
         bindCoolingPaletteItem(el);
       });
+    }
+
+    function renderAirflowPresetPalette() {
+      const list = root.querySelector('#airflowPresetList');
+      if (!list) return;
+      list.innerHTML = '';
+      AIRFLOW_PRESETS.forEach(function (pr) {
+        const el = document.createElement('div');
+        el.className = 'palette-item airflow-preset';
+        el.draggable = true;
+        el.dataset.airflowKind = pr.kind;
+        el.dataset.name = pr.name;
+        el.dataset.color = pr.color_hex;
+        el.dataset.widthM = String(pr.width_m);
+        el.dataset.depthM = String(pr.depth_m);
+        el.innerHTML =
+          '<div class="rack-icon" style="width:28px;height:28px;border-radius:50%;margin:0 auto .25rem;border:2px dashed ' +
+          pr.color_hex + ';background:transparent"></div>' +
+          '<div class="palette-title">' + esc(pr.name) + '</div>' +
+          '<small class="text-muted palette-size">Ceiling · 3D particles</small>';
+        list.appendChild(el);
+        el.addEventListener('click', function () {
+          pendingAirflow = {
+            kind: pr.kind,
+            name: pr.name,
+            color_hex: pr.color_hex,
+            width_m: pr.width_m,
+            depth_m: pr.depth_m,
+          };
+          pendingCooling = null;
+          pendingPdu = null;
+          pendingUps = null;
+          pendingTemplate = null;
+          root.querySelectorAll('.palette-item').forEach(function (x) { x.classList.remove('selected'); });
+          el.classList.add('selected');
+          ColdAisle.toast('Click on the floor plan to place: ' + pr.name, 'info');
+        });
+        el.addEventListener('dragstart', function (e) {
+          const payload = JSON.stringify({
+            kind: pr.kind,
+            name: pr.name,
+            color_hex: pr.color_hex,
+            width_m: pr.width_m,
+            depth_m: pr.depth_m,
+          });
+          try { e.dataTransfer.setData(DRAG_MIME_AIRFLOW, payload); } catch (err) { /* ignore */ }
+          try { e.dataTransfer.setData('text/plain', DRAG_TEXT_PREFIX_AIRFLOW + payload); } catch (err2) { /* ignore */ }
+          e.dataTransfer.effectAllowed = 'copy';
+        });
+      });
+    }
+
+    async function placeAirflowAt(posX, posY, payload) {
+      if (!room || !roomId()) {
+        ColdAisle.toast('Select a room first', 'error');
+        return;
+      }
+      const defs = payload || {};
+      const draft = {
+        width_mm: Math.round((Number(defs.width_m) || 0.6) * 1000),
+        depth_mm: Math.round((Number(defs.depth_m) || 0.6) * 1000),
+        front_facing: 'north',
+        rotation_deg: 0,
+      };
+      const sn = snapCabinetPosition(posX, posY, draft, false);
+      try {
+        const res = await ColdAisle.api('api/floorplan.php?action=create_airflow_anchor', {
+          method: 'POST',
+          body: {
+            room_id: roomId(),
+            kind: defs.kind === 'return' ? 'return' : 'supply_vent',
+            name: defs.name || (defs.kind === 'return' ? 'Return' : 'Supply vent'),
+            pos_x: sn.x,
+            pos_y: sn.y,
+            width_m: Number(defs.width_m) || 0.6,
+            depth_m: Number(defs.depth_m) || 0.6,
+            color_hex: defs.color_hex || (defs.kind === 'return' ? '#fb923c' : '#38bdf8'),
+          },
+        });
+        const a = (res && res.anchor) || null;
+        if (a) {
+          airflowAnchors.push(a);
+          setAirflowLocked(a, false);
+          selectAirflow(a);
+          refresh3d();
+          ColdAisle.toast('Placed ' + (a.name || 'marker') + ' — adjust then Save / Lock', 'success');
+        }
+      } catch (err) {
+        ColdAisle.toast((err && err.message) || 'Failed to place airflow marker', 'error');
+      }
+      pendingAirflow = null;
     }
 
     function renderUnplacedCoolingPalette() {
@@ -5319,6 +5652,7 @@
       });
       pendingPdu = null;
       pendingCooling = null;
+      pendingAirflow = null;
     }
 
     function refresh3d() {
@@ -5332,6 +5666,9 @@
         cooling: floorCooling,
         ups: floorUps,
         envSensors: envSensors3d,
+        airflowAnchors: airflowAnchors,
+        airflowOverlay: true,
+        airflowColor: 'blue',
         heatOverlay: true,
         cablePaths: showRaceways ? cablePaths : [],
         racewayFilter: racewayFilter || 'all',
@@ -6002,6 +6339,7 @@
           selectedId = null;
           selectedPduId = null;
           selectedCoolingId = null;
+          selectedAirflowId = null;
           selectedUpsId = null;
           selectedIds.clear();
           renderRacewayProps(rp);
@@ -6011,9 +6349,18 @@
         }
       }
 
-      if ((pendingTemplate || pendingPdu || pendingCooling || pendingUps) && !hit) {
+      if ((pendingTemplate || pendingPdu || pendingCooling || pendingUps || pendingAirflow) && !hit) {
         const w = worldFromCanvas(pt.x, pt.y);
-        if (pendingUps) {
+        if (pendingAirflow) {
+          const afTmpl = pendingAirflow;
+          pendingAirflow = null;
+          pendingUps = null;
+          pendingCooling = null;
+          pendingPdu = null;
+          pendingTemplate = null;
+          clearPaletteSelection();
+          placeAirflowAt(w.x, w.y, afTmpl);
+        } else if (pendingUps) {
           const upsTmpl = pendingUps;
           pendingUps = null;
           pendingCooling = null;
@@ -6040,6 +6387,29 @@
           clearPaletteSelection();
           createCabinetAt(w.x, w.y, tmpl);
         }
+        return;
+      }
+
+      if (hit && hit.type === 'airflow') {
+        const aa = hit.obj;
+        selectAirflow(aa);
+        pan = null;
+        if (!isAirflowLocked(aa) && !e.shiftKey) {
+          const r = airflowRect(aa);
+          drag = {
+            kind: 'airflow',
+            id: Number(aa.anchor_id),
+            ox: pt.x - r.x,
+            oy: pt.y - r.y,
+            startX: pt.x,
+            startY: pt.y,
+            active: false,
+          };
+          try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+        } else {
+          drag = null;
+        }
+        updateCanvasCursor(true);
         return;
       }
 
@@ -6157,6 +6527,7 @@
         if (!e.shiftKey) {
           selectCabinet(null);
           selectedPduId = null;
+          selectedAirflowId = null;
         }
         drag = null;
         pan = { lastX: e.clientX, lastY: e.clientY, pointerId: e.pointerId };
@@ -6349,6 +6720,35 @@
         const yEl = propsEl.querySelector('#fu_y');
         if (xEl) xEl.value = fmtLen(u.pos_x);
         if (yEl) yEl.value = fmtLen(u.pos_y);
+        draw();
+        return;
+      }
+      if (drag.kind === 'airflow') {
+        const a = airflowAnchors.find(function (x) { return Number(x.anchor_id) === drag.id; });
+        if (!a || isAirflowLocked(a)) {
+          drag = null;
+          return;
+        }
+        const ptA = canvasPoint(e);
+        if (!drag.active) {
+          const dx = ptA.x - drag.startX;
+          const dy = ptA.y - drag.startY;
+          if ((dx * dx + dy * dy) < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) return;
+          drag.active = true;
+        }
+        let x = (ptA.x - drag.ox - ORIGIN) / scale();
+        let y = (ptA.y - drag.oy - ORIGIN) / scale();
+        const sn = snapCabinetPosition(x, y, {
+          width_mm: Math.round((Number(a.width_m) || 0.6) * 1000),
+          depth_mm: Math.round((Number(a.depth_m) || 0.6) * 1000),
+          front_facing: 'north',
+        }, false);
+        a.pos_x = sn.x;
+        a.pos_y = sn.y;
+        const xEl = propsEl.querySelector('#af_x');
+        const yEl = propsEl.querySelector('#af_y');
+        if (xEl) xEl.value = fmtLen(a.pos_x);
+        if (yEl) yEl.value = fmtLen(a.pos_y);
         draw();
         return;
       }
@@ -6558,6 +6958,17 @@
       }
 
       drag = null;
+      if (kind === 'airflow') {
+        const a = airflowAnchors.find(function (x) { return Number(x.anchor_id) === Number(dragId); });
+        if (!a || !wasActive || isAirflowLocked(a)) {
+          updateCanvasCursor();
+          return;
+        }
+        draw();
+        updateCanvasCursor();
+        ColdAisle.toast('Vent position updated — click Save to keep', 'info');
+        return;
+      }
       if (kind === 'ups') {
         const u = floorUps.find(function (x) { return Number(x.ups_id) === Number(dragId); });
         if (!u || !wasActive || isUpsPositionLocked(u)) {
@@ -6640,6 +7051,7 @@
     renderUnplacedPduPalette();
     renderCoolingPresetPalette();
     renderUnplacedCoolingPalette();
+    renderAirflowPresetPalette();
     renderUpsPalette();
 
     canvas.addEventListener('dragover', function (e) {
@@ -6686,7 +7098,35 @@
       return null;
     }
 
+    function parseAirflowDropData(dt) {
+      if (!dt) return null;
+      let raw = '';
+      try { raw = dt.getData(DRAG_MIME_AIRFLOW) || ''; } catch (e) { /* ignore */ }
+      if (!raw) {
+        try { raw = dt.getData('text/plain') || dt.getData('Text') || ''; } catch (e2) { raw = ''; }
+      }
+      if (!raw) return null;
+      if (raw.indexOf(DRAG_TEXT_PREFIX_AIRFLOW) === 0) raw = raw.slice(DRAG_TEXT_PREFIX_AIRFLOW.length);
+      try {
+        const o = JSON.parse(raw);
+        if (o && (o.kind === 'supply_vent' || o.kind === 'return')) return o;
+      } catch (e3) { /* ignore */ }
+      return null;
+    }
+
     function handlePlannerDrop(e) {
+      const airDefaults = parseAirflowDropData(e.dataTransfer);
+      if (airDefaults) {
+        const ptA = canvasPoint(e);
+        const wA = worldFromCanvas(ptA.x, ptA.y);
+        placeAirflowAt(wA.x, wA.y, airDefaults);
+        pendingTemplate = null;
+        pendingPdu = null;
+        pendingCooling = null;
+        pendingAirflow = null;
+        clearPaletteSelection();
+        return true;
+      }
       const coolDefaults = parseCoolingDropData(e.dataTransfer);
       if (coolDefaults) {
         const ptC = canvasPoint(e);

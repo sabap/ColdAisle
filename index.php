@@ -168,6 +168,22 @@ try {
     App::log('Dashboard env 3d: ' . $e->getMessage(), 'warning');
 }
 
+$airflow3d = [];
+try {
+    if (class_exists('Schema')) {
+        Schema::ensureAirflow();
+    }
+    $airflow3d = Database::fetchAll(
+        'SELECT a.*, r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth
+         FROM airflow_anchors a
+         LEFT JOIN rooms r ON r.room_id = a.room_id
+         WHERE a.is_active = 1
+         ORDER BY a.kind, a.name, a.anchor_id'
+    ) ?: [];
+} catch (Throwable $e) {
+    $airflow3d = [];
+}
+
 // Raceways for dashboard 3D (elevation + ladder geometry)
 $cablePaths3d = [];
 try {
@@ -364,6 +380,12 @@ if (class_exists('SiteTourService')) {
                 Temp heat spheres (~3 ft)
             </label>
             <label class="text-muted" style="font-size:.85rem;display:flex;align-items:center;gap:.4rem;cursor:pointer;margin:0">
+                <input type="checkbox" id="dash3dAirflowToggle"
+                    <?= count($airflow3d) < 1 ? 'disabled' : 'checked' ?>
+                    title="Ceiling supply vents to returns. Blue/white for now; live temps later.">
+                Airflow particles
+            </label>
+            <label class="text-muted" style="font-size:.85rem;display:flex;align-items:center;gap:.4rem;cursor:pointer;margin:0">
                 <input type="checkbox" id="dash3dWalkToggle"
                     title="On: stand in an aisle (WASD, drag to look). Off: orbit the hall (drag to rotate, scroll to zoom).">
                 Walk aisle (first-person)
@@ -391,6 +413,7 @@ if (class_exists('SiteTourService')) {
              data-ups='<?= App::e(json_encode($ups3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-rooms='<?= App::e(json_encode($rooms, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-env-sensors='<?= App::e(json_encode($envSensors3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
+             data-airflow='<?= App::e(json_encode($airflow3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-cable-paths='<?= App::e(json_encode($cablePaths3d, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) ?>'
              data-logo-url='<?= App::e(App::url('assets/img/logo.svg')) ?>'></div>
     </div>
@@ -505,12 +528,16 @@ if (class_exists('SiteTourService')) {
         var ups = JSON.parse(el.dataset.ups || '[]');
         var rooms = JSON.parse(el.dataset.rooms || '[]');
         var envSensors = JSON.parse(el.dataset.envSensors || '[]');
+        var airflow = [];
+        try { airflow = JSON.parse(el.dataset.airflow || '[]'); } catch (eAf) { airflow = []; }
         var cablePaths = [];
         try { cablePaths = JSON.parse(el.dataset.cablePaths || '[]'); } catch (eCp) { cablePaths = []; }
         var logoUrl = el.dataset.logoUrl || '';
         var heatOn = true;
         var tog = document.getElementById('dash3dHeatToggle');
         if (tog) heatOn = !!tog.checked;
+        var airTog = document.getElementById('dash3dAirflowToggle');
+        var airOn = !!(airTog && airTog.checked);
         var walkTog = document.getElementById('dash3dWalkToggle');
         var view = ColdAisle3D.mount(el, {
           cabinets: cabinets,
@@ -519,6 +546,9 @@ if (class_exists('SiteTourService')) {
           ups: ups,
           rooms: rooms,
           envSensors: envSensors,
+          airflowAnchors: airflow,
+          airflowOverlay: airOn,
+          airflowColor: 'blue',
           cablePaths: cablePaths,
           logoUrl: logoUrl,
           heatOverlay: heatOn,
@@ -532,6 +562,11 @@ if (class_exists('SiteTourService')) {
         if (tog && view && typeof view.setHeatOverlay === 'function') {
           tog.addEventListener('change', function () {
             view.setHeatOverlay(!!tog.checked);
+          });
+        }
+        if (airTog && view && typeof view.setAirflowOverlay === 'function') {
+          airTog.addEventListener('change', function () {
+            view.setAirflowOverlay(!!airTog.checked);
           });
         }
         if (walkTog && view && typeof view.setMode === 'function') {

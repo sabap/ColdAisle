@@ -390,6 +390,120 @@ try {
         }
     }
 
+    if ($method === 'POST' && in_array($fpAction, [
+        'create_airflow_anchor', 'update_airflow_anchor', 'delete_airflow_anchor',
+    ], true)) {
+        api_require_any_permission(['edit_infrastructure', 'edit_cooling']);
+        api_require_csrf();
+        $data = api_read_json();
+        if (class_exists('Schema')) {
+            Schema::ensureAirflow();
+        }
+
+        if ($fpAction === 'create_airflow_anchor') {
+            $roomId = (int)($data['room_id'] ?? 0);
+            if ($roomId < 1 || !floorplan_fetch_room($roomId)) {
+                App::json(['error' => 'room_id required'], 400);
+            }
+            $kind = strtolower(trim((string)($data['kind'] ?? 'supply_vent')));
+            if (!in_array($kind, ['supply_vent', 'return'], true)) {
+                $kind = 'supply_vent';
+            }
+            $name = trim((string)($data['name'] ?? ''));
+            if ($name === '') {
+                $name = $kind === 'return' ? 'Return' : 'Supply vent';
+            }
+            $w = (float)($data['width_m'] ?? 0.6);
+            $d = (float)($data['depth_m'] ?? 0.6);
+            if ($w < 0.2) {
+                $w = 0.6;
+            }
+            if ($d < 0.2) {
+                $d = 0.6;
+            }
+            $color = trim((string)($data['color_hex'] ?? ''));
+            if (!preg_match('/^#[0-9A-Fa-f]{6}$/', $color)) {
+                $color = $kind === 'return' ? '#fb923c' : '#38bdf8';
+            }
+            $z = isset($data['pos_z']) && $data['pos_z'] !== '' && $data['pos_z'] !== null
+                ? (float)$data['pos_z'] : null;
+            $cid = isset($data['cooling_unit_id']) ? (int)$data['cooling_unit_id'] : 0;
+            $id = (int)Database::insert('airflow_anchors', [
+                'room_id' => $roomId,
+                'kind' => $kind,
+                'name' => $name,
+                'pos_x' => round((float)($data['pos_x'] ?? 0), 3),
+                'pos_y' => round((float)($data['pos_y'] ?? 0), 3),
+                'pos_z' => $z,
+                'width_m' => $w,
+                'depth_m' => $d,
+                'rotation_deg' => (float)($data['rotation_deg'] ?? 0),
+                'color_hex' => $color,
+                'cooling_unit_id' => $cid > 0 ? $cid : null,
+                'is_locked' => 0,
+                'is_active' => 1,
+            ]);
+            if (class_exists('AuditService')) {
+                AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'create', 'airflow_anchor', $id, [
+                    'kind' => $kind,
+                    'room_id' => $roomId,
+                ]);
+            }
+            App::json(['anchor' => floorplan_fetch_airflow($id)], 201);
+        }
+
+        if ($fpAction === 'update_airflow_anchor') {
+            $id = (int)($data['anchor_id'] ?? 0);
+            $row = $id > 0 ? floorplan_fetch_airflow($id) : null;
+            if (!$row) {
+                App::json(['error' => 'Airflow marker not found'], 404);
+            }
+            $fields = [];
+            if (array_key_exists('name', $data) && trim((string)$data['name']) !== '') {
+                $fields['name'] = trim((string)$data['name']);
+            }
+            if (array_key_exists('kind', $data)) {
+                $k = strtolower(trim((string)$data['kind']));
+                if (in_array($k, ['supply_vent', 'return'], true)) {
+                    $fields['kind'] = $k;
+                }
+            }
+            foreach (['pos_x', 'pos_y', 'pos_z', 'width_m', 'depth_m', 'rotation_deg'] as $col) {
+                if (array_key_exists($col, $data) && $data[$col] !== '') {
+                    $fields[$col] = round((float)$data[$col], 3);
+                }
+            }
+            if (array_key_exists('color_hex', $data) && preg_match('/^#[0-9A-Fa-f]{6}$/', (string)$data['color_hex'])) {
+                $fields['color_hex'] = (string)$data['color_hex'];
+            }
+            if (array_key_exists('is_locked', $data)) {
+                $fields['is_locked'] = !empty($data['is_locked']) ? 1 : 0;
+            }
+            if (array_key_exists('cooling_unit_id', $data)) {
+                $cid = (int)$data['cooling_unit_id'];
+                $fields['cooling_unit_id'] = $cid > 0 ? $cid : null;
+            }
+            if (!$fields) {
+                App::json(['error' => 'No fields to update'], 400);
+            }
+            $fields['updated_at'] = date('Y-m-d H:i:s');
+            Database::update('airflow_anchors', $fields, 'anchor_id = :id', [':id' => $id]);
+            App::json(['anchor' => floorplan_fetch_airflow($id)]);
+        }
+
+        if ($fpAction === 'delete_airflow_anchor') {
+            $id = (int)($data['anchor_id'] ?? 0);
+            if ($id < 1) {
+                App::json(['error' => 'anchor_id required'], 400);
+            }
+            Database::delete('airflow_anchors', 'anchor_id = ?', [$id]);
+            if (class_exists('AuditService')) {
+                AuditService::log((int)$user['user_id'], $user['username'] ?? '', 'delete', 'airflow_anchor', $id, []);
+            }
+            App::json(['ok' => true, 'anchor_id' => $id]);
+        }
+    }
+
     // --- Row / room PDU floor placement ---
     if ($method === 'POST' && in_array($fpAction, [
         'place_pdu', 'create_floor_pdu', 'update_floor_pdu', 'unplace_pdu',
@@ -917,6 +1031,19 @@ try {
         $envSensors3d = [];
     }
 
+    $airflowAnchors = [];
+    try {
+        if (class_exists('Schema')) {
+            Schema::ensureAirflow();
+        }
+        $airflowAnchors = Database::fetchAll(
+            'SELECT * FROM airflow_anchors WHERE room_id = ? AND is_active = 1 ORDER BY kind, name, anchor_id',
+            [$roomId]
+        ) ?: [];
+    } catch (Throwable $e) {
+        $airflowAnchors = [];
+    }
+
     App::json([
         'room' => $room,
         'cabinets' => $cabinets,
@@ -929,6 +1056,7 @@ try {
         'placed_ups' => $placedUps,
         'unplaced_ups' => $unplacedUps,
         'env_sensors' => $envSensors3d,
+        'airflow_anchors' => $airflowAnchors,
         'cable_paths' => $paths,
         'units' => $units === 'imperial' ? 'imperial' : 'metric',
         'planner' => [
@@ -969,6 +1097,15 @@ function floorplan_fetch_room(int $roomId): ?array
         }
         return $row;
     }
+}
+
+function floorplan_fetch_airflow(int $id): ?array
+{
+    if ($id < 1) {
+        return null;
+    }
+    $row = Database::fetchOne('SELECT * FROM airflow_anchors WHERE anchor_id = ?', [$id]);
+    return $row ?: null;
 }
 
 function floorplan_normalize_facing($facing): string

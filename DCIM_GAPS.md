@@ -7,7 +7,7 @@
 - This file tracks **product / competitive gaps** so chat menus and compaction do not lose the map.  
 - Promote a gap into `BACKLOG.md` only when scope is confirmed and work is intentionally deferred.
 
-**Last reviewed:** 2026-08-11 (post **Tech mode** field chrome; G-B3 **0.3.119**).
+**Last reviewed:** 2026-08-28 (G-B4-net IPAM v1 closed **0.3.167–0.3.175**).
 
 ---
 
@@ -47,6 +47,7 @@
 | Cabinet QR + field audit mode | Labels, sheets, `?field=1` / `?audit=1` | **0.3.105** |
 | Cooling unit inventory + env sensors (manual) | Active/standby pairs, ASHRAE guidance copy | **0.3.5** foundation |
 | Cabling (port–port), disposals, audits, reports | Depth varies — see Partial below | Core |
+| IPAM (address plan, subnet plan, aligned groups) | Prefixes + host records; Excel import; Viewer vs edit; not DDI | **0.3.167–0.3.175** |
 | Facility load without rack+row double-count | prefer_upstream / manual / sum all | **0.3.101** |
 | PDU list split (row vs cabinet) | Power → PDUs | **0.3.104** |
 
@@ -84,7 +85,7 @@ These are **not** free-form suggestions; they have acceptance criteria in the ba
 | **G-B1** | **Structured cable plant** | **Closed (v1)** — **0.3.122** | Patch panels, trunks, pathways | Raceways on floor plan, feed OH/UF, media/speed colors, circuit IDs | Patch-panel device templates; multi-path hop list; bulk CSV |
 | **G-B2** | **Change / move work orders** | **Closed (v1)** — **0.3.116**; **ITSM** — Unreleased | ITSM-linked moves, approvals | Ticket, from/to, checklist, apply inventory; SDP Cloud, ServiceNow, Zendesk, Jira, Freshservice (outbound + pull) | Extra vendors later if requested |
 | **G-B3** | **Asset lifecycle depth** | **Closed (v1)** — **0.3.119** | PO/RMA/warranty campaigns | PO/RMA fields, custody event log, warranty digests + report | Multi-entity warranty (PDU/UPS); full ITAM campaigns later |
-| **G-B4-net** | **IPAM / network-DCIM bridge** | Gap (often intentional) | Device42, NetBox | Infra-first; interfaces on devices only | Out of default scope unless multi-homed switch inventory is requested |
+| **G-B4-net** | **IPAM / network-DCIM bridge** | **Closed (v1 IPAM)** — **0.3.167–0.3.175** | phpIPAM nested subnets / NetBox containers (not DDI) | Address plan (host records, next-free); subnet plan (manual Parent, holes, carve `/n`); aligned groups (same host index across prefixes, e.g. multi-homed WAN last octet); Excel per-worksheet import; inventory link + conflicts; Viewer look / DC Admin edit | Leftover (out of default scope): switch interface inventory, IPv6, DNS/DHCP server, Infoblox-class DDI |
 | **G-B5** | **Mail product flows** | **Closed (v1)** — **0.3.118** | Welcome, password reset, lifecycle mail | Welcome, local forgot/reset, disposal due-soon digests | Optional: must-change-password gate; richer templates |
 
 ### Tier C — Low priority / out of scope unless asked
@@ -122,6 +123,7 @@ Use as a **discussion default**, not a commitment.
 
 | Former gap | Delivered | Release / notes |
 |------------|-----------|-----------------|
+| **G-B4-net IPAM v1** | Address vs subnet plans; aligned groups (same index across prefixes); Excel import; inventory link; IPAM RBAC | **0.3.167–0.3.175** (aligned **0.3.174**, permissions **0.3.175**) |
 | **G-B1 Structured cable plant** | Raceways (fiber trough / tray) on floor plan; OH vs underfloor feed; cable speed/color/circuit | **0.3.122** |
 | **Tech mode (field tablet/phone)** | Session chrome + hub; reuses cabinets/devices/WO/audit APIs; QR → tech | **0.3.120–0.3.121** |
 | **G-B3 Asset lifecycle depth** | Device PO/purchase/RMA; chain-of-custody event log; warranty email digests; warranty report polish | **0.3.119** |
@@ -166,6 +168,7 @@ Use as a **discussion default**, not a commitment.
 
 | Date | Change |
 |------|--------|
+| 2026-08-28 | **G-B4-net** closed as IPAM v1 (**0.3.167–0.3.175**). Remaining Device42/NetBox slice (interfaces, IPv6, DDI) stays out of default scope. |
 | 2026-08-11 | Initial formal gap list (tiers A–C, backlog links, closed gaps through 0.3.108) |
 | 2026-08-11 | G-A1 closed in **0.3.109** (power path report); Tier A program in progress |
 | 2026-08-11 | G-A2 closed in **0.3.110** (capacity / phase imbalance / Fits?) |

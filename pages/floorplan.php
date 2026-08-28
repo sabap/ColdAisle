@@ -43,7 +43,7 @@ layout_header('Floor Planner', $user, 'floorplan');
         </button>
         <button type="button" class="btn btn-primary btn-sm" id="toggleGrid" title="Show 1 ft grid on the floor" data-tour="fp-grid">Grid: On</button>
         <button type="button" class="btn btn-primary btn-sm" id="toggleSnap" title="Snap cabinets to grid when placing or moving">Snap: On</button>
-        <span class="nudge-controls" title="Arrow keys nudge selected (unlocked) cabinets, PDUs, UPS, or cooling units">
+        <span class="nudge-controls" title="Arrow keys nudge selected (unlocked) cabinets, PDUs, UPS, cooling, or airflow markers">
             <label class="text-muted" style="font-size:.8rem;margin:0">Nudge</label>
             <input type="number" id="nudgeAmount" class="form-control" style="width:4.2rem;padding:.2rem .35rem;font-size:.85rem" min="0.01" step="any" value="1">
             <select id="nudgeUnit" class="form-control" style="width:auto;min-width:3.5rem;padding:.2rem .35rem;font-size:.85rem">
@@ -131,6 +131,12 @@ layout_header('Floor Planner', $user, 'floorplan');
             <div id="coolingUnplacedList" class="palette-list palette-list-compact">
                 <p class="text-muted" style="font-size:.75rem;margin:0">Load a room to see unplaced units.</p>
             </div>
+
+            <h3 style="margin-top:1rem;font-size:.95rem">Airflow</h3>
+            <p class="text-muted" style="font-size:.72rem;margin:.25rem 0 .5rem">
+                Ceiling <strong>supply vents</strong> and <strong>returns</strong> for 3D particles (blue/white for now).
+            </p>
+            <div id="airflowPresetList" class="palette-list palette-list-compact"></div>
 
             <h3 style="margin-top:1rem;font-size:.95rem">UPS</h3>
             <p class="text-muted" style="font-size:.72rem;margin:.25rem 0 .5rem">

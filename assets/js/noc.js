@@ -977,6 +977,7 @@
     var ups = scene.ups || scene.ups_units || [];
     var rooms = scene.rooms || [];
     var envSensors = scene.env_sensors || scene.envSensors || [];
+    var airflowAnchors = scene.airflow_anchors || scene.airflowAnchors || [];
     var cablePaths = scene.cable_paths || scene.cablePaths || [];
     var logoUrl = scene.logo_url || cfg.logoUrl || '';
     // Prefer explicit snapshot; fall back to health embedded on scene
@@ -1000,6 +1001,9 @@
           ups: ups,
           rooms: rooms,
           envSensors: envSensors,
+          airflowAnchors: airflowAnchors,
+          airflowOverlay: airflowAnchors.length > 0,
+          airflowColor: 'blue',
           cablePaths: nocShowRaceways ? cablePaths : [],
           showRaceways: nocShowRaceways,
           showObjectLabels: nocShowLabels,

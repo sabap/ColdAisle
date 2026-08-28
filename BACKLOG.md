@@ -367,7 +367,7 @@ Notes from templates: many temps labeled **FAHRENHEIT**; some setpoints/remotes 
 
 | Field | Value |
 |-------|--------|
-| **Status** | **open** (design noted; not started) |
+| **Status** | **partial** — slice A–D (anchors + 3D markers + auto path + blue/white particles). Temp coloring deferred. |
 | **Requested** | 2026-08-06 (user) |
 | **Source** | chat (NOC/3D cooling visualization idea) |
 | **Priority** | visual / ops storytelling (depends on placement + temp data) |

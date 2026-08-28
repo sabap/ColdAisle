@@ -856,6 +856,10 @@
     var floorCooling = options.cooling || options.cooling_units || options.floor_cooling || [];
     var floorUps = options.ups || options.ups_units || options.floor_ups || [];
     var envSensors = options.envSensors || options.env_sensors || [];
+    var airflowAnchors = options.airflowAnchors || options.airflow_anchors || [];
+    var airflowOverlay = options.airflowOverlay === true || options.airflowOverlay === '1';
+    var airflowColorMode = String(options.airflowColor || options.airflow_color || 'blue').toLowerCase();
+    if (airflowColorMode !== 'white') airflowColorMode = 'blue';
     var cablePaths = options.cablePaths || options.cable_paths || options.raceways || [];
     var cableRoutes = options.cableRoutes || options.cable_routes || options.connectionRoutes || [];
     var showObjectLabels = options.showObjectLabels !== false && options.objectLabels !== false;
@@ -2000,6 +2004,240 @@
       }
     }
 
+    // --- Airflow vents / returns + particles (temps optional; blue/white until polled) ---
+    var airflowGroup = new THREE.Group();
+    airflowGroup.name = 'airflow';
+    airflowGroup.visible = !!airflowOverlay;
+    scene.add(airflowGroup);
+    var airflowParticles = null;
+    var airflowParticleState = [];
+    var airflowBaseColor = airflowColorMode === 'white' ? 0xe2e8f0 : 0x7dd3fc;
+
+    function airflowTintFromTemp(t) {
+      // Hook for polled °C: null → site tint (blue/white). Later: reuse heat-sphere scale.
+      if (t == null || isNaN(Number(t))) {
+        return new THREE.Color(airflowBaseColor);
+      }
+      return tempToColor(Number(t));
+    }
+
+    function airflowCenter(a) {
+      var w = Number(a.width_m);
+      var d = Number(a.depth_m);
+      if (!isFinite(w) || w <= 0) w = 0.6;
+      if (!isFinite(d) || d <= 0) d = 0.6;
+      return {
+        x: (Number(a.pos_x) || 0) + w / 2,
+        z: (Number(a.pos_y) || 0) + d / 2,
+        w: w,
+        d: d,
+        y: (a.pos_z != null && a.pos_z !== '' && isFinite(Number(a.pos_z))) ? Number(a.pos_z) : 3.0,
+      };
+    }
+
+    function cabFrontDir(c) {
+      var f = String(c.front_facing || '').toLowerCase();
+      if (f === 'south' || f === 's') return { dx: 0, dz: 1 };
+      if (f === 'east' || f === 'e') return { dx: 1, dz: 0 };
+      if (f === 'west' || f === 'w') return { dx: -1, dz: 0 };
+      return { dx: 0, dz: -1 };
+    }
+
+    function aisleMeans(cabs) {
+      var cold = { x: 0, z: 0, n: 0 };
+      var hot = { x: 0, z: 0, n: 0 };
+      (cabs || []).forEach(function (c) {
+        var w = mmToM(c.width_mm) || 0.6;
+        var d = mmToM(c.depth_mm) || 1.2;
+        var cx = (Number(c.pos_x) || 0) + w / 2;
+        var cz = (Number(c.pos_y) || 0) + d / 2;
+        var dir = cabFrontDir(c);
+        var reach = Math.max(w, d) / 2 + 0.45;
+        cold.x += cx + dir.dx * reach;
+        cold.z += cz + dir.dz * reach;
+        cold.n++;
+        hot.x += cx - dir.dx * reach;
+        hot.z += cz - dir.dz * reach;
+        hot.n++;
+      });
+      if (!cold.n) return null;
+      return {
+        cold: { x: cold.x / cold.n, z: cold.z / cold.n },
+        hot: { x: hot.x / hot.n, z: hot.z / hot.n },
+      };
+    }
+
+    function polylineLen(pts) {
+      var L = 0;
+      for (var i = 1; i < pts.length; i++) {
+        var a = pts[i - 1];
+        var b = pts[i];
+        var dx = b.x - a.x;
+        var dy = b.y - a.y;
+        var dz = b.z - a.z;
+        L += Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      return L;
+    }
+
+    function pointOnPoly(pts, dist) {
+      if (!pts.length) return { x: 0, y: 1, z: 0 };
+      if (pts.length === 1) return pts[0];
+      var remain = dist;
+      for (var i = 1; i < pts.length; i++) {
+        var a = pts[i - 1];
+        var b = pts[i];
+        var dx = b.x - a.x;
+        var dy = b.y - a.y;
+        var dz = b.z - a.z;
+        var seg = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.0001;
+        if (remain <= seg) {
+          var t = remain / seg;
+          return { x: a.x + dx * t, y: a.y + dy * t, z: a.z + dz * t };
+        }
+        remain -= seg;
+      }
+      return pts[pts.length - 1];
+    }
+
+    (function buildAirflow() {
+      var list = airflowAnchors || [];
+      if (!list.length) return;
+      var supplies = [];
+      var returns = [];
+      list.forEach(function (a) {
+        if (!a || a.is_active === 0 || a.is_active === false) return;
+        var kind = String(a.kind || '').toLowerCase();
+        var c = airflowCenter(a);
+        var isRet = kind === 'return';
+        var col = isRet ? 0xfb923c : 0x38bdf8;
+        if (a.color_hex && /^#[0-9A-Fa-f]{6}$/.test(String(a.color_hex))) {
+          col = new THREE.Color(a.color_hex).getHex();
+        }
+        var disc = new THREE.Mesh(
+          new THREE.CylinderGeometry(Math.max(c.w, c.d) * 0.45, Math.max(c.w, c.d) * 0.45, 0.04, 20),
+          new THREE.MeshStandardMaterial({
+            color: col,
+            transparent: true,
+            opacity: 0.85,
+            roughness: 0.4,
+            metalness: 0.15,
+            emissive: col,
+            emissiveIntensity: 0.25,
+          })
+        );
+        disc.position.set(c.x, c.y, c.z);
+        disc.userData = { airflow: a, kind: kind };
+        airflowGroup.add(disc);
+        var arrowDir = isRet ? 1 : -1;
+        var cone = new THREE.Mesh(
+          new THREE.ConeGeometry(0.08, 0.18, 8),
+          new THREE.MeshBasicMaterial({ color: col })
+        );
+        cone.position.set(c.x, c.y + arrowDir * 0.16, c.z);
+        if (isRet) cone.rotation.x = Math.PI;
+        airflowGroup.add(cone);
+        if (isRet) returns.push(c);
+        else supplies.push(c);
+      });
+
+      if (!supplies.length || !returns.length) return;
+      var aisles = aisleMeans(cabinets);
+      var aisleY = 1.2;
+      var paths = [];
+      supplies.forEach(function (s) {
+        var best = returns[0];
+        var bestD = Infinity;
+        returns.forEach(function (r) {
+          var dx = r.x - s.x;
+          var dz = r.z - s.z;
+          var dd = dx * dx + dz * dz;
+          if (dd < bestD) {
+            bestD = dd;
+            best = r;
+          }
+        });
+        var pts = [
+          { x: s.x, y: s.y, z: s.z },
+          { x: s.x, y: aisleY, z: s.z },
+        ];
+        if (aisles) {
+          pts.push({ x: aisles.cold.x, y: aisleY, z: aisles.cold.z });
+          pts.push({ x: aisles.hot.x, y: aisleY, z: aisles.hot.z });
+        }
+        pts.push({ x: best.x, y: aisleY, z: best.z });
+        pts.push({ x: best.x, y: best.y, z: best.z });
+        var len = polylineLen(pts);
+        if (len < 0.2) return;
+        paths.push({
+          pts: pts,
+          len: len,
+          // tempC: { supply, cold, hot, return } — fill from poll later
+          tempC: null,
+        });
+      });
+      if (!paths.length) return;
+
+      var nPart = Math.min(640, Math.max(48, paths.length * 56));
+      var positions = new Float32Array(nPart * 3);
+      var colors = new Float32Array(nPart * 3);
+      var geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      var mat = new THREE.PointsMaterial({
+        size: 0.07,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.88,
+        depthWrite: false,
+        sizeAttenuation: true,
+      });
+      airflowParticles = new THREE.Points(geo, mat);
+      airflowParticles.frustumCulled = false;
+      airflowGroup.add(airflowParticles);
+      var tint = airflowTintFromTemp(null);
+      for (var i = 0; i < nPart; i++) {
+        var path = paths[i % paths.length];
+        airflowParticleState.push({
+          path: path,
+          t: (i / nPart) * path.len,
+          speed: 0.55 + (i % 7) * 0.04,
+        });
+        colors[i * 3] = tint.r;
+        colors[i * 3 + 1] = tint.g;
+        colors[i * 3 + 2] = tint.b;
+      }
+      geo.attributes.color.needsUpdate = true;
+    })();
+
+    function tickAirflow(dt) {
+      if (!airflowParticles || !airflowGroup.visible) return;
+      var pos = airflowParticles.geometry.attributes.position;
+      var col = airflowParticles.geometry.attributes.color;
+      for (var i = 0; i < airflowParticleState.length; i++) {
+        var st = airflowParticleState[i];
+        st.t += st.speed * dt;
+        if (st.t > st.path.len) st.t -= st.path.len;
+        var p = pointOnPoly(st.path.pts, st.t);
+        pos.setXYZ(i, p.x, p.y, p.z);
+        // When path.tempC is set, blend by progress. Until then, stay blue/white.
+        if (st.path.tempC) {
+          var u = st.path.len > 0 ? st.t / st.path.len : 0;
+          var tc = st.path.tempC;
+          var sample = tc.supply;
+          if (u > 0.25 && tc.cold != null) sample = tc.cold;
+          if (u > 0.5 && tc.hot != null) sample = tc.hot;
+          if (u > 0.8 && tc.return != null) sample = tc.return;
+          var c3 = airflowTintFromTemp(sample);
+          col.setXYZ(i, c3.r, c3.g, c3.b);
+        }
+      }
+      pos.needsUpdate = true;
+      if (airflowParticleState.length && airflowParticleState[0].path.tempC) {
+        col.needsUpdate = true;
+      }
+    }
+
     // Cable raceways (ladder / fiber trough / conduit) at path elevation
     var racewayGroup = new THREE.Group();
     racewayGroup.name = 'raceways';
@@ -2491,6 +2729,7 @@
       }
       // Raceway near-camera fade sphere (updates every frame while orbiting)
       updateRacewayCameraFade();
+      tickAirflow(dt);
       renderer.render(scene, camera);
     }
     animate();
@@ -2553,6 +2792,9 @@
       racewayGroup: racewayGroup,
       setHeatOverlay: function (on) {
         heatGroup.visible = !!on;
+      },
+      setAirflowOverlay: function (on) {
+        airflowGroup.visible = !!on;
       },
       setAutoRotate: function (on) {
         autoRotate = !!on;

@@ -827,6 +827,22 @@ if ($includeScene) {
         unset($cabRow);
     }
 
+    $airflow3d = [];
+    try {
+        if (class_exists('Schema')) {
+            Schema::ensureAirflow();
+        }
+        $airflow3d = Database::fetchAll(
+            'SELECT a.*, r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth
+             FROM airflow_anchors a
+             LEFT JOIN rooms r ON r.room_id = a.room_id
+             WHERE a.is_active = 1
+             ORDER BY a.kind, a.name, a.anchor_id'
+        ) ?: [];
+    } catch (Throwable $e) {
+        $airflow3d = [];
+    }
+
     $out['scene'] = [
         'cabinets' => $cabinets3d,
         'pdus' => $pdus3d,
@@ -834,6 +850,7 @@ if ($includeScene) {
         'ups' => $ups3d,
         'rooms' => $rooms,
         'env_sensors' => $envSensors3d,
+        'airflow_anchors' => $airflow3d,
         'cable_paths' => $cablePaths3d,
         'cabinet_health' => $cabinetHealth,
         'logo_url' => App::url('assets/img/logo.svg'),

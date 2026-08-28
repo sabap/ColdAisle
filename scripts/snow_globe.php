@@ -11,6 +11,7 @@
  *   php scripts/snow_globe.php --dry-run
  *   php scripts/snow_globe.php --seed=42 --admin-pass='Demo-ChangeMe!'
  *   php scripts/snow_globe.php --freeze-only   # disable SNMP + re-align history to "now"
+ *   php scripts/snow_globe.php --ipam-only     # rewrite IPAM CIDRs/hostnames only (screenshots)
  *
  * Only run on a non-production / lab instance.
  */
@@ -21,7 +22,7 @@ if (PHP_SAPI !== 'cli') {
     exit(1);
 }
 
-$opts = getopt('', ['root::', 'dry-run', 'seed::', 'admin-pass::', 'org::', 'site::', 'freeze-only', 'skip-freeze', 'help']);
+$opts = getopt('', ['root::', 'dry-run', 'seed::', 'admin-pass::', 'org::', 'site::', 'freeze-only', 'skip-freeze', 'ipam-only', 'help']);
 if (isset($opts['help'])) {
     echo "Snow Globe: anonymize inventory for demos.\n";
     echo "  --root=PATH     App root (default: parent of scripts/)\n";
@@ -32,6 +33,7 @@ if (isset($opts['help'])) {
     echo "  --site=NAME     Demo site name\n";
     echo "  --freeze-only   Only disable SNMP polling and freeze/shift history for charts\n";
     echo "  --skip-freeze   Skip history freeze step (full scrub still disables SNMP)\n";
+    echo "  --ipam-only     Rewrite IPAM prefixes/addresses/aligned groups only (no rack/user changes)\n";
     exit(0);
 }
 
@@ -42,6 +44,7 @@ $root = rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $root), DIRECTORY_SE
 $dry = array_key_exists('dry-run', $opts);
 $freezeOnly = array_key_exists('freeze-only', $opts);
 $skipFreeze = array_key_exists('skip-freeze', $opts);
+$ipamOnly = array_key_exists('ipam-only', $opts);
 $seed = isset($opts['seed']) ? (int)$opts['seed'] : 20260814;
 $adminPass = isset($opts['admin-pass']) && $opts['admin-pass'] !== false
     ? (string)$opts['admin-pass']
@@ -339,6 +342,376 @@ function demoAsset(int $seed, int $id): string
     return sprintf('AT%06d', hInt($seed, "at:$id", 100000, 999999));
 }
 
+function ipv4ToInt(string $ip): ?int
+{
+    $ip = trim($ip);
+    if ($ip === '' || filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
+        return null;
+    }
+    $n = ip2long($ip);
+    if ($n === false) {
+        return null;
+    }
+    return (int)sprintf('%u', $n);
+}
+
+function intToIpv4(int $n): string
+{
+    return (string)long2ip($n & 0xFFFFFFFF);
+}
+
+function ipv4IsPrivate(int $n): bool
+{
+    $a = ($n >> 24) & 0xFF;
+    $b = ($n >> 16) & 0xFF;
+    if ($a === 10) {
+        return true;
+    }
+    if ($a === 192 && $b === 168) {
+        return true;
+    }
+    if ($a === 172 && $b >= 16 && $b <= 31) {
+        return true;
+    }
+    return false;
+}
+
+function alignIpv4(int $cursor, int $size): int
+{
+    if ($size <= 1) {
+        return $cursor;
+    }
+    $mask = $size - 1;
+    return ($cursor + $mask) & ~$mask;
+}
+
+function remapIpv4(?string $ip, int $oldNet, int $newNet): ?string
+{
+    if ($ip === null) {
+        return null;
+    }
+    $n = ipv4ToInt($ip);
+    if ($n === null) {
+        return null;
+    }
+    return intToIpv4($newNet + ($n - $oldNet));
+}
+
+/** Map a real hostname to a fictional but realistic label. */
+function demoIpamHostname(string $old, array &$seqByRole, array &$hostMap): string
+{
+    $raw = trim($old);
+    if ($raw === '') {
+        return '';
+    }
+    $key = strtolower($raw);
+    if (isset($hostMap[$key])) {
+        return $hostMap[$key];
+    }
+    $core = $key;
+    $core = preg_replace('/\s+/', ' ', $core) ?? $core;
+    $core = preg_replace('/\b(www\.)?[\w.-]+\.(org|com|net|local|edu|gov)\b/', '', $core) ?? $core;
+    $isGw = (bool)preg_match('/\b(default\s*gw|default\s*gateway|gateway|def gw)\b/', $core);
+    $role = 'node';
+    if ($isGw) {
+        $role = 'gateway';
+    } elseif (preg_match('/firepower|asa|firewall|\bfw\b|ngfw/', $core)) {
+        $role = 'fw';
+    } elseif (preg_match('/fatpipe|sd-?wan|magicwan|orchestrator/', $core)) {
+        $role = 'sdwan';
+    } elseif (preg_match('/netscaler|citrix|\badc\b|\bvip\b|aaa/', $core)) {
+        $role = 'adc';
+    } elseif (preg_match('/anyconnect|\bvpn\b/', $core)) {
+        $role = 'vpn';
+    } elseif (preg_match('/securelink|encryption/', $core)) {
+        $role = 'remote';
+    } elseif (preg_match('/hyper-?v|esx|vmotion|scvmm|hvclust|virtual/', $core)) {
+        $role = 'virt';
+    } elseif (preg_match('/isilon|nas|immstor|pacs|stor|san|veeam|vault/', $core)) {
+        $role = 'stor';
+    } elseif (preg_match('/\bkvm\b/', $core)) {
+        $role = 'kvm';
+    } elseif (preg_match('/\bmail\b|\bowa\b|exchange/', $core)) {
+        $role = 'mail';
+    } elseif (preg_match('/lync|skype|sip|xmpp|webconf|avaya|sbc|collab/', $core)) {
+        $role = 'collab';
+    } elseif (preg_match('/wsus|sccm|observ|wsus/', $core)) {
+        $role = 'mgmt';
+    } elseif (preg_match('/webserver|\bweb\b|proxy|isa\b/', $core)) {
+        $role = 'web';
+    } elseif (preg_match('/\bdns\b/', $core)) {
+        $role = 'dns';
+    } elseif (preg_match('/dhcp/', $core)) {
+        $role = 'dhcp';
+    } elseif (preg_match('/ilo|ilom|idrac|ipmi|oob/', $core)) {
+        $role = 'oob';
+    } elseif (preg_match('/switch|core|router/', $core)) {
+        $role = 'net';
+    } elseif (preg_match('/pos_/', $core)) {
+        $role = 'pos';
+    } elseif (preg_match('/pacs|dicom|cardio|sectra/', $core)) {
+        $role = 'img';
+    }
+    $seqByRole[$role] = ($seqByRole[$role] ?? 0) + 1;
+    $n = $seqByRole[$role];
+    if ($role === 'gateway') {
+        $name = 'gateway';
+    } else {
+        $name = sprintf('%s-%02d', $role, $n);
+    }
+    $hostMap[$key] = $name;
+    return $name;
+}
+
+/**
+ * Rewrite IPAM so screenshots do not leak real CIDRs, ISPs, or hostnames.
+ * Prefix lengths and host offsets stay the same (aligned last-octet groups still work).
+ *
+ * @return array{prefixes:int,addresses:int,groups:int}
+ */
+function anonymizeIpam(PDO $pdo, int $seed): array
+{
+    out('--- IPAM (demo CIDRs + hostnames) ---');
+    $stats = ['prefixes' => 0, 'addresses' => 0, 'groups' => 0];
+    if (!tableExists($pdo, 'ipam_prefixes')) {
+        out('  ipam tables not present — skip');
+        return $stats;
+    }
+
+    $pfxCols = columns($pdo, 'ipam_prefixes');
+    $prefixes = $pdo->query('SELECT * FROM ipam_prefixes')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    if ($prefixes === []) {
+        out('  no prefixes');
+        return $stats;
+    }
+
+    usort($prefixes, static function ($a, $b) {
+        $la = (int)($a['prefix_len'] ?? 24);
+        $lb = (int)($b['prefix_len'] ?? 24);
+        if ($la !== $lb) {
+            return $la <=> $lb;
+        }
+        return ((int)($a['network_int'] ?? 0)) <=> ((int)($b['network_int'] ?? 0));
+    });
+
+    $privCursor = ipv4ToInt('10.80.0.0');
+    $pubCursor = ipv4ToInt('203.0.113.0');
+    if ($privCursor === null || $pubCursor === null) {
+        throw new RuntimeException('IPAM remap cursor failed');
+    }
+
+    $map = [];
+    foreach ($prefixes as $p) {
+        $pid = (int)$p['prefix_id'];
+        $cidr = trim((string)($p['cidr'] ?? ''));
+        $oldNet = null;
+        $len = (int)($p['prefix_len'] ?? 24);
+        if (preg_match('#^(\d{1,3}(?:\.\d{1,3}){3})/(\d{1,2})$#', $cidr, $m)) {
+            $oldNet = ipv4ToInt($m[1]);
+            $len = (int)$m[2];
+        } elseif (isset($p['network_int']) && $p['network_int'] !== null && $p['network_int'] !== '') {
+            $oldNet = (int)$p['network_int'];
+        }
+        if ($oldNet === null || $len < 8 || $len > 32) {
+            out("  skip prefix {$pid} (unparseable CIDR)");
+            continue;
+        }
+        $size = 1 << (32 - $len);
+        $public = !ipv4IsPrivate($oldNet);
+        if ($public) {
+            $pubCursor = alignIpv4($pubCursor, $size);
+            $newNet = $pubCursor;
+            $pubCursor += $size;
+        } else {
+            $privCursor = alignIpv4($privCursor, $size);
+            $newNet = $privCursor;
+            $privCursor += $size;
+        }
+        $map[$pid] = [
+            'old_net' => $oldNet,
+            'new_net' => $newNet,
+            'len' => $len,
+            'cidr' => intToIpv4($newNet) . '/' . $len,
+            'public' => $public,
+            'row' => $p,
+        ];
+    }
+
+    $newByAddr = [];
+    $hostMap = [];
+    $seqByRole = [];
+    if (tableExists($pdo, 'ipam_addresses')) {
+        $rows = $pdo->query(
+            'SELECT address_id, prefix_id, ip, hostname FROM ipam_addresses'
+        )->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        foreach ($rows as $row) {
+            $pid = (int)$row['prefix_id'];
+            $aid = (int)$row['address_id'];
+            if (!isset($map[$pid])) {
+                continue;
+            }
+            $m = $map[$pid];
+            $oldIp = ipv4ToInt((string)$row['ip']);
+            $newIp = $oldIp === null
+                ? remapIpv4((string)$row['ip'], $m['old_net'], $m['new_net'])
+                : intToIpv4($m['new_net'] + ($oldIp - $m['old_net']));
+            if ($newIp === null) {
+                continue;
+            }
+            $host = demoIpamHostname((string)($row['hostname'] ?? ''), $seqByRole, $hostMap);
+            $newByAddr[$aid] = ['ip' => $newIp, 'ip_int' => ipv4ToInt($newIp), 'hostname' => $host];
+        }
+    }
+
+    // Park then write finals so unique (cidr/ip) keys cannot collide mid-update.
+    foreach ($map as $pid => $m) {
+        $park = sprintf('240.%d.%d.0/%d', ($pid >> 8) & 255, $pid & 255, (int)$m['len']);
+        $st = $pdo->prepare('UPDATE ipam_prefixes SET cidr = ?, network_int = ?, prefix_len = ? WHERE prefix_id = ?');
+        $st->execute([$park, $pid, $m['len'], $pid]);
+    }
+    if ($newByAddr !== []) {
+        $st = $pdo->prepare('UPDATE ipam_addresses SET ip = ?, ip_int = ? WHERE address_id = ?');
+        foreach ($newByAddr as $aid => $nv) {
+            $parkIp = sprintf('241.%d.%d.%d', ($aid >> 16) & 255, ($aid >> 8) & 255, $aid & 255);
+            $st->execute([$parkIp, $aid, $aid]);
+        }
+    }
+
+    $internetN = 0;
+    $hasDhcp = hasCol($pfxCols, 'dhcp_start');
+    $hasNotes = hasCol($pfxCols, 'notes');
+    $hasDesc = hasCol($pfxCols, 'description');
+    $hasRole = hasCol($pfxCols, 'role');
+    $hasGw = hasCol($pfxCols, 'gateway');
+    $sets = ['cidr = ?', 'name = ?', 'prefix_len = ?', 'network_int = ?'];
+    if ($hasGw) {
+        $sets[] = 'gateway = ?';
+    }
+    if ($hasDhcp) {
+        $sets[] = 'dhcp_start = ?';
+        $sets[] = 'dhcp_end = ?';
+    }
+    if ($hasDesc) {
+        $sets[] = 'description = ?';
+    }
+    if ($hasNotes) {
+        $sets[] = 'notes = NULL';
+    }
+    if ($hasRole) {
+        $sets[] = 'role = ?';
+    }
+    if (hasCol($pfxCols, 'updated_at')) {
+        $sets[] = 'updated_at = SYSUTCDATETIME()';
+    }
+    $pfxUpd = $pdo->prepare('UPDATE ipam_prefixes SET ' . implode(', ', $sets) . ' WHERE prefix_id = ?');
+    foreach ($map as $pid => $m) {
+        $p = $m['row'];
+        $oldName = trim((string)($p['name'] ?? ''));
+        $newNetStr = intToIpv4($m['new_net']);
+        $role = ($p['role'] ?? null) ?: null;
+        if ($m['public'] || preg_match('/internet|mediacom|hargray|clearwave|\batt\b|at&t|wan circuit/i', $oldName)) {
+            $internetN++;
+            $name = 'Internet circuit ' . chr(64 + min($internetN, 26));
+            $role = 'public';
+        } elseif (preg_match('/dmz/i', $oldName)) {
+            $name = 'DMZ';
+            $role = 'public';
+        } elseif ($m['len'] >= 30) {
+            $name = 'P2P ' . $newNetStr;
+            $role = 'interconnect';
+        } elseif ($oldName === '' || preg_match('/^\d{1,3}(\.\d{1,3}){3}/', $oldName)) {
+            $vlan = !empty($p['vlan_id']) ? (int)$p['vlan_id'] : 0;
+            $name = $vlan > 0 ? ('VLAN ' . $vlan) : $newNetStr;
+        } else {
+            $name = 'Subnet ' . $pid;
+        }
+        $params = [$m['cidr'], $name, $m['len'], $m['new_net']];
+        if ($hasGw) {
+            $params[] = remapIpv4($p['gateway'] ?? null, $m['old_net'], $m['new_net']);
+        }
+        if ($hasDhcp) {
+            $params[] = remapIpv4($p['dhcp_start'] ?? null, $m['old_net'], $m['new_net']);
+            $params[] = remapIpv4($p['dhcp_end'] ?? null, $m['old_net'], $m['new_net']);
+        }
+        if ($hasDesc) {
+            $params[] = 'Demo address plan';
+        }
+        if ($hasRole) {
+            $params[] = $role;
+        }
+        $params[] = $pid;
+        $pfxUpd->execute($params);
+        $stats['prefixes']++;
+    }
+    out('  prefixes remapped: ' . $stats['prefixes']);
+
+    if ($newByAddr !== []) {
+        $addrCols = columns($pdo, 'ipam_addresses');
+        $sets = ['ip = ?', 'ip_int = ?', 'hostname = ?'];
+        $hasMac = hasCol($addrCols, 'mac_address');
+        if ($hasMac) {
+            $sets[] = 'mac_address = ?';
+        }
+        if (hasCol($addrCols, 'description')) {
+            $sets[] = 'description = NULL';
+        }
+        if (hasCol($addrCols, 'notes')) {
+            $sets[] = 'notes = NULL';
+        }
+        if (hasCol($addrCols, 'updated_at')) {
+            $sets[] = 'updated_at = SYSUTCDATETIME()';
+        }
+        $st = $pdo->prepare('UPDATE ipam_addresses SET ' . implode(', ', $sets) . ' WHERE address_id = ?');
+        foreach ($newByAddr as $aid => $nv) {
+            $params = [$nv['ip'], $nv['ip_int'], $nv['hostname'] === '' ? null : $nv['hostname']];
+            if ($hasMac) {
+                $params[] = demoMac($seed, 900000 + $aid);
+            }
+            $params[] = $aid;
+            $st->execute($params);
+            $stats['addresses']++;
+        }
+        out('  addresses remapped: ' . $stats['addresses']);
+    }
+
+    if (tableExists($pdo, 'ipam_align_groups')) {
+        $groups = $pdo->query('SELECT group_id, name FROM ipam_align_groups ORDER BY group_id')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        $gUpd = $pdo->prepare('UPDATE ipam_align_groups SET name = ?, description = ? WHERE group_id = ?');
+        $i = 0;
+        foreach ($groups as $g) {
+            $i++;
+            $gUpd->execute(['Aligned group ' . $i, 'Demo same-index assignment', (int)$g['group_id']]);
+            $stats['groups']++;
+        }
+        if (tableExists($pdo, 'ipam_align_members')) {
+            $members = $pdo->query('SELECT member_id FROM ipam_align_members ORDER BY group_id, sort_order, member_id')->fetchAll(PDO::FETCH_COLUMN) ?: [];
+            $mUpd = $pdo->prepare('UPDATE ipam_align_members SET label = ? WHERE member_id = ?');
+            $n = 0;
+            foreach ($members as $mid) {
+                $n++;
+                $mUpd->execute(['Provider ' . chr(64 + min($n, 26)), (int)$mid]);
+            }
+        }
+        if (tableExists($pdo, 'ipam_align_slots')) {
+            $slots = $pdo->query('SELECT slot_id, hostname FROM ipam_align_slots')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $sUpd = $pdo->prepare('UPDATE ipam_align_slots SET hostname = ?, notes = NULL WHERE slot_id = ?');
+            foreach ($slots as $s) {
+                $host = demoIpamHostname((string)($s['hostname'] ?? ''), $seqByRole, $hostMap);
+                if ($host === '') {
+                    $host = 'site-' . (int)$s['slot_id'];
+                }
+                $sUpd->execute([$host, (int)$s['slot_id']]);
+            }
+        }
+        if ($stats['groups'] > 0) {
+            out('  aligned groups: ' . $stats['groups']);
+        }
+    }
+
+    out('  hostnames rewritten (fictional roles). Public prefixes use TEST-NET-3 (203.0.113.0/24).');
+    return $stats;
+}
+
 /** Map device_type → short role code */
 function deviceRoleCode(?string $type, ?string $label): string
 {
@@ -387,14 +760,39 @@ out('Root:  ' . $root);
 out('Seed:  ' . $seed);
 out('Org:   ' . $orgName);
 out('Site:  ' . $siteName);
-out('Mode:  ' . ($dry ? 'DRY-RUN' : ($freezeOnly ? 'FREEZE-ONLY' : 'LIVE')));
+out('Mode:  ' . ($dry ? 'DRY-RUN' : ($ipamOnly ? 'IPAM-ONLY' : ($freezeOnly ? 'FREEZE-ONLY' : 'LIVE'))));
 out('');
 
 if ($dry) {
     out('Dry-run: would anonymize inventory, clear secrets, rewrite org identity, reset admin,');
     out('disable SNMP polling, and freeze/shift history so line charts stay populated.');
+    if ($ipamOnly) {
+        out('With --ipam-only: rewrite IPAM CIDRs/hostnames only.');
+    }
     out('Re-run without --dry-run to apply.');
     exit(0);
+}
+
+if ($ipamOnly) {
+    $pdo->beginTransaction();
+    try {
+        $ipam = anonymizeIpam($pdo, $seed);
+        $pdo->commit();
+        out('');
+        out('IPAM-only complete. Racks, users, and admin password were not changed.');
+        out('Prefixes:  ' . $ipam['prefixes']);
+        out('Addresses: ' . $ipam['addresses']);
+        out('Groups:    ' . $ipam['groups']);
+        out('Refresh IPAM in the browser for screenshots.');
+        exit(0);
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        fwrite(STDERR, 'FAILED: ' . $e->getMessage() . PHP_EOL);
+        fwrite(STDERR, $e->getFile() . ':' . $e->getLine() . PHP_EOL);
+        exit(1);
+    }
 }
 
 // Freeze-only: skip anonymize; just lock down polling + chart history
@@ -1044,6 +1442,11 @@ try {
         }
         out('device_ports macs: ' . count($ports));
     }
+
+    // --- 14b) IPAM prefixes / host records / aligned groups ---
+    $ipam = anonymizeIpam($pdo, $seed);
+    $stats['rows_updated'] += $ipam['prefixes'] + $ipam['addresses'] + $ipam['groups'];
+    $stats['tables_touched']++;
 
     // --- 15) Sessions / tokens / audit (PII + real usernames) ---
     foreach (['auth_sessions', 'password_reset_tokens', 'notifications'] as $t) {

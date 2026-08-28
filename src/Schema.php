@@ -988,6 +988,7 @@ class Schema
             self::ensureColumn('env_readings', 'metric', 'NVARCHAR(40) NULL');
 
             self::ensureIpam();
+            self::ensureAirflow();
 
             // Rare idempotent reshapes / backfills (not only ADD column)
             self::runIdempotentReshapes();
@@ -1146,6 +1147,9 @@ class Schema
                 'cooling_unit_id', 'name', 'unit_type', 'unit_role', 'cooling_medium',
                 'room_id', 'pos_x', 'pos_y', 'snmp_enabled', 'primary_ip',
             ],
+            'airflow_anchors' => [
+                'anchor_id', 'room_id', 'kind', 'name', 'pos_x', 'pos_y', 'pos_z',
+            ],
             'env_sensors' => [
                 'sensor_id', 'name', 'sensor_kind', 'host_type', 'room_id',
                 'cooling_unit_id', 'pdu_id', 'device_id', 'last_value',
@@ -1155,7 +1159,7 @@ class Schema
             'device_snmp_readings' => ['reading_id', 'device_id', 'metric_name', 'metric_value', 'polled_at'],
         ];
         $core = array_values(array_unique(array_merge($core, [
-            'cooling_units', 'env_sensors', 'env_readings',
+            'cooling_units', 'env_sensors', 'env_readings', 'airflow_anchors',
         ])));
         return ['core_tables' => $core, 'tables' => $managed];
     }
@@ -1563,6 +1567,36 @@ class Schema
                 notes NVARCHAR(500) NULL,
                 created_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_as_created DEFAULT SYSUTCDATETIME(),
                 updated_at DATETIME2 NOT NULL CONSTRAINT DF_ipam_as_updated DEFAULT SYSUTCDATETIME()
+            )"
+        );
+    }
+
+    /**
+     * Ceiling supply vents and return grilles for 3D airflow particles.
+     * Safe to call from the floor-plan API even when the version stamp skipped ensure().
+     */
+    public static function ensureAirflow(): void
+    {
+        self::ensureTable(
+            'airflow_anchors',
+            "CREATE TABLE airflow_anchors (
+                anchor_id INT IDENTITY(1,1) PRIMARY KEY,
+                room_id INT NOT NULL,
+                kind NVARCHAR(20) NOT NULL,
+                name NVARCHAR(80) NULL,
+                pos_x FLOAT NOT NULL,
+                pos_y FLOAT NOT NULL,
+                pos_z FLOAT NULL,
+                width_m FLOAT NOT NULL CONSTRAINT DF_af_w DEFAULT 0.6,
+                depth_m FLOAT NOT NULL CONSTRAINT DF_af_d DEFAULT 0.6,
+                rotation_deg FLOAT NOT NULL CONSTRAINT DF_af_rot DEFAULT 0,
+                color_hex NVARCHAR(7) NULL,
+                cooling_unit_id INT NULL,
+                is_locked BIT NOT NULL CONSTRAINT DF_af_lock DEFAULT 0,
+                is_active BIT NOT NULL CONSTRAINT DF_af_active DEFAULT 1,
+                notes NVARCHAR(255) NULL,
+                created_at DATETIME2 NOT NULL CONSTRAINT DF_af_created DEFAULT SYSUTCDATETIME(),
+                updated_at DATETIME2 NOT NULL CONSTRAINT DF_af_updated DEFAULT SYSUTCDATETIME()
             )"
         );
     }
