@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **Airflow is cabinet-aware:** particles spawn along round or long slot vents, drop into nearby rack **fronts**, pass through to the **rear**, then all streams are pulled into the returns — with swirl so it does not look like a single line.
-
 ### Bug fixes
 
 ---
 
+## [0.3.178] - 2026-08-28
+
+### Enhancements
+
+- **Airflow is cabinet-aware:** particles spawn along round or long slot vents, drop into nearby rack **fronts**, pass through to the **rear**, then all streams are pulled into the returns — with swirl so it does not look like a single line.
+
+---
 ## [0.3.177] - 2026-08-28
 
 ### Bug fixes
