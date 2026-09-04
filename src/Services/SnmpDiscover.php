@@ -371,7 +371,7 @@ class SnmpDiscover
             '1.3.6.1.4.1.99999.2.2.0',
             '1.3.6.1.4.1.99999.2.3.0',
         ];
-        // Known Liebert LGP leaves (IS-UNITY-ICOM2 identity from live SolarWinds walks + classic conditions)
+        // Known Liebert LGP leaves (IS-UNITY-ICOM2 identity + classic conditions)
         $leafLiebert = [
             '1.3.6.1.4.1.476.1.42.2.1.1.0',
             '1.3.6.1.4.1.476.1.42.2.1.2.0',
@@ -1191,7 +1191,7 @@ class SnmpDiscover
             }
         } elseif ($coolingFocus && $liebertHits === 0) {
             $msg .= ' Auth works (sysDescr) but enterprise 1.3.6.1.4.1.476 returned nothing — '
-                . 'use the same community as SolarWinds (e.g. LANCOMM) for v2c, or fix VACM/AgentX for LGP. '
+                . 'use the same v2c community your NMS uses, or fix VACM/AgentX for LGP. '
                 . 'Condition tables (…476.1.42.3…) are often empty on IS-UNITY-ICOM2 even when identity (…42.2…) works.';
             if ($errors) {
                 $msg .= ' Walk errors: ' . implode('; ', array_slice($errors, 0, 3)) . '.';

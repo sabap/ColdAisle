@@ -36,8 +36,14 @@ package-lock.json
 # Local smoke / temp scripts
 /scripts/_*.php
 
-# Vendor/site screenshots (not app assets; may contain private site data)
+# Vendor/site screenshots and local dumps (private hall data — do not commit)
 /DC_UPS/
+/AC_Vertiv_Thermal/
+/ROW-PDU/
+/*.png
+snmpwalk*.txt
+docs/PUBLIC_SITE_PROMPT.md
+/storage/tmp/**
 
 # TLS CA bundle (downloaded locally; not required in git)
 /config/cacert.pem

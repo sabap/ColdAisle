@@ -41,11 +41,12 @@ layout_header('Documentation', $user, 'docs');
         <div>
             <p class="text-muted mb-0">
                 Operator reference for ColdAisle <strong><?= App::e($version) ?></strong>.
-                How-tos for the floor planner, SNMP Discover, applying a work order to inventory,
-                and Tech / field PWA — plus the external machine API for robots.
+                What 1.0 includes, how-tos for the floor planner, IPAM (including aligned groups), SNMP Discover,
+                applying a work order to inventory, and Tech / field PWA — plus the external machine API for robots.
             </p>
         </div>
         <nav class="docs-jump" aria-label="Jump to section">
+            <a class="settings-jump-chip" href="#what-10">What 1.0 includes</a>
             <a class="settings-jump-chip" href="#floorplan">Floor planner</a>
             <a class="settings-jump-chip" href="#ipam">IPAM</a>
             <a class="settings-jump-chip" href="#snmp-discover">SNMP Discover</a>
@@ -63,6 +64,7 @@ layout_header('Documentation', $user, 'docs');
         <div class="card-body">
             <p class="docs-toc-label">Using ColdAisle</p>
             <ol class="docs-toc-list">
+                <li><a href="#what-10">What 1.0 includes</a></li>
                 <li><a href="#floorplan">Floor planner</a></li>
                 <li><a href="#ipam">IPAM</a></li>
                 <li><a href="#snmp-discover">SNMP Discover</a></li>
@@ -85,6 +87,35 @@ layout_header('Documentation', $user, 'docs');
             </ol>
         </div>
     </nav>
+
+    <div class="card" id="what-10">
+        <div class="card-header">
+            <h2 style="margin:0">What 1.0 includes</h2>
+        </div>
+        <div class="card-body docs-prose">
+            <p>
+                ColdAisle <strong>1.0</strong> is the hall you can run every day: floor plan and 3D, power and UPS SNMP,
+                cooling inventory plus <strong>Liebert DS live telemetry</strong>, airflow particles, IPAM, raceways,
+                work orders, NOC wall, auth (local / LDAPS / Entra), and GitHub updates with site backup.
+                App version <strong><?= App::e($version) ?></strong>.
+            </p>
+            <p>
+                <strong>In:</strong> racks and elevations; row/rack PDUs and power path; UPS; CRAC/CRAH with SNMPv3
+                (Engine ID, supply/return, humidity, states); env sensors (set Placement to Cold aisle or Hot aisle);
+                3D airflow rainbow (supply → cold aisle → hot aisle → return); NOC cooling pane and 24h temp history;
+                cabling and raceways; IPAM (not DDI); field QR / Tech mode.
+            </p>
+            <p>
+                <strong>Out of 1.0:</strong> cooling or PDU writes (setpoints, outlet reboot), Liebert discrete alarm-table
+                walks, PDU Locate blink, BMS/BACnet, CFD, multi-site, native mobile apps, Infoblox-class DNS/DHCP.
+            </p>
+            <p class="mb-0">
+                Full table (in vs out, operator checklist) lives in the repo as
+                <code>docs/WHAT_1.0_INCLUDES.md</code>
+                (<a href="https://github.com/sabap/ColdAisle/blob/main/docs/WHAT_1.0_INCLUDES.md">GitHub</a>).
+            </p>
+        </div>
+    </div>
 
     <div class="card" id="floorplan">
         <div class="card-header flex-between">
@@ -145,26 +176,70 @@ layout_header('Documentation', $user, 'docs');
         </div>
         <div class="card-body docs-prose">
             <p>
-                Two tracking modes, same idea as phpIPAM nested subnets or NetBox containers.
-                An <strong>address plan</strong> is a prefix plus host records (empty IPs are not stored; <strong>Next free</strong> is computed).
-                A <strong>subnet plan</strong> is a container: you assign a block to a site, then carve child prefixes inside it.
-                Set <strong>Parent</strong> on a prefix to nest it. Opening a container shows children, leftover ranges, and next-free /n.
-                Import does not build that tree for you. DHCP on an address plan is a start/end fence, not a DHCP server.
+                ColdAisle IPAM tracks <strong>prefixes and host records</strong>. It is not DNS, DHCP, or Infoblox.
+                DHCP start/end on an address plan is only a fence for “this range is for leases,” not a server.
             </p>
-            <h3 class="docs-h3">Aligned groups</h3>
+            <h3 class="docs-h3">Three tools (do not mix them up)</h3>
+            <ol>
+                <li>
+                    <strong>Address plan</strong> — a prefix you fill with named hosts.
+                    Empty IPs are not stored; <strong>Next free</strong> is computed from what is already assigned.
+                    Typical: a VLAN /24, a WAN /24, an iDRAC /24.
+                </li>
+                <li>
+                    <strong>Subnet plan</strong> — a container you carve into smaller prefixes (phpIPAM nested subnets / NetBox containers).
+                    Set <strong>Parent</strong> when you add a child. Opening a container shows children, leftover ranges, and next-free /n.
+                    Import does not invent that tree; you set Parent (or a parent column on the sheet).
+                </li>
+                <li>
+                    <strong>Aligned group</strong> — not a parent/child tree. It pins the <em>same host index</em> across two or more
+                    <em>already created</em> address-plan prefixes. Use this when Metro-E (or LAN + OOB) should share a memorable number.
+                </li>
+            </ol>
+
+            <h3 class="docs-h3">How aligned groups are designed</h3>
             <p>
-                Use an aligned group when several prefixes should share a memorable host number.
-                Add two or more prefixes, then assign a site name to an <strong>index</strong>.
-                The index is the offset from each prefix’s network address — on a /24 that is the last octet.
-                Example: one /24 per WAN provider (<code>10.10.0.0/24</code>, <code>10.10.1.0/24</code>, <code>10.10.2.0/24</code>);
-                a site at index 10 gets <code>10.10.0.10</code>, <code>10.10.1.10</code>, and <code>10.10.2.10</code> in one step
-                so equal-cost paths stay obvious. Same pattern for a server VLAN plus iDRAC.
+                The <strong>index</strong> is the offset from each prefix’s <em>network address</em>, not a magic last-octet field.
+                On a /24 that offset <em>is</em> the last octet. Index 10 on
+                <code>10.10.0.0/24</code>, <code>10.10.1.0/24</code>, and <code>10.10.2.0/24</code>
+                is <code>10.10.0.10</code>, <code>10.10.1.10</code>, and <code>10.10.2.10</code>.
             </p>
+            <table class="data" style="max-width:40rem;margin:.5rem 0 1rem">
+                <thead>
+                <tr><th>Index</th><th>Provider A<br><span class="text-muted" style="font-weight:400">10.10.0.0/24</span></th><th>Provider B<br><span class="text-muted" style="font-weight:400">10.10.1.0/24</span></th><th>Provider C<br><span class="text-muted" style="font-weight:400">10.10.2.0/24</span></th></tr>
+                </thead>
+                <tbody>
+                <tr><td><code>10</code></td><td><code>10.10.0.10</code></td><td><code>10.10.1.10</code></td><td><code>10.10.2.10</code></td></tr>
+                <tr><td><code>11</code></td><td><code>10.10.0.11</code></td><td><code>10.10.1.11</code></td><td><code>10.10.2.11</code></td></tr>
+                </tbody>
+            </table>
             <p>
-                Create the prefixes first, then IPAM → <strong>Aligned</strong> → + Group.
-                The grid is spreadsheet-style (assigned rows plus the next free index; <strong>Show unused</strong> lists every index).
-                Clearing a slot removes those host records if the hostname still matches. Deleting the group leaves the IPs in place.
-                Viewer can open IPAM but cannot assign addresses or change prefixes; Data Center Admin and Global Admin can.
+                That matches how many shops number remote offices: three ISP /24s, same last octet per site, so equal-cost
+                (or primary/backup) paths are obvious in traceroute and ACLs. The same pattern works for
+                <strong>server VLAN + iDRAC</strong> (production <code>.50</code> and OOB <code>.50</code> on different prefixes).
+            </p>
+            <ul>
+                <li>A group is a <em>pin</em> across peers, not a parent/child tree. Do not nest the WAN /24s under each other for this job.</li>
+                <li>Index range defaults to <strong>1–254</strong> (so network and broadcast stay off the grid). The stored cap is 0–254 even on a /16 — this is a last-octet-style tool, not a /16 host planner.</li>
+                <li>Need <strong>two or more</strong> member prefixes before Assign works. Column labels are yours (Provider A, iDRAC, …); they are not pulled from ISP names.</li>
+                <li>Assign writes a host record on <em>every</em> member at that offset, same hostname. If those IPs already exist in the same prefix, the hostname is overwritten. If an IP lives in a different prefix, assign refuses.</li>
+                <li>Mixed prefix lengths: index N must fit <em>every</em> member. A /25 cannot take index 200; that cell shows <strong>out of range</strong> and assign fails until you pick an index inside all members.</li>
+                <li>The grid is spreadsheet-style (one row per index, one column per prefix). By default it hides unused indexes and shows the next free slot. <strong>Show unused</strong> lists the whole range.</li>
+                <li>A yellow row means hostnames already differ across prefixes (import or a hand edit). Clear only deletes host records whose hostname still matches the slot, so a renamed IP is left alone. <strong>Delete group</strong> removes the pin only; the IPs stay in the address plans.</li>
+            </ul>
+
+            <h3 class="docs-h3">Walkthrough: aligned WAN (or LAN + iDRAC)</h3>
+            <ol>
+                <li>Create (or import) each prefix as an <strong>address plan</strong>. Do not nest them under each other for this job.</li>
+                <li>IPAM → <strong>Aligned</strong> → <strong>+ Group</strong>. Name the group, set Index from / to if you want to reserve .0/.255 or a smaller pool.</li>
+                <li>Pick two or more member prefixes. Optional column labels (keep them generic if visitors can see IPAM).</li>
+                <li>Open the group. Enter an index and a site/hostname → <strong>Assign on all prefixes</strong>.
+                    The default index is the next free slot in range. <strong>Show unused</strong> lists every index in the range, not only assigned rows.</li>
+                <li>To take a site back, clear that slot. Host records are removed only if the hostname still matches (so a hand-edited IP is left alone).
+                    <strong>Delete group</strong> removes the alignment only; the IPs stay in the address plans.</li>
+            </ol>
+            <p>
+                Viewer can open IPAM but cannot assign or change prefixes. Data Center Admin and Global Admin can.
                 Refine View / Edit on <strong>Users → Platform roles</strong>.
             </p>
             <h3 class="docs-h3">Import from Excel</h3>

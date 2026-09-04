@@ -7,7 +7,7 @@
 - This file tracks **product / competitive gaps** so chat menus and compaction do not lose the map.  
 - Promote a gap into `BACKLOG.md` only when scope is confirmed and work is intentionally deferred.
 
-**Last reviewed:** 2026-08-28 (G-B4-net IPAM v1 closed **0.3.167–0.3.175**).
+**Last reviewed:** 2026-09-04 (G-B8 / G-B9 / G-A3 cooling thermal closed **0.3.183–0.3.188**).
 
 ---
 
@@ -59,9 +59,9 @@ These are **not** free-form suggestions; they have acceptance criteria in the ba
 
 | Gap ID | Topic | BACKLOG | Status | Notes |
 |--------|--------|---------|--------|--------|
-| G-B4 | Cooling / env SNMP E2E, threshold mail, history charts | **#4** | Partial | Foundation shipped; poll path, AP9340 map, alerts, charts still open |
-| G-B8 | Vertiv / Liebert DS LGP thermal SNMP | **#8** | **Blocked ~2026-08-18** | Unity VACM / firmware; templates in `AC_Vertiv_Thermal/` |
-| G-B9 | 3D airflow particles (vents → aisle → return) | **#9** | Open | Visual; depends on anchors + temp samples |
+| G-B4 | Cooling / env SNMP E2E, threshold mail, history charts | **#4** | **Closed (v1)** — **0.3.111** + **0.3.183–0.3.188** | Leftover: AP9340 curated map |
+| G-B8 | Vertiv / Liebert DS LGP thermal SNMP | **#8** | **Closed (v1)** — **0.3.183–0.3.188** | Live supply/return/state; leaf map; no Unit Control SET |
+| G-B9 | 3D airflow particles (vents → aisle → return) | **#9** | **Closed (v1)** — **0.3.176–0.3.188** | Rainbow from live temps; NOC toggle |
 | G-B10 | PDU Locate (LCD / network LED blink) | **#10** | Parked | Phase 0 lab required; no safe public blink OID documented |
 
 ---
@@ -74,8 +74,8 @@ These are **not** free-form suggestions; they have acceptance criteria in the ba
 |----|-----|--------|----------|-----------------|-----------------|
 | **G-A1** | **End-to-end power path report** | **Closed (v1)** — **0.3.109** | dcTrack, Nlyte, openDCIM power path style | Report + dashboard card; soft UPS by zone; no SVG one-line | Optional later: hard UPS/panel FKs, diagram |
 | **G-A2** | **Capacity planning / phase imbalance** | **Closed (v1)** — **0.3.110** | “Where can I place N kW?” tools | Free kW/U, phase amps, 20% imbalance badge, Fits? filter | Reserved/planned capacity bookings still out of scope |
-| **G-A3** | **Cooling live telemetry + env alerts** | **Closed (v1 env)** — **0.3.111**; cooling thermal depth still **G-B8** | Trellis / EcoStruxure thermal panels | Threshold + stale mail, promoted snapshot UI, attention list | Vertiv DS live temps after firmware/#8 |
-| **G-A4** | **Vendor OID / device template library** | **Closed (v1)** — **0.3.115** | Fleet “pick model → done” | Pack library + Vertiv DS import + seed tags | Field-verify non-APC seeds; full Vertiv poll still #8 |
+| **G-A3** | **Cooling live telemetry + env alerts** | **Closed (v1)** — **0.3.111** + **0.3.183–0.3.188** | Trellis / EcoStruxure thermal panels | Threshold + stale mail, DS poll, NOC history, 3D rainbow | Discrete alarm table / other Vertiv families later |
+| **G-A4** | **Vendor OID / device template library** | **Closed (v1)** — **0.3.115** | Fleet “pick model → done” | Pack library + Vertiv DS import + seed tags | Field-verify non-APC seeds; other Vertiv families later |
 | **G-A5** | **Bulk / zone SNMP ops surface** | **Closed (v1)** — **0.3.112** | Enterprise “stale poll” / bulk actions | Age badges, zone poll, NOC stale count | Optional multi-select bulk poll later |
 
 ### Tier B — Classic mid-tier DCIM
@@ -114,8 +114,8 @@ Use as a **discussion default**, not a commitment.
 | 3 | G-A3 (env slice) | Env threshold mail + history charts | **Done 0.3.111** (stale + cooling snapshot UI) |
 | 4 | G-A5 | Stale poll / last-poll age | **Done 0.3.112** |
 | 5 | G-A4 | Template library (light) | **Done 0.3.115** |
-| 6 | G-B8 → G-A3 | Vertiv DS template + poll after ~2026-08-18 | Largest cooling unlock |
-| 6 | G-B9 A or G-B1 | Airflow anchors **or** cable plant depth | Ops preference |
+| 6 | G-B8 → G-A3 | Vertiv DS template + poll | **Done 0.3.183–0.3.188** |
+| 6 | G-B9 | Airflow particles + temp color | **Done 0.3.176–0.3.188** |
 
 ---
 
@@ -123,6 +123,8 @@ Use as a **discussion default**, not a commitment.
 
 | Former gap | Delivered | Release / notes |
 |------------|-----------|-----------------|
+| **G-B8 / G-A3 thermal** | Liebert DS SNMPv3 Engine ID, Discover leaves, poll snapshot, NOC cooling history | **0.3.183–0.3.188** |
+| **G-B9 Airflow particles** | Vents/returns, particles, rainbow from supply/aisle/return, SNMP active/standby in 3D | **0.3.176–0.3.188** |
 | **G-B4-net IPAM v1** | Address vs subnet plans; aligned groups (same index across prefixes); Excel import; inventory link; IPAM RBAC | **0.3.167–0.3.175** (aligned **0.3.174**, permissions **0.3.175**) |
 | **G-B1 Structured cable plant** | Raceways (fiber trough / tray) on floor plan; OH vs underfloor feed; cable speed/color/circuit | **0.3.122** |
 | **Tech mode (field tablet/phone)** | Session chrome + hub; reuses cabinets/devices/WO/audit APIs; QR → tech | **0.3.120–0.3.121** |
@@ -143,7 +145,7 @@ Use as a **discussion default**, not a commitment.
 | Site backup to SMB | `SmbBackupService` | **0.3.3** |
 | Active sessions / presence | Users Online + update warning | **0.2.99** |
 | Global °C / °F | `TempUnitService` | **BACKLOG** #7 done |
-| Cooling inventory foundation | Units + env sensors + floor place | **0.3.5** (SNMP depth still open) |
+| Cooling inventory foundation | Units + env sensors + floor place | **0.3.5** (thermal SNMP closed **0.3.188**) |
 
 ---
 
@@ -168,11 +170,12 @@ Use as a **discussion default**, not a commitment.
 
 | Date | Change |
 |------|--------|
+| 2026-09-04 | **G-B8 / G-B9 / G-A3** closed: Liebert DS live telemetry, airflow rainbow, NOC cooling history (**0.3.183–0.3.188**). 1.0 surface: [`docs/WHAT_1.0_INCLUDES.md`](docs/WHAT_1.0_INCLUDES.md). |
 | 2026-08-28 | **G-B4-net** closed as IPAM v1 (**0.3.167–0.3.175**). Remaining Device42/NetBox slice (interfaces, IPv6, DDI) stays out of default scope. |
 | 2026-08-11 | Initial formal gap list (tiers A–C, backlog links, closed gaps through 0.3.108) |
 | 2026-08-11 | G-A1 closed in **0.3.109** (power path report); Tier A program in progress |
 | 2026-08-11 | G-A2 closed in **0.3.110** (capacity / phase imbalance / Fits?) |
-| 2026-08-11 | G-A3 env slice closed in **0.3.111** (stale mail + cooling snapshot UI); Vertiv still #8 |
+| 2026-08-11 | G-A3 env slice closed in **0.3.111** (stale mail + cooling snapshot UI); Vertiv later **#8** |
 | 2026-08-11 | G-A5 closed in **0.3.112** (poll age badges + zone SNMP poll + NOC stale) |
 | 2026-08-11 | Parallel pool **0.3.113**; NOC helpers fix **0.3.114**; G-A4 pack library **0.3.115** |
 | 2026-08-11 | G-B2 work orders **0.3.116** |

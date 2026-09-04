@@ -325,6 +325,8 @@ layout_header('IPAM', $user, 'ipam');
     Nesting is optional: set <strong>Parent</strong> when you add a prefix (for example a site /21, then VLAN /24s under it).
     <a href="<?= App::e(App::url('pages/ipam.php?view=aligned')) ?>">Aligned groups</a>
     pin the same host index across two or more prefixes (multi-homed WAN, or LAN + iDRAC).
+    How it is designed:
+    <a href="<?= App::e(App::url('pages/docs.php#ipam')) ?>">Documentation → IPAM</a>.
     DHCP on an address plan is a range fence, not a server.
     <?php if ($canEdit): ?>
         <a href="<?= App::e(App::url('pages/ipam.php?view=import')) ?>">Import Excel or CSV</a>.
@@ -338,7 +340,7 @@ layout_header('IPAM', $user, 'ipam');
     ]); ?>
     <div class="flex gap-1" style="flex-wrap:wrap">
         <a class="btn btn-secondary" href="<?= App::e(App::url('pages/ipam.php?view=conflicts')) ?>">Conflicts</a>
-        <a class="btn btn-secondary" href="<?= App::e(App::url('pages/ipam.php?view=aligned')) ?>">Aligned</a>
+        <a class="btn btn-secondary" href="<?= App::e(App::url('pages/ipam.php?view=aligned')) ?>" data-tour="ipam-aligned">Aligned</a>
         <?php if ($canEdit): ?>
             <a class="btn btn-secondary" href="<?= App::e(App::url('pages/ipam.php?view=import')) ?>">Import</a>
             <a class="btn btn-primary" href="<?= App::e(App::url('pages/ipam.php?view=prefix')) ?>">+ Prefix</a>
@@ -848,6 +850,8 @@ endif; ?>
                 </ul>
                 <p class="text-muted" style="margin-bottom:0">
                     Create the prefixes first (import or + Prefix), then the group. This is not a parent/child subnet tree.
+                    Index is the offset from each network address (last octet on a /24). Design and assign flow:
+                    <a href="<?= App::e(App::url('pages/docs.php#ipam')) ?>">Documentation → IPAM</a>.
                 </p>
             </div>
         <?php endif; ?>

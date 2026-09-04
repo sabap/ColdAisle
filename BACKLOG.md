@@ -82,7 +82,7 @@ Historical note commits:
 
 | Field | Value |
 |-------|--------|
-| **Status** | **done (foundation)** (release **0.3.5**) — SNMP poll worker + threshold mail alerts deferred |
+| **Status** | **done** (foundation **0.3.5**; SNMP + airflow + NOC thermal **0.3.183–0.3.188**) — leftover: AP9340 curated map, optional floor overlay |
 | **Requested** | 2026-07-29 (user) |
 | **Source** | `BACKLOG.md` |
 | **Priority** | product expansion (post power/SNMP foundation) |
@@ -99,15 +99,15 @@ Historical note commits:
 
 **Still open (follow-up slices)**
 
-1. **SNMP poll end-to-end** for cooling units + env probes — **partial**: device EMS + cooling site templates + worker exist; Vertiv DS condition OIDs still **#8**  
+1. ~~**SNMP poll end-to-end**~~ — **done** (cooling worker + Vertiv DS leaves **#8**, **0.3.183–0.3.188**)  
 2. **AP9340 field mapping** — after user Discover/OID export, curated PowerNet env template (temp/humidity per probe)  
 3. ~~**Threshold alerts / digests**~~ — **done** (`EnvSensorAlertService` + stale/offline digest **0.3.111**)  
-4. ~~History charts~~ — **done** (`env_history` / sensor detail)  
-5. **3D / floor plan sensor markers** using `env_sensors.pos_*` (height/Z later)  
-6. Optional heat/humidity floor overlay  
-7. **Vertiv / Liebert DS LGP condition SNMP** — formal item **#8** (blocked on Unity VACM / Monitoring Support; templates in `AC_Vertiv_Thermal/`)  
-8. **3D airflow particles** (ceiling vents → cold aisle → hot aisle → returns) — formal item **#9**  
-9. Cooling unit **live telemetry UI** from `last_poll_json` known keys — **done 0.3.111** (promoted cards; full maps depend on #8)
+4. ~~History charts~~ — **done** (`env_history` / sensor detail; cooling `cooling_readings` **0.3.188**)  
+5. ~~**3D / floor plan sensor markers**~~ — **done** (`EnvSensor3dData` heat spheres)  
+6. Optional heat/humidity floor overlay (heat spheres + airflow rainbow cover the 1.0 story)  
+7. ~~**Vertiv / Liebert DS LGP condition SNMP**~~ — **done** **#8** (**0.3.183–0.3.188**)  
+8. ~~**3D airflow particles**~~ — **done** **#9** (**0.3.176–0.3.188**)  
+9. ~~Cooling unit **live telemetry UI**~~ — **done** **0.3.111** + DS maps **0.3.184–0.3.187** + NOC history **0.3.188**
 
 **Recommended order (AP9340 site)**
 
@@ -130,7 +130,7 @@ Historical note commits:
 - [x] Can inventory cooling units and associate them with rooms; active/standby without zones  
 - [x] Threshold alert (e.g. high temp) can notify via existing mail settings  
 - [x] Stale / offline sensor mail (digest option) after scheduled poll  
-- [ ] SNMP poll path works for at least one cooling **thermal** template end-to-end (blocked on #8 for Liebert DS)  
+- [x] SNMP poll path works for at least one cooling **thermal** template end-to-end (Liebert DS **#8**, **0.3.183–0.3.188**)  
 - [x] Power features remain unaffected  
 
 ---
@@ -274,11 +274,11 @@ Historical note commits:
 
 | Field | Value |
 |-------|--------|
-| **Status** | **blocked / parked** — Vertiv on-site firmware update planned **2026-08-18** (cooling + thermal card); re-test SNMP after that |
+| **Status** | **done** (releases **0.3.183–0.3.188**) |
 | **Requested** | 2026-08-05…08-06 (user + Vertiv field / monitoring engagement) |
 | **Source** | chat (Liebert DS only showing uptime; Vertiv rep + `AC_Vertiv_Thermal/` templates; ticket to Monitoring.Support) |
 | **Priority** | high for site cooling ops once agent access is fixed |
-| **Do not implement until** | (1) post–Aug 18 firmware visit confirms `.3` GETs work **or** user asks to import templates dry-run, and (2) scope confirmed |
+| **Delivered** | Engine ID per agent; Discover GETs DS present-value leaves; poll snapshot + °F→°C; full DS leaf map; sentinel drop; NOC/3D consume live temps |
 
 **Goal:** Poll live Liebert **DS** thermal metrics into ColdAisle (supply/return temp, humidity, system state, capacity, alarms—not only sysUpTime / product identity), using **official Vertiv NMS OID maps**, then expand to related product templates in the pack.
 
@@ -353,13 +353,15 @@ Notes from templates: many temps labeled **FAHRENHEIT**; some setpoints/remotes 
 
 **Acceptance (when built)**
 
-- [ ] With a correctly configured Unity view, **Poll now** on a DS unit returns supply/return temp (and humidity or system state) into `last_poll_json` / cooling UI  
-- [ ] Site can attach a **Vertiv DS** OID template without hand-typing OIDs  
-- [ ] Values respect site °C/°F display; no double conversion  
-- [ ] NOC / cooling views show more than uptime once data is present  
-- [ ] Writable control OIDs remain unused by default  
+- [x] With a correctly configured Unity view, **Poll now** on a DS unit returns supply/return temp (and humidity or system state) into `last_poll_json` / cooling UI  
+- [x] Site can attach a **Vertiv DS** OID template without hand-typing OIDs  
+- [x] Values respect site °C/°F display; no double conversion  
+- [x] NOC / cooling views show more than uptime once data is present  
+- [x] Writable control OIDs remain unused by default  
 
-**Revisit trigger:** reply from `Monitoring.Support@Vertiv.com` (or successful GET of Return Temp / System State on site credentials).
+**Left for later (not 1.0):** discrete `SNMP_GET_TABLE` alarm booleans; other Vertiv family JSON (CRV/chillers) when those assets exist; Unit Control SET.
+
+**Revisit trigger:** ~~Monitoring.Support ticket / firmware visit~~ **closed in product** after live GETs of Return Temp and System State (2026-09-04).
 
 ---
 
@@ -367,11 +369,11 @@ Notes from templates: many temps labeled **FAHRENHEIT**; some setpoints/remotes 
 
 | Field | Value |
 |-------|--------|
-| **Status** | **partial** — slice A–D (anchors + 3D markers + auto path + blue/white particles). Temp coloring deferred. |
+| **Status** | **done** (releases **0.3.176–0.3.188**) |
 | **Requested** | 2026-08-06 (user) |
 | **Source** | chat (NOC/3D cooling visualization idea) |
 | **Priority** | visual / ops storytelling (depends on placement + temp data) |
-| **Do not implement until** | explicitly requested; confirm v1 scope (anchors + particles only vs full CFD-like paths) |
+| **Delivered** | Anchors + 3D markers + auto path + particles; rainbow from supply / aisle sensors / return (**0.3.188**); NOC air-particle toggle; SNMP active/standby LEDs |
 
 **Goal:** In the 3D room view, show **air particles** that originate at **ceiling supply vents**, travel through the **cold aisle**, across/through cabinets (front → rear), and return via the **hot aisle** to **AC return** anchors. Particle **color** reflects live/last temperatures from the sensors along that path. Effect is **toggleable** (dashboard / floor-plan 3D / NOC).
 
@@ -439,11 +441,11 @@ Notes from templates: many temps labeled **FAHRENHEIT**; some setpoints/remotes 
 
 **Acceptance (when built)**
 
-- [ ] Can place ceiling **supply vents** and **returns** on the floor plan and see them in 3D  
-- [ ] Can turn **airflow particles** on/off in 3D without breaking heat spheres or faceplates  
-- [ ] Particles move supply → cold aisle → hot aisle → return along a defined or auto path  
-- [ ] Particle color changes with available front/rear cabinet temps and supply/return temps when present  
-- [ ] Performance acceptable on dashboard and NOC (capped particle count; default off)  
+- [x] Can place ceiling **supply vents** and **returns** on the floor plan and see them in 3D  
+- [x] Can turn **airflow particles** on/off in 3D without breaking heat spheres or faceplates  
+- [x] Particles move supply → cold aisle → hot aisle → return along a defined or auto path  
+- [x] Particle color changes with available aisle temps and supply/return temps when present  
+- [x] Performance acceptable on dashboard and NOC (capped particle count; NOC toggle)  
 
 **Open design questions (resolve at implement time)**
 
@@ -509,6 +511,22 @@ Notes from templates: many temps labeled **FAHRENHEIT**; some setpoints/remotes 
 ---
 
 ## Completed (keep for audit; do not re-implement)
+
+### Vertiv / Liebert DS cooling SNMP (#8)
+
+| Field | Value |
+|-------|--------|
+| **Status** | **done** (**0.3.183–0.3.188**) |
+| **Source** | backlog item #8 |
+| **Delivered** | SNMPv3 Engine ID; Discover DS present-value + full leaf map from `AC_Vertiv_Thermal`; poll snapshot °F→°C; sentinel drop; unit UI + NOC + 3D consume live temps. No Unit Control SET. |
+
+### 3D airflow particles (#9)
+
+| Field | Value |
+|-------|--------|
+| **Status** | **done** (**0.3.176–0.3.188**) |
+| **Source** | backlog item #9 |
+| **Delivered** | Supply/return anchors; particles vent → cabinet front → rear → return; rainbow from live supply / aisle / return; NOC toggle; SNMP active/standby on CRAC meshes |
 
 ### Global temperature unit (°C / °F)
 

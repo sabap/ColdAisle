@@ -6,6 +6,7 @@ Primary platform: **IIS + PHP + Microsoft SQL Server** on Windows (with a clean 
 Formerly known as **WinDCIM**. Built as a modern replacement path for environments that outgrew or cannot maintain Linux-based [openDCIM](https://github.com/opendcim/openDCIM), with first-class support for local accounts, **LDAPS**, and **Microsoft Entra ID (Azure AD) SSO**.
 
 **Current version:** see [`VERSION`](VERSION).  
+**What 1.0 includes** (operator surface): [`docs/WHAT_1.0_INCLUDES.md`](docs/WHAT_1.0_INCLUDES.md).  
 **Release notes:** [`CHANGELOG.md`](CHANGELOG.md) (New features · Enhancements · Bug fixes).  
 **Deferred work:** [`BACKLOG.md`](BACKLOG.md). **Competitive DCIM gaps:** [`DCIM_GAPS.md`](DCIM_GAPS.md).
 
@@ -36,11 +37,13 @@ Each tagged release should have categorized notes in [`CHANGELOG.md`](CHANGELOG.
 | **Auth** | Local passwords, LDAPS (Active Directory, nested groups), Microsoft Entra OIDC SSO |
 | **Setup** | Browser wizard creates DB, schema, and admin account; optional **restore from site backup** |
 | **Dashboard** | Capacity metrics + interactive **3D** rack floor view (Three.js) |
-| **Floor planner** | Drag-and-drop cabinets (and row PDUs) onto room canvas; 2D plan + 3D toggle |
+| **Floor planner** | Drag-and-drop cabinets, row PDUs, cooling units, raceways, supply vents and returns; 2D plan + 3D toggle |
 | **Cabinets** | Rectangular models by width/depth (mm) and U-height; rack elevation with U-mounted PDUs |
 | **Devices** | Manual entry, U-slot assignment, conflict checks, interfaces, power-supply lines → outlets |
 | **Power** | Power zones (A/B), panels, row/rack PDUs, multi-phase (1/2/3), outlet inventory, PDU templates |
+| **Cooling** | CRAC/CRAH inventory, env sensors, Liebert DS SNMPv3 telemetry, 3D airflow rainbow, NOC thermal pane — see [What 1.0 includes](docs/WHAT_1.0_INCLUDES.md) |
 | **Cabling** | Port-to-port cables, media types, cable tray/underfloor routes |
+| **IPAM** | Address plan, subnet plan, aligned groups, Excel import (not DDI) |
 | **SNMP** | SNMPv2c/v3, encrypted secrets at rest, MIB upload, Discover + site OID templates, phase & outlet telemetry, scheduled poll worker |
 | **Power ops** | Near/overload alerts with batched email digests, short-term power history + charts, CSV/reports |
 | **Updates & backup** | One-click GitHub update with pre-update zip, site export/restore packages, storage housekeeping |
