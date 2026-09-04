@@ -15,14 +15,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **1.0 surface doc:** [`docs/WHAT_1.0_INCLUDES.md`](docs/WHAT_1.0_INCLUDES.md) and Documentation in-app. BACKLOG #8 (Liebert DS SNMP) and #9 (3D airflow) marked done.
-- **IPAM walkthrough:** Documentation explains address plan vs subnet plan vs aligned groups, how the host index is computed (network offset, 0–254 cap, mixed prefix lengths), and the Metro-E / LAN+iDRAC assign flow. The site tour now has an Aligned groups step.
-- **Sample copy hygiene:** Settings, openDCIM import, and Discover help text use generic `contoso` / `example.org` / RFC 5737 addresses. Root screenshots, snmpwalks, and local vendor packs stay gitignored.
-
 ### Bug fixes
 
 ---
 
+## [1.0.0] - 2026-09-04
+
+### Enhancements
+
+- **1.0 surface doc:** [`docs/WHAT_1.0_INCLUDES.md`](docs/WHAT_1.0_INCLUDES.md) and Documentation in-app. BACKLOG #8 (Liebert DS SNMP) and #9 (3D airflow) marked done.
+- **IPAM walkthrough:** Documentation explains address plan vs subnet plan vs aligned groups, how the host index is computed (network offset, 0–254 cap, mixed prefix lengths), and the Metro-E / LAN+iDRAC assign flow. The site tour now has an Aligned groups step.
+- **Sample copy hygiene:** Settings, openDCIM import, and Discover help text use generic `contoso` / `example.org` / RFC 5737 addresses. Root screenshots, snmpwalks, and local vendor packs stay gitignored.
+
+---
 ## [0.3.188] - 2026-09-04
 
 ### Enhancements
