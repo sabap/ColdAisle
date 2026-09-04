@@ -730,6 +730,16 @@ class SnmpPoller
         $metrics = is_array($got['metrics'] ?? null) ? $got['metrics'] : [];
         // collectOidMap stores {numeric, raw, oid}; Live telemetry / last_poll_json need scalars
         $clean = self::flattenCoolingSnapshotMetrics($metrics);
+        if (is_file(App::ROOT . '/includes/cooling_helpers.php')) {
+            require_once App::ROOT . '/includes/cooling_helpers.php';
+        }
+        if (function_exists('cooling_air_temp_to_c')) {
+            foreach (['supply_temp', 'return_temp', 'control_temp'] as $tk) {
+                if (isset($clean[$tk]) && is_numeric($clean[$tk])) {
+                    $clean[$tk] = cooling_air_temp_to_c((float)$clean[$tk]);
+                }
+            }
+        }
 
         $now = date('Y-m-d H:i:s');
         $snapshot = [
@@ -752,6 +762,13 @@ class SnmpPoller
                 $flat = SnmpThresholdService::flattenPollMetrics(
                     is_array($got['metrics'] ?? null) ? $got['metrics'] : $metrics
                 );
+                if (function_exists('cooling_air_temp_to_c')) {
+                    foreach (['supply_temp', 'return_temp', 'control_temp'] as $tk) {
+                        if (isset($flat[$tk]) && is_numeric($flat[$tk])) {
+                            $flat[$tk] = cooling_air_temp_to_c((float)$flat[$tk]);
+                        }
+                    }
+                }
                 SnmpThresholdService::evaluateEntity(
                     'cooling',
                     (int)$unit['cooling_unit_id'],

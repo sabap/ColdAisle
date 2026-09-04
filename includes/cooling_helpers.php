@@ -683,6 +683,22 @@ function env_sensor_threshold_status(?float $value, array $sensor): string
     return 'ok';
 }
 
+/**
+ * Vertiv / Liebert LGP present-value air temps are Fahrenheit (official NMS maps).
+ * Canonical storage is °C. Values already in a plausible CRAC °C band are left alone
+ * so a second pass does not double-convert.
+ */
+function cooling_air_temp_to_c(?float $v): ?float
+{
+    if ($v === null) {
+        return null;
+    }
+    // 40–150 °F is a real CRAC air band; 40 °C+ as supply/return is not.
+    if ($v > 40.0 && $v <= 150.0) {
+        return round(($v - 32.0) * 5.0 / 9.0, 2);
+    }
+    return round($v, 2);
+}
 
 /**
  * Promote known keys from cooling unit last_poll_json into a compact snapshot.
@@ -860,23 +876,25 @@ function cooling_poll_snapshot_promote($jsonOrArray): array
         'alarms_present', 'alarm_count', 'alarms', 'active_alarms',
     ]));
 
+    $supply = $supply !== null ? cooling_air_temp_to_c($supply) : null;
+    $return = $return !== null ? cooling_air_temp_to_c($return) : null;
+    $control = $control !== null ? cooling_air_temp_to_c($control) : null;
+
     $fmtTemp = static function (?float $c): string {
         if ($c === null) {
             return '—';
         }
-        // Large values may already be Fahrenheit from some vendor maps
-        if (class_exists('TempUnitService') && $c <= 60.0) {
-            return TempUnitService::format($c, 1);
+        if (class_exists('TempUnitService')) {
+            return TempUnitService::format($c, 1, true);
         }
-        if (class_exists('TempUnitService') && $c > 60.0) {
-            $unit = method_exists('TempUnitService', 'siteUnit') ? TempUnitService::siteUnit() : 'C';
-            if ($unit === 'F' || $unit === 'f') {
-                return rtrim(rtrim(sprintf('%.1F', $c), '0'), '.') . ' °F';
-            }
-            $c2 = ($c - 32.0) * 5.0 / 9.0;
-            return TempUnitService::format($c2, 1);
+        $s = rtrim(rtrim(number_format($c, 1, '.', ''), '0'), '.');
+        return ($s === '' ? '0' : $s) . ' °C';
+    };
+    $fmtPct = static function (?float $n): string {
+        if ($n === null) {
+            return '—';
         }
-        return rtrim(rtrim(sprintf('%.1F', $c), '0'), '.') . ' °C';
+        return (string)(int)round($n) . '%';
     };
 
     $display = [];
@@ -902,21 +920,21 @@ function cooling_poll_snapshot_promote($jsonOrArray): array
     if ($coolCap !== null) {
         $display[] = [
             'label' => 'Cooling %',
-            'value' => rtrim(rtrim(sprintf('%.0F', $coolCap), '0'), '.') . '%',
+            'value' => $fmtPct($coolCap),
             'key' => 'cooling_capacity_pct',
         ];
     }
     if ($fanCap !== null) {
         $display[] = [
             'label' => 'Fan %',
-            'value' => rtrim(rtrim(sprintf('%.0F', $fanCap), '0'), '.') . '%',
+            'value' => $fmtPct($fanCap),
             'key' => 'fan_capacity_pct',
         ];
     }
     if ($alarms !== null) {
         $display[] = [
             'label' => 'Alarms',
-            'value' => rtrim(rtrim(sprintf('%.0F', $alarms), '0'), '.'),
+            'value' => (string)(int)round($alarms),
             'key' => 'alarms_present',
         ];
     }

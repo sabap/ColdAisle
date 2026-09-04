@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **Liebert DS temps were treated as °C:** Vertiv reports supply/return in Fahrenheit (54 °F / 65 °F). Values ≤ 60 were converted as Celsius, so supply showed 129.2°. Convert F→C for storage and display (site unit then applies). Fan/cooling % no longer strip trailing zeros (`100` → `1%`, `0` → blank `%`).
+
 ---
 
 ## [0.3.185] - 2026-09-04
