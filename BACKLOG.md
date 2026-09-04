@@ -290,7 +290,7 @@ Historical note commits:
 | Identity works | `1.3.6.1.4.1.476.1.42.2` → Vertiv, **IS-UNITY-ICOM2**, fw ≈ **v8.0.0.1-4.4.7** |
 | sysObjectID | `1.3.6.1.4.1.476.1.42` |
 | Condition tree empty | Walks/GETs under **`1.3.6.1.4.1.476.1.42.3`** return empty / timeout (likely **VACM / view ACL**, context, or feature enablement on Unity—not missing OIDs in the app) |
-| Discover limitation | ColdAisle cooling Discover preferred other LGP leaf shapes (e.g. community IDs 5002/4291); Vertiv DS templates use **`…3.4.1.2.3.1.3.n`** present-value style |
+| Discover limitation | **Fixed in 0.3.184:** Discover GETs Vertiv DS present-value leaves (`…3.4.1.2.3.1.3.n`, system state `…3.4.3.1.0`) after identity. Re-test Discover on SNMPv3 + Engine ID; if those GETs still miss, VACM/firmware remains the block. |
 
 **External dependency (ticket)**
 

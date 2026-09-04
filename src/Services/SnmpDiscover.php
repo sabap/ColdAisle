@@ -92,6 +92,26 @@ class SnmpDiscover
     ];
 
     /**
+     * Vertiv DS / IS-UNITY LGP present-value leaves (Vertiv NMS template).
+     * GET these; do not walk 42.3.4 (empty roots time out on Unity).
+     *
+     * @var array<string,string> oid => cooling map key
+     */
+    private const LIEBERT_DS_CONDITION_LEAVES = [
+        '1.3.6.1.4.1.476.1.42.3.2.2.0' => 'alarms_present',
+        '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.1' => 'control_temp',
+        '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.2' => 'supply_temp',
+        '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.3' => 'return_temp',
+        '1.3.6.1.4.1.476.1.42.3.4.2.2.3.1.3.1' => 'control_humidity',
+        '1.3.6.1.4.1.476.1.42.3.4.2.2.3.1.3.2' => 'return_humidity',
+        '1.3.6.1.4.1.476.1.42.3.4.3.1.0' => 'system_state',
+        '1.3.6.1.4.1.476.1.42.3.4.3.2.0' => 'cooling_state',
+        '1.3.6.1.4.1.476.1.42.3.4.3.3.0' => 'fan_state',
+        '1.3.6.1.4.1.476.1.42.3.4.3.9.0' => 'cooling_capacity_pct',
+        '1.3.6.1.4.1.476.1.42.3.4.3.16.0' => 'fan_capacity_pct',
+    ];
+
+    /**
      * Dell iDRAC / OpenManage Server Administrator (enterprise 674.10892.5).
      * Narrow status/inventory trees only — never walk all of 674.
      */
@@ -491,7 +511,14 @@ class SnmpDiscover
         }
 
         if ($coolingFocus) {
-            $leafGets = array_merge($leafSys, $leafLiebertId);
+            // Identity first, then Vertiv DS present-value GETs, then community-id fallback.
+            // Do not stop after manufacturer/model — that hid empty-vs-live .3 tables.
+            $leafGets = array_merge(
+                $leafSys,
+                $leafLiebertId,
+                array_keys(self::LIEBERT_DS_CONDITION_LEAVES),
+                $leafLiebert
+            );
         } elseif ($idracFocus) {
             $leafGets = array_merge($leafSys, $leafIdrac);
         } elseif ($ciscoFocus) {
@@ -516,10 +543,12 @@ class SnmpDiscover
         $leafStarted = microtime(true);
         $leafHits = 0;
         $leafLiebertHits = 0;
+        $leafLiebertConditionHits = 0;
         $emsTempHits = 0;
         $emsHumHits = 0;
         // AP7862 / xPDU need many leaf GETs (phase tables); xPDU uses longer per-OID timeout
-        $leafBudget = $coolingFocus ? 4.0 : self::LEAF_PHASE_BUDGET_SEC;
+        // Cooling: identity (~5) + DS present-values (~11); 300ms miss × 11 ≈ 3.3s
+        $leafBudget = $coolingFocus ? 8.0 : self::LEAF_PHASE_BUDGET_SEC;
         if ($apcFocus && $looksXpdu) {
             $leafBudget = 14.0; // ~1.5s/OID on old NMC; core totals + phases
         } elseif ($apcFocus && $looksPdu) {
@@ -561,10 +590,13 @@ class SnmpDiscover
                     break;
                 }
             }
-            // Identity leaves are enough for cooling — skip remaining empty condition GETs
-            if ($coolingFocus && $leafLiebertHits >= 2) {
-                $logStep('leaf_early_stop liebert hits=' . $leafLiebertHits);
-                break;
+            // Identity is not enough: still GET DS present-value temps/state.
+            // Skip only leftover community-id GETs once DS conditions already answered.
+            if ($coolingFocus && $leafLiebertConditionHits >= 2
+                && str_contains($oid, '476.1.42.3.9.20')
+            ) {
+                $logStep('leaf_skip community-id GETs dsHits=' . $leafLiebertConditionHits);
+                continue;
             }
             // Slow old xPDU cards need longer GETs; keep other leaves short
             $leafTo = (!empty($looksXpdu) && str_starts_with($oid, '1.3.6.1.4.1.318.1.1.15.'))
@@ -582,6 +614,9 @@ class SnmpDiscover
                 if (str_starts_with($oid, '1.3.6.1.4.1.476.')) {
                     $leafLiebertHits++;
                 }
+                if (str_starts_with($oid, '1.3.6.1.4.1.476.1.42.3')) {
+                    $leafLiebertConditionHits++;
+                }
                 if (str_contains($oid, '10.3.13.1.1.3.') || str_contains($oid, '10.2.3.2.1.4.')
                     || str_contains($oid, '10.3.5.1.1.3.')
                 ) {
@@ -596,6 +631,7 @@ class SnmpDiscover
         }
         $logStep('leaf_gets collected=' . count($collected) . ' hits=' . $leafHits
             . ' liebertLeaf=' . $leafLiebertHits
+            . ' liebertCond=' . $leafLiebertConditionHits
             . ' emsT=' . $emsTempHits . ' emsH=' . $emsHumHits);
 
         // xPDU second chance: short leaf budget often misses 15.x when mixed with EMS/rPDU thrash.
@@ -674,8 +710,22 @@ class SnmpDiscover
         if ($haveEmsLive && !$coolingFocus && empty($looksXpdu)) {
             $logStep('walks_skipped have_ems_live elapsed=' . round($elapsed, 2));
         } elseif ($coolingFocus && $liebertHits >= 2) {
-            // Identity already from leaf GETs — only need a short system walk if missing
-            $logStep('walks_minimal have_liebert_live hits=' . $liebertHits);
+            // Identity already from leaf GETs — skip empty 42.3.4 walks.
+            // If DS present-value GETs missed, try the community-id table once.
+            $condHitsWalk = 0;
+            foreach ($collected as $oidKey => $_) {
+                if (str_starts_with((string)$oidKey, '1.3.6.1.4.1.476.1.42.3')) {
+                    $condHitsWalk++;
+                }
+            }
+            $coolWalkRoots = ['1.3.6.1.2.1.1'];
+            if ($condHitsWalk === 0) {
+                $coolWalkRoots[] = '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2';
+                $logStep('walks_minimal identity_only probing_community_table');
+            } else {
+                $logStep('walks_minimal have_liebert_live hits=' . $liebertHits
+                    . ' conditions=' . $condHitsWalk);
+            }
             if ($elapsed < $walkDeadline && count($collected) < self::MAX_OIDS) {
                 self::setOidOutputFormat('numeric');
                 $walkRootStats = self::collectWalks(
@@ -684,7 +734,7 @@ class SnmpDiscover
                     $creds,
                     $collected,
                     $errors,
-                    ['1.3.6.1.2.1.1'],
+                    $coolWalkRoots,
                     $discoverStarted,
                     $totalBudget
                 );
@@ -841,7 +891,7 @@ class SnmpDiscover
                 'sysUpTime' => '1.3.6.1.2.1.1.3.0',
             ];
         }
-        // Liebert ruleset: inject LGP identity OIDs from full collection
+        // Liebert ruleset: inject LGP identity + DS present-value OIDs from full collection
         if ($coolingFocus) {
             foreach ([
                 '1.3.6.1.4.1.476.1.42.2.1.1.0' => 'lgp_manufacturer',
@@ -849,6 +899,11 @@ class SnmpDiscover
                 '1.3.6.1.4.1.476.1.42.2.1.3.0' => 'lgp_version',
                 '1.3.6.1.4.1.476.1.42.2.1.5.0' => 'lgp_firmware',
             ] as $loid => $lkey) {
+                if (isset($collected[$loid]) && !isset($proposed[$lkey])) {
+                    $proposed[$lkey] = $loid;
+                }
+            }
+            foreach (self::LIEBERT_DS_CONDITION_LEAVES as $loid => $lkey) {
                 if (isset($collected[$loid]) && !isset($proposed[$lkey])) {
                     $proposed[$lkey] = $loid;
                 }
@@ -1078,7 +1133,10 @@ class SnmpDiscover
             }
         } elseif ($coolingFocus && $lgpIdentity > 0 && $lgpConditions === 0) {
             $msg .= ' LGP product identity present (…476.1.42.2…, e.g. Vertiv IS-UNITY-ICOM2) but '
-                . 'condition/measurement tables (…476.1.42.3…) are empty — no supply/return temps over SNMP until the card exposes them.';
+                . 'condition/measurement tables (…476.1.42.3…) did not answer. '
+                . 'Probed Vertiv DS present-value GETs (return temp …3.4.1.2.3.1.3.3, '
+                . 'system state …3.4.3.1.0) — no supply/return temps until Unity VACM/view '
+                . 'or firmware exposes 476.1.42.3.';
         } elseif ($xpduMapSeeded) {
             // Skip generic MIB mismatch noise when xPDU map is intentional
         } elseif ($mibsLoaded > 0 && $namedCount === 0 && $indexSize === 0) {
@@ -2191,6 +2249,11 @@ class SnmpDiscover
             return true;
         }
 
+        // Vertiv DS LGP present-value / alarms — never treat as config noise
+        if (preg_match('/^1\.3\.6\.1\.4\.1\.476\.1\.42\.3\.(2|4)\./', $oid)) {
+            return false;
+        }
+
         // Always drop pure identity / non-metric strings (model AP8861, timestamps as text)
         if (self::isNonMetricString($raw)) {
             // Allow only if name is clearly a live metric (rare string enums)
@@ -2258,7 +2321,13 @@ class SnmpDiscover
             $score += 10;
         }
         if (str_starts_with($oid, '1.3.6.1.4.1.476.1.42.3.9.20.')) {
-            $score += 12; // condition present-value tables
+            $score += 12; // community-id present-value tables
+        }
+        // Vertiv DS present-value tree (temps / humidity / state / capacity)
+        if (str_starts_with($oid, '1.3.6.1.4.1.476.1.42.3.4.')
+            || str_starts_with($oid, '1.3.6.1.4.1.476.1.42.3.2.')
+        ) {
+            $score += 22;
         }
         // Known DS/iCOM supply / return condition IDs
         if (preg_match('/1\.3\.6\.1\.4\.1\.476\.1\.42\.3\.9\.20\.1\.20\.1\.2\.1\.(5002|4291|5001|5003)$/', $oid)) {
@@ -2541,6 +2610,10 @@ class SnmpDiscover
             $hints[] = 'Cisco FRU PSU state';
         } elseif (str_starts_with($oid, '1.3.6.1.4.1.9.9.117.1.4.1')) {
             $hints[] = 'Cisco FRU fan state';
+        }
+
+        if (isset(self::LIEBERT_DS_CONDITION_LEAVES[$oid])) {
+            $hints[] = 'Vertiv DS ' . str_replace('_', ' ', self::LIEBERT_DS_CONDITION_LEAVES[$oid]);
         }
 
         if ($name) {
@@ -3637,6 +3710,10 @@ class SnmpDiscover
             }
             if (isset($identityMap[$oid]) && !isset($out[$identityMap[$oid]])) {
                 $out[$identityMap[$oid]] = $oid;
+            }
+            if (isset(self::LIEBERT_DS_CONDITION_LEAVES[$oid]) && !isset($out[self::LIEBERT_DS_CONDITION_LEAVES[$oid]])) {
+                $out[self::LIEBERT_DS_CONDITION_LEAVES[$oid]] = $oid;
+                continue;
             }
             $hay = strtolower((string)($c['name'] ?? '') . ' ' . (string)($c['hint'] ?? ''));
             $key = null;

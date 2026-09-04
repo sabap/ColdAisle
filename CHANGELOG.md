@@ -15,6 +15,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Cooling Discover probes Vertiv DS temps:** Liebert ruleset now GETs the IS-UNITY present-value OIDs (return/supply/control temp, humidity, system state, capacity) instead of stopping after manufacturer/model. Identity-only Discover was reporting empty `476.1.42.3` tables without asking for those leaves.
+
 ### Bug fixes
 
 ---
