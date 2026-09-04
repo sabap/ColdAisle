@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [0.3.185] - 2026-09-04
+
+### Bug fixes
+
 - **Cooling Poll now stored empty snapshots:** SNMP returned 14 metrics as `{numeric, raw, oid}` objects; the unit snapshot kept only scalars, so Live telemetry and the metrics table stayed blank. Poll now flattens those values into `last_poll_json` and reloads the unit page so supply/return/state show.
 
 ---
-
 ## [0.3.184] - 2026-09-04
 
 ### Enhancements
