@@ -13,14 +13,19 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **SNMPv3 Engine ID per agent:** cooling units, devices, PDUs, and UPS store the authoritative Engine ID (hex). The poller passes it on SNMPv3 sessions so USM localizes the profile passphrase to that box (Liebert DS / IntelliSlot GET/GETBULK past sysUpTime). Not stored on the shared credential profile.
-
 ### Enhancements
 
 ### Bug fixes
 
 ---
 
+## [0.3.183] - 2026-09-04
+
+### New features
+
+- **SNMPv3 Engine ID per agent:** cooling units, devices, PDUs, and UPS store the authoritative Engine ID (hex). The poller passes it on SNMPv3 sessions so USM localizes the profile passphrase to that box (Liebert DS / IntelliSlot GET/GETBULK past sysUpTime). Not stored on the shared credential profile.
+
+---
 ## [0.3.182] - 2026-08-28
 
 ### New features
