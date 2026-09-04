@@ -92,8 +92,10 @@ class SnmpDiscover
     ];
 
     /**
-     * Vertiv DS / IS-UNITY LGP present-value leaves (Vertiv NMS template).
+     * Vertiv DS / IS-UNITY LGP leaves from AC_Vertiv_Thermal (DS JSON + CRV CW temp).
      * GET these; do not walk 42.3.4 (empty roots time out on Unity).
+     * Duplicate keys: first OID wins when injecting the proposed map.
+     * Unit Control SET (…3.7.4.2.0) is intentionally omitted.
      *
      * @var array<string,string> oid => cooling map key
      */
@@ -102,14 +104,66 @@ class SnmpDiscover
         '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.1' => 'control_temp',
         '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.2' => 'supply_temp',
         '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.3' => 'return_temp',
+        '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.4' => 'comp1_temp_1',
+        '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.5' => 'comp2_temp_1',
+        '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.7' => 'comp1_temp_2',
+        '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.8' => 'comp2_temp_2',
+        '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.6.2' => 'supply_temp_setpoint',
+        '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.6.3' => 'return_temp_setpoint',
         '1.3.6.1.4.1.476.1.42.3.4.2.2.3.1.3.1' => 'control_humidity',
         '1.3.6.1.4.1.476.1.42.3.4.2.2.3.1.3.2' => 'return_humidity',
+        '1.3.6.1.4.1.476.1.42.3.4.2.2.3.1.6.2' => 'return_humidity_setpoint',
         '1.3.6.1.4.1.476.1.42.3.4.3.1.0' => 'system_state',
         '1.3.6.1.4.1.476.1.42.3.4.3.2.0' => 'cooling_state',
-        '1.3.6.1.4.1.476.1.42.3.4.3.3.0' => 'fan_state',
+        '1.3.6.1.4.1.476.1.42.3.4.3.7.0' => 'fan_state',
+        '1.3.6.1.4.1.476.1.42.3.4.3.4.0' => 'humidify_state',
+        '1.3.6.1.4.1.476.1.42.3.4.3.5.0' => 'dehumidify_state',
         '1.3.6.1.4.1.476.1.42.3.4.3.9.0' => 'cooling_capacity_pct',
+        '1.3.6.1.4.1.476.1.42.3.4.3.10.0' => 'heating_capacity_pct',
+        '1.3.6.1.4.1.476.1.42.3.4.3.14.0' => 'operating_reason',
+        '1.3.6.1.4.1.476.1.42.3.4.3.15.0' => 'operating_mode',
         '1.3.6.1.4.1.476.1.42.3.4.3.16.0' => 'fan_capacity_pct',
+        '1.3.6.1.4.1.476.1.42.3.4.3.17.0' => 'free_cooling_capacity_pct',
+        '1.3.6.1.4.1.476.1.42.3.4.3.18.0' => 'dehumidify_capacity_pct',
+        '1.3.6.1.4.1.476.1.42.3.4.3.19.0' => 'humidify_capacity_pct',
+        '1.3.6.1.4.1.476.1.42.3.4.3.20.0' => 'free_cooling_state',
+        '1.3.6.1.4.1.476.1.42.3.4.3.21.0' => 'electric_heater_state',
+        '1.3.6.1.4.1.476.1.42.3.4.3.22.0' => 'hot_water_state',
+        '1.3.6.1.4.1.476.1.42.3.4.6.1.0' => 'comp1_run_hours',
+        '1.3.6.1.4.1.476.1.42.3.4.6.2.0' => 'comp2_run_hours',
+        '1.3.6.1.4.1.476.1.42.3.4.6.3.0' => 'fan_run_hours',
+        '1.3.6.1.4.1.476.1.42.3.4.6.7.0' => 'reheat1_run_hours',
+        '1.3.6.1.4.1.476.1.42.3.4.6.8.0' => 'reheat2_run_hours',
+        '1.3.6.1.4.1.476.1.42.3.4.6.9.0' => 'reheat3_run_hours',
+        '1.3.6.1.4.1.476.1.42.3.4.6.12.0' => 'humidify_run_hours',
+        '1.3.6.1.4.1.476.1.42.3.4.6.13.0' => 'dehumidify_run_hours',
+        '1.3.6.1.4.1.476.1.42.3.4.6.14.0' => 'hot_gas_run_hours',
+        '1.3.6.1.4.1.476.1.42.3.4.6.15.0' => 'hot_water_run_hours',
+        '1.3.6.1.4.1.476.1.42.3.4.6.16.0' => 'free_cool_run_hours',
+        // Chilled water: not in the DS NMS pack (alarms only). CRV maps ID 7 column 50.
+        '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.50.7' => 'chilled_water_temp',
+        '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.6' => 'chilled_water_temp',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5059.1' => 'remote_temp_1',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5059.2' => 'remote_temp_2',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5059.3' => 'remote_temp_3',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5059.4' => 'remote_temp_4',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5059.5' => 'remote_temp_5',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5059.6' => 'remote_temp_6',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5059.7' => 'remote_temp_7',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5059.8' => 'remote_temp_8',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5059.9' => 'remote_temp_9',
+        '1.3.6.1.4.1.476.1.42.3.9.20.1.20.1.2.1.5059.10' => 'remote_temp_10',
     ];
+
+    /**
+     * Official Vertiv DS leaf map (read-only). Used by Discover and cooling Poll extras.
+     *
+     * @return array<string,string> oid => metric key
+     */
+    public static function liebertDsLeafMap(): array
+    {
+        return self::LIEBERT_DS_CONDITION_LEAVES;
+    }
 
     /**
      * Dell iDRAC / OpenManage Server Administrator (enterprise 674.10892.5).
@@ -169,8 +223,8 @@ class SnmpDiscover
     private const LEAF_PHASE_BUDGET_SEC = 5.0;
     /** Skip walks after this many seconds total (IIS FastCGI / PHP max_execution_time ~25s). */
     private const WALK_DEADLINE_SEC = 10.0;
-    /** Cooling Discover: tighter total budget so unit 2 cannot hit 25s fatal. */
-    private const COOLING_TOTAL_BUDGET_SEC = 18.0;
+    /** Cooling Discover: DS leaf map is larger; stay under IIS ~60s. */
+    private const COOLING_TOTAL_BUDGET_SEC = 28.0;
     private const COOLING_WALK_DEADLINE_SEC = 12.0;
     /** Candidates shown in Discover UI (high-signal only). */
     private const MAX_DISPLAY_CANDIDATES = 40;
@@ -220,9 +274,9 @@ class SnmpDiscover
         }
 
         // Stay under PHP/IIS caps; cooling walks must self-budget (see COOLING_TOTAL_BUDGET_SEC)
-        @ini_set('max_execution_time', '30');
+        @ini_set('max_execution_time', '45');
         if (function_exists('set_time_limit')) {
-            @set_time_limit(30);
+            @set_time_limit(45);
         }
         $discoverStarted = microtime(true);
         $logStep = static function (string $step) use ($discoverStarted, $host): void {
@@ -544,11 +598,12 @@ class SnmpDiscover
         $leafHits = 0;
         $leafLiebertHits = 0;
         $leafLiebertConditionHits = 0;
+        $remoteMisses = 0;
         $emsTempHits = 0;
         $emsHumHits = 0;
         // AP7862 / xPDU need many leaf GETs (phase tables); xPDU uses longer per-OID timeout
-        // Cooling: identity (~5) + DS present-values (~11); 300ms miss × 11 ≈ 3.3s
-        $leafBudget = $coolingFocus ? 8.0 : self::LEAF_PHASE_BUDGET_SEC;
+        // Cooling: DS leaf pack (~50 GETs); 300ms miss × remotes is the risk — skip empty remotes
+        $leafBudget = $coolingFocus ? 20.0 : self::LEAF_PHASE_BUDGET_SEC;
         if ($apcFocus && $looksXpdu) {
             $leafBudget = 14.0; // ~1.5s/OID on old NMC; core totals + phases
         } elseif ($apcFocus && $looksPdu) {
@@ -590,12 +645,17 @@ class SnmpDiscover
                     break;
                 }
             }
-            // Identity is not enough: still GET DS present-value temps/state.
-            // Skip only leftover community-id GETs once DS conditions already answered.
+            // Skip leftover community-id GETs (5002/4291…) once DS conditions answered,
+            // but keep remote sensors (…5059.n).
             if ($coolingFocus && $leafLiebertConditionHits >= 2
                 && str_contains($oid, '476.1.42.3.9.20')
+                && !str_contains($oid, '.5059.')
             ) {
                 $logStep('leaf_skip community-id GETs dsHits=' . $leafLiebertConditionHits);
+                continue;
+            }
+            if ($coolingFocus && $remoteMisses >= 2 && str_contains($oid, '.5059.')) {
+                $logStep('leaf_skip remaining remotes misses=' . $remoteMisses);
                 continue;
             }
             // Slow old xPDU cards need longer GETs; keep other leaves short
@@ -617,6 +677,9 @@ class SnmpDiscover
                 if (str_starts_with($oid, '1.3.6.1.4.1.476.1.42.3')) {
                     $leafLiebertConditionHits++;
                 }
+                if (str_contains($oid, '.5059.')) {
+                    $remoteMisses = 0;
+                }
                 if (str_contains($oid, '10.3.13.1.1.3.') || str_contains($oid, '10.2.3.2.1.4.')
                     || str_contains($oid, '10.3.5.1.1.3.')
                 ) {
@@ -627,6 +690,8 @@ class SnmpDiscover
                 ) {
                     $emsHumHits++;
                 }
+            } elseif ($coolingFocus && str_contains($oid, '.5059.')) {
+                $remoteMisses++;
             }
         }
         $logStep('leaf_gets collected=' . count($collected) . ' hits=' . $leafHits

@@ -243,6 +243,12 @@ class SnmpOidTemplates
             'system_state' => '1.3.6.1.4.1.476.1.42.3.4.3.1.0',
             'cooling_capacity_pct' => '1.3.6.1.4.1.476.1.42.3.4.3.9.0',
             'fan_capacity_pct' => '1.3.6.1.4.1.476.1.42.3.4.3.16.0',
+            'chilled_water_temp' => '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.50.7',
+            'supply_temp_setpoint' => '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.6.2',
+            'return_temp_setpoint' => '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.6.3',
+            'fan_state' => '1.3.6.1.4.1.476.1.42.3.4.3.7.0',
+            'free_cooling_state' => '1.3.6.1.4.1.476.1.42.3.4.3.20.0',
+            'operating_mode' => '1.3.6.1.4.1.476.1.42.3.4.3.15.0',
         ];
         foreach ($coreFallback as $k => $oid) {
             if (!isset($map[$k])) {

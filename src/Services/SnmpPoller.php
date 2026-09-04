@@ -682,6 +682,13 @@ class SnmpPoller
         if (!$oidMap) {
             throw new RuntimeException('Site OID template has an empty OID map.');
         }
+        // Merge Vertiv DS leaf pack so Poll picks up setpoints/states/hours/remotes
+        // even if the saved site template is still the short Discover map.
+        foreach (SnmpDiscover::liebertDsLeafMap() as $oid => $key) {
+            if (!isset($oidMap[$key]) && is_string($oid) && $oid !== '') {
+                $oidMap[$key] = $oid;
+            }
+        }
 
         $creds = SnmpDiscover::credsFromCooling($unit);
         if ($creds['host'] === '') {
@@ -717,6 +724,7 @@ class SnmpPoller
         );
 
         $got = self::collectOidMap($session, $oidMap);
+        self::probeLiebertChilledWater($session, $got, $oidMap);
         self::closeSession($session);
 
         if ((int)($got['ok'] ?? 0) === 0) {
@@ -734,10 +742,17 @@ class SnmpPoller
             require_once App::ROOT . '/includes/cooling_helpers.php';
         }
         if (function_exists('cooling_air_temp_to_c')) {
-            foreach (['supply_temp', 'return_temp', 'control_temp'] as $tk) {
-                if (isset($clean[$tk]) && is_numeric($clean[$tk])) {
-                    $clean[$tk] = cooling_air_temp_to_c((float)$clean[$tk]);
+            foreach ($clean as $tk => $tv) {
+                if (!is_numeric($tv)) {
+                    continue;
                 }
+                $k = (string)$tk;
+                if (!preg_match('/temp/', $k) || str_contains($k, 'humidity')) {
+                    continue;
+                }
+                $tenths = (bool)preg_match('/^remote_temp_/', $k)
+                    || ($k === 'chilled_water_temp' && (float)$tv > 150.0);
+                $clean[$tk] = cooling_air_temp_to_c((float)$tv, $tenths);
             }
         }
 
@@ -763,10 +778,17 @@ class SnmpPoller
                     is_array($got['metrics'] ?? null) ? $got['metrics'] : $metrics
                 );
                 if (function_exists('cooling_air_temp_to_c')) {
-                    foreach (['supply_temp', 'return_temp', 'control_temp'] as $tk) {
-                        if (isset($flat[$tk]) && is_numeric($flat[$tk])) {
-                            $flat[$tk] = cooling_air_temp_to_c((float)$flat[$tk]);
+                    foreach ($flat as $tk => $tv) {
+                        if (!is_numeric($tv)) {
+                            continue;
                         }
+                        $k = (string)$tk;
+                        if (!preg_match('/temp/', $k) || str_contains($k, 'humidity')) {
+                            continue;
+                        }
+                        $tenths = (bool)preg_match('/^remote_temp_/', $k)
+                            || ($k === 'chilled_water_temp' && (float)$tv > 150.0);
+                        $flat[$tk] = cooling_air_temp_to_c((float)$tv, $tenths);
                     }
                 }
                 SnmpThresholdService::evaluateEntity(
@@ -2318,6 +2340,8 @@ class SnmpPoller
         $ok = 0;
         $failed = 0;
         $lastErr = null;
+        $remoteMisses = 0;
+        $skipRemotes = false;
         /** @var array<string,array{numeric:?float,raw:mixed,oid:string}> $metrics */
         $metrics = [];
 
@@ -2341,10 +2365,25 @@ class SnmpPoller
             if (preg_match('/^outlet_(amps|watts|power|current|name|state)\b/', $metricKey)) {
                 continue;
             }
+            $isRemote = (bool)preg_match('/^remote_temp_\d+$/', $metricKey);
+            if ($skipRemotes && $isRemote) {
+                continue;
+            }
             try {
                 $oidNorm = ltrim($oid, '.');
                 $raw = self::get($session, $oidNorm);
                 $num = self::toNumber($raw);
+                if ($isRemote && ($raw === false || $raw === null || $num === null)) {
+                    $remoteMisses++;
+                    if ($remoteMisses >= 2) {
+                        $skipRemotes = true;
+                    }
+                    $failed++;
+                    continue;
+                }
+                if ($isRemote) {
+                    $remoteMisses = 0;
+                }
                 // APC sentinel: -1 = "feature not supported" on many rPDU2 leaves
                 if ($num !== null && $num < 0
                     && preg_match('/^1\.3\.6\.1\.4\.1\.318\.1\.1\.26\./', $oidNorm)
@@ -2456,6 +2495,12 @@ class SnmpPoller
             } catch (Throwable $e) {
                 $failed++;
                 $lastErr = $e->getMessage();
+                if (!empty($isRemote)) {
+                    $remoteMisses++;
+                    if ($remoteMisses >= 2) {
+                        $skipRemotes = true;
+                    }
+                }
             }
         }
 
@@ -2732,6 +2777,45 @@ class SnmpPoller
             return 'module';
         } catch (Throwable $e) {
             return null;
+        }
+    }
+
+    /**
+     * Dual/hybrid DS units expose chilled-water temp on LGP ID 7 (CRV pack) or
+     * present-value index 6. The DS NMS JSON only has CW *alarms*, so probe if
+     * the site template has no chilled_water_temp key yet.
+     *
+     * @param array<string,mixed> $session
+     * @param array<string,mixed> $got
+     * @param array<string,string> $oidMap
+     */
+    private static function probeLiebertChilledWater(array $session, array &$got, array $oidMap): void
+    {
+        $metrics = is_array($got['metrics'] ?? null) ? $got['metrics'] : [];
+        if (isset($metrics['chilled_water_temp'])) {
+            return;
+        }
+        $oids = [
+            '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.50.7',
+            '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3.6',
+        ];
+        foreach ($oids as $oid) {
+            try {
+                $raw = self::get($session, $oid);
+            } catch (Throwable $e) {
+                continue;
+            }
+            $num = self::toNumber($raw);
+            if ($num === null) {
+                continue;
+            }
+            $got['metrics']['chilled_water_temp'] = [
+                'numeric' => $num,
+                'raw' => $raw,
+                'oid' => $oid,
+            ];
+            $got['ok'] = (int)($got['ok'] ?? 0) + 1;
+            return;
         }
     }
 

@@ -688,16 +688,43 @@ function env_sensor_threshold_status(?float $value, array $sensor): string
  * Canonical storage is °C. Values already in a plausible CRAC °C band are left alone
  * so a second pass does not double-convert.
  */
-function cooling_air_temp_to_c(?float $v): ?float
+function cooling_air_temp_to_c(?float $v, bool $tenthsF = false): ?float
 {
     if ($v === null) {
         return null;
     }
-    // 40–150 °F is a real CRAC air band; 40 °C+ as supply/return is not.
-    if ($v > 40.0 && $v <= 150.0) {
+    if ($tenthsF) {
+        $v = $v / 10.0;
+    }
+    // 40–250 °F covers CRAC air and compressor discharge; 40 °C+ supply is not plausible.
+    if ($v > 40.0 && $v <= 250.0) {
         return round(($v - 32.0) * 5.0 / 9.0, 2);
     }
     return round($v, 2);
+}
+
+/** Vertiv DS enumValues (index 0 is always "?"). */
+function cooling_lgp_enum(string $kind, $raw): ?string
+{
+    if ($raw === null || $raw === '') {
+        return null;
+    }
+    if (!is_numeric($raw)) {
+        return (string)$raw;
+    }
+    $i = (int)$raw;
+    $maps = [
+        'system' => [1 => 'On', 2 => 'Off', 3 => 'Standby'],
+        'onoff' => [1 => 'On', 2 => 'Off'],
+        'freecool' => [1 => 'On', 2 => 'Off', 3 => 'Start', 4 => 'Unavailable'],
+        'reason' => [
+            1 => 'None', 2 => 'Local user', 3 => 'Alarm', 4 => 'Schedule',
+            5 => 'Remote user', 6 => 'External device', 7 => 'Local display',
+        ],
+        'mode' => [1 => 'Auto', 2 => 'Manual'],
+    ];
+    $map = $maps[$kind] ?? $maps['onoff'];
+    return $map[$i] ?? ('State ' . $i);
 }
 
 /**
@@ -711,6 +738,7 @@ function cooling_air_temp_to_c(?float $v): ?float
  *   supply_temp:?float,
  *   return_temp:?float,
  *   control_temp:?float,
+ *   chilled_water_temp:?float,
  *   humidity:?float,
  *   system_state:?string,
  *   cooling_capacity_pct:?float,
@@ -728,6 +756,7 @@ function cooling_poll_snapshot_promote($jsonOrArray): array
         'supply_temp' => null,
         'return_temp' => null,
         'control_temp' => null,
+        'chilled_water_temp' => null,
         'humidity' => null,
         'system_state' => null,
         'cooling_capacity_pct' => null,
@@ -847,24 +876,19 @@ function cooling_poll_snapshot_promote($jsonOrArray): array
     $control = $num($pick([
         'control_temp', 'control_temperature', 'space_temp', 'room_temp',
     ]));
+    $chilledWater = $num($pick([
+        'chilled_water_temp', 'cw_temp', 'fluid_temp', 'glycol_temp',
+        'chilled_water_temperature', 'fluid_supply_temp',
+    ]));
     $humidity = $num($pick([
         'return_humidity', 'control_humidity', 'humidity', 'rh',
         'relative_humidity', 'return_rh', 'space_humidity',
     ]));
     $stateRaw = $pick([
-        'system_state', 'unit_state', 'operating_state', 'mode',
+        'system_state', 'unit_state', 'operating_state',
         'status', 'on_off', 'unit_status',
     ]);
-    $state = null;
-    if ($stateRaw !== null && $stateRaw !== '') {
-        if (is_numeric($stateRaw)) {
-            $map = [0 => 'Off', 1 => 'On', 2 => 'Standby', 3 => 'Alarm'];
-            $i = (int)$stateRaw;
-            $state = $map[$i] ?? ('State ' . $i);
-        } else {
-            $state = (string)$stateRaw;
-        }
-    }
+    $state = cooling_lgp_enum('system', $stateRaw);
     $coolCap = $num($pick([
         'cooling_capacity', 'cooling_capacity_pct', 'cool_capacity',
         'capacity_pct', 'cooling_pct',
@@ -879,6 +903,46 @@ function cooling_poll_snapshot_promote($jsonOrArray): array
     $supply = $supply !== null ? cooling_air_temp_to_c($supply) : null;
     $return = $return !== null ? cooling_air_temp_to_c($return) : null;
     $control = $control !== null ? cooling_air_temp_to_c($control) : null;
+    $chilledWater = $chilledWater !== null
+        ? cooling_air_temp_to_c($chilledWater, $chilledWater > 150.0)
+        : null;
+    $supplySp = $num($pick(['supply_temp_setpoint', 'supply_setpoint']));
+    $returnSp = $num($pick(['return_temp_setpoint', 'return_setpoint']));
+    $rhSp = $num($pick(['return_humidity_setpoint', 'humidity_setpoint']));
+    $supplySp = $supplySp !== null ? cooling_air_temp_to_c($supplySp) : null;
+    $returnSp = $returnSp !== null ? cooling_air_temp_to_c($returnSp) : null;
+    $heatCap = $num($pick(['heating_capacity_pct', 'heating_capacity']));
+    $freeCap = $num($pick(['free_cooling_capacity_pct', 'free_cool_capacity']));
+    $humCap = $num($pick(['humidify_capacity_pct']));
+    $dehumCap = $num($pick(['dehumidify_capacity_pct']));
+    $coolState = cooling_lgp_enum('onoff', $pick(['cooling_state']));
+    $fanState = cooling_lgp_enum('onoff', $pick(['fan_state']));
+    $humState = cooling_lgp_enum('onoff', $pick(['humidify_state']));
+    $dehumState = cooling_lgp_enum('onoff', $pick(['dehumidify_state']));
+    $freeState = cooling_lgp_enum('freecool', $pick(['free_cooling_state']));
+    $heatState = cooling_lgp_enum('onoff', $pick(['electric_heater_state']));
+    $hwState = cooling_lgp_enum('onoff', $pick(['hot_water_state']));
+    $opMode = cooling_lgp_enum('mode', $pick(['operating_mode']));
+    $opReason = cooling_lgp_enum('reason', $pick(['operating_reason']));
+    $comp1t1 = $num($pick(['comp1_temp_1']));
+    $comp2t1 = $num($pick(['comp2_temp_1']));
+    $comp1t2 = $num($pick(['comp1_temp_2']));
+    $comp2t2 = $num($pick(['comp2_temp_2']));
+    $comp1t1 = $comp1t1 !== null ? cooling_air_temp_to_c($comp1t1) : null;
+    $comp2t1 = $comp2t1 !== null ? cooling_air_temp_to_c($comp2t1) : null;
+    $comp1t2 = $comp1t2 !== null ? cooling_air_temp_to_c($comp1t2) : null;
+    $comp2t2 = $comp2t2 !== null ? cooling_air_temp_to_c($comp2t2) : null;
+    $hComp1 = $num($pick(['comp1_run_hours']));
+    $hComp2 = $num($pick(['comp2_run_hours']));
+    $hFan = $num($pick(['fan_run_hours']));
+    $hReheat1 = $num($pick(['reheat1_run_hours']));
+    $hFree = $num($pick(['free_cool_run_hours']));
+    $hHum = $num($pick(['humidify_run_hours']));
+    $hDehum = $num($pick(['dehumidify_run_hours']));
+    $hHotGas = $num($pick(['hot_gas_run_hours']));
+    $hHotWater = $num($pick(['hot_water_run_hours']));
+    $hReheat2 = $num($pick(['reheat2_run_hours']));
+    $hReheat3 = $num($pick(['reheat3_run_hours']));
 
     $fmtTemp = static function (?float $c): string {
         if ($c === null) {
@@ -896,8 +960,17 @@ function cooling_poll_snapshot_promote($jsonOrArray): array
         }
         return (string)(int)round($n) . '%';
     };
+    $fmtHours = static function (?float $n): string {
+        if ($n === null) {
+            return '—';
+        }
+        return (string)(int)round($n) . ' h';
+    };
 
     $display = [];
+    $add = static function (string $label, string $value, string $key) use (&$display): void {
+        $display[] = ['label' => $label, 'value' => $value, 'key' => $key];
+    };
     if ($supply !== null) {
         $display[] = ['label' => 'Supply', 'value' => $fmtTemp($supply), 'key' => 'supply_temp'];
     }
@@ -906,6 +979,9 @@ function cooling_poll_snapshot_promote($jsonOrArray): array
     }
     if ($control !== null && $control !== $supply && $control !== $return) {
         $display[] = ['label' => 'Control', 'value' => $fmtTemp($control), 'key' => 'control_temp'];
+    }
+    if ($chilledWater !== null) {
+        $display[] = ['label' => 'Chilled water', 'value' => $fmtTemp($chilledWater), 'key' => 'chilled_water_temp'];
     }
     if ($humidity !== null) {
         $display[] = [
@@ -938,6 +1014,106 @@ function cooling_poll_snapshot_promote($jsonOrArray): array
             'key' => 'alarms_present',
         ];
     }
+    if ($supplySp !== null) {
+        $add('Supply SP', $fmtTemp($supplySp), 'supply_temp_setpoint');
+    }
+    if ($returnSp !== null) {
+        $add('Return SP', $fmtTemp($returnSp), 'return_temp_setpoint');
+    }
+    if ($rhSp !== null) {
+        $add('RH SP', rtrim(rtrim(sprintf('%.1F', $rhSp), '0'), '.') . ' %RH', 'return_humidity_setpoint');
+    }
+    if ($opMode !== null) {
+        $add('Mode', $opMode, 'operating_mode');
+    }
+    if ($opReason !== null) {
+        $add('Reason', $opReason, 'operating_reason');
+    }
+    if ($coolState !== null) {
+        $add('Cooling', $coolState, 'cooling_state');
+    }
+    if ($fanState !== null) {
+        $add('Fan', $fanState, 'fan_state');
+    }
+    if ($freeState !== null) {
+        $add('Free cooling', $freeState, 'free_cooling_state');
+    }
+    if ($heatState !== null) {
+        $add('Heater', $heatState, 'electric_heater_state');
+    }
+    if ($hwState !== null) {
+        $add('Hot water', $hwState, 'hot_water_state');
+    }
+    if ($humState !== null) {
+        $add('Humidify', $humState, 'humidify_state');
+    }
+    if ($dehumState !== null) {
+        $add('Dehumidify', $dehumState, 'dehumidify_state');
+    }
+    if ($heatCap !== null) {
+        $add('Heat %', $fmtPct($heatCap), 'heating_capacity_pct');
+    }
+    if ($freeCap !== null) {
+        $add('Free-cool %', $fmtPct($freeCap), 'free_cooling_capacity_pct');
+    }
+    if ($humCap !== null) {
+        $add('Humidify %', $fmtPct($humCap), 'humidify_capacity_pct');
+    }
+    if ($dehumCap !== null) {
+        $add('Dehumidify %', $fmtPct($dehumCap), 'dehumidify_capacity_pct');
+    }
+    if ($comp1t1 !== null) {
+        $add('Comp1 T1', $fmtTemp($comp1t1), 'comp1_temp_1');
+    }
+    if ($comp2t1 !== null) {
+        $add('Comp2 T1', $fmtTemp($comp2t1), 'comp2_temp_1');
+    }
+    if ($comp1t2 !== null) {
+        $add('Comp1 T2', $fmtTemp($comp1t2), 'comp1_temp_2');
+    }
+    if ($comp2t2 !== null) {
+        $add('Comp2 T2', $fmtTemp($comp2t2), 'comp2_temp_2');
+    }
+    if ($hComp1 !== null) {
+        $add('Comp1 hours', $fmtHours($hComp1), 'comp1_run_hours');
+    }
+    if ($hComp2 !== null) {
+        $add('Comp2 hours', $fmtHours($hComp2), 'comp2_run_hours');
+    }
+    if ($hFan !== null) {
+        $add('Fan hours', $fmtHours($hFan), 'fan_run_hours');
+    }
+    if ($hReheat1 !== null) {
+        $add('Reheat 1 h', $fmtHours($hReheat1), 'reheat1_run_hours');
+    }
+    if ($hReheat2 !== null) {
+        $add('Reheat 2 h', $fmtHours($hReheat2), 'reheat2_run_hours');
+    }
+    if ($hReheat3 !== null) {
+        $add('Reheat 3 h', $fmtHours($hReheat3), 'reheat3_run_hours');
+    }
+    if ($hHum !== null) {
+        $add('Humidify h', $fmtHours($hHum), 'humidify_run_hours');
+    }
+    if ($hDehum !== null) {
+        $add('Dehumidify h', $fmtHours($hDehum), 'dehumidify_run_hours');
+    }
+    if ($hHotGas !== null) {
+        $add('Hot gas h', $fmtHours($hHotGas), 'hot_gas_run_hours');
+    }
+    if ($hHotWater !== null) {
+        $add('Hot water h', $fmtHours($hHotWater), 'hot_water_run_hours');
+    }
+    if ($hFree !== null) {
+        $add('Free-cool h', $fmtHours($hFree), 'free_cool_run_hours');
+    }
+    for ($ri = 1; $ri <= 10; $ri++) {
+        $rv = $num($pick(['remote_temp_' . $ri]));
+        if ($rv === null) {
+            continue;
+        }
+        $add('Remote ' . $ri, $fmtTemp(cooling_air_temp_to_c($rv, $rv > 150.0)), 'remote_temp_' . $ri);
+    }
 
     return [
         'has_data' => $display !== [],
@@ -945,6 +1121,7 @@ function cooling_poll_snapshot_promote($jsonOrArray): array
         'supply_temp' => $supply,
         'return_temp' => $return,
         'control_temp' => $control,
+        'chilled_water_temp' => $chilledWater,
         'humidity' => $humidity,
         'system_state' => $state,
         'cooling_capacity_pct' => $coolCap,

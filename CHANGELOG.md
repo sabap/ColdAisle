@@ -15,6 +15,9 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **Liebert DS chilled-water temp:** Discover and Poll now probe LGP chilled-water temperature (`…3.4.1.2.3.1.50.7` tenths °F from the Vertiv CRV map, fallback `…3.4.1.2.3.1.3.6`). The DS NMS pack only had CW alarms, so dual/hybrid units never showed a water temp. Live telemetry adds a Chilled water card when the OID answers.
+- **Liebert DS full leaf map (Vertiv pack):** Discover/Poll GETs the rest of the DS NMS leaves — setpoints, extra states (fan/humidify/free-cool/heater), capacities, compressor temps, run hours, remotes 1–10. Empty remotes are skipped after two misses. Unit Control SET is not included. Poll merges these OIDs even if the saved site template is still the short map.
+
 ### Bug fixes
 
 ---

@@ -373,7 +373,7 @@ if ($unitId > 0) {
                             <?php
                             $n = 0;
                             foreach ($lastPollMetrics as $mk => $mv):
-                                if ($n++ >= 24) {
+                                if ($n++ >= 80) {
                                     break;
                                 }
                                 ?>
@@ -385,8 +385,8 @@ if ($unitId > 0) {
                             </tbody>
                         </table>
                     </div>
-                    <?php if (count($lastPollMetrics) > 24): ?>
-                        <p class="text-muted mb-0" style="font-size:.75rem">Showing 24 of <?= count($lastPollMetrics) ?> keys.</p>
+                    <?php if (count($lastPollMetrics) > 80): ?>
+                        <p class="text-muted mb-0" style="font-size:.75rem">Showing 80 of <?= count($lastPollMetrics) ?> keys.</p>
                     <?php endif; ?>
                 </div>
             <?php else: ?>
@@ -698,7 +698,7 @@ if ($unitId > 0) {
                         }
                         if (tbody) {
                             tbody.innerHTML = '';
-                            keys.slice(0, 24).forEach(function (k) {
+                            keys.slice(0, 80).forEach(function (k) {
                                 var tr = document.createElement('tr');
                                 tr.innerHTML = '<td><code style="font-size:.78rem">' + esc(k) + '</code></td>' +
                                     '<td>' + esc(metrics[k]) + '</td>';
