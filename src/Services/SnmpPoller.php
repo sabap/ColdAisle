@@ -450,10 +450,12 @@ class SnmpPoller
             $privProto,
             $creds['priv_passphrase'] ?? '',
             (string)($device['snmp_v3_context'] ?? $creds['context'] ?? ''),
-            $secLevel
+            $secLevel,
+            (string)($creds['engine_id'] ?? $device['snmp_engine_id'] ?? '')
         );
         // Prefer the same procedural snmp3_get path Discover uses (more reliable on some iDRACs)
-        $session['prefer_procedural'] = true;
+        // unless an Engine ID is set (snmp3_get cannot pass it).
+        $session['prefer_procedural'] = empty($session['engine_id']);
         $session['timeout_usec'] = 3_000_000;
         $session['retries'] = 1;
         $session['host_label'] = (string)$creds['host']; // original FQDN/IP for errors
@@ -709,7 +711,9 @@ class SnmpPoller
             $creds['auth_passphrase'] ?? '',
             $creds['priv_protocol'] ?? '',
             $creds['priv_passphrase'] ?? '',
-            (string)($creds['context'] ?? $unit['snmp_context'] ?? '')
+            (string)($creds['context'] ?? $unit['snmp_context'] ?? ''),
+            '',
+            (string)($creds['engine_id'] ?? $unit['snmp_engine_id'] ?? '')
         );
 
         $got = self::collectOidMap($session, $oidMap);
@@ -844,7 +848,8 @@ class SnmpPoller
             $privProto,
             $privPass,
             (string)($unit['snmp_context'] ?? ''),
-            $secLevel
+            $secLevel,
+            (string)($unit['snmp_engine_id'] ?? '')
         );
         $got = self::collectOidMap($session, $oidMap);
         self::closeSession($session);
@@ -1152,6 +1157,9 @@ class SnmpPoller
                 $result = false;
             }
         }
+        if (($result === false || !is_array($result)) && !empty($session['engine_id'])) {
+            return is_array($result) ? $result : [];
+        }
         if ($result === false || !is_array($result)) {
             $host = (string)($session['host'] ?? '');
             $ver = strtolower((string)($session['version'] ?? '2c'));
@@ -1331,7 +1339,9 @@ class SnmpPoller
             $creds['auth_passphrase'] ?? '',
             $creds['priv_protocol'] ?? '',
             $creds['priv_passphrase'] ?? '',
-            (string)($creds['context'] ?? $pdu['snmp_context'] ?? '')
+            (string)($creds['context'] ?? $pdu['snmp_context'] ?? ''),
+            '',
+            (string)($creds['engine_id'] ?? $pdu['snmp_engine_id'] ?? '')
         );
 
         $got = self::collectOidMap($session, $oidMap);
@@ -2871,7 +2881,9 @@ class SnmpPoller
             Crypto::decryptQuiet($pdu['snmp_auth_passphrase'] ?? null) ?? '',
             $pdu['snmp_priv_protocol'] ?? '',
             Crypto::decryptQuiet($pdu['snmp_priv_passphrase'] ?? null) ?? '',
-            $pdu['snmp_context'] ?? ''
+            $pdu['snmp_context'] ?? '',
+            '',
+            (string)($pdu['snmp_engine_id'] ?? '')
         );
 
         $sysDescr = self::get($session, '1.3.6.1.2.1.1.1.0');
@@ -2952,7 +2964,8 @@ class SnmpPoller
         string $privProto,
         string $privPass,
         string $context,
-        string $secLevel = ''
+        string $secLevel = '',
+        string $engineId = ''
     ) {
         if (!function_exists('snmp3_get') && !function_exists('snmp2_get') && !class_exists('SNMP')) {
             throw new RuntimeException('PHP SNMP extension not available');
@@ -2981,14 +2994,15 @@ class SnmpPoller
                 }
                 $snmpObj->exceptions_enabled = 0;
                 if (strtolower($version) === '3') {
-                    $snmpObj->setSecurity(
-                        $resolvedLevel,
-                        $authProto,
-                        $authPass ?: '',
-                        $privProto,
-                        $privPass ?: '',
-                        $context ?: ''
-                    );
+                    SnmpDiscover::applySnmpV3Security($snmpObj, [
+                        'security_level' => $resolvedLevel,
+                        'auth_protocol' => $authProto,
+                        'auth_passphrase' => $authPass ?: '',
+                        'priv_protocol' => $privProto,
+                        'priv_passphrase' => $privPass ?: '',
+                        'context' => $context ?: '',
+                        'engine_id' => $engineId,
+                    ]);
                 }
             } catch (Throwable $e) {
                 $snmpObj = null;
@@ -3005,6 +3019,7 @@ class SnmpPoller
             'privPass' => $privPass,
             'context' => $context,
             'secLevel' => $resolvedLevel,
+            'engine_id' => SnmpDiscover::normalizeEngineId($engineId) ?? '',
             'timeout_usec' => $timeoutUsec,
             'retries' => $retries,
             'snmp' => $snmpObj,
@@ -3015,6 +3030,10 @@ class SnmpPoller
     {
         $oid = ltrim($oid, '.');
         $preferProc = !empty($session['prefer_procedural']);
+        // Procedural snmp3_get cannot pass Engine ID — keep the SNMP class path.
+        if (!empty($session['engine_id'])) {
+            $preferProc = false;
+        }
         $timeout = (int)($session['timeout_usec'] ?? 2_000_000);
         $retries = (int)($session['retries'] ?? 1);
         $host = $session['host'];

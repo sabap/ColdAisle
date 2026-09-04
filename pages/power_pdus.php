@@ -241,6 +241,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             $snmpPrivProto = $_POST['snmp_priv_protocol'] !== '' ? $_POST['snmp_priv_protocol'] : null;
             $snmpPrivPass = $_POST['snmp_priv_passphrase'] !== '' ? $_POST['snmp_priv_passphrase'] : null;
             $snmpContext = $_POST['snmp_context'] !== '' ? $_POST['snmp_context'] : null;
+            $snmpEngineId = null;
+            if (class_exists('SnmpDiscover')) {
+                $snmpEngineId = SnmpDiscover::engineIdFromPost($_POST['snmp_engine_id'] ?? null);
+            } elseif (trim((string)($_POST['snmp_engine_id'] ?? '')) !== '') {
+                $snmpEngineId = trim((string)$_POST['snmp_engine_id']);
+            }
             $snmpSecLevel = $_POST['snmp_v3_sec_level'] !== '' ? $_POST['snmp_v3_sec_level'] : null;
             // Apply SNMPv3 profile credentials onto PDU fields when a profile is selected
             if ($profileId) {
@@ -322,6 +328,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'snmp_priv_protocol' => $snmpPrivProto,
                 'snmp_priv_passphrase' => $snmpPrivPass,
                 'snmp_context' => $snmpContext,
+                'snmp_engine_id' => $snmpEngineId,
                 'snmp_v3_sec_level' => $snmpSecLevel,
                 'snmp_v3_profile_id' => $profileId,
                 'snmp_site_template_id' => $siteTplId > 0 ? $siteTplId : null,

@@ -334,6 +334,17 @@ function cooling_unit_fields_from_post(array $post): array
             ? (string)($post['snmp_priv_passphrase'] ?? '')
             : null,
         'snmp_context' => cooling_null_str($post['snmp_context'] ?? null),
+        'snmp_engine_id' => (static function () use ($post) {
+            if (!class_exists('SnmpDiscover')) {
+                $f = dirname(__DIR__) . '/src/Services/SnmpDiscover.php';
+                if (is_file($f)) {
+                    require_once $f;
+                }
+            }
+            return class_exists('SnmpDiscover')
+                ? SnmpDiscover::engineIdFromPost($post['snmp_engine_id'] ?? null)
+                : cooling_null_str($post['snmp_engine_id'] ?? null);
+        })(),
         'snmp_site_template_id' => $intOrNull($post['snmp_site_template_id'] ?? null),
         'snmp_auto_poll' => !empty($post['snmp_auto_poll']) ? 1 : 0,
         'notes' => cooling_null_str($post['notes'] ?? null),

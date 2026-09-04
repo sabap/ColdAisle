@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **SNMPv3 Engine ID per agent:** cooling units, devices, PDUs, and UPS store the authoritative Engine ID (hex). The poller passes it on SNMPv3 sessions so USM localizes the profile passphrase to that box (Liebert DS / IntelliSlot GET/GETBULK past sysUpTime). Not stored on the shared credential profile.
+
 ### Enhancements
 
 ### Bug fixes
@@ -27,6 +29,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **Import raceways from a site zip (SQL):** `scripts/Import-RacewaysFromSiteBackup.ps1` reads `cable_paths` from a `coldaisle-site_*.zip` (e.g. v0.3.148 pre–Snow Globe) and upserts names + waypoints by `path_id`. Dry-run by default; `-Apply` after a SQL snapshot. Credentials are filled in the script.
 
 ### Enhancements
+
+- **SNMPv3 Engine ID per agent:** cooling units, devices, PDUs, and UPS can store the authoritative Engine ID (hex). The poller passes it on SNMPv3 sessions so USM localizes the profile passphrase to that box (Liebert DS / IntelliSlot GETBULK past sysUpTime). Not part of the shared credential profile.
 
 - **NOC air particles toggle:** Settings → NOC wall display has **Show air particles** (on by default). Uncheck to hide motes on the wall; vents and returns stay.
 

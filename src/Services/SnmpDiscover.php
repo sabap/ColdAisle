@@ -1825,6 +1825,17 @@ class SnmpDiscover
     ) {
         $timeout = $timeoutUsec ?? self::WALK_TIMEOUT_USEC;
         try {
+            if ($version === '3' && class_exists('SNMP') && self::normalizeEngineId((string)($creds['engine_id'] ?? '')) !== null) {
+                $sess = new \SNMP(constant('SNMP::VERSION_3'), $hostPort, (string)($creds['security_name'] ?? ''), $timeout, self::WALK_RETRIES);
+                $sess->exceptions_enabled = 0;
+                if (defined('SNMP_VALUE_PLAIN')) {
+                    $sess->valueretrieval = constant('SNMP_VALUE_PLAIN');
+                }
+                self::applySnmpV3Security($sess, $creds);
+                $r = @$sess->get($oid);
+                @$sess->close();
+                return ($r === false) ? null : $r;
+            }
             if ($version === '3' && function_exists('snmp3_get')) {
                 $sec = self::secLevel($creds);
                 $authProto = self::normalizeSnmpProtocol((string)($creds['auth_protocol'] ?? 'SHA'), 'auth');
@@ -1900,17 +1911,7 @@ class SnmpDiscover
                     $sess->oid_output_format = constant('SNMP_OID_OUTPUT_NUMERIC');
                 }
                 if ($version === '3') {
-                    $sec = self::secLevel($creds);
-                    $authProto = self::normalizeSnmpProtocol((string)($creds['auth_protocol'] ?? 'SHA'), 'auth');
-                    $privProto = self::normalizeSnmpProtocol((string)($creds['priv_protocol'] ?? 'AES'), 'priv');
-                    $sess->setSecurity(
-                        $sec,
-                        $authProto,
-                        (string)($creds['auth_passphrase'] ?? ''),
-                        $privProto,
-                        (string)($creds['priv_passphrase'] ?? ''),
-                        (string)($creds['context'] ?? '')
-                    );
+                    self::applySnmpV3Security($sess, $creds);
                 }
                 $walked = @$sess->walk($root, true);
                 if (is_object($sess)) {
@@ -2012,6 +2013,84 @@ class SnmpDiscover
     public static function resolveSecLevel(array $creds): string
     {
         return self::secLevel($creds);
+    }
+
+    /**
+     * Normalize an SNMPv3 authoritative Engine ID to lowercase hex (no 0x).
+     * RFC 3411: 5–32 octets. Accepts 0x, colons, spaces. Empty → null.
+     * Invalid non-empty input → null (caller may reject).
+     */
+    public static function normalizeEngineId(?string $raw): ?string
+    {
+        $s = strtolower(trim((string)$raw));
+        if ($s === '') {
+            return null;
+        }
+        if (str_starts_with($s, '0x')) {
+            $s = substr($s, 2);
+        }
+        $s = preg_replace('/[^0-9a-f]/', '', $s) ?? '';
+        $n = strlen($s);
+        if ($n < 10 || $n > 64 || ($n % 2) !== 0) {
+            return null;
+        }
+        return $s;
+    }
+
+    /** Binary engine ID for PHP SNMP::setSecurity() 7th argument. */
+    public static function engineIdBinary(?string $raw): ?string
+    {
+        $hex = self::normalizeEngineId($raw);
+        if ($hex === null) {
+            return null;
+        }
+        $bin = hex2bin($hex);
+        return ($bin !== false && $bin !== '') ? $bin : null;
+    }
+
+    /** CLI -e value, e.g. 0x80001f88… */
+    public static function engineIdCli(?string $raw): ?string
+    {
+        $hex = self::normalizeEngineId($raw);
+        return $hex !== null ? ('0x' . $hex) : null;
+    }
+
+    /** Parse form POST; empty → null; invalid → RuntimeException. */
+    public static function engineIdFromPost(mixed $raw): ?string
+    {
+        $s = trim((string)$raw);
+        if ($s === '') {
+            return null;
+        }
+        $n = self::normalizeEngineId($s);
+        if ($n === null) {
+            throw new RuntimeException(
+                'SNMPv3 Engine ID must be hex, 5-32 bytes (e.g. 80001f8880aabb or 0x80:00:1f:88:…).'
+            );
+        }
+        return $n;
+    }
+
+    /**
+     * Apply USM user + optional authoritative Engine ID to a PHP SNMP session.
+     * The 7th setSecurity argument is contextEngineID (raw octets). Net-SNMP
+     * uses it for the scoped PDU; many agents also require it to match the
+     * authoritative engine so GETBULK past sysUpTime succeeds.
+     */
+    public static function applySnmpV3Security(\SNMP $sess, array $creds): void
+    {
+        $sec = self::secLevel($creds);
+        $authProto = self::normalizeSnmpProtocol((string)($creds['auth_protocol'] ?? 'SHA'), 'auth');
+        $privProto = self::normalizeSnmpProtocol((string)($creds['priv_protocol'] ?? 'AES'), 'priv');
+        $authPass = (string)($creds['auth_passphrase'] ?? '');
+        $privPass = (string)($creds['priv_passphrase'] ?? '');
+        $context = (string)($creds['context'] ?? '');
+        $bin = self::engineIdBinary((string)($creds['engine_id'] ?? ''));
+        if ($bin !== null) {
+            $sess->setSecurity($sec, $authProto, $authPass, $privProto, $privPass, $context, $bin);
+            return;
+        }
+        $sess->setSecurity($sec, $authProto, $authPass, $privProto, $privPass, $context);
     }
 
     /**
@@ -3979,6 +4058,7 @@ class SnmpDiscover
             'priv_passphrase' => (string)(Crypto::decryptQuiet($device['snmp_v3_priv_pass'] ?? null) ?? ''),
             'community' => (string)(Crypto::decryptQuiet($device['snmp_community'] ?? null) ?? 'public'),
             'context' => (string)($device['snmp_v3_context'] ?? ''),
+            'engine_id' => (string)($device['snmp_engine_id'] ?? ''),
         ];
         // Profile overrides when set (same rules as device Save)
         if (!empty($device['snmp_v3_profile_id'])) {
@@ -4278,6 +4358,7 @@ class SnmpDiscover
             'priv_passphrase' => (string)(Crypto::decryptQuiet($pdu['snmp_priv_passphrase'] ?? null) ?? ''),
             'community' => $community !== '' ? $community : 'public',
             'context' => (string)($pdu['snmp_context'] ?? ''),
+            'engine_id' => (string)($pdu['snmp_engine_id'] ?? ''),
         ];
         if (!empty($pdu['snmp_v3_profile_id'])) {
             try {
@@ -4392,6 +4473,7 @@ class SnmpDiscover
             'priv_passphrase' => (string)(Crypto::decryptQuiet($unit['snmp_priv_passphrase'] ?? null) ?? ''),
             'community' => $community !== '' ? $community : 'public',
             'context' => (string)($unit['snmp_context'] ?? ''),
+            'engine_id' => (string)($unit['snmp_engine_id'] ?? ''),
         ];
         if (!empty($unit['snmp_v3_profile_id'])) {
             try {

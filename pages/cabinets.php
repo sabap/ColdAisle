@@ -1051,6 +1051,7 @@ if ($id) {
             html += '<div class="form-row snmp-v3"><label>Priv passphrase</label><input class="form-control" type="password" name="snmp_priv_passphrase" value="" placeholder="' +
                 esc(hasPrivPass ? '•••• saved (leave blank to keep)' : '') + '" autocomplete="new-password"></div>';
             html += '<div class="form-row snmp-v3"><label>Context</label><input class="form-control" name="snmp_context" value="' + esc(pdu.snmp_context || '') + '"></div>';
+            html += '<div class="form-row snmp-v3"><label>Engine ID</label><input class="form-control" name="snmp_engine_id" value="' + esc(pdu.snmp_engine_id || '') + '" placeholder="80001f8880… hex"></div>';
             html += '<div class="form-row full"><label>Notes</label><textarea class="form-control" name="notes" rows="2">' + esc(pdu.notes || '') + '</textarea></div>';
             html += '</div>';
 
@@ -1168,6 +1169,7 @@ if ($id) {
                 snmp_priv_protocol: g('snmp_priv_protocol'),
                 snmp_priv_passphrase: g('snmp_priv_passphrase'),
                 snmp_context: g('snmp_context'),
+                snmp_engine_id: g('snmp_engine_id'),
                 notes: g('notes'),
                 cabinet_id: cabinetId,
                 pdu_scope: g('pdu_scope') || 'rack'

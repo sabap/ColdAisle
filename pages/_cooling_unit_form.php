@@ -273,6 +273,16 @@ $selfId = (int)($edit['cooling_unit_id'] ?? 0);
     <div class="form-row cu-snmp-v3" style="display:none"><label>Context</label>
         <input class="form-control" name="snmp_context" id="<?= App::e($snmpFormId) ?>_context"
                value="<?= App::e($edit['snmp_context'] ?? '') ?>"></div>
+    <div class="form-row full cu-snmp-v3" style="display:none"><label>SNMPv3 Engine ID (this unit)</label>
+        <input class="form-control" name="snmp_engine_id" id="<?= App::e($snmpFormId) ?>_engine_id"
+               value="<?= App::e($edit['snmp_engine_id'] ?? '') ?>"
+               placeholder="80001f8880… or 0x80:00:1f:88:…" autocomplete="off">
+        <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+            Authoritative engine ID of <em>this</em> agent. USM localizes the profile passphrase with it,
+            so the same user on two Liebert boxes uses different keys. Required for GET/GETBULK past sysUpTime
+            on many IntelliSlot / DS units. Not stored on the credential profile.
+        </p>
+    </div>
     <div class="form-row full cu-snmp-any" style="display:none">
         <label>
             <input type="checkbox" name="snmp_auto_poll" value="1" <?= !empty($edit['snmp_auto_poll']) ? 'checked' : '' ?>>

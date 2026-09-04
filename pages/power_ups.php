@@ -950,6 +950,14 @@ if ($action === 'new' || ($action === 'edit' && $upsId > 0)) {
             </div>
             <div class="form-row"><label>Port</label>
                 <input class="form-control" type="number" name="snmp_port" id="ups_snmp_port" value="<?= (int)($u['snmp_port'] ?? 161) ?>"></div>
+            <div class="form-row full"><label>SNMPv3 Engine ID (this UPS)</label>
+                <input class="form-control" name="snmp_engine_id" id="ups_snmp_engine_id"
+                       value="<?= App::e($u['snmp_engine_id'] ?? '') ?>"
+                       placeholder="80001f8880… or 0x80:00:1f:88:…" autocomplete="off">
+                <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                    Authoritative engine ID of this agent. USM localizes the profile passphrase with it.
+                </p>
+            </div>
             <div class="form-row"><label>SNMPv3 profile</label>
                 <select class="form-control" name="snmp_v3_profile_id" id="ups_snmp_v3_profile_id">
                     <option value="">— manual / keep —</option>

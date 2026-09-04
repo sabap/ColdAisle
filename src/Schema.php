@@ -98,6 +98,7 @@ class Schema
                 'snmp_v3_priv_proto' => 'NVARCHAR(20) NULL',
                 'snmp_v3_priv_pass' => 'NVARCHAR(255) NULL',
                 'snmp_v3_context' => 'NVARCHAR(100) NULL',
+                'snmp_engine_id' => 'NVARCHAR(80) NULL',
                 // Site OID template (discovered or manual) — OIDs stored once, not per device
                 'snmp_site_template_id' => 'INT NULL',
                 'snmp_auto_poll' => 'BIT NOT NULL CONSTRAINT DF_devices_snmp_auto DEFAULT 0',
@@ -342,6 +343,7 @@ class Schema
                 'breaker_columns' => 'INT NULL',
                 'breaker_layout' => "NVARCHAR(40) NULL CONSTRAINT DF_pdus_brk_layout DEFAULT 'odd_right_even_left'",
                 'snmp_v3_profile_id' => 'INT NULL',
+                'snmp_engine_id' => 'NVARCHAR(80) NULL',
                 // Site OID template (discovered Vendor+Model) shared across same-model PDUs
                 'snmp_site_template_id' => 'INT NULL',
                 // Include in SNMP scheduler (poll_snmp.php) when a site template is assigned
@@ -811,6 +813,7 @@ class Schema
             self::ensureColumn('cooling_units', 'snmp_priv_protocol', 'NVARCHAR(20) NULL');
             self::ensureColumn('cooling_units', 'snmp_priv_passphrase', 'NVARCHAR(255) NULL');
             self::ensureColumn('cooling_units', 'snmp_context', 'NVARCHAR(100) NULL');
+            self::ensureColumn('cooling_units', 'snmp_engine_id', 'NVARCHAR(80) NULL');
 
             // UPS inventory (in-row / in-rack) — floor placement + SNMP like cooling units
             self::ensureTable(
@@ -854,6 +857,7 @@ class Schema
                     snmp_priv_protocol NVARCHAR(20) NULL,
                     snmp_priv_passphrase NVARCHAR(255) NULL,
                     snmp_context NVARCHAR(100) NULL,
+                    snmp_engine_id NVARCHAR(80) NULL,
                     snmp_site_template_id INT NULL,
                     snmp_auto_poll BIT NOT NULL CONSTRAINT DF_ups_snmp_auto DEFAULT 0,
                     snmp_last_poll_at DATETIME2 NULL,
@@ -889,6 +893,7 @@ class Schema
             self::ensureColumn('ups_units', 'last_input_freq', 'DECIMAL(10,3) NULL');
             self::ensureColumn('ups_units', 'last_output_freq', 'DECIMAL(10,3) NULL');
             self::ensureColumn('ups_units', 'last_output_current', 'DECIMAL(12,3) NULL');
+            self::ensureColumn('ups_units', 'snmp_engine_id', 'NVARCHAR(80) NULL');
 
             // UPS poll history for dashboard / zone charts
             self::ensureTable(
@@ -1065,7 +1070,7 @@ class Schema
             'devices' => [
                 'parent_device_id', 'manufacture_date', 'weight_kg', 'num_data_ports', 'num_power_ports',
                 'warranty_provider', 'tags', 'snmp_version', 'snmp_community', 'snmp_fail_count',
-                'snmp_v3_profile_id', 'snmp_site_template_id', 'snmp_auto_poll',
+                'snmp_v3_profile_id', 'snmp_site_template_id', 'snmp_auto_poll', 'snmp_engine_id',
                 'snmp_last_poll_at', 'snmp_last_poll_watts', 'snmp_last_poll_amps', 'last_poll_json',
                 'idrac_host', 'icmp_monitor', 'icmp_fail_count', 'icmp_last_at', 'icmp_last_ok',
                 'po_number', 'purchase_date', 'purchase_cost', 'purchase_vendor',
@@ -1081,6 +1086,7 @@ class Schema
             'pdus' => [
                 'mount_style', 'position_u', 'u_height', 'snmp_community', 'phases',
                 'output_mode', 'snmp_site_template_id', 'snmp_auto_poll', 'pdu_template_id',
+                'snmp_engine_id',
                 'last_poll_phases', 'room_id', 'pos_x', 'pos_y',
                 'icmp_monitor', 'icmp_fail_count', 'icmp_last_at', 'icmp_last_ok',
                 'include_in_site_load',
@@ -1145,7 +1151,7 @@ class Schema
             ],
             'cooling_units' => [
                 'cooling_unit_id', 'name', 'unit_type', 'unit_role', 'cooling_medium',
-                'room_id', 'pos_x', 'pos_y', 'snmp_enabled', 'primary_ip',
+                'room_id', 'pos_x', 'pos_y', 'snmp_enabled', 'primary_ip', 'snmp_engine_id',
             ],
             'airflow_anchors' => [
                 'anchor_id', 'room_id', 'kind', 'name', 'shape', 'pos_x', 'pos_y', 'pos_z',

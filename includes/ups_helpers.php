@@ -805,6 +805,9 @@ function ups_fields_from_post(array $post): array
         'snmp_auth_protocol' => (($v = trim((string)($post['snmp_auth_protocol'] ?? ''))) !== '') ? $v : null,
         'snmp_priv_protocol' => (($v = trim((string)($post['snmp_priv_protocol'] ?? ''))) !== '') ? $v : null,
         'snmp_context' => (($v = trim((string)($post['snmp_context'] ?? ''))) !== '') ? $v : null,
+        'snmp_engine_id' => class_exists('SnmpDiscover')
+            ? SnmpDiscover::engineIdFromPost($post['snmp_engine_id'] ?? null)
+            : ((($v = trim((string)($post['snmp_engine_id'] ?? ''))) !== '') ? $v : null),
     ];
     // Passphrases / community only when provided (keep on update)
     if (array_key_exists('snmp_community', $post) && trim((string)$post['snmp_community']) !== '') {

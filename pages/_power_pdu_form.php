@@ -358,6 +358,14 @@ $formModal = !empty($formModal);
     <div class="form-row power-snmp-v3" style="display:none"><label>Context</label>
         <input class="form-control" name="snmp_context" id="power_snmp_context"
                value="<?= App::e($edit['snmp_context'] ?? '') ?>"></div>
+    <div class="form-row full power-snmp-v3" style="display:none"><label>SNMPv3 Engine ID (this PDU)</label>
+        <input class="form-control" name="snmp_engine_id" id="power_snmp_engine_id"
+               value="<?= App::e($edit['snmp_engine_id'] ?? '') ?>"
+               placeholder="80001f8880… or 0x80:00:1f:88:…" autocomplete="off">
+        <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+            Authoritative engine ID of this agent. USM localizes the profile passphrase with it.
+        </p>
+    </div>
 
     <?php
     $siteOidTemplates = $siteOidTemplates ?? [];

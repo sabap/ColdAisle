@@ -202,6 +202,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         'snmp_v3_priv_proto' => device_empty_to_null($_POST['snmp_v3_priv_proto'] ?? null),
         'snmp_v3_priv_pass' => device_empty_to_null($_POST['snmp_v3_priv_pass'] ?? null),
         'snmp_v3_context' => device_empty_to_null($_POST['snmp_v3_context'] ?? null),
+        'snmp_engine_id' => class_exists('SnmpDiscover')
+            ? SnmpDiscover::engineIdFromPost($_POST['snmp_engine_id'] ?? null)
+            : device_empty_to_null($_POST['snmp_engine_id'] ?? null),
         'hostname' => device_empty_to_null($_POST['hostname'] ?? null),
         'mgmt_ip' => device_empty_to_null($_POST['mgmt_ip'] ?? null),
         'idrac_host' => device_empty_to_null($_POST['idrac_host'] ?? null),
@@ -2434,6 +2437,9 @@ if ($action === 'new' || $id) {
                             <?php if (!empty($device['snmp_v3_context'])): ?>
                             <div><dt>Context</dt><dd><?= App::e((string)$device['snmp_v3_context']) ?></dd></div>
                             <?php endif; ?>
+                            <?php if (!empty($device['snmp_engine_id'])): ?>
+                            <div><dt>Engine ID</dt><dd><code><?= App::e((string)$device['snmp_engine_id']) ?></code></dd></div>
+                            <?php endif; ?>
                             <?php endif; ?>
                             <div><dt>Site OID template</dt><dd id="snmpTplName">
                                 <?php if ($siteTpl):
@@ -3744,6 +3750,15 @@ if ($action === 'new' || $id) {
                 <div class="form-row snmp-v3-fields"><label>SNMPv3 Context</label>
                     <input class="form-control" name="snmp_v3_context" id="snmp_v3_context"
                            value="<?= App::e((string)($device['snmp_v3_context'] ?? '')) ?>"></div>
+                <div class="form-row full snmp-v3-fields"><label>SNMPv3 Engine ID (this device)</label>
+                    <input class="form-control" name="snmp_engine_id" id="snmp_engine_id"
+                           value="<?= App::e((string)($device['snmp_engine_id'] ?? '')) ?>"
+                           placeholder="80001f8880… or 0x80:00:1f:88:…" autocomplete="off">
+                    <p class="text-muted" style="font-size:.75rem;margin:.3rem 0 0">
+                        Authoritative engine ID of this agent. USM localizes the profile passphrase with it
+                        (same user, different keys per box). Required for GET/GETBULK past sysUpTime on some v3 agents.
+                    </p>
+                </div>
 
             </div>
         </div>

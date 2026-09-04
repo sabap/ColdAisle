@@ -5,6 +5,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/_bootstrap.php';
+require_once dirname(__DIR__) . '/src/Services/SnmpDiscover.php';
 
 $method = api_method();
 $user = AuthManager::user();
@@ -292,6 +293,9 @@ try {
             'snmp_priv_protocol' => pdu_null($d['snmp_priv_protocol'] ?? null),
             'snmp_priv_passphrase' => pdu_null($d['snmp_priv_passphrase'] ?? null),
             'snmp_context' => pdu_null($d['snmp_context'] ?? null),
+            'snmp_engine_id' => class_exists('SnmpDiscover')
+                ? SnmpDiscover::engineIdFromPost($d['snmp_engine_id'] ?? null)
+                : pdu_null($d['snmp_engine_id'] ?? null),
             'snmp_v3_sec_level' => pdu_null($d['snmp_v3_sec_level'] ?? null),
             'notes' => pdu_null($d['notes'] ?? null),
             'is_active' => 1,
@@ -404,13 +408,16 @@ try {
             'manufacturer', 'model', 'serial_no', 'mac_address', 'ip_address', 'output_mode', 'num_outlets', 'num_breaker_slots', 'rated_amps',
             'input_type', 'snmp_enabled', 'snmp_version', 'snmp_port', 'snmp_community',
             'snmp_security_name', 'snmp_auth_protocol', 'snmp_auth_passphrase',
-            'snmp_priv_protocol', 'snmp_priv_passphrase', 'snmp_context', 'snmp_v3_sec_level', 'notes',
+            'snmp_priv_protocol', 'snmp_priv_passphrase', 'snmp_context', 'snmp_engine_id', 'snmp_v3_sec_level', 'notes',
             'include_in_site_load',
         ];
         foreach ($map as $k) {
             if (array_key_exists($k, $d)) {
                 $fields[$k] = $d[$k] === '' ? null : $d[$k];
             }
+        }
+        if (array_key_exists('snmp_engine_id', $fields) && class_exists('SnmpDiscover')) {
+            $fields['snmp_engine_id'] = SnmpDiscover::engineIdFromPost($fields['snmp_engine_id'] ?? null);
         }
         if (array_key_exists('include_in_site_load', $fields)) {
             $fields['include_in_site_load'] = !empty($fields['include_in_site_load']) ? 1 : 0;
