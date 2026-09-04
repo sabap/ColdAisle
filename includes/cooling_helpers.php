@@ -756,11 +756,28 @@ function cooling_poll_snapshot_promote($jsonOrArray): array
         return preg_replace('/[^a-z0-9_]+/', '', $k) ?? $k;
     };
 
+    $unwrap = static function ($v) {
+        if (is_array($v)) {
+            if (isset($v['numeric']) && $v['numeric'] !== null && $v['numeric'] !== '' && is_numeric($v['numeric'])) {
+                return 0 + $v['numeric'];
+            }
+            if (array_key_exists('raw', $v) && $v['raw'] !== null && $v['raw'] !== '') {
+                return $v['raw'];
+            }
+            if (array_key_exists('value', $v) && $v['value'] !== null && $v['value'] !== '') {
+                return $v['value'];
+            }
+            return null;
+        }
+        return $v;
+    };
+
     /** @var array<string,mixed> $byNorm */
     $byNorm = [];
     foreach ($metrics as $k => $v) {
-        $byNorm[$norm((string)$k)] = $v;
-        $byNorm[(string)$k] = $v;
+        $uv = $unwrap($v);
+        $byNorm[$norm((string)$k)] = $uv;
+        $byNorm[(string)$k] = $uv;
     }
 
     $pick = static function (array $candidates) use ($byNorm, $norm) {

@@ -728,13 +728,8 @@ class SnmpPoller
         }
 
         $metrics = is_array($got['metrics'] ?? null) ? $got['metrics'] : [];
-        // Drop non-scalar noise; keep numbers/strings for UI
-        $clean = [];
-        foreach ($metrics as $k => $v) {
-            if (is_scalar($v) || $v === null) {
-                $clean[(string)$k] = $v;
-            }
-        }
+        // collectOidMap stores {numeric, raw, oid}; Live telemetry / last_poll_json need scalars
+        $clean = self::flattenCoolingSnapshotMetrics($metrics);
 
         $now = date('Y-m-d H:i:s');
         $snapshot = [
@@ -2721,6 +2716,35 @@ class SnmpPoller
         } catch (Throwable $e) {
             return null;
         }
+    }
+
+    /**
+     * Collapse collectOidMap rows ({numeric, raw, oid}) to scalars for last_poll_json / UI.
+     *
+     * @param array<string,mixed> $metrics
+     * @return array<string,int|float|string|null>
+     */
+    private static function flattenCoolingSnapshotMetrics(array $metrics): array
+    {
+        $clean = [];
+        foreach ($metrics as $k => $v) {
+            $key = (string)$k;
+            if (is_array($v)) {
+                if (isset($v['numeric']) && $v['numeric'] !== null && $v['numeric'] !== '' && is_numeric($v['numeric'])) {
+                    $clean[$key] = (0 + $v['numeric']);
+                    continue;
+                }
+                $raw = $v['raw'] ?? $v['value'] ?? null;
+                if (is_scalar($raw) && $raw !== '' && $raw !== false) {
+                    $clean[$key] = is_numeric($raw) ? (0 + $raw) : (string)$raw;
+                }
+                continue;
+            }
+            if (is_scalar($v) || $v === null) {
+                $clean[$key] = $v;
+            }
+        }
+        return $clean;
     }
 
     /**

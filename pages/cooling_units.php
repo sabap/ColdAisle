@@ -730,7 +730,8 @@ if ($unitId > 0) {
                     onSuccess: function (data, ctl) {
                         applyPollResult(data);
                         btnPoll.disabled = !hasTemplate;
-                        if (ctl && ctl.close) setTimeout(ctl.close, 1200);
+                        // Live telemetry card is server-rendered from last_poll_json
+                        setTimeout(function () { location.reload(); }, 700);
                     },
                     onError: function () {
                         btnPoll.disabled = !hasTemplate;
