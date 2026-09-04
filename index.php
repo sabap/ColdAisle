@@ -117,10 +117,14 @@ try {
 // Floor-placed cooling / AC units for dashboard 3D (wireframe + snowflake logo)
 $cooling3d = [];
 try {
+    if (is_file(__DIR__ . '/includes/cooling_helpers.php')) {
+        require_once __DIR__ . '/includes/cooling_helpers.php';
+    }
     $cooling3d = Database::fetchAll(
         'SELECT u.cooling_unit_id, u.name, u.unit_type, u.unit_role, u.cooling_medium,
                 u.pos_x, u.pos_y, u.pos_z, u.rotation_deg, u.front_facing,
                 u.width_mm, u.depth_mm, u.height_mm, u.color_hex, u.status,
+                u.last_poll_json,
                 r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth
          FROM cooling_units u
          LEFT JOIN rooms r ON r.room_id = u.room_id
@@ -128,6 +132,9 @@ try {
            AND u.pos_x IS NOT NULL AND u.pos_y IS NOT NULL
          ORDER BY u.name'
     );
+    if (function_exists('cooling_enrich_floor_units')) {
+        $cooling3d = cooling_enrich_floor_units($cooling3d);
+    }
 } catch (Throwable $e) {
     $cooling3d = [];
 }
@@ -517,7 +524,7 @@ if (class_exists('SiteTourService')) {
     if (!el) return;
     el.classList.add('dash-3d-loading');
     var threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=34') ?>;
+    var app3d = <?= json_encode(App::url('assets/js/dcim-3d.js') . '?v=35') ?>;
     loadScript(threeUrl)
       .then(function () { return loadScript(app3d); })
       .then(function () {

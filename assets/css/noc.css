@@ -362,6 +362,43 @@ html, body {
 .noc-split-row.noc-split-cool {
   flex: 1 1 auto;
 }
+.noc-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.85rem;
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+.noc-legend .noc-leg {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.noc-legend .noc-leg i {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  display: inline-block;
+}
+.noc-live-role {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.08rem 0.35rem;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+.noc-live-role.active {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.18);
+}
+.noc-live-role.standby {
+  color: #fcd34d;
+  background: rgba(251, 191, 36, 0.16);
+}
+.noc-sep { opacity: 0.45; }
 .noc-split-pane {
   min-height: 0;
   min-width: 0;

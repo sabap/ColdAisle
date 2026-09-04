@@ -978,7 +978,7 @@ try {
             'SELECT u.cooling_unit_id, u.name, u.unit_type, u.unit_role, u.cooling_medium,
                     u.room_id, u.pos_x, u.pos_y, u.pos_z, u.rotation_deg, u.front_facing,
                     u.width_mm, u.depth_mm, u.height_mm, u.color_hex, u.primary_ip, u.status,
-                    u.rated_kw_cooling, u.standby_of_id
+                    u.rated_kw_cooling, u.standby_of_id, u.last_poll_json
              FROM cooling_units u
              WHERE u.is_active = 1
                AND u.room_id = ?
@@ -1003,6 +1003,12 @@ try {
              ORDER BY u.name',
             [$dcId, $roomId, $dcId]
         );
+        if (is_file(dirname(__DIR__) . '/includes/cooling_helpers.php')) {
+            require_once dirname(__DIR__) . '/includes/cooling_helpers.php';
+        }
+        if (function_exists('cooling_enrich_floor_units')) {
+            $placedCooling = cooling_enrich_floor_units($placedCooling);
+        }
     } catch (Throwable $e) {
         $placedCooling = [];
         $unplacedCooling = [];

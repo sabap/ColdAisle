@@ -815,6 +815,39 @@ class Schema
             self::ensureColumn('cooling_units', 'snmp_context', 'NVARCHAR(100) NULL');
             self::ensureColumn('cooling_units', 'snmp_engine_id', 'NVARCHAR(80) NULL');
 
+            self::ensureTable(
+                'cooling_readings',
+                "CREATE TABLE cooling_readings (
+                    reading_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                    cooling_unit_id INT NOT NULL,
+                    supply_temp_c DECIMAL(6,2) NULL,
+                    return_temp_c DECIMAL(6,2) NULL,
+                    humidity DECIMAL(6,2) NULL,
+                    cooling_capacity_pct DECIMAL(8,2) NULL,
+                    fan_capacity_pct DECIMAL(8,2) NULL,
+                    system_state NVARCHAR(40) NULL,
+                    alarms_present DECIMAL(8,2) NULL,
+                    polled_at DATETIME2 NOT NULL CONSTRAINT DF_cu_rd_at DEFAULT SYSUTCDATETIME()
+                )"
+            );
+            try {
+                $hasCuRd = Database::fetchValue(
+                    "SELECT 1 FROM sys.tables WHERE name = 'cooling_readings' AND SCHEMA_NAME(schema_id) = 'dbo'"
+                );
+                if ($hasCuRd) {
+                    $idx = Database::fetchValue(
+                        "SELECT 1 FROM sys.indexes WHERE name = 'IX_cooling_readings_unit_time' AND object_id = OBJECT_ID('dbo.cooling_readings')"
+                    );
+                    if (!$idx) {
+                        Database::query(
+                            'CREATE NONCLUSTERED INDEX IX_cooling_readings_unit_time ON cooling_readings(cooling_unit_id, polled_at DESC)'
+                        );
+                    }
+                }
+            } catch (Throwable $e) {
+                // ignore index race
+            }
+
             // UPS inventory (in-row / in-rack) — floor placement + SNMP like cooling units
             self::ensureTable(
                 'ups_units',
@@ -1161,11 +1194,14 @@ class Schema
                 'cooling_unit_id', 'pdu_id', 'device_id', 'last_value',
                 'snmp_oid', 'snmp_index', 'pos_x', 'pos_y', 'pos_z',
             ],
+            'cooling_readings' => [
+                'reading_id', 'cooling_unit_id', 'supply_temp_c', 'return_temp_c', 'polled_at',
+            ],
             'env_readings' => ['reading_id', 'sensor_id', 'value', 'recorded_at'],
             'device_snmp_readings' => ['reading_id', 'device_id', 'metric_name', 'metric_value', 'polled_at'],
         ];
         $core = array_values(array_unique(array_merge($core, [
-            'cooling_units', 'env_sensors', 'env_readings', 'airflow_anchors',
+            'cooling_units', 'cooling_readings', 'env_sensors', 'env_readings', 'airflow_anchors',
         ])));
         return ['core_tables' => $core, 'tables' => $managed];
     }

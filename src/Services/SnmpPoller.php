@@ -667,6 +667,9 @@ class SnmpPoller
     public static function pollCoolingUnit(array $unit): array
     {
         require_once __DIR__ . '/SnmpDiscover.php';
+        if (is_file(App::ROOT . '/includes/cooling_helpers.php')) {
+            require_once App::ROOT . '/includes/cooling_helpers.php';
+        }
         $templateId = (int)($unit['snmp_site_template_id'] ?? 0);
         if ($templateId < 1) {
             throw new RuntimeException('Cooling unit has no site OID template assigned. Run Discover OIDs first.');
@@ -736,11 +739,11 @@ class SnmpPoller
         }
 
         $metrics = is_array($got['metrics'] ?? null) ? $got['metrics'] : [];
-        // collectOidMap stores {numeric, raw, oid}; Live telemetry / last_poll_json need scalars
-        $clean = self::flattenCoolingSnapshotMetrics($metrics);
         if (is_file(App::ROOT . '/includes/cooling_helpers.php')) {
             require_once App::ROOT . '/includes/cooling_helpers.php';
         }
+        // collectOidMap stores {numeric, raw, oid}; Live telemetry / last_poll_json need scalars
+        $clean = self::flattenCoolingSnapshotMetrics($metrics);
         if (function_exists('cooling_air_temp_to_c')) {
             foreach ($clean as $tk => $tv) {
                 if (!is_numeric($tv)) {
@@ -752,7 +755,12 @@ class SnmpPoller
                 }
                 $tenths = (bool)preg_match('/^remote_temp_/', $k)
                     || ($k === 'chilled_water_temp' && (float)$tv > 150.0);
-                $clean[$tk] = cooling_air_temp_to_c((float)$tv, $tenths);
+                $converted = cooling_air_temp_to_c((float)$tv, $tenths);
+                if ($converted === null) {
+                    unset($clean[$tk]);
+                    continue;
+                }
+                $clean[$tk] = $converted;
             }
         }
 
@@ -771,6 +779,34 @@ class SnmpPoller
             'last_poll_json' => json_encode($snapshot, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
             'updated_at' => $now,
         ], 'cooling_unit_id = :id', [':id' => (int)$unit['cooling_unit_id']]);
+
+        try {
+            $stRaw = $clean['system_state'] ?? null;
+            $stLabel = function_exists('cooling_lgp_enum')
+                ? cooling_lgp_enum('system', $stRaw)
+                : (is_scalar($stRaw) ? (string)$stRaw : null);
+            Database::insert('cooling_readings', [
+                'cooling_unit_id' => (int)$unit['cooling_unit_id'],
+                'supply_temp_c' => isset($clean['supply_temp']) && is_numeric($clean['supply_temp'])
+                    ? round((float)$clean['supply_temp'], 2) : null,
+                'return_temp_c' => isset($clean['return_temp']) && is_numeric($clean['return_temp'])
+                    ? round((float)$clean['return_temp'], 2) : null,
+                'humidity' => isset($clean['control_humidity']) && is_numeric($clean['control_humidity'])
+                    ? round((float)$clean['control_humidity'], 2)
+                    : (isset($clean['return_humidity']) && is_numeric($clean['return_humidity'])
+                        ? round((float)$clean['return_humidity'], 2) : null),
+                'cooling_capacity_pct' => isset($clean['cooling_capacity_pct']) && is_numeric($clean['cooling_capacity_pct'])
+                    ? round((float)$clean['cooling_capacity_pct'], 2) : null,
+                'fan_capacity_pct' => isset($clean['fan_capacity_pct']) && is_numeric($clean['fan_capacity_pct'])
+                    ? round((float)$clean['fan_capacity_pct'], 2) : null,
+                'system_state' => $stLabel,
+                'alarms_present' => isset($clean['alarms_present']) && is_numeric($clean['alarms_present'])
+                    ? round((float)$clean['alarms_present'], 2) : null,
+                'polled_at' => $now,
+            ]);
+        } catch (Throwable $e) {
+            App::log('cooling_readings insert: ' . $e->getMessage(), 'warning');
+        }
 
         if (class_exists('SnmpThresholdService')) {
             try {
@@ -2793,7 +2829,12 @@ class SnmpPoller
     {
         $metrics = is_array($got['metrics'] ?? null) ? $got['metrics'] : [];
         if (isset($metrics['chilled_water_temp'])) {
-            return;
+            $existing = $metrics['chilled_water_temp'];
+            $n = is_array($existing) ? ($existing['numeric'] ?? null) : $existing;
+            if (!function_exists('cooling_snmp_is_unavailable') || !cooling_snmp_is_unavailable($n)) {
+                return;
+            }
+            unset($got['metrics']['chilled_water_temp']);
         }
         $oids = [
             '1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.50.7',
@@ -2807,6 +2848,9 @@ class SnmpPoller
             }
             $num = self::toNumber($raw);
             if ($num === null) {
+                continue;
+            }
+            if (function_exists('cooling_snmp_is_unavailable') && cooling_snmp_is_unavailable($num)) {
                 continue;
             }
             $got['metrics']['chilled_water_temp'] = [
@@ -2843,6 +2887,22 @@ class SnmpPoller
             }
             if (is_scalar($v) || $v === null) {
                 $clean[$key] = $v;
+            }
+        }
+        foreach ($clean as $key => $val) {
+            if (!is_numeric($val)) {
+                continue;
+            }
+            $n = (float)$val;
+            $unavailable = function_exists('cooling_snmp_is_unavailable')
+                ? cooling_snmp_is_unavailable($n)
+                : (abs($n) >= 1.0e9);
+            if ($unavailable) {
+                unset($clean[$key]);
+                continue;
+            }
+            if (str_ends_with((string)$key, '_pct') && ($n < 0 || $n > 1000)) {
+                unset($clean[$key]);
             }
         }
         return $clean;

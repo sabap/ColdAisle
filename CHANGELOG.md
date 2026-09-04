@@ -15,7 +15,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
+- **3D airflow rainbow:** particles tint along the path from AC supply → cold aisle → hot aisle → return (blue–green–yellow–red). Missing hot-aisle sensors interpolate until those probes are placed. Vents/returns use live supply/return color.
+- **3D active/standby from SNMP:** CRAC labels and a green/amber LED follow Unity system state (On = active, Off/Standby = standby) instead of only the manual role field.
+- **NOC cooling pane:** live supply/return, aisle averages, SNMP active/standby, per-unit S/R/RH, and a 24h temperature history chart (supply, cold aisle, hot aisle, return). Poll writes `cooling_readings` for the graph.
+
 ### Bug fixes
+
+- **Liebert “sun surface” temps:** Unity returns Integer32/Unsigned32 max (`2147483647` / `4294967295`) when a sensor is not equipped. Those were stored as chilled-water 214748364.7° and compressor temps. Poll now drops SNMP not-available sentinels instead of converting them.
 
 ---
 

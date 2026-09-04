@@ -459,25 +459,98 @@
     return html;
   }
 
+  function sparklineMulti(series, emptyMsg) {
+    series = series || [];
+    var w = 640, h = 148, pad = 10;
+    var all = [];
+    series.forEach(function (s) {
+      (s.values || []).forEach(function (v) {
+        if (v != null && !isNaN(Number(v))) all.push(Number(v));
+      });
+    });
+    if (!all.length) {
+      return '<div class="noc-empty">' + esc(emptyMsg || 'No temperature history yet') + '</div>';
+    }
+    var min = Math.min.apply(null, all);
+    var max = Math.max.apply(null, all);
+    if (min === max) {
+      min -= 1;
+      max += 1;
+    }
+    var padY = (max - min) * 0.1 || 0.5;
+    min -= padY;
+    max += padY;
+    function xAt(i, n) {
+      if (n <= 1) return w / 2;
+      return pad + (i / (n - 1)) * (w - pad * 2);
+    }
+    function yAt(v) {
+      return pad + (1 - (v - min) / (max - min)) * (h - pad * 2);
+    }
+    var paths = '';
+    series.forEach(function (s) {
+      var vals = s.values || [];
+      var n = vals.length;
+      var line = '';
+      var first = true;
+      for (var i = 0; i < n; i++) {
+        if (vals[i] == null || isNaN(Number(vals[i]))) continue;
+        line += (first ? 'M ' : ' L ') + xAt(i, n).toFixed(1) + ' ' + yAt(Number(vals[i])).toFixed(1);
+        first = false;
+      }
+      if (!line) return;
+      paths += '<path d="' + line + '" fill="none" stroke="' + (s.color || '#38bdf8') +
+        '" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>';
+    });
+    var legend = '<div class="noc-legend">';
+    series.forEach(function (s) {
+      var has = (s.values || []).some(function (v) { return v != null && !isNaN(Number(v)); });
+      if (!has) return;
+      legend += '<span class="noc-leg"><i style="background:' + (s.color || '#38bdf8') + '"></i>' +
+        esc(s.name || '') + '</span>';
+    });
+    legend += '</div>';
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" role="img" aria-label="Temperature 24h">' +
+      paths + '</svg>' + legend;
+  }
+
   function renderCooling(data) {
     var c = data.cooling || {};
     var env = data.env || {};
+    var hist = data.cooling_history || {};
     var hot = (data.hot_sensors || []).slice(0, CAP.sensors);
     var units = (c.list || []).slice(0, CAP.cooling);
     var envCls = (env.crit > 0) ? 'crit' : (env.warn > 0) ? 'warn' : 'ok';
+    var sym = (data.temp_symbol || '°C');
+    var livePri = c.live_primary != null ? c.live_primary : c.primary;
+    var liveStb = c.live_standby != null ? c.live_standby : c.standby;
 
     var html = '<div class="noc-panel-frame noc-frame-cooling">';
     html += '<div class="noc-hero-row noc-hero-3">';
-    html += heroStat('accent', 'Cooling units',
+    html += heroStat('accent', 'Air units',
       fmtNum(c.units, 0),
-      fmtNum(c.primary, 0) + ' primary · ' + fmtNum(c.standby, 0) + ' standby');
-    html += heroStat('', 'Rated capacity',
-      fmtNum(c.rated_kw, 1) + '<span class="unit">kW</span>',
-      fmtNum(c.snmp_on, 0) + ' with SNMP');
+      fmtNum(livePri, 0) + ' active · ' + fmtNum(liveStb, 0) + ' standby (SNMP)');
+    html += heroStat('', 'Supply / return',
+      (c.avg_supply != null ? fmtNum(c.avg_supply, 1) : '—') +
+      '<span class="unit">' + esc(sym) + '</span>' +
+      ' <span class="noc-sep">/</span> ' +
+      (c.avg_return != null ? fmtNum(c.avg_return, 1) : '—') +
+      '<span class="unit">' + esc(sym) + '</span>',
+      (c.avg_cold_aisle != null ? 'Cold aisle ' + fmtNum(c.avg_cold_aisle, 1) + sym : 'Cold aisle —') +
+      (c.avg_hot_aisle != null ? ' · Hot ' + fmtNum(c.avg_hot_aisle, 1) + sym : ' · Hot aisle —'));
     html += heroStat(envCls, 'Env sensors',
       fmtNum(env.crit, 0) + '<span class="unit"> crit</span>',
       fmtNum(env.warn, 0) + ' warn · ' + fmtNum(env.ok, 0) + ' ok · ' + fmtNum(env.stale, 0) + ' stale');
     html += '</div>';
+
+    html += '<div class="noc-chart-wrap noc-chart-hero">' +
+      sparklineMulti([
+        { name: 'Supply', color: '#38bdf8', values: hist.supply || [] },
+        { name: 'Cold aisle', color: '#22c55e', values: hist.cold_aisle || [] },
+        { name: 'Hot aisle', color: '#facc15', values: hist.hot_aisle || [] },
+        { name: 'Return', color: '#f97316', values: hist.return || [] },
+      ], 'Temperature history builds as SNMP and env sensors poll') +
+      '</div>';
 
     html += '<div class="noc-split-row noc-split-cool">';
     html += '<div class="noc-split-pane noc-split-wide">' +
@@ -508,15 +581,20 @@
     } else {
       html += '<div class="noc-pill-grid noc-pill-stack">';
       units.forEach(function (u) {
+        var live = String(u.live_role || u.role || '').toLowerCase();
+        var liveLab = live === 'standby' ? 'standby' : 'active';
         html += '<div class="noc-pill">' +
-          '<div class="np-name">' + esc(u.name) + '</div>' +
+          '<div class="np-name">' + esc(u.name) +
+          ' <span class="noc-live-role ' + liveLab + '">' + liveLab + '</span></div>' +
           '<div class="np-meta">' + esc(u.type || '') +
-          (u.role ? ' · ' + esc(u.role) : '') +
-          (u.status ? ' · ' + esc(u.status) : '') +
+          (u.state ? ' · ' + esc(u.state) : '') +
+          (u.alarms != null && Number(u.alarms) > 0 ? ' · alarms ' + fmtNum(u.alarms, 0) : '') +
           '</div>' +
           '<div class="np-val small">' +
-          (u.rated_kw != null ? fmtNum(u.rated_kw, 1) + ' kW' : '—') +
-          (u.snmp ? ' · SNMP' : '') +
+          (u.supply != null ? 'S ' + fmtNum(u.supply, 1) + sym : '') +
+          (u.return != null ? ' · R ' + fmtNum(u.return, 1) + sym : '') +
+          (u.humidity != null ? ' · ' + fmtNum(u.humidity, 0) + '%RH' : '') +
+          (!u.supply && !u.return ? (u.rated_kw != null ? fmtNum(u.rated_kw, 1) + ' kW' : '—') : '') +
           '</div></div>';
       });
       html += '</div>';

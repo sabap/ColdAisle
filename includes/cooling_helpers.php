@@ -684,17 +684,39 @@ function env_sensor_threshold_status(?float $value, array $sensor): string
 }
 
 /**
+ * SNMP Integer32/Unsigned32 "not available" sentinels (no sensor / not equipped).
+ * Liebert returns 2147483647 / 4294967295; tenths scaling turns those into 214748364.7.
+ */
+function cooling_snmp_is_unavailable($v): bool
+{
+    if ($v === null || $v === '') {
+        return true;
+    }
+    if (!is_numeric($v)) {
+        return false;
+    }
+    $n = (float)$v;
+    if (!is_finite($n)) {
+        return true;
+    }
+    return abs($n) >= 1.0e9;
+}
+
+/**
  * Vertiv / Liebert LGP present-value air temps are Fahrenheit (official NMS maps).
  * Canonical storage is °C. Values already in a plausible CRAC °C band are left alone
  * so a second pass does not double-convert.
  */
 function cooling_air_temp_to_c(?float $v, bool $tenthsF = false): ?float
 {
-    if ($v === null) {
+    if ($v === null || cooling_snmp_is_unavailable($v)) {
         return null;
     }
     if ($tenthsF) {
         $v = $v / 10.0;
+        if (cooling_snmp_is_unavailable($v)) {
+            return null;
+        }
     }
     // 40–250 °F covers CRAC air and compressor discharge; 40 °C+ supply is not plausible.
     if ($v > 40.0 && $v <= 250.0) {
@@ -711,6 +733,9 @@ function cooling_lgp_enum(string $kind, $raw): ?string
     }
     if (!is_numeric($raw)) {
         return (string)$raw;
+    }
+    if (cooling_snmp_is_unavailable($raw)) {
+        return null;
     }
     $i = (int)$raw;
     $maps = [
@@ -856,13 +881,16 @@ function cooling_poll_snapshot_promote($jsonOrArray): array
         if ($v === null || $v === '') {
             return null;
         }
+        $n = null;
         if (is_numeric($v)) {
-            return (float)$v;
+            $n = (float)$v;
+        } elseif (is_string($v) && preg_match('/[-+]?\d*\.?\d+/', $v, $m)) {
+            $n = (float)$m[0];
         }
-        if (is_string($v) && preg_match('/[-+]?\d*\.?\d+/', $v, $m)) {
-            return (float)$m[0];
+        if ($n === null || cooling_snmp_is_unavailable($n)) {
+            return null;
         }
-        return null;
+        return $n;
     };
 
     $supply = $num($pick([
@@ -1130,5 +1158,143 @@ function cooling_poll_snapshot_promote($jsonOrArray): array
         'extras' => [],
         'display' => $display,
     ];
+}
+
+/**
+ * SNMP On → live primary; Off/Standby → live standby. Else inventory unit_role.
+ */
+function cooling_live_role_from_snapshot(array $snap, $fallbackRole = null): string
+{
+    $st = strtolower(trim((string)($snap['system_state'] ?? '')));
+    if ($st === 'on') {
+        return 'primary';
+    }
+    if ($st === 'off' || $st === 'standby') {
+        return 'standby';
+    }
+    $fb = strtolower(trim((string)$fallbackRole));
+    return $fb === 'standby' ? 'standby' : 'primary';
+}
+
+/**
+ * Attach live poll temps / SNMP role to floor-placed cooling rows. Drops last_poll_json.
+ *
+ * @param list<array<string,mixed>> $rows
+ * @return list<array<string,mixed>>
+ */
+function cooling_enrich_floor_units(array $rows): array
+{
+    foreach ($rows as &$u) {
+        $snap = cooling_poll_snapshot_promote($u['last_poll_json'] ?? null);
+        $u['supply_temp'] = $snap['supply_temp'];
+        $u['return_temp'] = $snap['return_temp'];
+        $u['humidity'] = $snap['humidity'];
+        $u['system_state'] = $snap['system_state'];
+        $u['cooling_capacity_pct'] = $snap['cooling_capacity_pct'];
+        $u['fan_capacity_pct'] = $snap['fan_capacity_pct'];
+        $u['alarms_present'] = $snap['alarms_present'];
+        $u['live_role'] = cooling_live_role_from_snapshot($snap, $u['unit_role'] ?? null);
+        unset($u['last_poll_json']);
+    }
+    unset($u);
+    return $rows;
+}
+
+/**
+ * 24h hall temperature series for NOC (15-minute buckets, °C).
+ *
+ * @return array{t:list<string>,supply:list<?float>,return:list<?float>,cold_aisle:list<?float>,hot_aisle:list<?float>,points:int}
+ */
+function cooling_history_24h(): array
+{
+    $empty = [
+        't' => [],
+        'supply' => [],
+        'return' => [],
+        'cold_aisle' => [],
+        'hot_aisle' => [],
+        'points' => 0,
+    ];
+    $buckets = [];
+    $add = static function (string $t, string $series, $val) use (&$buckets): void {
+        if ($val === null || $val === '' || !is_numeric($val)) {
+            return;
+        }
+        if (!isset($buckets[$t])) {
+            $buckets[$t] = [
+                'supply' => [], 'return' => [], 'cold_aisle' => [], 'hot_aisle' => [],
+            ];
+        }
+        $buckets[$t][$series][] = (float)$val;
+    };
+
+    try {
+        $cuRows = Database::fetchAll(
+            "SELECT DATEADD(minute, (DATEDIFF(minute, '20000101', polled_at) / 15) * 15, '20000101') AS bucket,
+                    AVG(supply_temp_c) AS supply_temp_c,
+                    AVG(return_temp_c) AS return_temp_c
+             FROM cooling_readings
+             WHERE polled_at >= DATEADD(hour, -24, SYSUTCDATETIME())
+             GROUP BY DATEADD(minute, (DATEDIFF(minute, '20000101', polled_at) / 15) * 15, '20000101')
+             ORDER BY bucket"
+        );
+        foreach ($cuRows as $r) {
+            $t = (string)($r['bucket'] ?? '');
+            $add($t, 'supply', $r['supply_temp_c'] ?? null);
+            $add($t, 'return', $r['return_temp_c'] ?? null);
+        }
+    } catch (Throwable $e) {
+        // table may not exist yet
+    }
+
+    try {
+        $envRows = Database::fetchAll(
+            "SELECT DATEADD(minute, (DATEDIFF(minute, '20000101', r.recorded_at) / 15) * 15, '20000101') AS bucket,
+                    LOWER(REPLACE(REPLACE(ISNULL(s.placement, ''), '-', '_'), ' ', '_')) AS place,
+                    AVG(r.value) AS avg_c
+             FROM env_readings r
+             INNER JOIN env_sensors s ON s.sensor_id = r.sensor_id
+             WHERE r.recorded_at >= DATEADD(hour, -24, SYSUTCDATETIME())
+               AND (r.metric IS NULL OR r.metric IN ('', 'temperature', 'temp', 'celsius'))
+               AND s.sensor_kind IN ('temperature', 'temp_humidity', 'dew_point')
+             GROUP BY DATEADD(minute, (DATEDIFF(minute, '20000101', r.recorded_at) / 15) * 15, '20000101'),
+                      LOWER(REPLACE(REPLACE(ISNULL(s.placement, ''), '-', '_'), ' ', '_'))
+             ORDER BY bucket"
+        );
+        foreach ($envRows as $r) {
+            $t = (string)($r['bucket'] ?? '');
+            $p = (string)($r['place'] ?? '');
+            if (in_array($p, ['cold_aisle', 'intake', 'equipment_intake', 'supply_air'], true)) {
+                $add($t, 'cold_aisle', $r['avg_c'] ?? null);
+            } elseif (in_array($p, ['hot_aisle', 'exhaust', 'return_air'], true)) {
+                $add($t, 'hot_aisle', $r['avg_c'] ?? null);
+            } elseif ($p === '' || $p === 'other' || $p === 'ambient') {
+                // Untagged sensors: user currently parks them in the cold aisle
+                $add($t, 'cold_aisle', $r['avg_c'] ?? null);
+            }
+        }
+    } catch (Throwable $e) {
+        // ignore
+    }
+
+    if ($buckets === []) {
+        return $empty;
+    }
+    ksort($buckets);
+    $mean = static function (array $vals): ?float {
+        if ($vals === []) {
+            return null;
+        }
+        return round(array_sum($vals) / count($vals), 2);
+    };
+    foreach ($buckets as $t => $series) {
+        $empty['t'][] = $t;
+        $empty['supply'][] = $mean($series['supply']);
+        $empty['return'][] = $mean($series['return']);
+        $empty['cold_aisle'][] = $mean($series['cold_aisle']);
+        $empty['hot_aisle'][] = $mean($series['hot_aisle']);
+    }
+    $empty['points'] = count($empty['t']);
+    return $empty;
 }
 

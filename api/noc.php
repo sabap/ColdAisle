@@ -365,21 +365,136 @@ try {
     ), 1);
     $cuRows = Database::fetchAll(
         'SELECT TOP 12 cooling_unit_id, name, unit_type, unit_role, status,
-                rated_kw_cooling, snmp_enabled, snmp_last_poll_at, primary_ip
+                rated_kw_cooling, snmp_enabled, snmp_last_poll_at, primary_ip, last_poll_json
          FROM cooling_units WHERE is_active = 1 ORDER BY name'
     );
+    $sumS = [];
+    $sumR = [];
+    $livePri = 0;
+    $liveStb = 0;
+    $fmtC = static function (?float $c): ?float {
+        if ($c === null) {
+            return null;
+        }
+        if (class_exists('TempUnitService')) {
+            return round((float)(TempUnitService::fromC($c) ?? $c), 1);
+        }
+        return round($c, 1);
+    };
     foreach ($cuRows as $cu) {
+        $snap = function_exists('cooling_poll_snapshot_promote')
+            ? cooling_poll_snapshot_promote($cu['last_poll_json'] ?? null)
+            : ['has_data' => false];
+        $liveRole = function_exists('cooling_live_role_from_snapshot')
+            ? cooling_live_role_from_snapshot($snap, $cu['unit_role'] ?? null)
+            : (string)($cu['unit_role'] ?? '');
+        if ($liveRole === 'standby') {
+            $liveStb++;
+        } else {
+            $livePri++;
+        }
+        if (isset($snap['supply_temp']) && is_numeric($snap['supply_temp'])) {
+            $sumS[] = (float)$snap['supply_temp'];
+        }
+        if (isset($snap['return_temp']) && is_numeric($snap['return_temp'])) {
+            $sumR[] = (float)$snap['return_temp'];
+        }
         $cooling['list'][] = [
             'name' => (string)$cu['name'],
             'type' => (string)($cu['unit_type'] ?? ''),
             'role' => (string)($cu['unit_role'] ?? ''),
+            'live_role' => $liveRole,
             'status' => (string)($cu['status'] ?? ''),
+            'state' => $snap['system_state'] ?? null,
+            'supply' => $fmtC(isset($snap['supply_temp']) && is_numeric($snap['supply_temp'])
+                ? (float)$snap['supply_temp'] : null),
+            'return' => $fmtC(isset($snap['return_temp']) && is_numeric($snap['return_temp'])
+                ? (float)$snap['return_temp'] : null),
+            'humidity' => isset($snap['humidity']) && is_numeric($snap['humidity'])
+                ? round((float)$snap['humidity'], 0) : null,
+            'alarms' => $snap['alarms_present'] ?? null,
             'rated_kw' => $cu['rated_kw_cooling'] !== null ? (float)$cu['rated_kw_cooling'] : null,
             'snmp' => !empty($cu['snmp_enabled']),
             'last_poll' => $cu['snmp_last_poll_at'] ?? null,
         ];
     }
+    $cooling['live_primary'] = $livePri;
+    $cooling['live_standby'] = $liveStb;
+    if ($sumS) {
+        $cooling['avg_supply'] = $fmtC(array_sum($sumS) / count($sumS));
+    }
+    if ($sumR) {
+        $cooling['avg_return'] = $fmtC(array_sum($sumR) / count($sumR));
+    }
+    try {
+        $aisleRows = Database::fetchAll(
+            "SELECT LOWER(REPLACE(REPLACE(ISNULL(placement, ''), '-', '_'), ' ', '_')) AS place,
+                    AVG(last_value) AS avg_c
+             FROM env_sensors
+             WHERE is_active = 1 AND last_value IS NOT NULL
+               AND sensor_kind IN ('temperature','temp_humidity','dew_point')
+             GROUP BY LOWER(REPLACE(REPLACE(ISNULL(placement, ''), '-', '_'), ' ', '_'))"
+        );
+        $cold = [];
+        $hot = [];
+        foreach ($aisleRows as $ar) {
+            $p = (string)($ar['place'] ?? '');
+            $v = isset($ar['avg_c']) && is_numeric($ar['avg_c']) ? (float)$ar['avg_c'] : null;
+            if ($v === null) {
+                continue;
+            }
+            if (in_array($p, ['cold_aisle', 'intake', 'equipment_intake', 'supply_air'], true)
+                || $p === '' || $p === 'ambient' || $p === 'other'
+            ) {
+                $cold[] = $v;
+            } elseif (in_array($p, ['hot_aisle', 'exhaust', 'return_air'], true)) {
+                $hot[] = $v;
+            }
+        }
+        $toDisp = static function (array $vals): ?float {
+            if ($vals === []) {
+                return null;
+            }
+            $c = array_sum($vals) / count($vals);
+            if (class_exists('TempUnitService')) {
+                return round((float)(TempUnitService::fromC($c) ?? $c), 1);
+            }
+            return round($c, 1);
+        };
+        $cooling['avg_cold_aisle'] = $toDisp($cold);
+        $cooling['avg_hot_aisle'] = $toDisp($hot);
+    } catch (Throwable $e2) {
+        // ignore
+    }
 } catch (Throwable $e) {
+}
+
+$coolingHistory = ['t' => [], 'supply' => [], 'return' => [], 'cold_aisle' => [], 'hot_aisle' => [], 'points' => 0];
+try {
+    if (function_exists('cooling_history_24h')) {
+        $ch = cooling_history_24h();
+        $n = count($ch['t'] ?? []);
+        $step = $n > 48 ? (int)ceil($n / 48) : 1;
+        $disp = static function ($c) {
+            if ($c === null || !is_numeric($c)) {
+                return null;
+            }
+            if (class_exists('TempUnitService')) {
+                return round((float)(TempUnitService::fromC((float)$c) ?? $c), 1);
+            }
+            return round((float)$c, 1);
+        };
+        for ($i = 0; $i < $n; $i += $step) {
+            $coolingHistory['t'][] = $ch['t'][$i];
+            $coolingHistory['supply'][] = $disp($ch['supply'][$i] ?? null);
+            $coolingHistory['return'][] = $disp($ch['return'][$i] ?? null);
+            $coolingHistory['cold_aisle'][] = $disp($ch['cold_aisle'][$i] ?? null);
+            $coolingHistory['hot_aisle'][] = $disp($ch['hot_aisle'][$i] ?? null);
+        }
+        $coolingHistory['points'] = count($coolingHistory['t']);
+    }
+} catch (Throwable $e) {
+    App::log('NOC cooling history: ' . $e->getMessage(), 'warning');
 }
 
 // UPS inventory snapshot (load / battery / health for wall)
@@ -642,6 +757,7 @@ $out = [
     'zones' => $zones,
     'ups' => $ups,
     'cooling' => $cooling,
+    'cooling_history' => $coolingHistory,
     'hot_sensors' => $hotSensors,
     'cabinet_health' => $cabinetHealth,
     'recent_alerts' => $recentAlerts,
@@ -729,6 +845,7 @@ if ($includeScene) {
             'SELECT u.cooling_unit_id, u.name, u.unit_type, u.unit_role, u.cooling_medium,
                     u.pos_x, u.pos_y, u.pos_z, u.rotation_deg, u.front_facing,
                     u.width_mm, u.depth_mm, u.height_mm, u.color_hex, u.status,
+                    u.last_poll_json,
                     r.name AS room_name, r.width_m AS room_width, r.depth_m AS room_depth
              FROM cooling_units u
              LEFT JOIN rooms r ON r.room_id = u.room_id
@@ -736,6 +853,9 @@ if ($includeScene) {
                AND u.pos_x IS NOT NULL AND u.pos_y IS NOT NULL
              ORDER BY u.name'
         );
+        if (function_exists('cooling_enrich_floor_units')) {
+            $cooling3d = cooling_enrich_floor_units($cooling3d);
+        }
     } catch (Throwable $e) {
         $cooling3d = [];
     }

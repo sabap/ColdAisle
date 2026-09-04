@@ -1629,7 +1629,7 @@
       var hex = cu.color_hex || coolingDefaultHex(cu.unit_type);
       if (!/^#[0-9A-Fa-f]{6}$/.test(String(hex))) hex = coolingDefaultHex(cu.unit_type);
       var color = new THREE.Color(hex);
-      var role = String(cu.unit_role || '').toLowerCase();
+      var role = String(cu.live_role || cu.unit_role || '').toLowerCase();
       var isStandby = role === 'standby';
       var bodyOp = isStandby ? 0.22 : 0.4;
 
@@ -1707,8 +1707,8 @@
       var nm = String(cu.name || 'Cooling').slice(0, 16);
       ctx.fillText(nm, 160, 30);
       ctx.font = '18px Segoe UI, sans-serif';
-      ctx.fillStyle = isStandby ? '#94a3b8' : '#bae6fd';
-      ctx.fillText(short + (isStandby ? ' · standby' : ''), 160, 54);
+      ctx.fillStyle = isStandby ? '#94a3b8' : '#86efac';
+      ctx.fillText(short + (isStandby ? ' · standby' : ' · active'), 160, 54);
       var tex = new THREE.CanvasTexture(canvas);
       var labelW = Math.max(w * 0.92, 0.55);
       var label = new THREE.Mesh(
@@ -1721,6 +1721,13 @@
       label.userData = { objectLabel: true };
       label.visible = showObjectLabels;
       mesh.add(label);
+
+      var led = new THREE.Mesh(
+        new THREE.SphereGeometry(0.045, 10, 8),
+        new THREE.MeshBasicMaterial({ color: isStandby ? 0xfbbf24 : 0x22c55e })
+      );
+      led.position.set(w * 0.32, h / 2 + 0.04, -d * 0.32);
+      mesh.add(led);
 
       rackGroup.add(mesh);
     });
@@ -1857,19 +1864,43 @@
     scene.add(heatGroup);
 
     function tempToColor(t) {
-      // Soft ASHRAE-ish band (°C): cool blue → green → yellow → red
+      // Smooth ASHRAE-ish band (°C): blue → cyan → green → yellow → orange → red
       var c = new THREE.Color();
-      if (t == null || isNaN(t)) {
+      if (t == null || isNaN(Number(t))) {
         c.setHex(0x64748b);
         return c;
       }
-      if (t <= 15) c.setHex(0x1d4ed8);
-      else if (t <= 18) c.setHex(0x0ea5e9);
-      else if (t <= 22) c.setHex(0x22c55e);
-      else if (t <= 25) c.setHex(0xa3e635);
-      else if (t <= 27) c.setHex(0xfacc15);
-      else if (t <= 30) c.setHex(0xf97316);
-      else c.setHex(0xef4444);
+      var x = Number(t);
+      var stops = [
+        { t: 12, h: 0x1d4ed8 },
+        { t: 16, h: 0x0ea5e9 },
+        { t: 20, h: 0x22c55e },
+        { t: 24, h: 0xfacc15 },
+        { t: 28, h: 0xf97316 },
+        { t: 32, h: 0xef4444 },
+      ];
+      if (x <= stops[0].t) {
+        c.setHex(stops[0].h);
+        return c;
+      }
+      if (x >= stops[stops.length - 1].t) {
+        c.setHex(stops[stops.length - 1].h);
+        return c;
+      }
+      for (var i = 0; i < stops.length - 1; i++) {
+        if (x <= stops[i + 1].t) {
+          var f = (x - stops[i].t) / (stops[i + 1].t - stops[i].t);
+          var a = new THREE.Color(stops[i].h);
+          var b = new THREE.Color(stops[i + 1].h);
+          c.setRGB(
+            a.r + (b.r - a.r) * f,
+            a.g + (b.g - a.g) * f,
+            a.b + (b.b - a.b) * f
+          );
+          return c;
+        }
+      }
+      c.setHex(0xef4444);
       return c;
     }
 
@@ -2186,9 +2217,81 @@
       return pts[pts.length - 1];
     }
 
+    function avgNums(arr) {
+      var n = 0, s = 0;
+      for (var i = 0; i < arr.length; i++) {
+        var v = Number(arr[i]);
+        if (!isFinite(v)) continue;
+        s += v;
+        n++;
+      }
+      return n ? s / n : null;
+    }
+
+    function hallAirTemps() {
+      var supply = [];
+      var retT = [];
+      (floorCooling || []).forEach(function (cu) {
+        var live = String(cu.live_role || cu.unit_role || '').toLowerCase();
+        if (live === 'standby') return;
+        if (cu.supply_temp != null && isFinite(Number(cu.supply_temp))) supply.push(Number(cu.supply_temp));
+        if (cu.return_temp != null && isFinite(Number(cu.return_temp))) retT.push(Number(cu.return_temp));
+      });
+      if (!supply.length || !retT.length) {
+        (floorCooling || []).forEach(function (cu) {
+          if (cu.supply_temp != null && isFinite(Number(cu.supply_temp))) supply.push(Number(cu.supply_temp));
+          if (cu.return_temp != null && isFinite(Number(cu.return_temp))) retT.push(Number(cu.return_temp));
+        });
+      }
+      var cold = [];
+      var hot = [];
+      (envSensors || []).forEach(function (s) {
+        var p = String(s.placement || '').toLowerCase().replace(/[-\s]/g, '_');
+        var t = Number(s.temp);
+        if (!isFinite(t)) return;
+        if (p === 'hot_aisle' || p === 'exhaust' || p === 'return_air') hot.push(t);
+        else if (p === 'cold_aisle' || p === 'intake' || p === 'equipment_intake' || p === 'supply_air') cold.push(t);
+        else cold.push(t);
+      });
+      var out = {
+        supply: avgNums(supply),
+        cold: avgNums(cold),
+        hot: avgNums(hot),
+        return: avgNums(retT),
+      };
+      if (out.cold == null && out.supply != null) out.cold = out.supply;
+      if (out.hot == null && out.cold != null && out.return != null) {
+        out.hot = out.cold + (out.return - out.cold) * 0.65;
+      }
+      if (out.hot == null && out.return != null) out.hot = out.return;
+      return out;
+    }
+
+    function tempAlongPath(tc, u) {
+      if (!tc) return null;
+      var keys = [
+        { u: 0, v: tc.supply },
+        { u: 0.28, v: tc.cold },
+        { u: 0.58, v: tc.hot },
+        { u: 1, v: tc.return },
+      ].filter(function (k) { return k.v != null && isFinite(Number(k.v)); });
+      if (!keys.length) return null;
+      if (keys.length === 1) return keys[0].v;
+      if (u <= keys[0].u) return keys[0].v;
+      for (var i = 0; i < keys.length - 1; i++) {
+        if (u <= keys[i + 1].u) {
+          var span = keys[i + 1].u - keys[i].u || 1;
+          var f = (u - keys[i].u) / span;
+          return keys[i].v + (keys[i + 1].v - keys[i].v) * f;
+        }
+      }
+      return keys[keys.length - 1].v;
+    }
+
     (function buildAirflow() {
       var list = airflowAnchors || [];
       if (!list.length) return;
+      var hallT = hallAirTemps();
       var supplies = [];
       var returns = [];
       list.forEach(function (a) {
@@ -2197,6 +2300,8 @@
         var c = airflowCenter(a);
         var isRet = kind === 'return';
         var col = isRet ? 0xfb923c : 0x38bdf8;
+        if (isRet && hallT.return != null) col = tempToColor(hallT.return).getHex();
+        else if (!isRet && hallT.supply != null) col = tempToColor(hallT.supply).getHex();
         if (a.color_hex && /^#[0-9A-Fa-f]{6}$/.test(String(a.color_hex))) {
           col = new THREE.Color(a.color_hex).getHex();
         }
@@ -2290,7 +2395,8 @@
         var dense = densifyPath(pts, 7);
         var len = polylineLen(dense);
         if (len < 0.4) return null;
-        return { pts: dense, len: len, tempC: null };
+        var hasT = hallT && (hallT.supply != null || hallT.cold != null || hallT.hot != null || hallT.return != null);
+        return { pts: dense, len: len, tempC: hasT ? hallT : null };
       }
 
       var streams = [];
@@ -2340,9 +2446,12 @@
             amp: (0.06 + Math.random() * 0.11) * ampScale,
             ampY: (0.03 + Math.random() * 0.06) * ampScale,
           });
-          colors[i * 3] = tint.r;
-          colors[i * 3 + 1] = tint.g;
-          colors[i * 3 + 2] = tint.b;
+          var u0 = path.len > 0 ? state[state.length - 1].t / path.len : 0;
+          var sample0 = path.tempC ? tempAlongPath(path.tempC, u0) : null;
+          var c0 = airflowTintFromTemp(sample0);
+          colors[i * 3] = c0.r;
+          colors[i * 3 + 1] = c0.g;
+          colors[i * 3 + 2] = c0.b;
         }
         geo.attributes.color.needsUpdate = true;
         airflowParticleSets.push({ points: pts, state: state });
@@ -2376,11 +2485,7 @@
           );
           if (st.path.tempC) {
             var u = st.path.len > 0 ? st.t / st.path.len : 0;
-            var tc = st.path.tempC;
-            var sample = tc.supply;
-            if (u > 0.22 && tc.cold != null) sample = tc.cold;
-            if (u > 0.5 && tc.hot != null) sample = tc.hot;
-            if (u > 0.78 && tc.return != null) sample = tc.return;
+            var sample = tempAlongPath(st.path.tempC, u);
             var c3 = airflowTintFromTemp(sample);
             col.setXYZ(i, c3.r, c3.g, c3.b);
           }
