@@ -320,18 +320,6 @@ if ($addressId > 0) {
 
 layout_header('IPAM', $user, 'ipam');
 ?>
-<p class="text-muted" style="margin-top:0">
-    Two kinds of prefix: an <strong>address plan</strong> (individual IPs) or a <strong>subnet plan</strong> (a container you carve into smaller prefixes).
-    Nesting is optional: set <strong>Parent</strong> when you add a prefix (for example a site /21, then VLAN /24s under it).
-    <a href="<?= App::e(App::url('pages/ipam.php?view=aligned')) ?>">Aligned groups</a>
-    pin the same host index across two or more prefixes (multi-homed WAN, or LAN + iDRAC).
-    How it is designed:
-    <a href="<?= App::e(App::url('pages/docs.php#ipam')) ?>">Documentation → IPAM</a>.
-    DHCP on an address plan is a range fence, not a server.
-    <?php if ($canEdit): ?>
-        <a href="<?= App::e(App::url('pages/ipam.php?view=import')) ?>">Import Excel or CSV</a>.
-    <?php endif; ?>
-</p>
 <div class="flex-between mb-2" style="flex-wrap:wrap;gap:.5rem">
     <?php layout_search_form('Search CIDR, name, VLAN…', $q, 'pages/ipam.php', [], [
         'rows' => '#ipamPrefixBody tr.ipam-prefix-row',

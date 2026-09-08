@@ -197,7 +197,7 @@ class UpdateService
                     }
                 }
                 if ($best === null) {
-                    throw new RuntimeException('No version tags found on the repository. Push a tag like v0.2.0 first.');
+                    throw new RuntimeException('No version tags found on the repository. Push a tag like v1.0.0 first.');
                 }
                 $tag = $best;
                 // Optional: formal Release object for this tag (may still have empty body)

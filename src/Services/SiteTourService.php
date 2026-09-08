@@ -88,7 +88,7 @@ class SiteTourService
             [
                 'id' => 'nav-floorplan',
                 'title' => 'Floor Planner',
-                'body' => 'Start spatial work here. The planner is the canvas for cabinets, floor PDUs, cooling, UPS footprints, and cable raceways — 2D to draw, 3D to check clearances.',
+                'body' => 'Hall → Floor planner. It is setup for the hall (not a daily list): cabinets, floor PDUs, cooling, UPS footprints, and raceways — 2D to draw, 3D to check clearances. Also linked from Data Centers and the dashboard 3D card.',
                 'page' => 'index.php',
                 'target' => '[data-tour="nav-floorplan"]',
                 'nav' => 'dashboard',
@@ -286,7 +286,7 @@ class SiteTourService
             [
                 'id' => 'nav-users',
                 'title' => 'Users and departments',
-                'body' => 'Local accounts, roles (Viewer through Global Admin), and departments. Directory users appear after a successful LDAPS/Entra login. Permissions hide nav items you should not see. Global Admins mint API-service accounts here. Documentation has operator how-tos (floor planner, SNMP Discover, work-order apply, Tech/PWA) and the machine API.',
+                'body' => 'Local accounts, roles (Viewer through Global Admin), and departments. Directory users appear after a successful LDAPS/Entra login. Permissions hide nav items you should not see. Global Admins mint API-service accounts here. Documentation has operator how-tos (floor planner, IPAM, SNMP Discover, work-order apply, Tech/PWA) and the machine API.',
                 'page' => 'pages/users.php',
                 'target' => '[data-tour="nav-users"]',
                 'nav' => 'users',

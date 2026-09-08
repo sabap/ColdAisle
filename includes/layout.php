@@ -7,6 +7,8 @@
  */
 declare(strict_types=1);
 
+require_once __DIR__ . '/help_tips.php';
+
 /** @var array{title:string,user:array,active:string,tech:bool}|null */
 $GLOBALS['coldaisle_layout_ctx'] = $GLOBALS['coldaisle_layout_ctx'] ?? null;
 
@@ -86,6 +88,85 @@ function layout_tech_mode_toggle(bool $on): void
     <?php
 }
 
+/**
+ * @return list<array{id:string,label:string,items:list<array{key:string,label:string,href:string,icon:string,tour:?string}>}>
+ */
+function layout_nav_groups(): array
+{
+    return [
+        [
+            'id' => 'hall',
+            'label' => 'Hall',
+            'items' => [
+                ['key' => 'datacenters', 'label' => 'Data Centers', 'href' => 'pages/datacenters.php', 'icon' => '🏛', 'tour' => 'nav-datacenters'],
+                ['key' => 'cabinets', 'label' => 'Cabinets', 'href' => 'pages/cabinets.php', 'icon' => '▤', 'tour' => 'nav-cabinets'],
+                ['key' => 'devices', 'label' => 'Devices', 'href' => 'pages/devices.php', 'icon' => '🖥', 'tour' => 'nav-devices'],
+                ['key' => 'device_templates', 'label' => 'Templates', 'href' => 'pages/device_templates.php', 'icon' => '', 'tour' => 'nav-device-templates'],
+                ['key' => 'floorplan', 'label' => 'Floor planner', 'href' => 'pages/floorplan.php', 'icon' => '▦', 'tour' => 'nav-floorplan'],
+            ],
+        ],
+        [
+            'id' => 'power',
+            'label' => 'Power',
+            'items' => [
+                ['key' => 'power', 'label' => 'Dashboard', 'href' => 'pages/power.php', 'icon' => '⚡', 'tour' => 'nav-power'],
+                ['key' => 'power_zones', 'label' => 'Zones', 'href' => 'pages/power_zones.php', 'icon' => '', 'tour' => 'nav-power-zones'],
+                ['key' => 'power_pdus', 'label' => 'PDUs', 'href' => 'pages/power_pdus.php', 'icon' => '', 'tour' => 'nav-power-pdus'],
+                ['key' => 'power_ups', 'label' => 'UPS', 'href' => 'pages/power_ups.php', 'icon' => '', 'tour' => 'nav-power-ups'],
+                ['key' => 'power_pdu_templates', 'label' => 'Templates', 'href' => 'pages/power_pdu_templates.php', 'icon' => '', 'tour' => null],
+            ],
+        ],
+        [
+            'id' => 'environment',
+            'label' => 'Environment',
+            'items' => [
+                ['key' => 'cooling', 'label' => 'Dashboard', 'href' => 'pages/cooling.php', 'icon' => '❄', 'tour' => 'nav-cooling'],
+                ['key' => 'cooling_units', 'label' => 'Air & pumps', 'href' => 'pages/cooling_units.php', 'icon' => '', 'tour' => null],
+                ['key' => 'env_sensors', 'label' => 'Env sensors', 'href' => 'pages/env_sensors.php', 'icon' => '', 'tour' => null],
+            ],
+        ],
+        [
+            'id' => 'plant',
+            'label' => 'Plant',
+            'items' => [
+                ['key' => 'cables', 'label' => 'Cabling', 'href' => 'pages/cables.php', 'icon' => '🔌', 'tour' => 'nav-cables'],
+                ['key' => 'ipam', 'label' => 'IPAM', 'href' => 'pages/ipam.php', 'icon' => '🔢', 'tour' => 'nav-ipam'],
+                ['key' => 'snmp', 'label' => 'SNMP', 'href' => 'pages/snmp.php', 'icon' => '📡', 'tour' => 'nav-snmp'],
+            ],
+        ],
+        [
+            'id' => 'work',
+            'label' => 'Work',
+            'items' => [
+                ['key' => 'work_orders', 'label' => 'Work orders', 'href' => 'pages/work_orders.php', 'icon' => '📋', 'tour' => 'nav-work-orders'],
+                ['key' => 'disposals', 'label' => 'Decommission', 'href' => 'pages/disposals.php', 'icon' => '🗑', 'tour' => 'nav-disposals'],
+                ['key' => 'audits', 'label' => 'Audits', 'href' => 'pages/audits.php', 'icon' => '✓', 'tour' => 'nav-audits'],
+                ['key' => 'reports', 'label' => 'Reports', 'href' => 'pages/reports.php', 'icon' => '📊', 'tour' => 'nav-reports'],
+            ],
+        ],
+        [
+            'id' => 'admin',
+            'label' => 'Admin',
+            'items' => [
+                ['key' => 'users', 'label' => 'Users & Depts', 'href' => 'pages/users.php', 'icon' => '👤', 'tour' => 'nav-users'],
+                ['key' => 'docs', 'label' => 'Documentation', 'href' => 'pages/docs.php', 'icon' => '📖', 'tour' => null],
+                ['key' => 'settings', 'label' => 'Settings', 'href' => 'pages/settings.php', 'icon' => '⚙', 'tour' => 'nav-settings'],
+            ],
+        ],
+    ];
+}
+
+function layout_nav_item_is_active(string $active, string $key): bool
+{
+    if ($active === $key) {
+        return true;
+    }
+    if ($key === 'power_pdu_templates' && in_array($active, ['power_pdu_templates', 'power_templates'], true)) {
+        return true;
+    }
+    return false;
+}
+
 function layout_header(string $title, array $user, string $active = ''): void
 {
     $appName = App::appName();
@@ -113,7 +194,9 @@ function layout_header(string $title, array $user, string $active = ''): void
     // Flashes already read; free session lock so media.php / parallel requests are not blocked
     App::releaseSessionLock();
 
-    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '67';
+    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '68';
+    $helpId = layout_help_id_for_active($active);
+    $helpCatalog = layout_help_catalog();
     $wizAuto = false;
     $wizRisk = ['warn' => false, 'message' => '', 'counts' => []];
     $tourActive = false;
@@ -164,7 +247,8 @@ function layout_header(string $title, array $user, string $active = ''): void
       setupWizardAuto: <?= $wizAuto ? 'true' : 'false' ?>,
       setupWizardRisk: <?= json_encode($wizRisk, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>,
       siteTourActive: <?= (!empty($tourActive) ? 'true' : 'false') ?>,
-      searchUrl: <?= json_encode(App::url('api/search.php')) ?>
+      searchUrl: <?= json_encode(App::url('api/search.php')) ?>,
+      helpTips: <?= json_encode($helpCatalog, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>
     };
     window.WINDCIM = window.ColdAisle; // legacy alias
     </script>
@@ -197,94 +281,49 @@ function layout_header(string $title, array $user, string $active = ''): void
             <span class="sidebar-find-label">Find…</span>
             <kbd>/</kbd>
         </button>
-        <nav class="sidebar-nav">
-            <?php
-            $nav = [
-                'dashboard' => ['Dashboard', 'index.php', '▣', 'nav-dashboard'],
-                'floorplan' => ['Floor Planner', 'pages/floorplan.php', '▦', 'nav-floorplan'],
-                'datacenters' => ['Data Centers', 'pages/datacenters.php', '🏛', 'nav-datacenters'],
-                'cabinets' => ['Cabinets', 'pages/cabinets.php', '▤', 'nav-cabinets'],
-                'devices' => ['Devices', 'pages/devices.php', '🖥', 'nav-devices'],
-                'power' => ['Power', 'pages/power.php', '⚡', 'nav-power'],
-                'cooling' => ['Cooling', 'pages/cooling.php', '❄', 'nav-cooling'],
-                'cables' => ['Cabling', 'pages/cables.php', '🔌', 'nav-cables'],
-                'ipam' => ['IPAM', 'pages/ipam.php', '🔢', 'nav-ipam'],
-                'snmp' => ['SNMP', 'pages/snmp.php', '📡', 'nav-snmp'],
-                'work_orders' => ['Work orders', 'pages/work_orders.php', '📋', 'nav-work-orders'],
-                'disposals' => ['Decommission', 'pages/disposals.php', '🗑', 'nav-disposals'],
-                'audits' => ['Audits', 'pages/audits.php', '✓', 'nav-audits'],
-                'reports' => ['Reports', 'pages/reports.php', '📊', 'nav-reports'],
-                'users' => ['Users & Depts', 'pages/users.php', '👤', 'nav-users'],
-                'docs' => ['Documentation', 'pages/docs.php', '📖', 'nav-docs'],
-                'settings' => ['Settings', 'pages/settings.php', '⚙', 'nav-settings'],
-            ];
-            $devicesActive = in_array($active, ['devices', 'device_templates'], true);
-            $powerActive = in_array($active, ['power', 'power_zones', 'power_pdus', 'power_pdu_templates', 'power_templates', 'power_ups'], true);
-            $coolingActive = in_array($active, ['cooling', 'cooling_units', 'env_sensors'], true);
-            foreach ($nav as $key => [$label, $href, $icon, $tourId]):
-                if (!AuthManager::canViewNav($user, $key)) {
+        <nav class="sidebar-nav" id="sidebarNav">
+            <?php if (AuthManager::canViewNav($user, 'dashboard')): ?>
+                <a class="nav-item <?= $active === 'dashboard' ? 'active' : '' ?>" href="<?= App::e(App::url('index.php')) ?>"
+                   data-tour="nav-dashboard">
+                    <span class="nav-icon">▣</span>
+                    <span>Dashboard</span>
+                </a>
+            <?php endif; ?>
+            <?php foreach (layout_nav_groups() as $group):
+                $visible = [];
+                $groupHasActive = false;
+                foreach ($group['items'] as $item) {
+                    if (!AuthManager::canViewNav($user, $item['key'])) {
+                        continue;
+                    }
+                    $itemActive = layout_nav_item_is_active($active, $item['key']);
+                    if ($itemActive) {
+                        $groupHasActive = true;
+                    }
+                    $visible[] = $item + ['is_active' => $itemActive];
+                }
+                if ($visible === []) {
                     continue;
                 }
-                $cls = ($active === $key
-                    || ($key === 'devices' && $devicesActive)
-                    || ($key === 'power' && $powerActive)
-                    || ($key === 'cooling' && $coolingActive)) ? 'active' : '';
-            ?>
-                <a class="nav-item <?= $cls ?>" href="<?= App::e(App::url($href)) ?>"
-                   data-tour="<?= App::e((string)$tourId) ?>">
-                    <span class="nav-icon"><?= $icon ?></span>
-                    <span><?= App::e($label) ?></span>
-                </a>
-                <?php if ($key === 'devices'): ?>
-                    <a class="nav-item nav-sub <?= $active === 'devices' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/devices.php')) ?>">
-                        <span class="nav-icon"></span><span>All devices</span>
-                    </a>
-                    <a class="nav-item nav-sub <?= $active === 'device_templates' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/device_templates.php')) ?>"
-                       data-tour="nav-device-templates">
-                        <span class="nav-icon"></span><span>Templates</span>
-                    </a>
-                <?php endif; ?>
-                <?php if ($key === 'power'): ?>
-                    <a class="nav-item nav-sub <?= $active === 'power' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/power.php')) ?>">
-                        <span class="nav-icon"></span><span>Dashboard</span>
-                    </a>
-                    <a class="nav-item nav-sub <?= $active === 'power_zones' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/power_zones.php')) ?>"
-                       data-tour="nav-power-zones">
-                        <span class="nav-icon"></span><span>Zones</span>
-                    </a>
-                    <a class="nav-item nav-sub <?= $active === 'power_pdus' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/power_pdus.php')) ?>"
-                       data-tour="nav-power-pdus">
-                        <span class="nav-icon"></span><span>PDUs</span>
-                    </a>
-                    <a class="nav-item nav-sub <?= $active === 'power_ups' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/power_ups.php')) ?>"
-                       data-tour="nav-power-ups">
-                        <span class="nav-icon"></span><span>UPS</span>
-                    </a>
-                    <a class="nav-item nav-sub <?= in_array($active, ['power_pdu_templates', 'power_templates'], true) ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/power_pdu_templates.php')) ?>">
-                        <span class="nav-icon"></span><span>Power Templates</span>
-                    </a>
-                <?php endif; ?>
-                <?php if ($key === 'cooling'): ?>
-                    <a class="nav-item nav-sub <?= $active === 'cooling' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/cooling.php')) ?>">
-                        <span class="nav-icon"></span><span>Dashboard</span>
-                    </a>
-                    <a class="nav-item nav-sub <?= $active === 'cooling_units' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/cooling_units.php')) ?>">
-                        <span class="nav-icon"></span><span>Air &amp; pumps</span>
-                    </a>
-                    <a class="nav-item nav-sub <?= $active === 'env_sensors' ? 'active' : '' ?>"
-                       href="<?= App::e(App::url('pages/env_sensors.php')) ?>">
-                        <span class="nav-icon"></span><span>Env sensors</span>
-                    </a>
-                <?php endif; ?>
+                ?>
+                <div class="nav-group<?= $groupHasActive ? ' is-open has-active' : '' ?>" data-nav-group="<?= App::e($group['id']) ?>">
+                    <button type="button" class="nav-group-toggle" aria-expanded="<?= $groupHasActive ? 'true' : 'false' ?>">
+                        <span><?= App::e($group['label']) ?></span>
+                        <span class="nav-group-chevron" aria-hidden="true"></span>
+                    </button>
+                    <div class="nav-group-body">
+                        <div class="nav-group-body-inner">
+                            <?php foreach ($visible as $item): ?>
+                                <a class="nav-item<?= $item['is_active'] ? ' active' : '' ?><?= $item['icon'] === '' ? ' nav-sub' : '' ?>"
+                                   href="<?= App::e(App::url($item['href'])) ?>"
+                                    <?php if (!empty($item['tour'])): ?> data-tour="<?= App::e((string)$item['tour']) ?>"<?php endif; ?>>
+                                    <span class="nav-icon"><?= $item['icon'] !== '' ? $item['icon'] : '' ?></span>
+                                    <span><?= App::e($item['label']) ?></span>
+                                </a>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                </div>
             <?php endforeach; ?>
         </nav>
         <div class="sidebar-footer">
@@ -302,6 +341,10 @@ function layout_header(string $title, array $user, string $active = ''): void
         <header class="topbar">
             <button type="button" class="btn btn-ghost btn-icon" id="sidebarToggle" aria-label="Toggle menu">☰</button>
             <h1 class="page-title"><?= App::e($title) ?></h1>
+            <?php if ($helpId): ?>
+                <button type="button" class="help-tip-btn" data-help="<?= App::e($helpId) ?>"
+                        aria-label="Help for this page" title="Help">?</button>
+            <?php endif; ?>
             <button type="button" class="btn btn-ghost topbar-find" id="topbarFindBtn" data-open-find
                     data-tour="global-search" title="Find cabinets, devices, PDUs, work orders (press /)">
                 Find <kbd>/</kbd>
@@ -574,7 +617,7 @@ function layout_footer(): void
     $licenseUrl = $githubUrl . '/blob/main/LICENSE';
     $timerOn = class_exists('App', false) && App::requestTimerEnabled();
     $timing = $timerOn ? App::requestTimingSnapshot() : null;
-    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '25';
+    $jsV = preg_replace('/\W+/', '', (string)App::VERSION) . '26';
 
     if ($tech):
         $nav = (class_exists('TechMode') && $user)
@@ -716,6 +759,17 @@ if ('serviceWorker' in navigator) {
         </div>
     </div>
 </div>
+
+<aside class="help-drawer" id="helpDrawer" hidden>
+    <div class="help-drawer-backdrop" data-help-close tabindex="-1"></div>
+    <div class="help-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="helpDrawerTitle">
+        <div class="help-drawer-header">
+            <h2 id="helpDrawerTitle">Help</h2>
+            <button type="button" class="modal-close" data-help-close aria-label="Close help">&times;</button>
+        </div>
+        <div class="help-drawer-body docs-prose" id="helpDrawerBody"></div>
+    </div>
+</aside>
 
 <script src="<?= App::e(App::url('assets/js/app.js')) ?>?v=<?= App::e($jsV) ?>"></script>
 <script>

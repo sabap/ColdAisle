@@ -6,7 +6,7 @@
  * kind/elev/width. Matching default is path_id (same IDs as the source snapshot)
  * so deleted production rows can be re-inserted and cable hops may reconnect.
  *
- *   php scripts/raceway_pack.php export --root=C:\inetpub\wwwroot\WinDCIM --file=C:\temp\raceway_pack.json
+ *   php scripts/raceway_pack.php export --root=C:\inetpub\wwwroot\ColdAisle --file=C:\temp\raceway_pack.json
  *   php scripts/raceway_pack.php import --file=C:\temp\raceway_pack.json --dry-run
  *   php scripts/raceway_pack.php import --file=C:\temp\raceway_pack.json
  *

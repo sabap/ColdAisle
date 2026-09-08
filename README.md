@@ -3,7 +3,7 @@
 **Data Center Infrastructure Management** — free & open source.  
 Primary platform: **IIS + PHP + Microsoft SQL Server** on Windows (with a clean path toward other stacks later).
 
-Formerly known as **WinDCIM**. Built as a modern replacement path for environments that outgrew or cannot maintain Linux-based [openDCIM](https://github.com/opendcim/openDCIM), with first-class support for local accounts, **LDAPS**, and **Microsoft Entra ID (Azure AD) SSO**.
+Built as a modern replacement path for environments that outgrew or cannot maintain Linux-based [openDCIM](https://github.com/opendcim/openDCIM), with first-class support for local accounts, **LDAPS**, and **Microsoft Entra ID (Azure AD) SSO**.
 
 **Current version:** see [`VERSION`](VERSION).  
 **What 1.0 includes** (operator surface): [`docs/WHAT_1.0_INCLUDES.md`](docs/WHAT_1.0_INCLUDES.md).  
@@ -91,7 +91,7 @@ Useful switches:
 | `-EnableSnmp` | Enable PHP `extension=snmp` for **web** Discover (optional; see SNMP notes) |
 | `-RegisterSnmpTask` | Register the Windows Task Scheduler poll job (elevated; uses `run_poll_snmp.cmd`) |
 | `-Force` | Refresh app files / PHP components (preserves `config\config.php`) |
-| `-Version 0.2.x` | Pin a release tag instead of “latest” |
+| `-Version 1.0.0` | Pin a release tag instead of “latest” |
 
 This downloads the **latest release tag** from this public repo, installs IIS/PHP/ODBC as needed, deploys to  
 `C:\inetpub\wwwroot\ColdAisle` (default), then you finish in the browser:

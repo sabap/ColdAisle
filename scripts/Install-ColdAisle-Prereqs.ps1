@@ -19,7 +19,7 @@
     Re-run safe: skips downloads that already exist unless -Force is specified.
 
 .PARAMETER PhpVersion
-    PHP version to install (default: 8.3.32). Must exist on windows.php.net releases.
+    PHP version to install (default: 8.3.33). Must exist on windows.php.net releases (current or archives). If that patch 404s, the installer falls back to the current 8.3 NTS zip.
 
 .PARAMETER PhpInstallPath
     Extract path for PHP (default: C:\PHP).
@@ -42,7 +42,7 @@
     Prefer the root Install-ColdAisle.ps1 for a one-shot public install.
 
 .PARAMETER Version
-    When using -FromGitHub: tag without/with v (e.g. 0.2.0). Default: latest tag.
+    When using -FromGitHub: tag without/with v (e.g. 1.0.0). Default: latest tag.
 
 .PARAMETER GitHubOwner
     GitHub owner for -FromGitHub. Default: sabap
@@ -99,7 +99,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$PhpVersion = '8.3.32',
+    [string]$PhpVersion = '8.3.33',
     [string]$PhpInstallPath = 'C:\PHP',
     [string]$SiteName = 'Default Web Site',
     [string]$SitePhysicalPath = 'C:\inetpub\wwwroot\ColdAisle',
@@ -242,6 +242,7 @@ function Install-IisFeatures {
             'IIS-HttpLogging'                = $true
             'IIS-RequestFiltering'           = $true
             'IIS-HttpCompressionStatic'      = $true
+            'IIS-ApplicationDevelopment'     = $true
             'IIS-CGI'                        = $true
             'IIS-ManagementConsole'          = $true
         }
@@ -296,27 +297,57 @@ function Install-VcRedist {
     }
 }
 
-function Get-PhpDownloadUrl([string]$Version) {
-    # Official release layout:
-    # https://windows.php.net/downloads/releases/php-8.3.14-nts-Win32-vs16-x64.zip
-    # Also try vs17 builds if vs16 missing.
-    $candidates = @(
+function Test-PhpZipUrl([string]$Url) {
+    try {
+        $resp = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -TimeoutSec 20
+        if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 400) {
+            return $true
+        }
+    } catch { }
+    return $false
+}
+
+function Get-PhpNtsX64Urls([string]$Version) {
+    return @(
         "https://windows.php.net/downloads/releases/php-$Version-nts-Win32-vs16-x64.zip",
         "https://windows.php.net/downloads/releases/php-$Version-nts-Win32-vs17-x64.zip",
         "https://windows.php.net/downloads/releases/archives/php-$Version-nts-Win32-vs16-x64.zip",
         "https://windows.php.net/downloads/releases/archives/php-$Version-nts-Win32-vs17-x64.zip"
     )
+}
+
+function Get-PhpDownloadUrl([string]$Version) {
+    # Official layout:
+    # https://windows.php.net/downloads/releases/php-8.3.33-nts-Win32-vs16-x64.zip
+    # Older patches move to /archives/. PHP 8.4+ uses vs17.
     Ensure-Tls12
-    foreach ($url in $candidates) {
-        try {
-            $resp = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing -TimeoutSec 20
-            if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 400) {
-                return $url
-            }
-        } catch {
-            # try next
+    foreach ($url in (Get-PhpNtsX64Urls $Version)) {
+        if (Test-PhpZipUrl $url) { return $url }
+    }
+
+    $mm = ($Version -split '\.')[0..1] -join '.'
+    $resolved = $null
+    try {
+        $idx = Invoke-RestMethod -Uri 'https://windows.php.net/downloads/releases/releases.json' -UseBasicParsing -TimeoutSec 20
+        if ($idx.$mm -and $idx.$mm.version) {
+            $resolved = [string]$idx.$mm.version
+        }
+    } catch { }
+    if ($resolved -and $resolved -ne $Version) {
+        Write-Warn "PHP $Version NTS zip not on the current index; using $resolved from windows.php.net"
+        foreach ($url in (Get-PhpNtsX64Urls $resolved)) {
+            if (Test-PhpZipUrl $url) { return $url }
         }
     }
+
+    foreach ($toolset in @('vs16', 'vs17')) {
+        $latest = "https://windows.php.net/downloads/releases/latest/php-$mm-nts-Win32-$toolset-x64-latest.zip"
+        if (Test-PhpZipUrl $latest) {
+            Write-Warn "Using rolling latest zip for PHP $mm ($toolset)"
+            return $latest
+        }
+    }
+
     throw @"
 Could not find PHP $Version NTS x64 on windows.php.net.
 Check https://windows.php.net/download/ for a valid version and pass -PhpVersion.
@@ -348,6 +379,22 @@ function Install-Php {
 
     if (-not (Test-Path $phpCgi)) {
         throw "php-cgi.exe not found under $PhpInstallPath after extract."
+    }
+
+    $caDir = Join-Path $PhpInstallPath 'extras\ssl'
+    $caBundle = Join-Path $caDir 'cacert.pem'
+    if (-not (Test-Path $caBundle)) {
+        try {
+            if (-not (Test-Path $caDir)) {
+                New-Item -ItemType Directory -Path $caDir -Force | Out-Null
+            }
+            Download-File -Uri 'https://curl.se/ca/cacert.pem' -OutFile $caBundle
+            if ((Test-Path $caBundle) -and ((Get-Item $caBundle).Length -gt 50000)) {
+                Write-Ok 'Installed Mozilla CA bundle (extras/ssl/cacert.pem)'
+            }
+        } catch {
+            Write-Warn "CA bundle download skipped: $($_.Exception.Message)"
+        }
     }
 
     # php.ini
@@ -454,6 +501,13 @@ function Configure-PhpIni([string]$IniPath) {
     # php_zip is the supported path on a fresh install.
     foreach ($ext in @('curl', 'mbstring', 'openssl', 'fileinfo', 'gd', 'ldap', 'pdo_odbc', 'zip')) {
         $c = Set-IniValue $c $ext -IsExtension
+    }
+
+    # CA bundle so GitHub updates, Entra, and mail verify TLS (Windows PHP zip ships extras/ssl/cacert.pem)
+    $caBundle = Join-Path $PhpInstallPath 'extras\ssl\cacert.pem'
+    if (Test-Path $caBundle) {
+        $c = Set-IniValue $c 'curl.cainfo' "`"$caBundle`""
+        $c = Set-IniValue $c 'openssl.cafile' "`"$caBundle`""
     }
 
     # snmp: DLL is usually present in the Windows PHP zip. Leaving extension=snmp ON in
@@ -1001,9 +1055,20 @@ Pass -DeploySource path\to\ColdAisle or run this script from the project scripts
         Write-Ok 'Backed up existing config\config.php'
     }
 
-    # Exclude VCS, local secrets, and runtime storage contents (dirs recreated later)
-    $excludeDirs = @('.git', '.vs', '.idea', 'node_modules', 'storage')
-    $excludeFiles = @('phpinfo-test.php', 'config.php')
+    # Exclude VCS, local secrets, runtime storage, and hall dumps that must never ship
+    $excludeDirs = @('.git', '.vs', '.idea', 'node_modules', 'storage', 'AC_Vertiv_Thermal', 'ROW-PDU', 'DC_UPS')
+    $excludeFiles = @(
+        'phpinfo-test.php',
+        'config.php',
+        'PUBLIC_SITE_PROMPT.md',
+        'snmpwalk*.txt',
+        'FacilityOutput.png',
+        'FloorPlan_Live.png',
+        'FloorPlan_IIS-TST.png',
+        '7862_Dashboard_APC.png',
+        '7862_Dashboard_ColdAisle.png',
+        '7862_Dashboard2_ColdAisle.png'
+    )
 
     # Ensure runtime dirs exist on target
     foreach ($sub in @('storage\logs', 'storage\uploads', 'storage\backups', 'storage\tmp', 'config')) {
@@ -1112,7 +1177,7 @@ function Invoke-PrereqVerification {
     if (Test-Path $phpExe) {
         Write-Ok "php.exe: $phpExe"
         $mods = & $phpExe -m 2>&1 | Out-String
-        foreach ($m in @('curl', 'mbstring', 'openssl', 'PDO', 'zip')) {
+        foreach ($m in @('curl', 'mbstring', 'openssl', 'PDO', 'zip', 'gd', 'fileinfo')) {
             if ($mods -match $m) { Write-Ok "PHP: $m" }
             else { Write-Warn "PHP module not listed: $m" }
         }
@@ -1181,7 +1246,7 @@ function Show-Summary {
 
   Verify:
     1.  & '$phpExe' -m
-        (should list curl, mbstring, openssl, zip, pdo_odbc; optional ldap, pdo_sqlsrv)
+        (should list curl, mbstring, openssl, zip, gd, fileinfo, pdo_odbc; optional ldap, pdo_sqlsrv)
     2.  Browse http://localhost/phpinfo-test.php
     3.  Browse http://localhost/setup.php         (ColdAisle web installer)
     4.  Delete phpinfo-test.php when done

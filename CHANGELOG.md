@@ -13,7 +13,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Collapsible sidebar:** Hall, Power, Environment, Plant, Work, and Admin fold with a short expand animation. The section you are in stays open; others remember your last choice. Floor planner moved under **Hall** (setup, not a top-level daily item) — still on Data Centers and the dashboard 3D card.
+- **Page help drawer:** circled **?** next to the page title slides a help panel from the right (Esc to close). IPAM’s long intro lives there; other major pages have a short tip plus a docs link.
+
 ### Enhancements
+
+- **Installer stack sweep:** default PHP NTS is **8.3.33** (current windows.php.net 8.3). If a pinned patch 404s, the script falls back to that minor’s current zip or the rolling `*-latest.zip`. `php.ini` points `curl.cainfo` / `openssl.cafile` at PHP’s `extras/ssl/cacert.pem` when present. IIS `maxAllowedContentLength` matches the 64 MB PHP upload cap. Post-checks require `gd` and `fileinfo`. Client IIS enables Application Development (parent of CGI). Local deploys skip hall dump folders/files.
+- **Copy polish:** ASHRAE / temp unit labels no longer show garbled `Â°C`. New installs write `App::VERSION` into config (was stuck at 0.2.27). Installer and raceway script examples use ColdAisle paths and v1.0.0. Raceway import requires `-ZipPath`/`-JsonPath` instead of a lab zip default. README no longer mentions the old product name.
 
 ### Bug fixes
 

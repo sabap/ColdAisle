@@ -1,8 +1,8 @@
 <?php
 /**
- * Cooling & environmental monitoring â€” labels, ASHRAE guidance, field helpers.
+ * Cooling & environmental monitoring — labels, ASHRAE guidance, field helpers.
  *
- * Guidance is based on ASHRAE TC 9.9 thermal envelopes (Recommended / A1â€“A4).
+ * Guidance is based on ASHRAE TC 9.9 thermal envelopes (Recommended / A1–A4).
  * Operators choose how much to use: a single active/standby pair is valid;
  * multi-unit / multi-sensor layouts are supported without requiring cooling zones.
  */
@@ -77,7 +77,7 @@ function cooling_ashrae_classes(): array
 
 /**
  * Rough dry-bulb / RH guidance for display (not a compliance engine).
- * Values: dry-bulb Â°C low/high, RH % low/high (null = not specified in this summary).
+ * Values: dry-bulb °C low/high, RH % low/high (null = not specified in this summary).
  *
  * @return array{label:string,db_c:array{0:?float,1:?float},rh:array{0:?float,1:?float},notes:string}
  */
@@ -88,7 +88,7 @@ function cooling_ashrae_envelope(string $class): array
             'label' => 'Recommended',
             'db_c' => [18.0, 27.0],
             'rh' => [null, 60.0],
-            'notes' => 'Typical enterprise target band (dry-bulb 18â€“27 Â°C; dew point / RH limits apply).',
+            'notes' => 'Typical enterprise target band (dry-bulb 18–27 °C; dew point / RH limits apply).',
         ],
         'A1' => [
             'label' => 'A1',
@@ -304,7 +304,7 @@ function cooling_unit_fields_from_post(array $post): array
         'rated_kw_cooling' => $num($post['rated_kw_cooling'] ?? null),
         'rated_tons' => $num($post['rated_tons'] ?? null),
         'rated_cfm' => $num($post['rated_cfm'] ?? null),
-        // Setpoints stored in Â°C; form posts site display unit
+        // Setpoints stored in °C; form posts site display unit
         'supply_temp_setpoint_c' => class_exists('TempUnitService')
             ? TempUnitService::postToC($post['supply_temp_setpoint_c'] ?? null)
             : $num($post['supply_temp_setpoint_c'] ?? null),
@@ -405,7 +405,7 @@ function cooling_unit_finalize_snmp(array $row, ?array $prev = null): array
                 $row['snmp_context'] = ($ctx === null || trim((string)$ctx) === '')
                     ? null
                     : trim((string)$ctx);
-                // Profile passphrases are already sealed in DB â€” copy as-is
+                // Profile passphrases are already sealed in DB — copy as-is
                 if (!empty($prof['auth_passphrase'])) {
                     $row['snmp_auth_passphrase'] = $prof['auth_passphrase'];
                     $authFromProfile = true;
@@ -482,9 +482,9 @@ function env_sensor_default_unit(string $kind): string
         return TempUnitService::defaultUnitForKind($kind);
     }
     return match ($kind) {
-        'temperature', 'dew_point' => 'Â°C',
+        'temperature', 'dew_point' => '°C',
         'humidity' => '%RH',
-        'temp_humidity' => 'Â°C / %RH',
+        'temp_humidity' => '°C / %RH',
         'differential_pressure' => 'Pa',
         'airflow' => 'CFM',
         'leak' => 'state',
@@ -560,7 +560,7 @@ function env_sensor_fields_from_post(array $post): array
         'is_active' => isset($post['is_active']) ? (!empty($post['is_active']) ? 1 : 0) : 1,
     ];
 
-    // Thresholds entered in site display unit â†’ store Â°C for temperature kinds
+    // Thresholds entered in site display unit → store °C for temperature kinds
     if (class_exists('TempUnitService')) {
         $fields = TempUnitService::thresholdsDisplayToStorage($fields, $kind);
         if (TempUnitService::isTempKind($kind) && ($unitPosted === null || $unitPosted === '')) {
@@ -568,7 +568,7 @@ function env_sensor_fields_from_post(array $post): array
         }
     }
 
-    // Host foreign keys â€” only the matching host type is populated
+    // Host foreign keys — only the matching host type is populated
     switch ($host) {
         case 'cooling_unit':
             $fields['cooling_unit_id'] = $intOrNull($post['cooling_unit_id'] ?? null);
@@ -595,7 +595,7 @@ function env_sensor_fields_from_post(array $post): array
 }
 
 /**
- * Display label for a sensor's host (device name, PDU name, â€¦).
+ * Display label for a sensor's host (device name, PDU name, …).
  * Expects optional join columns: device_label, cooling_unit_name, pdu_name, cabinet_name, room_name.
  *
  * @param array<string,mixed> $sensor

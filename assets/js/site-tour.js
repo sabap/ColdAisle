@@ -251,6 +251,10 @@
     nextBtn.textContent = index >= STEPS.length - 1 ? 'Finish' : (isWait ? 'Waiting…' : 'Next');
     nextBtn.disabled = isWait && index < STEPS.length - 1;
     prevBtn.disabled = index <= 0;
+    var tgt = targetEl(step.target);
+    if (tgt && window.ColdAisle && typeof ColdAisle.revealNavTarget === 'function') {
+      ColdAisle.revealNavTarget(tgt);
+    }
     requestAnimationFrame(position);
     setTimeout(position, 80);
   }

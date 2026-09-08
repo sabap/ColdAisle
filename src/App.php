@@ -395,7 +395,7 @@ class App
         header('X-Frame-Options: SAMEORIGIN');
         header('Referrer-Policy: strict-origin-when-cross-origin');
         header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
-        // Frame ancestors only â€” full CSP would break existing inline scripts
+        // Frame ancestors only — full CSP would break existing inline scripts
         header("Content-Security-Policy: frame-ancestors 'self'");
 
         $sec = self::isInstalled() ? self::securityConfig() : [];
@@ -449,7 +449,7 @@ class App
         if ($key === null) {
             return self::$config;
         }
-        // Brand is not configurable â€” ignore any legacy config/settings value
+        // Brand is not configurable — ignore any legacy config/settings value
         if ($key === 'app_name') {
             return self::APP_NAME;
         }
@@ -582,7 +582,7 @@ class App
         }
     }
 
-    /** Always "ColdAisle" â€” not user-configurable. */
+    /** Always "ColdAisle" — not user-configurable. */
     public static function appName(): string
     {
         return self::APP_NAME;
@@ -592,7 +592,7 @@ class App
     {
         if (!empty(self::$config['base_url'])) {
             $configured = rtrim((string)self::$config['base_url'], '/');
-            // Config may say https://â€¦ before IIS has a certificate binding.
+            // Config may say https://… before IIS has a certificate binding.
             // Until the request is actually HTTPS (or force_https is on), prefer the
             // live request origin so CSS/login links keep working over HTTP.
             if (PHP_SAPI !== 'cli'
@@ -634,7 +634,7 @@ class App
 
     /**
      * URL path to the application root (no trailing slash), e.g. '' or '/ColdAisle'.
-     * Must NOT include /pages, /api, etc. â€” those are inside the app.
+     * Must NOT include /pages, /api, etc. — those are inside the app.
      */
     public static function basePath(): string
     {

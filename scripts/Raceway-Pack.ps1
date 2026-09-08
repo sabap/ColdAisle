@@ -4,13 +4,13 @@
 
 .EXAMPLE
   # On the lab IIS box (source with intact floorplan):
-  .\scripts\Raceway-Pack.ps1 export -Root C:\inetpub\wwwroot\WinDCIM -File C:\temp\raceway_pack.json
+  .\scripts\Raceway-Pack.ps1 export -Root C:\inetpub\wwwroot\ColdAisle -File C:\temp\raceway_pack.json
 
   # Dry-run on production:
-  .\scripts\Raceway-Pack.ps1 import -Root C:\inetpub\wwwroot\WinDCIM -File C:\temp\raceway_pack.json -DryRun
+  .\scripts\Raceway-Pack.ps1 import -Root C:\inetpub\wwwroot\ColdAisle -File C:\temp\raceway_pack.json -DryRun
 
   # Apply on production (restores path_id so cable hops can reconnect):
-  .\scripts\Raceway-Pack.ps1 import -Root C:\inetpub\wwwroot\WinDCIM -File C:\temp\raceway_pack.json
+  .\scripts\Raceway-Pack.ps1 import -Root C:\inetpub\wwwroot\ColdAisle -File C:\temp\raceway_pack.json
 #>
 [CmdletBinding()]
 param(

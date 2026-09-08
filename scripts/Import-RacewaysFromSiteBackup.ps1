@@ -40,12 +40,11 @@ Write-Host 'Import-RacewaysFromSiteBackup.ps1  rev.5 ASCII' -ForegroundColor Dar
 # CONFIG - edit these for production, then run once as dry-run, then -Apply
 # =============================================================================
 if (-not $SqlServer)   { $SqlServer   = 'CHANGE_ME' }          # e.g. PROD-SQL\INSTANCE
-if (-not $Database)    { $Database    = 'WinDCIM' }
+if (-not $Database)    { $Database    = 'ColdAisle' }
 if (-not $SqlUser)     { $SqlUser     = 'CHANGE_ME' }
 if (-not $SqlPassword) { $SqlPassword = '' }                   # leave blank to prompt
 if (-not $ZipPath -and -not $JsonPath) {
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $ZipPath = Join-Path $scriptDir 'coldaisle-site_20260814_154021_v0.3.148.zip'
+    throw 'Pass -ZipPath (coldaisle-site_*.zip) or -JsonPath (cable_paths.json).'
 }
 # $ForceRoomId = 1   # uncomment if dest hall is not room_id 1
 # $RemoveExtraInRoom = $true  # also delete dest paths in that room not in the pack

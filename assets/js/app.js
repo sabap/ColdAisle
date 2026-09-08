@@ -891,6 +891,112 @@
     }
   }
 
+  var NAV_GROUP_KEY = 'ca_nav_groups';
+
+  function setNavGroupOpen(group, open) {
+    if (!group) return;
+    group.classList.toggle('is-open', !!open);
+    var btn = group.querySelector('.nav-group-toggle');
+    if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  function persistNavGroups() {
+    var state = {};
+    document.querySelectorAll('[data-nav-group]').forEach(function (g) {
+      state[g.getAttribute('data-nav-group')] = g.classList.contains('is-open');
+    });
+    try { localStorage.setItem(NAV_GROUP_KEY, JSON.stringify(state)); } catch (e) { /* private */ }
+  }
+
+  function initNavGroups() {
+    var groups = document.querySelectorAll('[data-nav-group]');
+    if (!groups.length) return;
+    var saved = {};
+    try { saved = JSON.parse(localStorage.getItem(NAV_GROUP_KEY) || '{}') || {}; } catch (e) { saved = {}; }
+    groups.forEach(function (g) {
+      var id = g.getAttribute('data-nav-group');
+      var open = g.classList.contains('has-active');
+      if (Object.prototype.hasOwnProperty.call(saved, id)) {
+        open = !!saved[id] || g.classList.contains('has-active');
+      }
+      setNavGroupOpen(g, open);
+      var btn = g.querySelector('.nav-group-toggle');
+      if (!btn) return;
+      btn.addEventListener('click', function () {
+        setNavGroupOpen(g, !g.classList.contains('is-open'));
+        persistNavGroups();
+      });
+    });
+  }
+
+  function revealNavTarget(el) {
+    if (!el) return;
+    var g = el.closest('[data-nav-group]');
+    if (g) setNavGroupOpen(g, true);
+  }
+
+  function initHelpDrawer() {
+    var drawer = document.getElementById('helpDrawer');
+    if (!drawer) return;
+    var titleEl = document.getElementById('helpDrawerTitle');
+    var bodyEl = document.getElementById('helpDrawerBody');
+    var tips = (window.ColdAisle && ColdAisle.helpTips) || {};
+    var lastFocus = null;
+
+    function close() {
+      drawer.classList.remove('is-open');
+      document.querySelectorAll('.help-tip-btn[aria-expanded="true"]').forEach(function (b) {
+        b.setAttribute('aria-expanded', 'false');
+      });
+      window.setTimeout(function () {
+        if (!drawer.classList.contains('is-open')) drawer.hidden = true;
+      }, 280);
+      if (lastFocus && lastFocus.focus) {
+        try { lastFocus.focus(); } catch (e) { /* ignore */ }
+      }
+    }
+
+    function open(id, trigger) {
+      var tip = tips[id];
+      if (!tip) return;
+      lastFocus = trigger || document.activeElement;
+      titleEl.textContent = tip.title || 'Help';
+      bodyEl.innerHTML = tip.html || '';
+      drawer.hidden = false;
+      if (trigger) trigger.setAttribute('aria-expanded', 'true');
+      requestAnimationFrame(function () {
+        drawer.classList.add('is-open');
+      });
+    }
+
+    document.addEventListener('click', function (e) {
+      var btn = e.target.closest('[data-help]');
+      if (btn) {
+        e.preventDefault();
+        var id = btn.getAttribute('data-help');
+        if (drawer.classList.contains('is-open') && titleEl.textContent === ((tips[id] && tips[id].title) || 'Help')) {
+          close();
+        } else {
+          open(id, btn);
+        }
+        return;
+      }
+      if (e.target.closest('[data-help-close]')) {
+        e.preventDefault();
+        close();
+      }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && drawer.classList.contains('is-open')) {
+        e.preventDefault();
+        close();
+      }
+    });
+  }
+
+  window.ColdAisle = window.ColdAisle || {};
+  ColdAisle.revealNavTarget = revealNavTarget;
+
   /**
    * Settings page: collapsible section cards (default collapsed).
    * Expand all / Collapse all; #hash opens a section; remembers open ids in localStorage.
@@ -1617,6 +1723,8 @@
     }
     initTimezoneComboboxes(document);
     initSettingsCollapsible();
+    initNavGroups();
+    initHelpDrawer();
     initGlobalSearch();
     initPageJump();
     initLiveListFilters();

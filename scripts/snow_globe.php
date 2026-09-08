@@ -7,7 +7,7 @@
  *
  * Usage (from site root or any cwd):
  *   php scripts/snow_globe.php
- *   php scripts/snow_globe.php --root=C:\inetpub\wwwroot\WinDCIM
+ *   php scripts/snow_globe.php --root=C:\inetpub\wwwroot\ColdAisle
  *   php scripts/snow_globe.php --dry-run
  *   php scripts/snow_globe.php --seed=42 --admin-pass='Demo-ChangeMe!'
  *   php scripts/snow_globe.php --freeze-only   # disable SNMP + re-align history to "now"

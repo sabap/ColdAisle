@@ -37,7 +37,7 @@
       .\Install-ColdAisle.ps1
 
 .PARAMETER Version
-    Release tag without or with leading v (e.g. 0.2.2 or v0.2.2), or branch name main.
+    Release tag without or with leading v (e.g. 1.0.0 or v1.0.0), or branch name main.
     Default: latest GitHub Release, else highest version tag; falls back to main if tag is too old.
 
 .PARAMETER SitePhysicalPath
@@ -47,7 +47,7 @@
     IIS site name. Default: Default Web Site
 
 .PARAMETER PhpVersion
-    PHP NTS build version for windows.php.net. Default: 8.3.32
+    PHP NTS build version for windows.php.net. Default: 8.3.33
 
 .PARAMETER PhpInstallPath
     Where to install PHP. Default: C:\PHP
@@ -91,7 +91,7 @@
     .\Install-ColdAisle.ps1
 
 .EXAMPLE
-    .\Install-ColdAisle.ps1 -Version 0.2.0 -SitePhysicalPath 'C:\inetpub\wwwroot\ColdAisle'
+    .\Install-ColdAisle.ps1 -Version 1.0.0 -SitePhysicalPath 'C:\inetpub\wwwroot\ColdAisle'
 
 .EXAMPLE
     .\Install-ColdAisle.ps1 -Force -OpenSetup
@@ -104,7 +104,7 @@ param(
     [string]$Version = '',
     [string]$SitePhysicalPath = 'C:\inetpub\wwwroot\ColdAisle',
     [string]$SiteName = 'Default Web Site',
-    [string]$PhpVersion = '8.3.32',
+    [string]$PhpVersion = '8.3.33',
     [string]$PhpInstallPath = 'C:\PHP',
     [string]$GitHubOwner = 'sabap',
     [string]$GitHubRepo = 'ColdAisle',
@@ -259,7 +259,7 @@ function Invoke-PostInstallChecks {
 
     if (Test-Path $phpExe) {
         $modOut = & $phpExe -m 2>&1 | Out-String
-        foreach ($need in @('curl', 'mbstring', 'openssl', 'PDO', 'zip')) {
+        foreach ($need in @('curl', 'mbstring', 'openssl', 'PDO', 'zip', 'gd', 'fileinfo')) {
             if ($modOut -match [regex]::Escape($need)) {
                 Write-Ok "PHP module: $need"
             } else {
@@ -454,7 +454,7 @@ function Resolve-LatestVersion {
         }
     }
     if (-not $best) {
-        throw "No version tags found on $Owner/$Repo. Push a tag like v0.2.0 first."
+        throw "No version tags found on $Owner/$Repo. Push a tag like v1.0.0 first."
     }
     Write-Ok "Latest version tag: v$best"
     return $best

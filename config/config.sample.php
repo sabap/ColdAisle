@@ -8,8 +8,8 @@ declare(strict_types=1);
 return [
     // Brand is fixed in code (App::APP_NAME); kept here for reference only
     'app_name' => 'ColdAisle',
-    'version' => '0.2.27',
-    // Generate: base64_encode(random_bytes(32)) â€” used to encrypt secrets in the DB
+    'version' => '1.0.0', // display only; App::VERSION is canonical
+    // Generate: base64_encode(random_bytes(32)) — used to encrypt secrets in the DB
     // Never commit a real production key.
     'app_key' => '',
     'timezone' => 'UTC',
@@ -21,9 +21,9 @@ return [
     'debug' => [
         'request_timer' => false,
     ],
-    // Phase B â€” transport & session hardening (see Settings â†’ Security)
+    // Phase B — transport & session hardening (see Settings → Security)
     'security' => [
-        'force_https' => false,          // 301 redirect HTTP â†’ HTTPS
+        'force_https' => false,          // 301 redirect HTTP → HTTPS
         'hsts' => false,                 // Strict-Transport-Security (only when already HTTPS)
         'hsts_max_age' => 31536000,      // 1 year
         'cookie_secure' => 'auto',       // auto | always | never
