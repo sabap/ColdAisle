@@ -7,6 +7,62 @@
 
   function mmToM(mm) { return (Number(mm) || 0) / 1000; }
 
+  function makeRaisedFloorTexture() {
+    var c = document.createElement('canvas');
+    c.width = 128;
+    c.height = 128;
+    var g = c.getContext('2d');
+    g.fillStyle = '#2a3344';
+    g.fillRect(0, 0, 128, 128);
+    g.fillStyle = '#323c50';
+    g.fillRect(4, 4, 120, 120);
+    g.strokeStyle = '#1a2230';
+    g.lineWidth = 3;
+    g.strokeRect(1.5, 1.5, 125, 125);
+    g.strokeStyle = 'rgba(255,255,255,0.06)';
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(8, 8);
+    g.lineTo(48, 8);
+    g.stroke();
+    var t = new THREE.CanvasTexture(c);
+    t.anisotropy = 4;
+    return t;
+  }
+
+  function makePerfDoorTexture() {
+    var c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 512;
+    var g = c.getContext('2d');
+    var grd = g.createLinearGradient(0, 0, 0, 512);
+    grd.addColorStop(0, '#1c2433');
+    grd.addColorStop(0.08, '#141a24');
+    grd.addColorStop(1, '#0d121a');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 256, 512);
+    g.fillStyle = '#22d3ee';
+    g.globalAlpha = 0.55;
+    g.fillRect(8, 6, 240, 5);
+    g.globalAlpha = 1;
+    g.fillStyle = '#070a10';
+    var y0 = 22;
+    for (var y = y0; y < 500; y += 7) {
+      var odd = ((y - y0) / 7) % 2;
+      for (var x = 10 + (odd ? 3 : 0); x < 246; x += 6) {
+        g.beginPath();
+        g.arc(x, y, 1.6, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+    g.strokeStyle = 'rgba(148,163,184,0.22)';
+    g.lineWidth = 4;
+    g.strokeRect(3, 3, 250, 506);
+    var t = new THREE.CanvasTexture(c);
+    t.anisotropy = 4;
+    return t;
+  }
+
   function mediaBase() {
     var b = (global.ColdAisle && global.ColdAisle.baseUrl)
       || (global.WINDCIM && global.WINDCIM.baseUrl)
@@ -902,13 +958,15 @@
       ? options.textureFaces
       : 'front';
     var textureConcurrency = Math.max(1, Math.min(6, Number(options.textureConcurrency) || 3));
+    // Opt-in hall look for lab overlay pages only. Default path is unchanged.
+    var labLook = options.look === 'lab';
 
     var width = container.clientWidth || 600;
     var height = container.clientHeight || 400;
 
     var scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0f18);
-    scene.fog = new THREE.Fog(0x0a0f18, 40, 120);
+    scene.background = new THREE.Color(labLook ? 0x070b12 : 0x0a0f18);
+    scene.fog = new THREE.Fog(labLook ? 0x070b12 : 0x0a0f18, labLook ? 26 : 40, labLook ? 85 : 120);
 
     var camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 500);
     camera.position.set(18, 16, 22);
@@ -923,13 +981,27 @@
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    var dir = new THREE.DirectionalLight(0xffffff, 0.8);
-    dir.position.set(10, 20, 10);
-    scene.add(dir);
-    var fill = new THREE.DirectionalLight(0x88aaff, 0.28);
-    fill.position.set(-8, 8, -5);
-    scene.add(fill);
+    if (labLook) {
+      scene.add(new THREE.AmbientLight(0x9bb4d0, 0.2));
+      scene.add(new THREE.HemisphereLight(0x8eb4ff, 0x1a1814, 0.4));
+      var key = new THREE.DirectionalLight(0xfff4e6, 1.05);
+      key.position.set(14, 24, 9);
+      scene.add(key);
+      var cool = new THREE.DirectionalLight(0x6aa8ff, 0.34);
+      cool.position.set(-16, 11, -7);
+      scene.add(cool);
+      var warm = new THREE.DirectionalLight(0xffc27a, 0.2);
+      warm.position.set(3, 5, -14);
+      scene.add(warm);
+    } else {
+      scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+      var dir = new THREE.DirectionalLight(0xffffff, 0.8);
+      dir.position.set(10, 20, 10);
+      scene.add(dir);
+      var fill = new THREE.DirectionalLight(0x88aaff, 0.28);
+      fill.position.set(-8, 8, -5);
+      scene.add(fill);
+    }
 
     var room = rooms[0] || { width_m: 30, depth_m: 20, name: 'Floor' };
     // Prefer room dimensions from first cabinet if present
@@ -972,17 +1044,30 @@
 
     var floorGeo = new THREE.PlaneGeometry(fw, fd);
     var floorMat = new THREE.MeshStandardMaterial({
-      color: 0x1a2332,
-      roughness: 0.9,
-      metalness: 0.1,
+      color: labLook ? 0x2c3546 : 0x1a2332,
+      roughness: labLook ? 0.78 : 0.9,
+      metalness: labLook ? 0.12 : 0.1,
     });
+    if (labLook) {
+      floorMat.map = makeRaisedFloorTexture();
+      floorMat.map.wrapS = THREE.RepeatWrapping;
+      floorMat.map.wrapT = THREE.RepeatWrapping;
+      floorMat.map.repeat.set(Math.max(8, Math.round(fw / 0.6)), Math.max(6, Math.round(fd / 0.6)));
+    }
     var floor = new THREE.Mesh(floorGeo, floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.position.set(fw / 2, 0, fd / 2);
     scene.add(floor);
 
-    var grid = new THREE.GridHelper(Math.max(fw, fd), Math.max(fw, fd), 0x3b82f6, 0x1e293b);
+    var grid = new THREE.GridHelper(
+      Math.max(fw, fd),
+      Math.max(fw, fd),
+      labLook ? 0x243044 : 0x3b82f6,
+      labLook ? 0x1a2332 : 0x1e293b
+    );
     grid.position.set(fw / 2, 0.01, fd / 2);
+    if (labLook) grid.material.opacity = 0.35;
+    if (labLook) grid.material.transparent = true;
     scene.add(grid);
 
     var edge = new THREE.LineSegments(
@@ -1201,9 +1286,9 @@
 
       var geo = new THREE.BoxGeometry(w, h, d);
       var mat = new THREE.MeshStandardMaterial({
-        color: color,
-        roughness: 0.55,
-        metalness: 0.35,
+        color: labLook ? color.clone().multiplyScalar(0.72) : color,
+        roughness: labLook ? 0.36 : 0.55,
+        metalness: labLook ? 0.58 : 0.35,
       });
       var mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(x + w / 2, h / 2, z + d / 2);
@@ -1240,6 +1325,34 @@
       mesh.add(rear);
       if (textureFaces === 'both') {
         faceJobs.push({ cab: cab, face: 'rear', mat: rearMat });
+      }
+
+      if (labLook) {
+        if (!makePerfDoorTexture._shared) {
+          makePerfDoorTexture._shared = makePerfDoorTexture();
+        }
+        var doorMap = makePerfDoorTexture._shared;
+        var doorMat = new THREE.MeshStandardMaterial({
+          map: doorMap,
+          roughness: 0.42,
+          metalness: 0.62,
+          transparent: true,
+          opacity: textureFaces === 'none' ? 0.96 : 0.82,
+        });
+        var doorGeo = new THREE.PlaneGeometry(faceW * 0.99, faceH * 0.99);
+        var doorF = new THREE.Mesh(doorGeo, doorMat);
+        doorF.position.set(0, 0, d / 2 + 0.006);
+        mesh.add(doorF);
+        var doorR = new THREE.Mesh(doorGeo.clone(), doorMat.clone());
+        doorR.position.set(0, 0, -d / 2 - 0.006);
+        doorR.rotation.y = Math.PI;
+        mesh.add(doorR);
+        var led = new THREE.Mesh(
+          new THREE.BoxGeometry(w * 0.92, 0.012, 0.012),
+          new THREE.MeshBasicMaterial({ color: 0x22d3ee })
+        );
+        led.position.set(0, h / 2 - 0.03, d / 2 + 0.008);
+        mesh.add(led);
       }
 
       // Soft side accents (not hard chrome rails)

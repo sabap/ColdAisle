@@ -10,6 +10,13 @@ function layout_help_catalog(): array
 {
     $docs = class_exists('App') ? App::url('pages/docs.php') : 'pages/docs.php';
     return [
+        'dash_lab' => [
+            'title' => 'Hall lab',
+            'html' => '<p>Experimental overlay hall: large 3D, glass metric chips, icon rail, and a side inspector. Production dashboard and NOC are unchanged.</p>'
+                . '<ul><li>Rail icons switch Overview / Thermal / Power / Inventory chips.</li>'
+                . '<li>Orbit / Aisle / Plan are camera presets. Aisle uses walk mode.</li>'
+                . '<li><strong>Lab NOC</strong> is the same layout as a wall display (same token as production NOC).</li></ul>',
+        ],
         'dashboard' => [
             'title' => 'Dashboard',
             'html' => '<p>Live snapshot of the hall: inventory counts, polled load, UPS, cooling, and the 3D view.</p>'
@@ -126,6 +133,7 @@ function layout_help_id_for_active(string $active): ?string
 {
     $map = [
         'dashboard' => 'dashboard',
+        'dash_lab' => 'dash_lab',
         'floorplan' => 'floorplan',
         'datacenters' => 'datacenters',
         'cabinets' => 'cabinets',

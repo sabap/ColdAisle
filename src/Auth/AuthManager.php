@@ -57,6 +57,7 @@ class AuthManager
     /** Nav key → required view permission */
     public const NAV_PERMISSIONS = [
         'dashboard' => 'view_dashboard',
+        'dash_lab' => 'view_dashboard',
         'floorplan' => 'view_floorplan',
         'datacenters' => 'view_datacenters',
         'cabinets' => 'view_cabinets',

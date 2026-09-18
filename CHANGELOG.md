@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Hall lab (experimental):** overlay dashboard (`pages/dash_lab.php`) and lab NOC (`pages/noc_lab.php`) — full-bleed 3D, glass metric chips, icon rail, side inspector, event stream. Opt-in 3D `look: lab` (perforated doors, studio lighting) does not change the production 3D path. Admin → Hall lab. Not a replacement for the live dashboard/NOC.
+
 ### Enhancements
 
 ### Bug fixes
