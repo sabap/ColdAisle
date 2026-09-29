@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **NOC 3D air particles:** color now follows the closest temperature sensor. Nearby intake and exhaust probes were being averaged together (and mixed with the hall-wide supply-to-return curve), so a mote beside a cold intake could still pick up the hot exhaust on the same rack. The larger mote size is slightly smaller so those sprites no longer cover the fine particles.
+
 ---
 
 ## [1.0.5] - 2026-09-29

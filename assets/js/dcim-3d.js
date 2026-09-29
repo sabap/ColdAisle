@@ -2759,13 +2759,14 @@
     });
 
     /**
-     * Inverse-distance sample of nearby env sensors at a particle (x, y=height, z).
-     * Falls back to path/hall temp when nothing is close.
+     * Temperature of the closest env sensor at a particle (x, y=height, z).
+     * One probe wins, so an intake and the exhaust on the same rack are not
+     * averaged. Height counts at half so a probe on the face still beats one
+     * across the aisle when the mote is above or below the probe. The outer
+     * quarter of that probe's reach eases into the path fallback.
      */
     function sampleAirTempAt(x, y, z, fallback) {
       if (!airProbes.length) return fallback;
-      var acc = 0;
-      var wsum = 0;
       var nearest = null;
       var nearestD2 = Infinity;
       var i;
@@ -2779,29 +2780,17 @@
           nearestD2 = d2;
           nearest = p;
         }
-        var reach = Math.max(2.4, p.r * 3);
-        if (d2 > reach * reach) continue;
-        var w = 1 / (d2 + 0.05);
-        acc += p.t * w;
-        wsum += w;
       }
-      if (wsum > 0) {
-        var local = acc / wsum;
-        if (fallback == null || !isFinite(fallback)) return local;
-        var d = Math.sqrt(nearestD2);
-        var span = Math.max(2.6, nearest.r * 3.2);
-        var mix = 1 - Math.min(1, d / span);
-        mix = mix * mix;
-        return local * mix + fallback * (1 - mix);
-      }
-      if (nearest && nearestD2 < 16) {
-        if (fallback == null || !isFinite(fallback)) return nearest.t;
-        var dN = Math.sqrt(nearestD2);
-        var mixN = 1 - Math.min(1, dN / 4);
-        mixN = mixN * mixN;
-        return nearest.t * mixN + fallback * (1 - mixN);
-      }
-      return fallback;
+      if (!nearest) return fallback;
+      var reach = Math.max(2.4, nearest.r * 3);
+      var d = Math.sqrt(nearestD2);
+      if (d > reach) return fallback;
+      if (fallback == null || !isFinite(fallback)) return nearest.t;
+      var edge = reach * 0.75;
+      if (d <= edge) return nearest.t;
+      var mix = 1 - (d - edge) / (reach - edge);
+      mix = mix * mix;
+      return nearest.t * mix + fallback * (1 - mix);
     }
 
     function tempAlongPath(tc, u) {
@@ -3019,7 +3008,7 @@
         clearParticleClouds();
         if (!airflowStreams.length || particleDensityPct <= 0) return;
         var counts = particleCounts();
-        if (counts.main > 0) addCloud(counts.main, 0.055, 0.78, 1);
+        if (counts.main > 0) addCloud(counts.main, 0.040, 0.78, 1);
         if (counts.fine > 0) addCloud(counts.fine, 0.022, 0.55, 1.25);
       };
       rebuildAirParticles();
