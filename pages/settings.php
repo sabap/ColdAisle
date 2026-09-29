@@ -8,6 +8,15 @@ require_once dirname(__DIR__) . '/src/Services/UpdateService.php';
 App::boot();
 $user = App::requirePermission('manage_settings');
 
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET'
+    && isset($_GET['_upd'])
+    && class_exists('UpdateService')
+    && method_exists('UpdateService', 'flashApplyStatusIfNeeded')
+    && empty($_SESSION['_flash'])
+) {
+    UpdateService::flashApplyStatusIfNeeded();
+}
+
 $configPath = App::configPath();
 $config = App::config();
 
@@ -3637,16 +3646,32 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
                 : 'settings.php';
             dest += (dest.indexOf('?') >= 0 ? '&' : '?') + '_upd=' + Date.now() + '#updates';
             var fd = new FormData(form);
+            var statusEl = document.getElementById('caAppUpdateStatus');
+            var detailEl = document.getElementById('caAppUpdateDetail');
+            function go() {
+                if (statusEl) statusEl.textContent = 'Reloading Settings…';
+                window.location.replace(dest);
+            }
             fetch(form.getAttribute('action') || (window.location.pathname + (window.location.search || '')), {
                 method: 'POST',
                 body: fd,
                 credentials: 'same-origin',
                 redirect: 'manual',
                 headers: { 'X-Requested-With': 'XMLHttpRequest' }
-            }).then(function () {
-                window.location.replace(dest);
-            }).catch(function () {
-                window.location.replace(dest);
+            }).then(function (res) {
+                if (statusEl) {
+                    statusEl.textContent = (res && res.ok) ? 'Apply finished — loading result…' : 'Request ended — checking result…';
+                }
+                if (detailEl && res && !res.ok) {
+                    detailEl.textContent = 'HTTP ' + res.status + '. If the overlay vanished before, Settings will show the last apply status.';
+                }
+                window.setTimeout(go, 400);
+            }).catch(function (err) {
+                if (statusEl) statusEl.textContent = 'Connection dropped — checking whether the update finished…';
+                if (detailEl) {
+                    detailEl.textContent = (err && err.message) ? String(err.message) : 'The web request ended (often IIS FastCGI timeout during backup).';
+                }
+                window.setTimeout(go, 900);
             });
             return false;
         }

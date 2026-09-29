@@ -26,6 +26,9 @@ class UpdateService
     /** Marker: only scan for pending files when this exists (set on deferred update). */
     public const PENDING_FLAG = 'has_pending_updates.flag';
 
+    /** Last apply result so Settings can toast after a dropped FastCGI request. */
+    public const LAST_APPLY_FILE = 'update_last_apply.json';
+
     /** @var list<string> pending .coldaisle-new paths created this request */
     private static array $pendingCreated = [];
 
@@ -381,8 +384,24 @@ class UpdateService
         $token = trim((string)$cfg['github_token']);
 
         App::log("Update apply starting: {$current} → {$version}", 'info');
+        self::writeApplyStatus([
+            'ok' => false,
+            'state' => 'running',
+            'phase' => 'backup',
+            'from' => $current,
+            'version' => $version,
+            'message' => "Update {$current} → {$version} started (backup)…",
+        ]);
         self::keepalive('backup');
         $backupPath = self::createBackup();
+        self::writeApplyStatus([
+            'ok' => false,
+            'state' => 'running',
+            'phase' => 'download',
+            'from' => $current,
+            'version' => $version,
+            'message' => 'Backup done. Downloading release…',
+        ]);
         self::keepalive('download');
         $tmpDir = self::makeWorkDir('upd');
 
@@ -480,14 +499,30 @@ class UpdateService
             }
 
             App::log("Update apply finished: {$current} → {$version} ({$stats['copied']} files)", 'info');
-            return [
+            $out = [
                 'ok' => true,
                 'message' => $msg,
                 'backup' => $backupPath,
                 'version' => $version,
             ];
+            self::writeApplyStatus([
+                'ok' => true,
+                'state' => 'done',
+                'phase' => 'done',
+                'from' => $current,
+                'version' => $version,
+                'message' => $msg,
+            ]);
+            return $out;
         } catch (Throwable $e) {
             App::log('Update apply failed: ' . $e->getMessage(), 'error');
+            self::writeApplyStatus([
+                'ok' => false,
+                'state' => 'failed',
+                'phase' => 'failed',
+                'version' => $version ?? null,
+                'message' => self::briefError($e->getMessage()),
+            ]);
             throw $e;
         } finally {
             self::rrmdir($tmpDir);
@@ -504,13 +539,95 @@ class UpdateService
         }
         // This sends body bytes — Location: headers will no longer work after the first flush.
         // Callers must use browserReturn() instead of App::redirect().
-        echo ' ';
+        echo str_repeat(' ', 256);
         if (function_exists('flush')) {
             @flush();
         }
         if ($phase !== '') {
             App::log('Update progress: ' . $phase, 'info');
+            $cur = self::readApplyStatus();
+            if (is_array($cur) && ($cur['state'] ?? '') === 'running') {
+                $cur['phase'] = $phase;
+                $cur['message'] = 'Update in progress: ' . $phase;
+                self::writeApplyStatus($cur);
+            }
         }
+    }
+
+    public static function applyStatusPath(): string
+    {
+        return App::ROOT . '/storage/tmp/' . self::LAST_APPLY_FILE;
+    }
+
+    /** @param array<string,mixed> $row */
+    public static function writeApplyStatus(array $row): void
+    {
+        $dir = App::ROOT . '/storage/tmp';
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        $row['at'] = date('c');
+        @file_put_contents(
+            self::applyStatusPath(),
+            json_encode($row, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+        );
+    }
+
+    /** @return array<string,mixed>|null */
+    public static function readApplyStatus(): ?array
+    {
+        $p = self::applyStatusPath();
+        if (!is_file($p)) {
+            return null;
+        }
+        $j = json_decode((string)@file_get_contents($p), true);
+        return is_array($j) ? $j : null;
+    }
+
+    /**
+     * Flash a leftover apply result after the overlay reloads Settings (?_upd=).
+     * Consumes a finished result; running/stale jobs become an error toast.
+     */
+    public static function flashApplyStatusIfNeeded(): void
+    {
+        $st = self::readApplyStatus();
+        if ($st === null) {
+            App::flash(
+                'warning',
+                'The update request ended without a result. Installed version is v'
+                . self::installedVersion()
+                . '. Check storage/logs/app.log, then try again if needed.'
+            );
+            return;
+        }
+        $state = (string)($st['state'] ?? '');
+        $msg = trim((string)($st['message'] ?? ''));
+        $at = strtotime((string)($st['at'] ?? '')) ?: 0;
+        $stale = $at > 0 && (time() - $at) > 900;
+        if ($state === 'done' && !empty($st['ok'])) {
+            App::flash('success', $msg !== '' ? $msg : ('Updated to v' . ($st['version'] ?? self::installedVersion()) . '.'));
+            $st['state'] = 'shown';
+            self::writeApplyStatus($st);
+            return;
+        }
+        if ($state === 'shown') {
+            return;
+        }
+        if ($state === 'running' || $stale) {
+            App::flash(
+                'error',
+                'Update did not finish'
+                . (!empty($st['phase']) ? ' (stopped during ' . (string)$st['phase'] . ')' : '')
+                . '. Installed version is v' . self::installedVersion()
+                . '. The IIS FastCGI timeout often kills a long backup — check storage/logs/app.log and try again.'
+            );
+            $st['state'] = 'shown';
+            self::writeApplyStatus($st);
+            return;
+        }
+        App::flash('error', $msg !== '' ? ('Update failed: ' . $msg) : 'Update failed. Check storage/logs/app.log.');
+        $st['state'] = 'shown';
+        self::writeApplyStatus($st);
     }
 
     /**
@@ -749,10 +866,12 @@ class UpdateService
                 'SiteBackupService unavailable — cannot create a database backup.'
             );
         }
+        self::keepalive('backup-site');
         $sitePath = SiteBackupService::export([
             'include_audit' => true,
             'include_readings' => false,
         ]);
+        self::keepalive('backup-files');
         if (!is_file($sitePath)) {
             throw new RuntimeException('Site (database) backup was not created.');
         }
@@ -903,6 +1022,9 @@ class UpdateService
                 // addFile streams at close; skip unreadable/locked files rather than abort.
                 if ($zip->addFile($full, $relNorm)) {
                     $filesAdded++;
+                    if ($filesAdded % 40 === 0) {
+                        self::keepalive('backup-files');
+                    }
                 }
             }
         }
@@ -1301,20 +1423,29 @@ class UpdateService
 
     private static function isCurrentlyExecuting(string $dest): bool
     {
+        $destNorm = str_replace('\\', '/', $dest);
+        $destReal = realpath($dest);
+        $candidates = [];
         $script = (string)($_SERVER['SCRIPT_FILENAME'] ?? '');
-        if ($script === '') {
-            return false;
+        if ($script !== '') {
+            $candidates[] = $script;
         }
-        $a = realpath($dest);
-        $b = realpath($script);
-        if ($a && $b) {
-            return strcasecmp($a, $b) === 0;
+        foreach (get_included_files() as $inc) {
+            $candidates[] = (string)$inc;
         }
-        // Dest may not exist yet
-        return strcasecmp(
-            str_replace('\\', '/', $dest),
-            str_replace('\\', '/', $script)
-        ) === 0;
+        foreach ($candidates as $live) {
+            if ($live === '') {
+                continue;
+            }
+            $liveReal = realpath($live);
+            if ($destReal && $liveReal && strcasecmp($destReal, $liveReal) === 0) {
+                return true;
+            }
+            if (strcasecmp($destNorm, str_replace('\\', '/', $live)) === 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
