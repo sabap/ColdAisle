@@ -13,6 +13,16 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+### Enhancements
+
+### Bug fixes
+
+---
+
+## [1.0.2] - 2026-09-29
+
+### New features
+
 - **Hall lab (experimental):** overlay dashboard (`pages/dash_lab.php`) and lab NOC (`pages/noc_lab.php`) — full-bleed HUD, glass metric chips, icon rail, side inspector, event stream. Opt-in 3D `look: lab` (perforated doors, aisle lights, Hot/Cold floor marks). Admin → Hall lab. Production dashboard/NOC chrome is unchanged.
 
 ### Enhancements
@@ -24,7 +34,6 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 - **Air particles vs rack probes:** particles were colored from a hall-wide supply/cold/hot/return average, so they ignored intake/exhaust sensors on individual racks. They now inverse-distance sample nearby env sensors (with the path average only as fallback). Untagged sensors are no longer dumped into the cold-aisle average.
 
 ---
-
 ## [1.0.1] - 2026-09-08
 
 ### New features
