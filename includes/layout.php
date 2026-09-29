@@ -150,6 +150,7 @@ function layout_nav_groups(): array
             'items' => [
                 ['key' => 'users', 'label' => 'Users & Depts', 'href' => 'pages/users.php', 'icon' => '👤', 'tour' => 'nav-users'],
                 ['key' => 'docs', 'label' => 'Documentation', 'href' => 'pages/docs.php', 'icon' => '📖', 'tour' => null],
+                ['key' => 'dash_lab', 'label' => 'Hall lab', 'href' => 'pages/dash_lab.php', 'icon' => '⚗', 'tour' => null],
                 ['key' => 'settings', 'label' => 'Settings', 'href' => 'pages/settings.php', 'icon' => '⚙', 'tour' => 'nav-settings'],
             ],
         ],

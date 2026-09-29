@@ -13,9 +13,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Hall lab (experimental):** overlay dashboard (`pages/dash_lab.php`) and lab NOC (`pages/noc_lab.php`) — full-bleed HUD, glass metric chips, icon rail, side inspector, event stream. Opt-in 3D `look: lab` (perforated doors, aisle lights, Hot/Cold floor marks). Admin → Hall lab. Production dashboard/NOC chrome is unchanged.
+
 ### Enhancements
 
+- **Lab 3D hall:** higher-res cabinet doors/frames/handles, overhead fixtures down each aisle, **COLD AISLE** / **HOT AISLE** floor labels from rack front (intake) vs rear (exhaust) and floor vents/returns.
+
 ### Bug fixes
+
+- **Air particles vs rack probes:** particles were colored from a hall-wide supply/cold/hot/return average, so they ignored intake/exhaust sensors on individual racks. They now inverse-distance sample nearby env sensors (with the path average only as fallback). Untagged sensors are no longer dumped into the cold-aisle average.
 
 ---
 
