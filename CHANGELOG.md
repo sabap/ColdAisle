@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [1.0.3] - 2026-09-29
+
+### Bug fixes
+
 - **Settings → Updates:** apply overlay vanished with no toast because the tab always reloaded after the POST, and IIS FastCGI often killed the request during the pre-update backup before a flash could be stored. Apply now writes `storage/tmp/update_last_apply.json`, keepalives during backup zip, defers every in-use PHP file (not only `settings.php`), and Settings `?_upd=` shows that result on reload.
 
 ---
-
 ## [1.0.2] - 2026-09-29
 
 ### New features
