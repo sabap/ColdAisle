@@ -37,14 +37,16 @@ if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
 $cssUrl = App::url('assets/css/noc.css') . '?v=13';
-$jsUrl = App::url('assets/js/noc.js') . '?v=19';
+$jsUrl = App::url('assets/js/noc.js') . '?v=20';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=39';
+$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=40';
 $org = '';
 $nocPanelSec = 20;
 $nocShowLabels = true;
 $nocShowRaceways = true;
 $nocShowAirflow = true;
+$nocShowSensors = true;
+$nocParticleDensity = 100;
 $nocAutoRotate = true;
 $nocClearedTtl = 120;
 $nocCamTiltPct = 63;
@@ -58,6 +60,8 @@ try {
     $nocShowLabels = SettingsService::get('noc_show_labels', '1') === '1';
     $nocShowRaceways = SettingsService::get('noc_show_raceways', '1') === '1';
     $nocShowAirflow = SettingsService::get('noc_show_airflow', '1') === '1';
+    $nocShowSensors = SettingsService::get('noc_show_sensors', '1') === '1';
+    $nocParticleDensity = max(0, min(200, (int)SettingsService::get('noc_particle_density_pct', '100')));
     $nocAutoRotate = SettingsService::get('noc_auto_rotate', '1') === '1';
     $nocClearedTtl = (int)SettingsService::get('noc_cleared_alert_ttl_sec', '120');
     $nocCamTiltPct = max(0, min(100, (int)SettingsService::get('noc_cam_tilt_pct', '63')));
@@ -87,6 +91,8 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
       showLabels: <?= $nocShowLabels ? 'true' : 'false' ?>,
       showRaceways: <?= $nocShowRaceways ? 'true' : 'false' ?>,
       showAirflow: <?= $nocShowAirflow ? 'true' : 'false' ?>,
+      showSensors: <?= $nocShowSensors ? 'true' : 'false' ?>,
+      particleDensityPct: <?= (int)$nocParticleDensity ?>,
       autoRotate: <?= $nocAutoRotate ? 'true' : 'false' ?>,
       clearedAlertTtlSec: <?= (int)$nocClearedTtl ?>,
       camTiltPct: <?= (int)$nocCamTiltPct ?>,

@@ -2334,6 +2334,15 @@
     airflowGroup.visible = !!airflowOverlay;
     scene.add(airflowGroup);
     var airflowParticleSets = [];
+    var airflowStreams = [];
+    var rebuildAirParticles = function () {};
+    // 100 = the historical mote count. 0 hides motes. 200 doubles them.
+    var particleDensityPct = Number(
+      options.particleDensity != null ? options.particleDensity : options.particle_density
+    );
+    if (!isFinite(particleDensityPct)) particleDensityPct = 100;
+    if (particleDensityPct < 0) particleDensityPct = 0;
+    if (particleDensityPct > 200) particleDensityPct = 200;
     var airflowBaseColor = airflowColorMode === 'white' ? 0xe2e8f0 : 0x7dd3fc;
 
     function airflowTintFromTemp(t) {
@@ -2964,7 +2973,7 @@
         airflowGroup.add(pts);
         var state = [];
         for (var i = 0; i < nPart; i++) {
-          var path = streams[i % streams.length];
+          var path = airflowStreams[i % airflowStreams.length];
           state.push({
             path: path,
             t: Math.random() * path.len,
@@ -2986,10 +2995,34 @@
         geo.attributes.color.needsUpdate = true;
         airflowParticleSets.push({ points: pts, state: state });
       }
-      var nMain = Math.min(1100, Math.max(220, streams.length * 4));
-      var nFine = Math.min(1600, Math.max(320, streams.length * 6));
-      addCloud(nMain, 0.055, 0.78, 1);
-      addCloud(nFine, 0.022, 0.55, 1.25);
+      airflowStreams = streams;
+      function particleCounts() {
+        var scale = particleDensityPct / 100;
+        var baseMain = Math.min(1100, Math.max(220, airflowStreams.length * 4));
+        var baseFine = Math.min(1600, Math.max(320, airflowStreams.length * 6));
+        return {
+          main: Math.max(0, Math.round(baseMain * scale)),
+          fine: Math.max(0, Math.round(baseFine * scale)),
+        };
+      }
+      function clearParticleClouds() {
+        var i;
+        for (i = 0; i < airflowParticleSets.length; i++) {
+          var pts = airflowParticleSets[i].points;
+          if (pts && pts.parent) pts.parent.remove(pts);
+          if (pts && pts.geometry) pts.geometry.dispose();
+          if (pts && pts.material) pts.material.dispose();
+        }
+        airflowParticleSets = [];
+      }
+      rebuildAirParticles = function () {
+        clearParticleClouds();
+        if (!airflowStreams.length || particleDensityPct <= 0) return;
+        var counts = particleCounts();
+        if (counts.main > 0) addCloud(counts.main, 0.055, 0.78, 1);
+        if (counts.fine > 0) addCloud(counts.fine, 0.022, 0.55, 1.25);
+      };
+      rebuildAirParticles();
     })();
     if (labLook) {
       try { buildLabAisles(); } catch (eAisle) { /* keep hall even if aisle paint fails */ }
@@ -3599,6 +3632,19 @@
       },
       setAirflowOverlay: function (on) {
         airflowGroup.visible = !!on;
+      },
+      /**
+       * Mote count relative to the built-in density. 100 keeps today's amount,
+       * 0 draws none (vents and returns stay), 200 doubles both clouds.
+       */
+      setParticleDensity: function (pct) {
+        var n = Number(pct);
+        if (!isFinite(n)) n = 100;
+        if (n < 0) n = 0;
+        if (n > 200) n = 200;
+        if (n === particleDensityPct) return;
+        particleDensityPct = n;
+        try { rebuildAirParticles(); } catch (eDens) { /* keep the current cloud */ }
       },
       setAutoRotate: function (on) {
         autoRotate = !!on;

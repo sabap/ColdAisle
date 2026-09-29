@@ -678,6 +678,8 @@ try {
 $nocShowLabels = true;
 $nocShowRaceways = true;
 $nocShowAirflow = true;
+$nocShowSensors = true;
+$nocParticleDensity = 100;
 $nocAutoRotate = true;
 $nocPanelSec = 20;
 $nocClearedTtl = 120;
@@ -687,6 +689,8 @@ try {
     $nocShowLabels = SettingsService::get('noc_show_labels', '1') === '1';
     $nocShowRaceways = SettingsService::get('noc_show_raceways', '1') === '1';
     $nocShowAirflow = SettingsService::get('noc_show_airflow', '1') === '1';
+    $nocShowSensors = SettingsService::get('noc_show_sensors', '1') === '1';
+    $nocParticleDensity = max(0, min(200, (int)SettingsService::get('noc_particle_density_pct', '100')));
     $nocAutoRotate = SettingsService::get('noc_auto_rotate', '1') === '1';
     $nocPanelSec = (int)SettingsService::get('noc_panel_rotate_sec', '20');
     if (!in_array($nocPanelSec, [5, 10, 20, 30, 40, 50, 60], true)) {
@@ -742,6 +746,8 @@ $out = [
         'show_labels' => $nocShowLabels,
         'show_raceways' => $nocShowRaceways,
         'show_airflow' => $nocShowAirflow,
+        'show_sensors' => $nocShowSensors,
+        'particle_density_pct' => $nocParticleDensity,
         'auto_rotate' => $nocAutoRotate,
         'panel_rotate_sec' => $nocPanelSec,
         'panel_rotate_ms' => $nocPanelSec * 1000,

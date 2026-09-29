@@ -14,7 +14,7 @@ $apiUrl = App::url('api/noc.php?scene=1');
 $cssUrl = App::url('assets/css/dash-lab.css') . '?v=2';
 $jsUrl = App::url('assets/js/dash-lab.js') . '?v=2';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=39';
+$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=40';
 $nocLab = App::url('pages/noc_lab.php');
 $prodDash = App::url('index.php');
 

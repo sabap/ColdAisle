@@ -16,6 +16,10 @@
   var nocShowLabels = cfg.showLabels !== false;
   var nocShowRaceways = cfg.showRaceways !== false;
   var nocShowAirflow = cfg.showAirflow !== false;
+  var nocShowSensors = cfg.showSensors !== false;
+  var nocParticleDensity = Number(cfg.particleDensityPct);
+  if (!isFinite(nocParticleDensity)) nocParticleDensity = 100;
+  nocParticleDensity = Math.max(0, Math.min(200, nocParticleDensity));
   var nocAutoRotate = cfg.autoRotate !== false;
   var nocClearedTtlSec = Number(cfg.clearedAlertTtlSec);
   if (!isFinite(nocClearedTtlSec)) nocClearedTtlSec = 120;
@@ -913,6 +917,11 @@
     if (typeof nocCfg.show_labels === 'boolean') nocShowLabels = nocCfg.show_labels;
     if (typeof nocCfg.show_raceways === 'boolean') nocShowRaceways = nocCfg.show_raceways;
     if (typeof nocCfg.show_airflow === 'boolean') nocShowAirflow = nocCfg.show_airflow;
+    if (typeof nocCfg.show_sensors === 'boolean') nocShowSensors = nocCfg.show_sensors;
+    if (nocCfg.particle_density_pct != null) {
+      var dens = Number(nocCfg.particle_density_pct);
+      if (isFinite(dens)) nocParticleDensity = Math.max(0, Math.min(200, dens));
+    }
     if (typeof nocCfg.auto_rotate === 'boolean') nocAutoRotate = nocCfg.auto_rotate;
     if (nocCfg.panel_rotate_ms != null) {
       var ms = Number(nocCfg.panel_rotate_ms);
@@ -945,6 +954,12 @@
       }
       if (typeof view3d.setAirflowOverlay === 'function') {
         view3d.setAirflowOverlay(nocShowAirflow);
+      }
+      if (typeof view3d.setHeatOverlay === 'function') {
+        view3d.setHeatOverlay(nocShowSensors);
+      }
+      if (typeof view3d.setParticleDensity === 'function') {
+        view3d.setParticleDensity(nocParticleDensity);
       }
       if (typeof view3d.setAutoRotate === 'function') {
         view3d.setAutoRotate(nocAutoRotate);
@@ -1087,11 +1102,12 @@
           airflowAnchors: airflowAnchors,
           airflowOverlay: nocShowAirflow && airflowAnchors.length > 0,
           airflowColor: 'blue',
+          particleDensity: nocParticleDensity,
           cablePaths: nocShowRaceways ? cablePaths : [],
           showRaceways: nocShowRaceways,
           showObjectLabels: nocShowLabels,
           logoUrl: logoUrl,
-          heatOverlay: envSensors.length > 0,
+          heatOverlay: nocShowSensors && envSensors.length > 0,
           interactive: false,
           walkEnabled: false,
           autoRotate: nocAutoRotate,
@@ -1112,6 +1128,8 @@
         if (typeof view3d.setObjectLabels === 'function') view3d.setObjectLabels(nocShowLabels);
         if (typeof view3d.setRacewaysVisible === 'function') view3d.setRacewaysVisible(nocShowRaceways);
         if (typeof view3d.setAirflowOverlay === 'function') view3d.setAirflowOverlay(nocShowAirflow);
+        if (typeof view3d.setHeatOverlay === 'function') view3d.setHeatOverlay(nocShowSensors);
+        if (typeof view3d.setParticleDensity === 'function') view3d.setParticleDensity(nocParticleDensity);
         if (typeof view3d.setAutoRotate === 'function') view3d.setAutoRotate(nocAutoRotate);
       }
       // Reflow after flex layout (3D stage + alert grid)

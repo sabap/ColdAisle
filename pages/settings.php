@@ -98,6 +98,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             SettingsService::set('noc_show_labels', !empty($_POST['noc_show_labels']) ? '1' : '0', 'noc');
             SettingsService::set('noc_show_raceways', !empty($_POST['noc_show_raceways']) ? '1' : '0', 'noc');
             SettingsService::set('noc_show_airflow', !empty($_POST['noc_show_airflow']) ? '1' : '0', 'noc');
+            SettingsService::set('noc_show_sensors', !empty($_POST['noc_show_sensors']) ? '1' : '0', 'noc');
+            $particleDensity = max(0, min(200, (int)($_POST['noc_particle_density_pct'] ?? 100)));
+            SettingsService::set('noc_particle_density_pct', (string)$particleDensity, 'noc');
             SettingsService::set('noc_auto_rotate', !empty($_POST['noc_auto_rotate']) ? '1' : '0', 'noc');
             $panelSec = (int)($_POST['noc_panel_rotate_sec'] ?? 20);
             $allowedPanel = [5, 10, 20, 30, 40, 50, 60];
@@ -1350,6 +1353,8 @@ if ($nocToken !== '') {
 $nocShowLabels = SettingsService::get('noc_show_labels', '1') === '1';
 $nocShowRaceways = SettingsService::get('noc_show_raceways', '1') === '1';
 $nocShowAirflow = SettingsService::get('noc_show_airflow', '1') === '1';
+$nocShowSensors = SettingsService::get('noc_show_sensors', '1') === '1';
+$nocParticleDensity = max(0, min(200, (int)SettingsService::get('noc_particle_density_pct', '100')));
 $nocAutoRotate = SettingsService::get('noc_auto_rotate', '1') === '1';
 $nocPanelSec = (int)SettingsService::get('noc_panel_rotate_sec', '20');
 if (!in_array($nocPanelSec, [5, 10, 20, 30, 40, 50, 60], true)) {
@@ -1371,6 +1376,7 @@ $nocPreviewScene = [
     'rooms' => [],
     'cable_paths' => [],
     'airflow_anchors' => [],
+    'env_sensors' => [],
 ];
 try {
     $nocPreviewScene['rooms'] = Database::fetchAll(
@@ -1437,6 +1443,17 @@ try {
     } catch (Throwable $eAf) {
         $nocPreviewScene['airflow_anchors'] = [];
     }
+    try {
+        if (class_exists('EnvSensor3dData')) {
+            $previewSensors = EnvSensor3dData::forFloor();
+            if (count($previewSensors) > 80) {
+                $previewSensors = array_slice($previewSensors, 0, 80);
+            }
+            $nocPreviewScene['env_sensors'] = $previewSensors;
+        }
+    } catch (Throwable $eSens) {
+        $nocPreviewScene['env_sensors'] = [];
+    }
 } catch (Throwable $e) {
     // preview optional
 }
@@ -1492,6 +1509,24 @@ try {
             </label>
                 <span class="text-muted" style="font-size:.75rem;margin-left:1.6rem">Supply-to-return motes through cabinet fronts in the NOC 3D view. Vents and returns still render.</span>
             </div>
+            <div class="form-row full">
+                <label for="noc_particle_density_pct">Particle density
+                    <output id="noc_particle_density_out" style="font-weight:700"><?= (int)$nocParticleDensity ?></output>
+                </label>
+                <input type="range" id="noc_particle_density_pct" name="noc_particle_density_pct"
+                       min="0" max="200" step="1" value="<?= (int)$nocParticleDensity ?>"
+                       style="width:100%;max-width:32rem">
+                <div class="text-muted" style="font-size:.7rem;display:flex;justify-content:space-between;max-width:32rem;margin:.1rem 0 .15rem">
+                    <span>None</span><span>Default (100)</span><span>Dense</span>
+                </div>
+                <span class="text-muted" style="font-size:.75rem">Amount of air motes in the NOC 3D view. 100 keeps the previous count. The preview updates as you drag; save to apply on the wall.</span>
+            </div>
+            <div class="form-row full"><label class="toggle-row" style="display:flex;align-items:center;gap:.55rem;cursor:pointer">
+                <input type="checkbox" name="noc_show_sensors" value="1" <?= $nocShowSensors ? 'checked' : '' ?> id="noc_show_sensors">
+                <span>Show temperature sensors</span>
+            </label>
+                <span class="text-muted" style="font-size:.75rem;margin-left:1.6rem">Heat spheres and temperature labels in the NOC 3D view. Air-particle color continues to follow nearby sensors.</span>
+            </div>
             <div class="form-row full"><label class="toggle-row" style="display:flex;align-items:center;gap:.55rem;cursor:pointer">
                 <input type="checkbox" name="noc_auto_rotate" value="1" <?= $nocAutoRotate ? 'checked' : '' ?> id="noc_auto_rotate">
                 <span>Auto-rotate 3D view</span>
@@ -1511,6 +1546,8 @@ try {
                              data-labels="<?= $nocShowLabels ? '1' : '0' ?>"
                              data-raceways="<?= $nocShowRaceways ? '1' : '0' ?>"
                              data-airflow="<?= $nocShowAirflow ? '1' : '0' ?>"
+                             data-sensors="<?= $nocShowSensors ? '1' : '0' ?>"
+                             data-density="<?= (int)$nocParticleDensity ?>"
                              data-tilt="<?= (int)$nocCamTiltPct ?>"
                              data-zoom="<?= (int)$nocCamZoomPct ?>"></div>
                         <p class="text-muted" style="font-size:.7rem;margin:.35rem 0 0;text-align:center">Live preview</p>
@@ -1662,7 +1699,7 @@ try {
     </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=35"></script>
+<script src="<?= App::e(App::url('assets/js/dcim-3d.js')) ?>?v=40"></script>
 <script>
 (function () {
   var el = document.getElementById('nocCamPreview');
@@ -1672,6 +1709,9 @@ try {
   var zoomOut = document.getElementById('noc_cam_zoom_out');
   var rotEl = document.getElementById('noc_auto_rotate');
   var airEl = document.getElementById('noc_show_airflow');
+  var sensEl = document.getElementById('noc_show_sensors');
+  var densEl = document.getElementById('noc_particle_density_pct');
+  var densOut = document.getElementById('noc_particle_density_out');
   if (!el || !window.THREE || !window.ColdAisle3D) return;
 
   var scene = {};
@@ -1679,6 +1719,9 @@ try {
   var labelsOn = el.getAttribute('data-labels') === '1';
   var racewaysOn = el.getAttribute('data-raceways') === '1';
   var airflowOn = el.getAttribute('data-airflow') === '1';
+  var sensorsOn = el.getAttribute('data-sensors') !== '0';
+  var density = parseInt(el.getAttribute('data-density') || '100', 10);
+  if (isNaN(density)) density = 100;
   var tilt = parseInt(el.getAttribute('data-tilt') || '63', 10);
   var zoom = parseInt(el.getAttribute('data-zoom') || '72', 10);
   if (isNaN(tilt)) tilt = 63;
@@ -1706,8 +1749,9 @@ try {
       airflowAnchors: scene.airflow_anchors || [],
       airflowOverlay: airflowOn,
       airflowColor: 'blue',
-      envSensors: [],
-      heatOverlay: false,
+      particleDensity: density,
+      envSensors: scene.env_sensors || [],
+      heatOverlay: sensorsOn && (scene.env_sensors || []).length > 0,
       interactive: false,
       walkEnabled: false,
       autoRotate: !!(rotEl && rotEl.checked),
@@ -1745,6 +1789,20 @@ try {
       view.setAirflowOverlay(!!airEl.checked);
     });
   }
+  if (sensEl && view && typeof view.setHeatOverlay === 'function') {
+    sensEl.addEventListener('change', function () {
+      view.setHeatOverlay(!!sensEl.checked);
+    });
+  }
+  function applyDensity() {
+    var n = densEl ? parseInt(densEl.value, 10) : 100;
+    if (isNaN(n)) n = 100;
+    if (densOut) densOut.textContent = String(n);
+    if (view && typeof view.setParticleDensity === 'function') {
+      view.setParticleDensity(n);
+    }
+  }
+  if (densEl) densEl.addEventListener('input', applyDensity);
   // Match stage size after layout
   try { window.dispatchEvent(new Event('resize')); } catch (e2) {}
 })();
