@@ -362,7 +362,7 @@
         titleEl.textContent = version ? ('Updating to v' + version) : 'Updating ColdAisle';
       }
       if (detailEl) {
-        detailEl.textContent = 'Backup, download, apply — usually 1–3 minutes. Do not close this tab.';
+        detailEl.textContent = 'Backup and file copy run outside IIS. A large database can take several minutes. Do not close this tab.';
       }
       let tipIdx = 0;
       if (statusEl) statusEl.textContent = tips[0];

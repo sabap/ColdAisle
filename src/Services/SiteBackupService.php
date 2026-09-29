@@ -80,21 +80,24 @@ class SiteBackupService
                 $skip = array_merge($skip, ['snmp_readings', 'pdu_readings']);
             }
 
+            $onProgress = $options['on_progress'] ?? null;
+            if (!is_callable($onProgress)) {
+                $onProgress = null;
+            }
             $counts = [];
             foreach ($tables as $table) {
                 if (in_array($table, $skip, true)) {
                     $counts[$table] = 'skipped';
                     continue;
                 }
-                $rows = self::exportTable($table);
-                $counts[$table] = count($rows);
-                $json = json_encode($rows, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-                if ($json === false) {
-                    throw new RuntimeException("Failed to encode table {$table} as JSON.");
+                if ($onProgress) {
+                    $onProgress('Backing up ' . $table . '…');
                 }
-                if (file_put_contents($staging . '/data/' . $table . '.json', $json) === false) {
-                    throw new RuntimeException("Failed to write data for {$table}.");
-                }
+                $counts[$table] = self::exportTableToFile(
+                    $table,
+                    $staging . '/data/' . $table . '.json',
+                    $onProgress
+                );
             }
 
             $appKey = (string)(App::config('app_key') ?? '');
@@ -121,7 +124,10 @@ class SiteBackupService
             $uploadsSrc = App::ROOT . '/storage/uploads';
             $uploadsDst = $staging . '/uploads';
             if (is_dir($uploadsSrc)) {
-                self::copyTree($uploadsSrc, $uploadsDst);
+                if ($onProgress) {
+                    $onProgress('Copying uploads…');
+                }
+                self::copyTree($uploadsSrc, $uploadsDst, $onProgress);
             } else {
                 @mkdir($uploadsDst, 0775, true);
             }
@@ -152,7 +158,16 @@ class SiteBackupService
                 json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
             );
 
-            self::zipDirectory($staging, $zipPath);
+            if ($onProgress) {
+                $onProgress('Zipping the site backup…');
+            }
+            $zipFiles = 0;
+            self::zipDirectory($staging, $zipPath, static function () use (&$zipFiles, $onProgress): void {
+                $zipFiles++;
+                if ($onProgress && $zipFiles % 40 === 0) {
+                    $onProgress('Zipping the site backup (' . $zipFiles . ' files)…');
+                }
+            });
             $finalPath = $zipPath;
             if ($encrypt) {
                 $encPath = $dir . DIRECTORY_SEPARATOR . $baseName . '.caisle';
@@ -807,11 +822,104 @@ class SiteBackupService
         );
     }
 
-    /** @return list<array<string,mixed>> */
-    private static function exportTable(string $table): array
+    /**
+     * Write one table as a JSON array without loading every row at once.
+     * Identity tables page by key; others use OFFSET/FETCH.
+     *
+     * @param callable|null $onProgress function(string $message): void
+     */
+    private static function exportTableToFile(string $table, string $dest, ?callable $onProgress): int
     {
-        // Bracketed identifier — table name already validated
-        return Database::fetchAll("SELECT * FROM [{$table}]");
+        $fh = fopen($dest, 'wb');
+        if ($fh === false) {
+            throw new RuntimeException("Failed to write data for {$table}.");
+        }
+        $count = 0;
+        $first = true;
+        try {
+            fwrite($fh, '[');
+            $chunk = 200;
+            $key = self::identityColumn($table);
+            if ($key !== null && !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $key)) {
+                $key = null;
+            }
+            if ($key !== null) {
+                $last = null;
+                while (true) {
+                    if ($last === null) {
+                        $rows = Database::fetchAll(
+                            "SELECT TOP {$chunk} * FROM [{$table}] ORDER BY [{$key}] ASC"
+                        );
+                    } else {
+                        $rows = Database::fetchAll(
+                            "SELECT TOP {$chunk} * FROM [{$table}] WHERE [{$key}] > ? ORDER BY [{$key}] ASC",
+                            [$last]
+                        );
+                    }
+                    if ($rows === []) {
+                        break;
+                    }
+                    foreach ($rows as $row) {
+                        self::writeBackupJsonRow($fh, $table, $row, $first);
+                        $first = false;
+                        $count++;
+                        $last = $row[$key] ?? $last;
+                    }
+                    if ($onProgress) {
+                        $onProgress('Backing up ' . $table . ' (' . $count . ' rows)…');
+                    }
+                    if (count($rows) < $chunk) {
+                        break;
+                    }
+                }
+            } else {
+                $offset = 0;
+                while (true) {
+                    $rows = Database::fetchAll(
+                        "SELECT * FROM [{$table}] ORDER BY (SELECT 1) OFFSET {$offset} ROWS FETCH NEXT {$chunk} ROWS ONLY"
+                    );
+                    if ($rows === []) {
+                        break;
+                    }
+                    foreach ($rows as $row) {
+                        self::writeBackupJsonRow($fh, $table, $row, $first);
+                        $first = false;
+                        $count++;
+                    }
+                    $offset += count($rows);
+                    if ($onProgress) {
+                        $onProgress('Backing up ' . $table . ' (' . $count . ' rows)…');
+                    }
+                    if (count($rows) < $chunk) {
+                        break;
+                    }
+                }
+            }
+            fwrite($fh, ']');
+        } finally {
+            fclose($fh);
+        }
+        return $count;
+    }
+
+    /**
+     * @param resource $fh
+     * @param array<string,mixed> $row
+     */
+    private static function writeBackupJsonRow($fh, string $table, array $row, bool $first): void
+    {
+        $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+        if (defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
+            $flags |= JSON_INVALID_UTF8_SUBSTITUTE;
+        }
+        $json = json_encode($row, $flags);
+        if ($json === false) {
+            throw new RuntimeException("Failed to encode a row from {$table} as JSON.");
+        }
+        if (!$first) {
+            fwrite($fh, ',');
+        }
+        fwrite($fh, $json);
     }
 
     private static function clearTable(string $table): void
@@ -1089,7 +1197,7 @@ class SiteBackupService
 
     // ─── zip / filesystem ────────────────────────────────────────────────
 
-    private static function zipDirectory(string $sourceDir, string $zipPath): void
+    private static function zipDirectory(string $sourceDir, string $zipPath, ?callable $onFile = null): void
     {
         if (class_exists('ZipArchive')) {
             $zip = new ZipArchive();
@@ -1109,6 +1217,9 @@ class SiteBackupService
                     $zip->addEmptyDir($rel);
                 } else {
                     $zip->addFile($file->getPathname(), $rel);
+                    if ($onFile) {
+                        $onFile();
+                    }
                 }
             }
             $zip->close();
@@ -1186,7 +1297,7 @@ class SiteBackupService
         throw new RuntimeException('Could not find package root (manifest.json) in archive.');
     }
 
-    private static function copyTree(string $src, string $dst): void
+    private static function copyTree(string $src, string $dst, ?callable $onFile = null): void
     {
         if (!is_dir($dst)) {
             @mkdir($dst, 0775, true);
@@ -1196,6 +1307,7 @@ class SiteBackupService
             RecursiveIteratorIterator::SELF_FIRST
         );
         $srcNorm = rtrim(str_replace('\\', '/', $src), '/');
+        $copied = 0;
         foreach ($iterator as $item) {
             /** @var SplFileInfo $item */
             $full = str_replace('\\', '/', $item->getPathname());
@@ -1211,6 +1323,10 @@ class SiteBackupService
                     @mkdir($parent, 0775, true);
                 }
                 @copy($item->getPathname(), $target);
+                $copied++;
+                if ($onFile && $copied % 40 === 0) {
+                    $onFile('Copying uploads (' . $copied . ' files)…');
+                }
             }
         }
     }

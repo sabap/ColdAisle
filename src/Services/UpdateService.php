@@ -534,24 +534,188 @@ class UpdateService
      */
     private static function keepalive(string $phase = ''): void
     {
+        if ($phase !== '') {
+            self::noteProgress($phase, 'Update in progress: ' . $phase);
+        } elseif (PHP_SAPI !== 'cli') {
+            self::flushWebBytes();
+        }
+    }
+
+    /**
+     * Record progress for the settings modal. Safe from the IIS request and from
+     * the detached php.exe worker (CLI skips the body flush).
+     */
+    private static function noteProgress(string $phase, string $message): void
+    {
+        $cur = self::readApplyStatus();
+        if (!is_array($cur) || ($cur['state'] ?? '') !== 'running') {
+            return;
+        }
+        $cur['phase'] = $phase;
+        $cur['message'] = $message;
+        self::writeApplyStatus($cur);
+        self::flushWebBytes();
+    }
+
+    /** Body bytes reset IIS FastCGI activityTimeout. They do not extend requestTimeout. */
+    private static function flushWebBytes(): void
+    {
         if (PHP_SAPI === 'cli') {
             return;
         }
-        // This sends body bytes — Location: headers will no longer work after the first flush.
-        // Callers must use browserReturn() instead of App::redirect().
         echo str_repeat(' ', 256);
         if (function_exists('flush')) {
             @flush();
         }
-        if ($phase !== '') {
-            App::log('Update progress: ' . $phase, 'info');
-            $cur = self::readApplyStatus();
-            if (is_array($cur) && ($cur['state'] ?? '') === 'running') {
-                $cur['phase'] = $phase;
-                $cur['message'] = 'Update in progress: ' . $phase;
-                self::writeApplyStatus($cur);
+    }
+
+    /**
+     * php.exe next to php-cgi, or C:\PHP\php.exe. Never return php-cgi.exe.
+     */
+    public static function findPhpCli(): string
+    {
+        $candidates = [];
+        if (defined('PHP_BINARY') && PHP_BINARY !== '') {
+            $dir = dirname(PHP_BINARY);
+            $candidates[] = $dir . DIRECTORY_SEPARATOR . 'php.exe';
+            $candidates[] = $dir . DIRECTORY_SEPARATOR . 'php';
+        }
+        $candidates[] = 'C:\\PHP\\php.exe';
+        $candidates[] = 'C:\\php\\php.exe';
+        foreach ($candidates as $c) {
+            if (is_file($c) && stripos($c, 'cgi') === false) {
+                return $c;
             }
         }
+        return 'php';
+    }
+
+    /**
+     * Start backup + apply in a detached php.exe so IIS FastCGI cannot kill it.
+     * The web request returns as soon as that process writes its first status.
+     *
+     * @return array{ok:bool,background:bool,message:string,version:?string,already?:bool}
+     */
+    public static function beginBackgroundApply(): array
+    {
+        $existing = self::readApplyStatus();
+        if (is_array($existing) && ($existing['state'] ?? '') === 'running') {
+            $at = strtotime((string)($existing['at'] ?? '')) ?: 0;
+            if ($at > 0 && (time() - $at) < 600) {
+                return [
+                    'ok' => true,
+                    'background' => true,
+                    'already' => true,
+                    'version' => isset($existing['version']) ? (string)$existing['version'] : null,
+                    'message' => (string)($existing['message'] ?? 'An update is already running.'),
+                ];
+            }
+        }
+
+        $cfg = self::config();
+        if (empty($cfg['enabled'])) {
+            throw new RuntimeException('Updates are disabled.');
+        }
+        $status = self::checkForUpdate(true);
+        if (empty($status['ok'])) {
+            throw new RuntimeException($status['error'] ?? 'Update check failed.');
+        }
+        $latest = ltrim((string)($status['latest'] ?? ''), 'vV');
+        if ($latest === '') {
+            throw new RuntimeException('No remote version found.');
+        }
+        $current = self::installedVersion();
+        if (version_compare($latest, $current, '<=')) {
+            throw new RuntimeException("Already on {$current}; remote {$latest} is not newer.");
+        }
+
+        $script = App::ROOT . DIRECTORY_SEPARATOR . 'scripts' . DIRECTORY_SEPARATOR . 'apply_update_cli.php';
+        if (!is_file($script)) {
+            throw new RuntimeException('Missing scripts/apply_update_cli.php.');
+        }
+        $php = self::findPhpCli();
+        $logDir = App::ROOT . '/storage/logs';
+        if (!is_dir($logDir)) {
+            @mkdir($logDir, 0775, true);
+        }
+        $logFile = $logDir . DIRECTORY_SEPARATOR . 'update_worker.log';
+        @file_put_contents(
+            $logFile,
+            date('c') . ' spawn ' . $php . ' ' . $script . ' ' . $latest . "\n",
+            FILE_APPEND
+        );
+
+        self::writeApplyStatus([
+            'ok' => false,
+            'state' => 'running',
+            'phase' => 'starting',
+            'from' => $current,
+            'version' => $latest,
+            'message' => "Starting update {$current} → {$latest}…",
+        ]);
+
+        $cmd = escapeshellarg($php) . ' -d max_execution_time=0 -d memory_limit=1024M '
+            . escapeshellarg($script) . ' ' . escapeshellarg($latest);
+        $spawned = false;
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+            $full = 'cmd /c start /B "" ' . $cmd . ' >> ' . escapeshellarg($logFile) . ' 2>&1';
+            $handle = @popen($full, 'r');
+            if (is_resource($handle)) {
+                @pclose($handle);
+                $spawned = true;
+            }
+        } else {
+            @exec($cmd . ' >> ' . escapeshellarg($logFile) . ' 2>&1 &');
+            $spawned = true;
+        }
+        if (!$spawned) {
+            $msg = 'Could not start php.exe for the update. Expected it beside php-cgi.exe or at C:\\PHP\\php.exe.';
+            self::writeApplyStatus([
+                'ok' => false,
+                'state' => 'failed',
+                'phase' => 'failed',
+                'from' => $current,
+                'version' => $latest,
+                'message' => $msg,
+            ]);
+            return [
+                'ok' => false,
+                'background' => true,
+                'version' => $latest,
+                'message' => $msg,
+            ];
+        }
+
+        $deadline = microtime(true) + 12.0;
+        while (microtime(true) < $deadline) {
+            usleep(250000);
+            $now = self::readApplyStatus();
+            $phase = is_array($now) ? (string)($now['phase'] ?? '') : '';
+            if ($phase !== '' && $phase !== 'starting') {
+                return [
+                    'ok' => true,
+                    'background' => true,
+                    'version' => $latest,
+                    'message' => (string)($now['message'] ?? 'Update started.'),
+                ];
+            }
+        }
+
+        $msg = 'The update process did not start. See storage/logs/update_worker.log.';
+        self::writeApplyStatus([
+            'ok' => false,
+            'state' => 'failed',
+            'phase' => 'failed',
+            'from' => $current,
+            'version' => $latest,
+            'message' => $msg,
+        ]);
+        return [
+            'ok' => false,
+            'background' => true,
+            'version' => $latest,
+            'message' => $msg,
+        ];
     }
 
     public static function applyStatusPath(): string
@@ -613,13 +777,35 @@ class UpdateService
         if ($state === 'shown') {
             return;
         }
-        if ($state === 'running' || $stale) {
+        if ($state === 'running') {
+            $age = $at > 0 ? (time() - $at) : 9999;
+            $phase = (string)($st['phase'] ?? '');
+            if ($age <= 600) {
+                App::flash(
+                    'warning',
+                    'Update still running'
+                    . ($phase !== '' ? ' (' . $phase . ')' : '')
+                    . ($msg !== '' ? (': ' . $msg) : '.')
+                    . ' Installed version is still v' . self::installedVersion() . '.'
+                );
+                return;
+            }
             App::flash(
                 'error',
                 'Update did not finish'
-                . (!empty($st['phase']) ? ' (stopped during ' . (string)$st['phase'] . ')' : '')
+                . ($phase !== '' ? ' (stopped during ' . $phase . ')' : '')
                 . '. Installed version is v' . self::installedVersion()
-                . '. The IIS FastCGI timeout often kills a long backup — check storage/logs/app.log and try again.'
+                . '. The background job stopped sending progress. See storage/logs/update_worker.log and storage/logs/app.log.'
+            );
+            $st['state'] = 'shown';
+            self::writeApplyStatus($st);
+            return;
+        }
+        if ($stale) {
+            App::flash(
+                'error',
+                'Update did not finish. Installed version is v' . self::installedVersion()
+                . '. See storage/logs/app.log.'
             );
             $st['state'] = 'shown';
             self::writeApplyStatus($st);
@@ -866,10 +1052,13 @@ class UpdateService
                 'SiteBackupService unavailable — cannot create a database backup.'
             );
         }
-        self::keepalive('backup-site');
+        self::noteProgress('backup-site', 'Backing up the database…');
         $sitePath = SiteBackupService::export([
             'include_audit' => true,
             'include_readings' => false,
+            'on_progress' => static function (string $message): void {
+                self::noteProgress('backup-site', $message);
+            },
         ]);
         self::keepalive('backup-files');
         if (!is_file($sitePath)) {

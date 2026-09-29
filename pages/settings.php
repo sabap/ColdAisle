@@ -9,6 +9,36 @@ App::boot();
 $user = App::requirePermission('manage_settings');
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET'
+    && isset($_GET['update_status'])
+    && class_exists('UpdateService')
+) {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    $st = UpdateService::readApplyStatus() ?? [];
+    $state = (string)($st['state'] ?? 'none');
+    $at = strtotime((string)($st['at'] ?? '')) ?: 0;
+    $age = $at > 0 ? (time() - $at) : 9999;
+    $stale = $state === 'running' && $age > 600;
+    $phase = (string)($st['phase'] ?? '');
+    $message = trim((string)($st['message'] ?? ''));
+    if ($stale) {
+        $state = 'failed';
+        $message = 'Update stopped sending progress'
+            . ($phase !== '' ? ' during ' . $phase : '')
+            . '. See storage/logs/update_worker.log.';
+    }
+    echo json_encode([
+        'ok' => true,
+        'state' => $state,
+        'phase' => $phase,
+        'message' => $message,
+        'version' => $st['version'] ?? null,
+        'stale' => $stale,
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET'
     && isset($_GET['_upd'])
     && class_exists('UpdateService')
     && method_exists('UpdateService', 'flashApplyStatusIfNeeded')
@@ -571,20 +601,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         }
 
         if ($section === 'update_apply') {
-            @set_time_limit(600);
-            @ignore_user_abort(true);
+            $wantsJson = strtolower((string)($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '')) === 'xmlhttprequest';
             try {
-                $result = UpdateService::applyUpdate(null);
+                $result = UpdateService::beginBackgroundApply();
                 AuditService::log((int)$user['user_id'], $user['username'], 'update_apply', 'system', null, [
                     'version' => $result['version'] ?? null,
                     'ok' => !empty($result['ok']),
-                    'backup' => isset($result['backup']) ? basename((string)$result['backup']) : null,
+                    'background' => true,
                 ]);
-                if (!empty($result['ok'])) {
-                    App::flash('success', $result['message'] ?? 'Update applied.');
-                } else {
-                    App::flash('error', $result['message'] ?? 'Update failed.');
+                if ($wantsJson) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                    exit;
                 }
+                App::flash(
+                    !empty($result['ok']) ? 'success' : 'error',
+                    (string)($result['message'] ?? 'Update started.')
+                );
             } catch (Throwable $e) {
                 App::log('Settings update_apply: ' . $e->getMessage(), 'error');
                 AuditService::log((int)$user['user_id'], $user['username'], 'update_apply', 'system', null, [
@@ -594,16 +627,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 $brief = class_exists('UpdateService')
                     ? UpdateService::briefError($e->getMessage())
                     : $e->getMessage();
-                App::flash(
-                    'error',
-                    'Update failed: ' . $brief
-                    . ' If this keeps happening on IIS, run the update from an elevated PowerShell on the server (see docs) or check storage/logs/app.log.'
-                );
-            }
-            // Keepalive during apply flushes the body, so Location: would be ignored
-            // (blank white POST page). HTML trampoline if headers already sent.
-            if (class_exists('UpdateService') && method_exists('UpdateService', 'browserReturn')) {
-                UpdateService::browserReturn('pages/settings.php#updates');
+                if ($wantsJson) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'ok' => false,
+                        'background' => true,
+                        'message' => 'Update failed: ' . $brief,
+                    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                    exit;
+                }
+                App::flash('error', 'Update failed: ' . $brief);
             }
             App::redirect('pages/settings.php#updates');
         }
@@ -3710,24 +3743,66 @@ $alertsBadgeOn = $alertsMasterOn && $anyCategoryOn;
                 if (statusEl) statusEl.textContent = 'Reloading Settings…';
                 window.location.replace(dest);
             }
+            var statusUrl = (window.ColdAisle && ColdAisle.baseUrl)
+                ? String(ColdAisle.baseUrl).replace(/\/$/, '') + '/pages/settings.php?update_status=1'
+                : 'settings.php?update_status=1';
+            var overlay = document.getElementById('caAppUpdateModal');
+            function poll() {
+                fetch(statusUrl, {
+                    credentials: 'same-origin',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                }).then(function (res) {
+                    return res.json();
+                }).then(function (data) {
+                    var state = data && data.state ? String(data.state) : '';
+                    var message = data && data.message ? String(data.message) : 'Update in progress…';
+                    if (statusEl) statusEl.textContent = message;
+                    if (state === 'done' || state === 'failed' || state === 'shown') {
+                        go();
+                        return;
+                    }
+                    window.setTimeout(poll, 2000);
+                }).catch(function () {
+                    window.setTimeout(poll, 3000);
+                });
+            }
             fetch(form.getAttribute('action') || (window.location.pathname + (window.location.search || '')), {
                 method: 'POST',
                 body: fd,
                 credentials: 'same-origin',
                 redirect: 'manual',
-                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' }
             }).then(function (res) {
-                if (statusEl) {
-                    statusEl.textContent = (res && res.ok) ? 'Apply finished — loading result…' : 'Request ended — checking result…';
-                }
-                if (detailEl && res && !res.ok) {
-                    detailEl.textContent = 'HTTP ' + res.status + '. If the overlay vanished before, Settings will show the last apply status.';
-                }
-                window.setTimeout(go, 400);
+                return res.text().then(function (text) {
+                    var data = null;
+                    try { data = JSON.parse(text); } catch (e) { data = null; }
+                    if (data && data.background) {
+                        if (overlay && overlay._updTip) {
+                            clearInterval(overlay._updTip);
+                            overlay._updTip = null;
+                        }
+                        if (statusEl) {
+                            statusEl.textContent = data.message || (data.ok ? 'Update started…' : 'Update did not start');
+                        }
+                        if (!data.ok) {
+                            if (detailEl) detailEl.textContent = data.message || 'The update process did not start.';
+                            return;
+                        }
+                        if (detailEl) {
+                            detailEl.textContent = 'Backup and file copy are running outside IIS. Keep this tab open.';
+                        }
+                        poll();
+                        return;
+                    }
+                    if (statusEl) {
+                        statusEl.textContent = (res && res.ok) ? 'Apply finished — loading result…' : 'Request ended — checking result…';
+                    }
+                    window.setTimeout(go, 400);
+                });
             }).catch(function (err) {
                 if (statusEl) statusEl.textContent = 'Connection dropped — checking whether the update finished…';
                 if (detailEl) {
-                    detailEl.textContent = (err && err.message) ? String(err.message) : 'The web request ended (often IIS FastCGI timeout during backup).';
+                    detailEl.textContent = (err && err.message) ? String(err.message) : 'The web request ended.';
                 }
                 window.setTimeout(go, 900);
             });
