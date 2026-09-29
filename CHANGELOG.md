@@ -15,12 +15,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Enhancements
 
-- **NOC 3D:** Settings → NOC wall display adds a particle-density slider (0–200; 100 is the previous mote count) and a **Show temperature sensors** checkbox. The settings preview updates live; save applies both on the NOC wall.
-
 ### Bug fixes
 
 ---
 
+## [1.0.4] - 2026-09-29
+
+### Enhancements
+
+- **NOC 3D:** Settings → NOC wall display adds a particle-density slider (0–200; 100 is the previous mote count) and a **Show temperature sensors** checkbox. The settings preview updates live; save applies both on the NOC wall.
+
+---
 ## [1.0.3] - 2026-09-29
 
 ### Bug fixes
