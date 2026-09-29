@@ -17,10 +17,15 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+---
+
+## [1.0.5] - 2026-09-29
+
+### Bug fixes
+
 - **Settings → Updates:** apply still died during the pre-update database backup. That export ran inside the IIS request, which FastCGI ends at about two minutes (and a large table can exhaust memory sooner). The modal then closed and Settings reported “stopped during backup-site”. Backup and file apply now run in a separate `php.exe` process. The modal stays up and shows progress until that process finishes. Table rows are written in batches so one large table does not have to sit entirely in memory.
 
 ---
-
 ## [1.0.4] - 2026-09-29
 
 ### Enhancements
