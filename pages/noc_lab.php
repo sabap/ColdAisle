@@ -36,10 +36,10 @@ $apiUrl = App::url('api/noc.php?scene=1');
 if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
-$cssUrl = App::url('assets/css/dash-lab.css') . '?v=1';
-$jsUrl = App::url('assets/js/dash-lab.js') . '?v=1';
+$cssUrl = App::url('assets/css/dash-lab.css') . '?v=2';
+$jsUrl = App::url('assets/js/dash-lab.js') . '?v=2';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=36';
+$dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=39';
 $org = '';
 try {
     $org = (string)SettingsService::get('org_name', '');
@@ -71,6 +71,7 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'Lab NOC';
 <body class="lab-noc-page">
   <div class="lab-overlay-root">
     <nav class="lab-rail" aria-label="Lab views">
+      <div class="lab-core" title="Link"></div>
       <button type="button" class="lab-rail-btn is-active" data-panel="overview" title="Overview">
         <span class="lab-rail-stack">▣<small>All</small></span>
       </button>
@@ -85,17 +86,26 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'Lab NOC';
       </button>
     </nav>
     <header class="lab-top">
-      <div>
-        <h1>Lab NOC</h1>
-        <span class="lab-kicker">Experimental wall · production NOC is unchanged</span>
+      <div style="display:flex;align-items:baseline;flex-wrap:wrap">
+        <h1>ColdAisle // Command</h1>
+        <span class="lab-kicker">Wall HUD</span>
       </div>
-      <div style="display:flex;align-items:center;gap:.85rem">
-        <a href="<?= App::e(App::url('pages/noc.php') . ($gotToken !== '' ? ('?token=' . rawurlencode($gotToken)) : '')) ?>">Production NOC</a>
+      <div style="display:flex;align-items:center;gap:1rem">
+        <span class="lab-live"><i></i> Live link</span>
+        <a href="<?= App::e(App::url('pages/noc.php') . ($gotToken !== '' ? ('?token=' . rawurlencode($gotToken)) : '')) ?>">Exit HUD</a>
         <span class="lab-clock" id="labClock">—</span>
       </div>
     </header>
     <div class="lab-stage">
       <div class="lab-3d" id="lab3d" aria-label="Experimental 3D hall"></div>
+      <div class="lab-hud" aria-hidden="true">
+        <span class="c tl"></span><span class="c tr"></span>
+        <span class="c bl"></span><span class="c br"></span>
+        <div class="lab-hex"></div>
+        <div class="lab-scan"></div>
+        <div class="lab-vignette"></div>
+        <div class="lab-reticle"></div>
+      </div>
       <div class="lab-chips" id="labChips"></div>
       <div class="lab-cam" role="group" aria-label="Camera">
         <button type="button" data-cam="orbit" class="is-active">Orbit</button>
@@ -105,13 +115,13 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'Lab NOC';
       </div>
     </div>
     <aside class="lab-inspector">
-      <h2 id="labInspectorTitle">Hall</h2>
+      <h2 id="labInspectorTitle">Systems</h2>
       <div id="labInspectorBody"></div>
     </aside>
     <div class="lab-stream">
       <div class="lab-stream-head">
-        <span>Event stream</span>
-        <span>site notifications</span>
+        <span>Telemetry</span>
+        <span>event bus</span>
       </div>
       <div id="labStreamList"></div>
     </div>

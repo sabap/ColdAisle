@@ -94,6 +94,32 @@
     }).join('');
   }
 
+  function ringSvg(pct, label) {
+    var p = Math.max(0, Math.min(100, Number(pct) || 0));
+    var r = 26;
+    var c = 2 * Math.PI * r;
+    var dash = (p / 100) * c;
+    return '<div class="lab-gauge"><svg width="72" height="72" viewBox="0 0 72 72">'
+      + '<circle cx="36" cy="36" r="' + r + '" fill="none" stroke="#041820" stroke-width="5"/>'
+      + '<circle cx="36" cy="36" r="' + r + '" fill="none" stroke="#00e5ff" stroke-width="5" '
+      + 'stroke-linecap="round" stroke-dasharray="' + dash.toFixed(1) + ' ' + c.toFixed(1) + '" '
+      + 'transform="rotate(-90 36 36)"/>'
+      + '<text x="36" y="40" text-anchor="middle" fill="#00e5ff" font-size="12" font-family="Orbitron,sans-serif">'
+      + Math.round(p) + '</text></svg><div class="k">' + esc(label) + '</div></div>';
+  }
+
+  function gaugeRow(data) {
+    var m = (data && data.metrics) || {};
+    var p = (data && data.power) || {};
+    var u = Number(m.u_pct) || 0;
+    var kw = Number(p.kw) || 0;
+    var kwPct = Math.max(0, Math.min(100, kw * 8));
+    var env = (data && data.env) || {};
+    var envN = (env.ok || 0) + (env.warn || 0) + (env.crit || 0) + (env.unknown || 0);
+    var envOk = envN ? (100 * (env.ok || 0) / envN) : 0;
+    return '<div class="lab-gauges">' + ringSvg(u, 'U fill') + ringSvg(kwPct, 'Load') + ringSvg(envOk, 'Env') + '</div>';
+  }
+
   function paintInspector(data) {
     var box = $('labInspectorBody');
     if (!box || !data) return;
@@ -140,7 +166,7 @@
         ['Sensors', String(m.env_sensors || 0)]
       ];
     }
-    var html = '<div class="lab-stat-grid">';
+    var html = gaugeRow(data) + '<div class="lab-stat-grid">';
     rows.forEach(function (r) {
       html += '<div class="lab-stat"><div class="k">' + esc(r[0]) + '</div><div class="v">' + esc(r[1]) + '</div></div>';
     });
@@ -238,7 +264,8 @@
       heatOverlay: true,
       interactive: true,
       walkEnabled: true,
-      autoRotate: !!cfg.autoRotate,
+      autoRotate: cfg.autoRotate !== false,
+      autoRotateSpeed: 0.0018,
       textureFaces: 'none',
       look: 'lab',
       cameraPhi: Math.PI / 3.2,

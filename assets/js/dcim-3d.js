@@ -7,60 +7,151 @@
 
   function mmToM(mm) { return (Number(mm) || 0) / 1000; }
 
-  function makeRaisedFloorTexture() {
-    var c = document.createElement('canvas');
-    c.width = 128;
-    c.height = 128;
-    var g = c.getContext('2d');
-    g.fillStyle = '#2a3344';
-    g.fillRect(0, 0, 128, 128);
-    g.fillStyle = '#323c50';
-    g.fillRect(4, 4, 120, 120);
-    g.strokeStyle = '#1a2230';
-    g.lineWidth = 3;
-    g.strokeRect(1.5, 1.5, 125, 125);
-    g.strokeStyle = 'rgba(255,255,255,0.06)';
-    g.lineWidth = 1;
-    g.beginPath();
-    g.moveTo(8, 8);
-    g.lineTo(48, 8);
-    g.stroke();
+  function canvasTex(c, aniso) {
     var t = new THREE.CanvasTexture(c);
-    t.anisotropy = 4;
+    t.anisotropy = aniso || 8;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.generateMipmaps = true;
     return t;
   }
 
-  function makePerfDoorTexture() {
+  function makeRaisedFloorTexture() {
     var c = document.createElement('canvas');
     c.width = 256;
-    c.height = 512;
+    c.height = 256;
     var g = c.getContext('2d');
-    var grd = g.createLinearGradient(0, 0, 0, 512);
-    grd.addColorStop(0, '#1c2433');
-    grd.addColorStop(0.08, '#141a24');
-    grd.addColorStop(1, '#0d121a');
+    g.fillStyle = '#1c2430';
+    g.fillRect(0, 0, 256, 256);
+    g.fillStyle = '#2a3344';
+    g.fillRect(6, 6, 244, 244);
+    var lg = g.createLinearGradient(6, 6, 250, 250);
+    lg.addColorStop(0, 'rgba(255,255,255,0.07)');
+    lg.addColorStop(0.5, 'rgba(255,255,255,0)');
+    lg.addColorStop(1, 'rgba(0,0,0,0.18)');
+    g.fillStyle = lg;
+    g.fillRect(6, 6, 244, 244);
+    g.strokeStyle = '#0d1218';
+    g.lineWidth = 5;
+    g.strokeRect(2, 2, 252, 252);
+    g.strokeStyle = 'rgba(255,255,255,0.08)';
+    g.lineWidth = 1;
+    g.strokeRect(10, 10, 80, 1);
+    return canvasTex(c, 8);
+  }
+
+  function makePerfDoorTexture(kind) {
+    var rear = kind === 'rear';
+    var c = document.createElement('canvas');
+    c.width = 1024;
+    c.height = 2048;
+    var g = c.getContext('2d');
+    var grd = g.createLinearGradient(0, 0, 0, 2048);
+    grd.addColorStop(0, rear ? '#1a222c' : '#222a36');
+    grd.addColorStop(0.08, '#121820');
+    grd.addColorStop(1, '#0a0e14');
     g.fillStyle = grd;
-    g.fillRect(0, 0, 256, 512);
-    g.fillStyle = '#22d3ee';
-    g.globalAlpha = 0.55;
-    g.fillRect(8, 6, 240, 5);
-    g.globalAlpha = 1;
-    g.fillStyle = '#070a10';
-    var y0 = 22;
-    for (var y = y0; y < 500; y += 7) {
-      var odd = ((y - y0) / 7) % 2;
-      for (var x = 10 + (odd ? 3 : 0); x < 246; x += 6) {
+    g.fillRect(0, 0, 1024, 2048);
+    // Outer frame
+    g.fillStyle = '#3a4556';
+    g.fillRect(0, 0, 1024, 2048);
+    g.fillStyle = '#151b24';
+    g.fillRect(48, 56, 928, 1936);
+    // Brushed inner
+    var inner = g.createLinearGradient(48, 0, 976, 0);
+    inner.addColorStop(0, '#10151c');
+    inner.addColorStop(0.5, '#1c2430');
+    inner.addColorStop(1, '#0e131a');
+    g.fillStyle = inner;
+    g.fillRect(72, 96, 880, 1860);
+    // Perforation
+    g.fillStyle = rear ? '#05070a' : '#070a10';
+    var y0 = 130;
+    var y1 = 1920;
+    var step = rear ? 9 : 8;
+    var rad = rear ? 2.4 : 2.05;
+    for (var y = y0; y < y1; y += step) {
+      var odd = Math.floor((y - y0) / step) % 2;
+      for (var x = 92 + (odd ? step / 2 : 0); x < 932; x += step) {
         g.beginPath();
-        g.arc(x, y, 1.6, 0, Math.PI * 2);
+        g.arc(x, y, rad, 0, Math.PI * 2);
         g.fill();
       }
     }
-    g.strokeStyle = 'rgba(148,163,184,0.22)';
-    g.lineWidth = 4;
-    g.strokeRect(3, 3, 250, 506);
-    var t = new THREE.CanvasTexture(c);
-    t.anisotropy = 4;
+    // U-channel rails
+    g.strokeStyle = 'rgba(180,196,214,0.16)';
+    g.lineWidth = 3;
+    for (var u = 0; u < 42; u++) {
+      var uy = 110 + u * ((y1 - y0) / 42);
+      g.beginPath();
+      g.moveTo(80, uy);
+      g.lineTo(944, uy);
+      g.stroke();
+    }
+    // Highlight edge
+    g.strokeStyle = 'rgba(220,230,240,0.28)';
+    g.lineWidth = 6;
+    g.strokeRect(56, 64, 912, 1920);
+    // Status bar
+    g.fillStyle = rear ? '#fb923c' : '#00e5ff';
+    g.globalAlpha = 0.85;
+    g.fillRect(80, 68, 864, 14);
+    g.globalAlpha = 1;
+    // Handle recess
+    g.fillStyle = 'rgba(0,0,0,0.45)';
+    g.fillRect(rear ? 120 : 860, 820, 48, 280);
+    g.fillStyle = '#8b9bb0';
+    g.fillRect(rear ? 128 : 870, 840, 22, 240);
+    g.fillStyle = '#c5d0dc';
+    g.fillRect(rear ? 132 : 874, 848, 8, 224);
+    var t = canvasTex(c, 8);
     return t;
+  }
+
+  function makeCabinetSideTexture() {
+    var c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 1024;
+    var g = c.getContext('2d');
+    var grd = g.createLinearGradient(0, 0, 256, 0);
+    grd.addColorStop(0, '#0c1016');
+    grd.addColorStop(0.5, '#1a222c');
+    grd.addColorStop(1, '#0c1016');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 256, 1024);
+    g.strokeStyle = 'rgba(0,0,0,0.45)';
+    g.lineWidth = 2;
+    for (var x = 32; x < 256; x += 32) {
+      g.beginPath();
+      g.moveTo(x, 0);
+      g.lineTo(x, 1024);
+      g.stroke();
+    }
+    g.fillStyle = 'rgba(0,229,255,0.12)';
+    g.fillRect(0, 8, 256, 6);
+    return canvasTex(c, 4);
+  }
+
+  function makeAisleFloorLabel(kind) {
+    var c = document.createElement('canvas');
+    c.width = 1024;
+    c.height = 256;
+    var g = c.getContext('2d');
+    var cold = kind === 'cold';
+    g.clearRect(0, 0, 1024, 256);
+    g.fillStyle = cold ? 'rgba(8, 47, 73, 0.35)' : 'rgba(67, 20, 7, 0.38)';
+    g.fillRect(0, 0, 1024, 256);
+    g.strokeStyle = cold ? '#38bdf8' : '#fb923c';
+    g.lineWidth = 10;
+    g.strokeRect(18, 18, 988, 220);
+    g.shadowColor = cold ? '#00e5ff' : '#ffb000';
+    g.shadowBlur = 22;
+    g.fillStyle = cold ? '#7dd3fc' : '#fdba74';
+    g.font = 'bold 96px Segoe UI, Arial, sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(cold ? 'COLD AISLE' : 'HOT AISLE', 512, 128);
+    return canvasTex(c, 4);
   }
 
   function mediaBase() {
@@ -981,18 +1072,21 @@
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
+    var labLedMats = [];
     if (labLook) {
-      scene.add(new THREE.AmbientLight(0x9bb4d0, 0.2));
-      scene.add(new THREE.HemisphereLight(0x8eb4ff, 0x1a1814, 0.4));
-      var key = new THREE.DirectionalLight(0xfff4e6, 1.05);
-      key.position.set(14, 24, 9);
+      scene.background = new THREE.Color(0x010308);
+      scene.fog = new THREE.FogExp2(0x031018, 0.028);
+      scene.add(new THREE.AmbientLight(0x1a3048, 0.18));
+      scene.add(new THREE.HemisphereLight(0x3d7ea6, 0x080604, 0.22));
+      var key = new THREE.DirectionalLight(0xe8f4ff, 0.55);
+      key.position.set(10, 28, 6);
       scene.add(key);
-      var cool = new THREE.DirectionalLight(0x6aa8ff, 0.34);
-      cool.position.set(-16, 11, -7);
+      var cool = new THREE.DirectionalLight(0x00d4ff, 0.55);
+      cool.position.set(-18, 14, -4);
       scene.add(cool);
-      var warm = new THREE.DirectionalLight(0xffc27a, 0.2);
-      warm.position.set(3, 5, -14);
-      scene.add(warm);
+      var rim = new THREE.DirectionalLight(0xff9f1c, 0.18);
+      rim.position.set(6, 8, -16);
+      scene.add(rim);
     } else {
       scene.add(new THREE.AmbientLight(0xffffff, 0.6));
       var dir = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -1066,9 +1160,47 @@
       labLook ? 0x1a2332 : 0x1e293b
     );
     grid.position.set(fw / 2, 0.01, fd / 2);
-    if (labLook) grid.material.opacity = 0.35;
-    if (labLook) grid.material.transparent = true;
+    if (labLook) {
+      grid.material.opacity = 0.22;
+      grid.material.transparent = true;
+    }
     scene.add(grid);
+
+    if (labLook) {
+      var glowGrid = new THREE.GridHelper(Math.max(fw, fd), Math.max(4, Math.round(Math.max(fw, fd) / 2)), 0x00e5ff, 0x083044);
+      glowGrid.position.set(fw / 2, 0.03, fd / 2);
+      glowGrid.material.transparent = true;
+      glowGrid.material.opacity = 0.55;
+      scene.add(glowGrid);
+      var pool = new THREE.PointLight(0x00e5ff, 1.6, Math.max(fw, fd) * 1.4, 2);
+      pool.position.set(fw / 2, 3.4, fd / 2);
+      scene.add(pool);
+      var ceil = new THREE.Mesh(
+        new THREE.PlaneGeometry(fw, fd),
+        new THREE.MeshBasicMaterial({
+          color: 0x00e5ff,
+          transparent: true,
+          opacity: 0.035,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        })
+      );
+      ceil.rotation.x = Math.PI / 2;
+      ceil.position.set(fw / 2, 4.6, fd / 2);
+      scene.add(ceil);
+      var ringGeo = new THREE.RingGeometry(Math.min(fw, fd) * 0.18, Math.min(fw, fd) * 0.185, 64);
+      var ringMat = new THREE.MeshBasicMaterial({
+        color: 0x00e5ff,
+        transparent: true,
+        opacity: 0.35,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      var ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(fw / 2, 0.04, fd / 2);
+      scene.add(ring);
+    }
 
     var edge = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(fw, 0.05, fd)),
@@ -1328,31 +1460,79 @@
       }
 
       if (labLook) {
-        if (!makePerfDoorTexture._shared) {
-          makePerfDoorTexture._shared = makePerfDoorTexture();
+        if (!makePerfDoorTexture._front) {
+          makePerfDoorTexture._front = makePerfDoorTexture('front');
+          makePerfDoorTexture._rear = makePerfDoorTexture('rear');
+          makeCabinetSideTexture._shared = makeCabinetSideTexture();
         }
-        var doorMap = makePerfDoorTexture._shared;
-        var doorMat = new THREE.MeshStandardMaterial({
-          map: doorMap,
-          roughness: 0.42,
-          metalness: 0.62,
-          transparent: true,
-          opacity: textureFaces === 'none' ? 0.96 : 0.82,
-        });
         var doorGeo = new THREE.PlaneGeometry(faceW * 0.99, faceH * 0.99);
-        var doorF = new THREE.Mesh(doorGeo, doorMat);
-        doorF.position.set(0, 0, d / 2 + 0.006);
+        var doorF = new THREE.Mesh(doorGeo, new THREE.MeshStandardMaterial({
+          map: makePerfDoorTexture._front,
+          roughness: 0.32,
+          metalness: 0.72,
+        }));
+        doorF.position.set(0, 0, d / 2 + 0.007);
         mesh.add(doorF);
-        var doorR = new THREE.Mesh(doorGeo.clone(), doorMat.clone());
-        doorR.position.set(0, 0, -d / 2 - 0.006);
+        var doorR = new THREE.Mesh(doorGeo.clone(), new THREE.MeshStandardMaterial({
+          map: makePerfDoorTexture._rear,
+          roughness: 0.34,
+          metalness: 0.7,
+        }));
+        doorR.position.set(0, 0, -d / 2 - 0.007);
         doorR.rotation.y = Math.PI;
         mesh.add(doorR);
-        var led = new THREE.Mesh(
-          new THREE.BoxGeometry(w * 0.92, 0.012, 0.012),
-          new THREE.MeshBasicMaterial({ color: 0x22d3ee })
+        var sideGeo = new THREE.PlaneGeometry(d * 0.98, h * 0.98);
+        var sideMat = new THREE.MeshStandardMaterial({
+          map: makeCabinetSideTexture._shared,
+          roughness: 0.4,
+          metalness: 0.55,
+        });
+        var sideL = new THREE.Mesh(sideGeo, sideMat);
+        sideL.position.set(-w / 2 - 0.002, 0, 0);
+        sideL.rotation.y = -Math.PI / 2;
+        mesh.add(sideL);
+        var sideR = new THREE.Mesh(sideGeo.clone(), sideMat.clone());
+        sideR.position.set(w / 2 + 0.002, 0, 0);
+        sideR.rotation.y = Math.PI / 2;
+        mesh.add(sideR);
+        var frameCol = new THREE.MeshStandardMaterial({ color: 0x2c3544, metalness: 0.65, roughness: 0.32 });
+        [[-faceW / 2, 0, d / 2 + 0.01, 0.018, h * 0.99, 0.02],
+         [faceW / 2, 0, d / 2 + 0.01, 0.018, h * 0.99, 0.02],
+         [0, h / 2 - 0.02, d / 2 + 0.01, faceW, 0.03, 0.02],
+         [0, -h / 2 + 0.03, d / 2 + 0.01, faceW, 0.05, 0.03]].forEach(function (b) {
+          var fr = new THREE.Mesh(new THREE.BoxGeometry(b[3], b[4], b[5]), frameCol);
+          fr.position.set(b[0], b[1], b[2]);
+          mesh.add(fr);
+        });
+        var handle = new THREE.Mesh(
+          new THREE.BoxGeometry(0.018, 0.22, 0.028),
+          new THREE.MeshStandardMaterial({ color: 0xb8c4d0, metalness: 0.85, roughness: 0.2 })
         );
-        led.position.set(0, h / 2 - 0.03, d / 2 + 0.008);
+        handle.position.set(faceW * 0.38, 0.02, d / 2 + 0.024);
+        mesh.add(handle);
+        var plinth = new THREE.Mesh(
+          new THREE.BoxGeometry(w * 1.04, 0.05, d * 1.04),
+          new THREE.MeshStandardMaterial({ color: 0x0b0f14, metalness: 0.4, roughness: 0.55 })
+        );
+        plinth.position.set(0, -h / 2 + 0.01, 0);
+        mesh.add(plinth);
+        var ledMat = new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.95 });
+        labLedMats.push(ledMat);
+        var led = new THREE.Mesh(new THREE.BoxGeometry(w * 0.88, 0.016, 0.016), ledMat);
+        led.position.set(0, h / 2 - 0.028, d / 2 + 0.014);
         mesh.add(led);
+        var glowLed = new THREE.Mesh(
+          new THREE.BoxGeometry(w * 0.9, 0.05, 0.04),
+          new THREE.MeshBasicMaterial({
+            color: 0x00e5ff,
+            transparent: true,
+            opacity: 0.16,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+          })
+        );
+        glowLed.position.set(0, h / 2 - 0.028, d / 2 + 0.022);
+        mesh.add(glowLed);
       }
 
       // Soft side accents (not hard chrome rails)
@@ -2229,6 +2409,182 @@
       };
     }
 
+    function makeAisleFixture(kind) {
+      var g = new THREE.Group();
+      var cold = kind === 'cold';
+      var housing = new THREE.Mesh(
+        new THREE.BoxGeometry(1.4, 0.08, 0.24),
+        new THREE.MeshStandardMaterial({ color: 0x1a2330, metalness: 0.75, roughness: 0.28 })
+      );
+      g.add(housing);
+      var lens = new THREE.Mesh(
+        new THREE.BoxGeometry(1.28, 0.03, 0.16),
+        new THREE.MeshBasicMaterial({ color: cold ? 0xe4fbff : 0xffe7c4 })
+      );
+      lens.position.y = -0.05;
+      g.add(lens);
+      var glow = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.6, 0.55),
+        new THREE.MeshBasicMaterial({
+          color: cold ? 0x7dd3fc : 0xfdba74,
+          transparent: true,
+          opacity: 0.18,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        })
+      );
+      glow.rotation.x = Math.PI / 2;
+      glow.position.y = -0.1;
+      g.add(glow);
+      return g;
+    }
+
+    function buildLabAisles() {
+      if (!labLook) return;
+      var cell = 0.8;
+      var votes = Object.create(null);
+      function bump(x, z, kind, wgt) {
+        if (!isFinite(x) || !isFinite(z)) return;
+        if (x < 0.45 || z < 0.45 || x > fw - 0.45 || z > fd - 0.45) return;
+        var i;
+        for (i = 0; i < walkColliders.length; i++) {
+          var b = walkColliders[i];
+          if (x > b.minX + 0.08 && x < b.maxX - 0.08 && z > b.minZ + 0.08 && z < b.maxZ - 0.08) {
+            return;
+          }
+        }
+        var gx = Math.round(x / cell);
+        var gz = Math.round(z / cell);
+        var k = gx + ',' + gz;
+        if (!votes[k]) {
+          votes[k] = { gx: gx, gz: gz, x: gx * cell, z: gz * cell, cold: 0, hot: 0 };
+        }
+        votes[k][kind] += wgt || 1;
+      }
+      cabinets.forEach(function (cab) {
+        var info = cabAirInfo(cab);
+        if (!info) return;
+        bump(info.inlet.x, info.inlet.z, 'cold', 2);
+        bump(info.exhaust.x, info.exhaust.z, 'hot', 2);
+        bump(info.inlet.x + info.dir.dx * 0.55, info.inlet.z + info.dir.dz * 0.55, 'cold', 1);
+        bump(info.exhaust.x - info.dir.dx * 0.55, info.exhaust.z - info.dir.dz * 0.55, 'hot', 1);
+      });
+      (airflowAnchors || []).forEach(function (a) {
+        if (!a) return;
+        var kind = String(a.kind || '').toLowerCase() === 'return' ? 'hot' : 'cold';
+        var c = airflowCenter(a);
+        bump(c.x, c.z, kind, 3);
+      });
+      var cells = Object.keys(votes).map(function (k) { return votes[k]; });
+      if (!cells.length) return;
+
+      function cluster(axis) {
+        var groups = Object.create(null);
+        cells.forEach(function (c) {
+          var gk = axis === 'x' ? String(c.gz) : String(c.gx);
+          if (!groups[gk]) groups[gk] = [];
+          groups[gk].push(c);
+        });
+        var runs = [];
+        Object.keys(groups).forEach(function (gk) {
+          var arr = groups[gk].slice().sort(function (a, b) {
+            return axis === 'x' ? a.gx - b.gx : a.gz - b.gz;
+          });
+          var cur = [arr[0]];
+          var i;
+          for (i = 1; i < arr.length; i++) {
+            var gap = axis === 'x' ? (arr[i].gx - arr[i - 1].gx) : (arr[i].gz - arr[i - 1].gz);
+            if (gap <= 2) cur.push(arr[i]);
+            else {
+              if (cur.length >= 2) runs.push(cur);
+              cur = [arr[i]];
+            }
+          }
+          if (cur.length >= 2) runs.push(cur);
+        });
+        return runs;
+      }
+      var runsX = cluster('x');
+      var runsZ = cluster('z');
+      var useX = runsX.length >= runsZ.length;
+      var packed = (useX ? runsX : runsZ).map(function (r) {
+        return { cells: r, axis: useX ? 'x' : 'z' };
+      });
+
+      var lightBudget = 14;
+      var lightsPlaced = 0;
+      var ceilY = 3.6;
+      packed.forEach(function (run) {
+        var cellsR = run.cells;
+        var coldN = 0;
+        var hotN = 0;
+        var sx = 0;
+        var sz = 0;
+        cellsR.forEach(function (c) {
+          coldN += c.cold;
+          hotN += c.hot;
+          sx += c.x;
+          sz += c.z;
+        });
+        var kind = coldN >= hotN ? 'cold' : 'hot';
+        var cx = sx / cellsR.length;
+        var cz = sz / cellsR.length;
+        var minC = cellsR[0];
+        var maxC = cellsR[cellsR.length - 1];
+        var len = (run.axis === 'x' ? Math.abs(maxC.x - minC.x) : Math.abs(maxC.z - minC.z)) + cell;
+        var width = cell * 1.2;
+        var col = kind === 'cold' ? 0x0ea5e9 : 0xf97316;
+        var strip = new THREE.Mesh(
+          new THREE.PlaneGeometry(run.axis === 'x' ? len : width, run.axis === 'x' ? width : len),
+          new THREE.MeshBasicMaterial({
+            color: col,
+            transparent: true,
+            opacity: 0.18,
+            depthWrite: false,
+          })
+        );
+        strip.rotation.x = -Math.PI / 2;
+        strip.position.set(cx, 0.022, cz);
+        scene.add(strip);
+        var labTex = makeAisleFloorLabel(kind);
+        var label = new THREE.Mesh(
+          new THREE.PlaneGeometry(Math.max(2.6, Math.min(len * 0.7, 8)), 0.55),
+          new THREE.MeshBasicMaterial({
+            map: labTex,
+            transparent: true,
+            opacity: 0.92,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          })
+        );
+        label.rotation.x = -Math.PI / 2;
+        if (run.axis === 'z') label.rotation.z = Math.PI / 2;
+        label.position.set(cx, 0.035, cz);
+        label.userData = { objectLabel: false };
+        scene.add(label);
+
+        var steps = Math.max(1, Math.round(len / 2.5));
+        var s;
+        for (s = 0; s < steps; s++) {
+          var t = steps === 1 ? 0.5 : s / (steps - 1);
+          var lx = run.axis === 'x' ? (minC.x + t * (maxC.x - minC.x)) : cx;
+          var lz = run.axis === 'z' ? (minC.z + t * (maxC.z - minC.z)) : cz;
+          var fixture = makeAisleFixture(kind);
+          fixture.position.set(lx, ceilY, lz);
+          if (run.axis === 'z') fixture.rotation.y = Math.PI / 2;
+          scene.add(fixture);
+          if (lightsPlaced < lightBudget) {
+            var lc = kind === 'cold' ? 0xd8f6ff : 0xffe2b8;
+            var pl = new THREE.PointLight(lc, 1.05, 8.2, 1.5);
+            pl.position.set(lx, ceilY - 0.1, lz);
+            scene.add(pl);
+            lightsPlaced++;
+          }
+        }
+      });
+    }
+
     function spawnOnVent(info) {
       var hw = info.w / 2;
       var hd = info.d / 2;
@@ -2364,7 +2720,6 @@
         if (!isFinite(t)) return;
         if (p === 'hot_aisle' || p === 'exhaust' || p === 'return_air') hot.push(t);
         else if (p === 'cold_aisle' || p === 'intake' || p === 'equipment_intake' || p === 'supply_air') cold.push(t);
-        else cold.push(t);
       });
       var out = {
         supply: avgNums(supply),
@@ -2378,6 +2733,66 @@
       }
       if (out.hot == null && out.return != null) out.hot = out.return;
       return out;
+    }
+
+    var airProbes = [];
+    (envSensors || []).forEach(function (s) {
+      var t = Number(s.temp);
+      if (!isFinite(t)) return;
+      var sx = Number(s.pos_x);
+      var sz = Number(s.pos_y);
+      var sy = Number(s.pos_z);
+      if (!isFinite(sx) || !isFinite(sz)) return;
+      if (!isFinite(sy)) sy = 1;
+      var r = Number(s.radius_m);
+      if (!isFinite(r) || r <= 0) r = 0.915;
+      airProbes.push({ x: sx, y: sy, z: sz, t: t, r: r });
+    });
+
+    /**
+     * Inverse-distance sample of nearby env sensors at a particle (x, y=height, z).
+     * Falls back to path/hall temp when nothing is close.
+     */
+    function sampleAirTempAt(x, y, z, fallback) {
+      if (!airProbes.length) return fallback;
+      var acc = 0;
+      var wsum = 0;
+      var nearest = null;
+      var nearestD2 = Infinity;
+      var i;
+      for (i = 0; i < airProbes.length; i++) {
+        var p = airProbes[i];
+        var dx = x - p.x;
+        var dy = (y - p.y) * 0.5;
+        var dz = z - p.z;
+        var d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < nearestD2) {
+          nearestD2 = d2;
+          nearest = p;
+        }
+        var reach = Math.max(2.4, p.r * 3);
+        if (d2 > reach * reach) continue;
+        var w = 1 / (d2 + 0.05);
+        acc += p.t * w;
+        wsum += w;
+      }
+      if (wsum > 0) {
+        var local = acc / wsum;
+        if (fallback == null || !isFinite(fallback)) return local;
+        var d = Math.sqrt(nearestD2);
+        var span = Math.max(2.6, nearest.r * 3.2);
+        var mix = 1 - Math.min(1, d / span);
+        mix = mix * mix;
+        return local * mix + fallback * (1 - mix);
+      }
+      if (nearest && nearestD2 < 16) {
+        if (fallback == null || !isFinite(fallback)) return nearest.t;
+        var dN = Math.sqrt(nearestD2);
+        var mixN = 1 - Math.min(1, dN / 4);
+        mixN = mixN * mixN;
+        return nearest.t * mixN + fallback * (1 - mixN);
+      }
+      return fallback;
     }
 
     function tempAlongPath(tc, u) {
@@ -2560,7 +2975,9 @@
             ampY: (0.03 + Math.random() * 0.06) * ampScale,
           });
           var u0 = path.len > 0 ? state[state.length - 1].t / path.len : 0;
-          var sample0 = path.tempC ? tempAlongPath(path.tempC, u0) : null;
+          var p0 = pointOnPoly(path.pts, state[state.length - 1].t);
+          var samplePath0 = path.tempC ? tempAlongPath(path.tempC, u0) : null;
+          var sample0 = sampleAirTempAt(p0.x, p0.y, p0.z, samplePath0);
           var c0 = airflowTintFromTemp(sample0);
           colors[i * 3] = c0.r;
           colors[i * 3 + 1] = c0.g;
@@ -2574,6 +2991,9 @@
       addCloud(nMain, 0.055, 0.78, 1);
       addCloud(nFine, 0.022, 0.55, 1.25);
     })();
+    if (labLook) {
+      try { buildLabAisles(); } catch (eAisle) { /* keep hall even if aisle paint fails */ }
+    }
 
     function tickAirflow(dt) {
       if (!airflowGroup.visible || !airflowParticleSets.length) return;
@@ -2596,15 +3016,21 @@
             p.y + Math.sin(tNow * 2.8 + st.phase2) * st.ampY,
             p.z + wob2
           );
-          if (st.path.tempC) {
-            var u = st.path.len > 0 ? st.t / st.path.len : 0;
-            var sample = tempAlongPath(st.path.tempC, u);
+          var u = st.path.len > 0 ? st.t / st.path.len : 0;
+          var samplePath = st.path.tempC ? tempAlongPath(st.path.tempC, u) : null;
+          var sample = sampleAirTempAt(
+            p.x + wob,
+            p.y + Math.sin(tNow * 2.8 + st.phase2) * st.ampY,
+            p.z + wob2,
+            samplePath
+          );
+          if (sample != null) {
             var c3 = airflowTintFromTemp(sample);
             col.setXYZ(i, c3.r, c3.g, c3.b);
           }
         }
         pos.needsUpdate = true;
-        if (state.length && state[0].path.tempC) {
+        if (airProbes.length || (state.length && state[0].path.tempC)) {
           col.needsUpdate = true;
         }
       }
@@ -3101,6 +3527,12 @@
       }
       // Raceway near-camera fade sphere (updates every frame while orbiting)
       updateRacewayCameraFade();
+      if (labLedMats.length) {
+        var lt = now / 1000;
+        for (var li = 0; li < labLedMats.length; li++) {
+          labLedMats[li].opacity = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(lt * 2.2 + li * 0.35));
+        }
+      }
       tickAirflow(dt);
       renderer.render(scene, camera);
     }
