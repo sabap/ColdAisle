@@ -17,6 +17,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### Bug fixes
 
+- **PHP runtime:** the repository now tells operators to upgrade PHP for CVE-2026-109618 and CVE-2026-109619. Updating ColdAisle does not replace PHP. New installs pin PHP 8.3.36; an existing `php-cgi.exe` is left as-is.
+
 ---
 
 ## [1.0.6] - 2026-09-29

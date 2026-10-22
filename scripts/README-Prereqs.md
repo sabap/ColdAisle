@@ -73,7 +73,7 @@ Or pull the app from GitHub while using the prereq script:
 .\Install-ColdAisle-Prereqs.ps1 -SitePhysicalPath 'C:\inetpub\wwwroot\ColdAisle'
 
 # Pin PHP version (must exist on windows.php.net)
-.\Install-ColdAisle-Prereqs.ps1 -PhpVersion 8.3.33
+.\Install-ColdAisle-Prereqs.ps1 -PhpVersion 8.3.36
 
 # Custom PHP folder / site name
 .\Install-ColdAisle-Prereqs.ps1 `
@@ -106,7 +106,7 @@ Or pull the app from GitHub while using the prereq script:
 | `-OpenSetup` | off | Open `http://localhost/setup.php` after install. |
 | `-RunVerification` | on | PHP/IIS/site post-checks. |
 | `-SkipDeploy` | off | Use when files are already under inetpub and you only need the stack. |
-| `-PhpVersion` | `8.3.33` | Change if the zip 404s on windows.php.net (installer also tries archives + current 8.3). |
+| `-PhpVersion` | `8.3.36` | October 2026 security fix. Change if the zip 404s on windows.php.net (installer also tries archives + current 8.3). An existing `php-cgi.exe` is not replaced unless `-Force` is used. |
 | `-PhpInstallPath` | `C:\PHP` | FastCGI points here. |
 | `-EnableSnmp` | off | Enable PHP snmp for **in-browser Discover** (not required for the OS poll task). |
 | `-RegisterSnmpTask` | off | Register Task Scheduler job → `cmd.exe /c …\run_poll_snmp.cmd` every 1 min as SYSTEM. |

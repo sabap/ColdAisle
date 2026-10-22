@@ -47,7 +47,7 @@
     IIS site name. Default: Default Web Site
 
 .PARAMETER PhpVersion
-    PHP NTS build version for windows.php.net. Default: 8.3.33
+    PHP NTS build version for windows.php.net. Default: 8.3.36 (includes the October 2026 PHP security fixes). An existing php-cgi.exe is left in place unless -Force is used.
 
 .PARAMETER PhpInstallPath
     Where to install PHP. Default: C:\PHP
@@ -104,7 +104,7 @@ param(
     [string]$Version = '',
     [string]$SitePhysicalPath = 'C:\inetpub\wwwroot\ColdAisle',
     [string]$SiteName = 'Default Web Site',
-    [string]$PhpVersion = '8.3.33',
+    [string]$PhpVersion = '8.3.36',
     [string]$PhpInstallPath = 'C:\PHP',
     [string]$GitHubOwner = 'sabap',
     [string]$GitHubRepo = 'ColdAisle',

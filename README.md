@@ -10,6 +10,23 @@ Built as a modern replacement path for environments that outgrew or cannot maint
 **Release notes:** [`CHANGELOG.md`](CHANGELOG.md) (New features · Enhancements · Bug fixes).  
 **Deferred work:** [`BACKLOG.md`](BACKLOG.md). **Competitive DCIM gaps:** [`DCIM_GAPS.md`](DCIM_GAPS.md).
 
+## PHP security notice (21 October 2026)
+
+PHP fixed two critical vulnerabilities in the **PHP runtime**: [CVE-2026-109618](https://www.php.net/archive/2026.php#2026-10-21-5) and [CVE-2026-109619](https://www.php.net/archive/2026.php#2026-10-21-5). They affect every PHP install that serves web requests, including ColdAisle on IIS FastCGI (`php-cgi.exe`).
+
+**Updating the ColdAisle site does not mitigate this.** Settings → Updates, a GitHub release zip, and a file overlay only replace application files. They leave the PHP folder on the server unchanged. Upgrade PHP itself.
+
+| PHP line | Minimum fixed version |
+|----------|------------------------|
+| 8.5 | 8.5.12 |
+| 8.4 | 8.4.27 |
+| 8.3 | **8.3.36** |
+| 8.2 | 8.2.35 |
+
+On Windows, use the **Non Thread Safe x64** zip from [windows.php.net](https://windows.php.net/download/). Stop the IIS app pool, replace the PHP binaries, and keep the existing `php.ini` plus `ext\php_sqlsrv.dll` and `ext\php_pdo_sqlsrv.dll` (those Microsoft drivers are not in the PHP zip). Start the pool and confirm `php-cgi.exe -n -v` shows a fixed version.
+
+A new ColdAisle install from this repo pins PHP 8.3.36. If `php-cgi.exe` is already on the server, the installer leaves that copy in place, so an existing site still needs the PHP upgrade above.
+
 ## Support / donate
 
 ColdAisle is free to use. If it helps your datacenter and you want to support development, optional donations via PayPal are welcome (no paywall, no accounts):
@@ -55,7 +72,7 @@ Each tagged release should have categorized notes in [`CHANGELOG.md`](CHANGELOG.
 ## Requirements
 
 - **Windows Server** (or Windows 10/11) with **IIS**
-- **PHP 8.0+** (FastCGI) with extensions: `pdo`, `json`, `mbstring`, `curl`, `zip`
+- **PHP 8.0+** (FastCGI) with extensions: `pdo`, `json`, `mbstring`, `curl`, `zip`. The application still runs on 8.0 or newer, but the PHP install must be a build that includes the October 2026 fixes (8.3.36, 8.4.27, 8.5.12, or 8.2.35, or a newer patch on that line). See the security notice above.
   - Database: `pdo_sqlsrv` **or** `pdo_odbc` + **ODBC Driver 17/18 for SQL Server**
   - Optional: `ldap` (LDAPS), `snmp` (web Discover / in-app SNMP)
 - **Microsoft SQL Server** 2016+ (Express is fine)

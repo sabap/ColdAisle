@@ -19,7 +19,7 @@
     Re-run safe: skips downloads that already exist unless -Force is specified.
 
 .PARAMETER PhpVersion
-    PHP version to install (default: 8.3.33). Must exist on windows.php.net releases (current or archives). If that patch 404s, the installer falls back to the current 8.3 NTS zip.
+    PHP version to install (default: 8.3.36). Must exist on windows.php.net releases (current or archives). If that patch 404s, the installer falls back to the current 8.3 NTS zip. An existing php-cgi.exe is left in place unless -Force is used. -Force removes the PHP folder, so keep a copy of php.ini and the Microsoft sqlsrv DLLs.
 
 .PARAMETER PhpInstallPath
     Extract path for PHP (default: C:\PHP).
@@ -99,7 +99,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$PhpVersion = '8.3.33',
+    [string]$PhpVersion = '8.3.36',
     [string]$PhpInstallPath = 'C:\PHP',
     [string]$SiteName = 'Default Web Site',
     [string]$SitePhysicalPath = 'C:\inetpub\wwwroot\ColdAisle',
@@ -318,7 +318,7 @@ function Get-PhpNtsX64Urls([string]$Version) {
 
 function Get-PhpDownloadUrl([string]$Version) {
     # Official layout:
-    # https://windows.php.net/downloads/releases/php-8.3.33-nts-Win32-vs16-x64.zip
+    # https://windows.php.net/downloads/releases/php-8.3.36-nts-Win32-vs16-x64.zip
     # Older patches move to /archives/. PHP 8.4+ uses vs17.
     Ensure-Tls12
     foreach ($url in (Get-PhpNtsX64Urls $Version)) {
