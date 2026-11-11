@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.9] - 2026-11-11
+
+### Enhancements
+
+- **NOC / Firewalls:** Throughput on the NOC Firewalls panel and the firewall detail page is a flow lane for each up interface. Inbound motes travel one way and outbound the other. How many motes, how fast they move, and how warm the color is all follow the last measured rate against that link's speed. The detail page still keeps the six-hour history chart
+
+---
 ## [1.0.8] - 2026-11-11
 
 ### Enhancements
