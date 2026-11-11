@@ -1,7 +1,7 @@
 <?php
 /**
  * NOC wall display — no login required (optional ?token= from Settings).
- * 3D pinned left; right side rotates Overview / Power / Zones / Cooling.
+ * 3D pinned left; right side rotates Overview / Power / Zones / Cooling / Firewalls.
  */
 declare(strict_types=1);
 
@@ -36,8 +36,8 @@ $apiUrl = App::url('api/noc.php');
 if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
-$cssUrl = App::url('assets/css/noc.css') . '?v=13';
-$jsUrl = App::url('assets/js/noc.js') . '?v=20';
+$cssUrl = App::url('assets/css/noc.css') . '?v=14';
+$jsUrl = App::url('assets/js/noc.js') . '?v=21';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
 $dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=41';
 $org = '';
@@ -107,7 +107,7 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
     <header class="noc-header">
       <div>
         <h1><?= App::e($org !== '' ? $org : App::APP_NAME) ?> <span class="sub">NOC</span></h1>
-        <div class="sub">Live inventory · power · cooling · environment</div>
+        <div class="sub">Live inventory · power · cooling · firewalls</div>
       </div>
       <div class="noc-clock" id="nocClock">—</div>
     </header>
@@ -135,6 +135,7 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
         <button type="button" class="noc-tab" data-panel="power" role="tab">Power</button>
         <button type="button" class="noc-tab" data-panel="zones" role="tab">Zones</button>
         <button type="button" class="noc-tab" data-panel="cooling" role="tab">Cooling</button>
+        <button type="button" class="noc-tab" data-panel="firewalls" role="tab" hidden>Firewalls</button>
         <div class="noc-rotate-track" aria-hidden="true"><i class="noc-rotate-bar" id="nocRotateBar"></i></div>
       </div>
       <div class="noc-panel-body" id="nocPanelBody">
@@ -142,6 +143,7 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
         <section class="noc-panel" id="panel-power" data-panel="power"></section>
         <section class="noc-panel" id="panel-zones" data-panel="zones"></section>
         <section class="noc-panel" id="panel-cooling" data-panel="cooling"></section>
+        <section class="noc-panel" id="panel-firewalls" data-panel="firewalls" hidden></section>
       </div>
     </div>
 

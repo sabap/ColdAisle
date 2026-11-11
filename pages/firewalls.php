@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
 require_once dirname(__DIR__) . '/src/Schema.php';
 require_once dirname(__DIR__) . '/src/Services/FirewallPoll.php';
+require_once dirname(__DIR__) . '/src/Services/FirewallHistory.php';
 require_once dirname(__DIR__) . '/src/Services/Crypto.php';
 require_once dirname(__DIR__) . '/src/Services/AuditService.php';
 
@@ -205,7 +206,7 @@ if ($id > 0) {
         }
     }
     layout_header('Firewall: ' . $fw['name'], $user, 'firewalls');
-    firewall_detail($fw, $snap, $canEdit);
+    firewall_detail($fw, $snap, $canEdit, FirewallHistory::one((int)$fw['firewall_id']));
     layout_footer();
     exit;
 }
@@ -389,11 +390,29 @@ function firewall_form(array $fw, array $rooms): void
  * @param array<string,mixed> $fw
  * @param array<string,mixed> $snap
  */
-function firewall_detail(array $fw, array $snap, bool $canEdit): void
+/**
+ * @param array<string,mixed>|null $history
+ */
+function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history = null): void
 {
     $mem = is_array($snap['memory'] ?? null) ? $snap['memory'] : [];
     $fail = is_array($snap['failover'] ?? null) ? $snap['failover'] : [];
     $ifaces = is_array($snap['interfaces'] ?? null) ? $snap['interfaces'] : [];
+    $rateByName = [];
+    if (is_array($history) && !empty($history['interfaces']) && is_array($history['interfaces'])) {
+        foreach ($history['interfaces'] as $hif) {
+            if (is_array($hif) && isset($hif['name'])) {
+                $rateByName[(string)$hif['name']] = $hif;
+            }
+        }
+    }
+    $historyJson = json_encode(
+        $history,
+        JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES
+    );
+    if ($historyJson === false) {
+        $historyJson = 'null';
+    }
     ?>
     <div class="flex-between mb-2">
         <div>
@@ -461,22 +480,42 @@ function firewall_detail(array $fw, array $snap, bool $canEdit): void
             <p class="text-muted" style="white-space:pre-wrap"><?= App::e((string)$snap['sys_descr']) ?></p>
         <?php endif; ?>
     </div>
+    <div id="fwCharts" class="fw-charts"
+         data-id="<?= (int)$fw['firewall_id'] ?>"
+         data-api="<?= App::e(App::url('api/firewall_history.php')) ?>">
+        <p class="text-muted">Loading charts…</p>
+    </div>
+    <script type="application/json" id="fwHistoryBoot"><?= $historyJson ?></script>
+    <script src="<?= App::e(App::url('assets/js/firewall-charts.js')) ?>?v=1"></script>
     <div class="card">
-        <p class="text-muted" style="margin:.75rem 1rem .25rem">Octet counters are totals since the interface came up, not a live rate.</p>
+        <p class="text-muted" style="margin:.75rem 1rem .25rem">In and out rates are the change since the previous poll, as a percent of interface speed. Octet counters are totals since the interface came up. Down interfaces, and links with no reported speed, stay in this table only.</p>
         <table class="table">
             <thead>
-                <tr><th>Interface</th><th>Status</th><th>Speed</th><th>In octets</th><th>Out octets</th></tr>
+                <tr>
+                    <th>Interface</th><th>Status</th><th>Speed</th>
+                    <th>In rate</th><th>Out rate</th>
+                    <th>In octets</th><th>Out octets</th>
+                </tr>
             </thead>
             <tbody>
             <?php if (!$ifaces): ?>
-                <tr><td colspan="5" class="text-muted">No external interfaces in the last poll. Internal-Data interfaces are hidden.</td></tr>
+                <tr><td colspan="7" class="text-muted">No external interfaces in the last poll. Internal-Data interfaces are hidden.</td></tr>
             <?php endif; ?>
             <?php foreach ($ifaces as $iface): ?>
                 <?php if (!is_array($iface)) { continue; } ?>
+                <?php
+                $rate = $rateByName[(string)($iface['name'] ?? '')] ?? null;
+                $speedText = isset($iface['speed_mbps']) ? FirewallHistory::formatSpeed((int)$iface['speed_mbps']) : '';
+                if ($speedText === '' && isset($iface['speed_mbps'])) {
+                    $speedText = number_format((int)$iface['speed_mbps']) . ' Mb/s';
+                }
+                ?>
                 <tr>
                     <td><?= App::e((string)($iface['name'] ?? '')) ?></td>
                     <td><?= App::e((string)($iface['oper'] ?? '')) ?></td>
-                    <td><?= isset($iface['speed_mbps']) ? number_format((int)$iface['speed_mbps']) . ' Mb/s' : '' ?></td>
+                    <td><?= App::e($speedText) ?></td>
+                    <td><?= App::e(firewall_rate_label(is_array($rate) ? $rate : null, 'in')) ?></td>
+                    <td><?= App::e(firewall_rate_label(is_array($rate) ? $rate : null, 'out')) ?></td>
                     <td><?= isset($iface['in_octets']) ? number_format((int)$iface['in_octets']) : '' ?></td>
                     <td><?= isset($iface['out_octets']) ? number_format((int)$iface['out_octets']) : '' ?></td>
                 </tr>
@@ -493,6 +532,24 @@ function firewall_detail(array $fw, array $snap, bool $canEdit): void
         </form>
     <?php endif; ?>
     <?php
+}
+
+/** @param array<string,mixed>|null $rate */
+function firewall_rate_label(?array $rate, string $which): string
+{
+    if ($rate === null) {
+        return '—';
+    }
+    $util = $rate[$which . '_util'] ?? null;
+    $text = $rate[$which . '_text'] ?? null;
+    if ($util === null || $util === '') {
+        return '—';
+    }
+    $label = rtrim(rtrim(number_format((float)$util, 2, '.', ''), '0'), '.') . '%';
+    if (is_string($text) && $text !== '') {
+        $label .= ' · ' . $text;
+    }
+    return $label;
 }
 
 function firewall_uptime(?int $sec): string

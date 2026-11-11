@@ -1202,6 +1202,12 @@ class Schema
                 'firewall_id', 'name', 'primary_ip', 'model', 'snmp_enabled', 'snmp_auto_poll',
                 'last_version', 'last_failover', 'last_cpu_pct', 'last_connections',
             ],
+            'firewall_samples' => [
+                'sample_id', 'firewall_id', 'cpu_pct', 'memory_pct', 'connections', 'cps', 'polled_at',
+            ],
+            'firewall_if_samples' => [
+                'sample_id', 'firewall_id', 'if_name', 'speed_mbps', 'in_octets', 'out_octets', 'polled_at',
+            ],
             'env_readings' => ['reading_id', 'sensor_id', 'value', 'recorded_at'],
             'device_snmp_readings' => ['reading_id', 'device_id', 'metric_name', 'metric_value', 'polled_at'],
         ];
@@ -1694,6 +1700,34 @@ class Schema
                 updated_at DATETIME2 NOT NULL CONSTRAINT DF_fw_updated DEFAULT SYSUTCDATETIME()
             )"
         );
+        self::ensureTable(
+            'firewall_samples',
+            "CREATE TABLE firewall_samples (
+                sample_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                firewall_id INT NOT NULL,
+                cpu_pct DECIMAL(6,2) NULL,
+                memory_pct DECIMAL(6,2) NULL,
+                connections INT NULL,
+                cps INT NULL,
+                failover NVARCHAR(40) NULL,
+                polled_at DATETIME2 NOT NULL
+            )"
+        );
+        self::ensureTable(
+            'firewall_if_samples',
+            "CREATE TABLE firewall_if_samples (
+                sample_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                firewall_id INT NOT NULL,
+                if_name NVARCHAR(128) NOT NULL,
+                oper NVARCHAR(20) NULL,
+                speed_mbps INT NULL,
+                in_octets BIGINT NULL,
+                out_octets BIGINT NULL,
+                polled_at DATETIME2 NOT NULL
+            )"
+        );
+        self::ensureIndex('firewall_samples', 'IX_fw_samples_fw_time', 'firewall_id, polled_at DESC');
+        self::ensureIndex('firewall_if_samples', 'IX_fw_if_samples_fw_time', 'firewall_id, polled_at DESC');
         $version = class_exists('App') ? App::VERSION : '0';
         $stamp = App::ROOT . '/storage/tmp/firewall_grants_' . $version . '.flag';
         if (is_file($stamp)) {
@@ -1744,6 +1778,22 @@ class Schema
             );
         }
         return true;
+    }
+
+    private static function ensureIndex(string $table, string $index, string $columns): void
+    {
+        try {
+            $exists = Database::fetchValue(
+                "SELECT 1 FROM sys.indexes WHERE name = ? AND object_id = OBJECT_ID(?)",
+                [$index, 'dbo.' . $table]
+            );
+            if ($exists) {
+                return;
+            }
+            Database::query("CREATE NONCLUSTERED INDEX {$index} ON {$table} ({$columns})");
+        } catch (Throwable $e) {
+            // Charts still work without the index.
+        }
     }
 
     private static function ensureTable(string $table, string $createSql): void

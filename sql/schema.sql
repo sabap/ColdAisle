@@ -1450,3 +1450,37 @@ CREATE TABLE firewalls (
     updated_at DATETIME2 NOT NULL CONSTRAINT DF_fw_updated DEFAULT SYSUTCDATETIME()
 );
 GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'firewall_samples')
+CREATE TABLE firewall_samples (
+    sample_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    firewall_id INT NOT NULL,
+    cpu_pct DECIMAL(6,2) NULL,
+    memory_pct DECIMAL(6,2) NULL,
+    connections INT NULL,
+    cps INT NULL,
+    failover NVARCHAR(40) NULL,
+    polled_at DATETIME2 NOT NULL
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_fw_samples_fw_time')
+CREATE NONCLUSTERED INDEX IX_fw_samples_fw_time ON firewall_samples(firewall_id, polled_at DESC);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'firewall_if_samples')
+CREATE TABLE firewall_if_samples (
+    sample_id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    firewall_id INT NOT NULL,
+    if_name NVARCHAR(128) NOT NULL,
+    oper NVARCHAR(20) NULL,
+    speed_mbps INT NULL,
+    in_octets BIGINT NULL,
+    out_octets BIGINT NULL,
+    polled_at DATETIME2 NOT NULL
+);
+GO
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_fw_if_samples_fw_time')
+CREATE NONCLUSTERED INDEX IX_fw_if_samples_fw_time ON firewall_if_samples(firewall_id, polled_at DESC);
+GO

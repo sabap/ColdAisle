@@ -735,6 +735,14 @@ if ($recentAlerts !== []) {
     $recentAlerts = $filtered;
 }
 
+$firewalls = [];
+try {
+    require_once dirname(__DIR__) . '/src/Services/FirewallHistory.php';
+    $firewalls = FirewallHistory::wall();
+} catch (Throwable $e) {
+    $firewalls = [];
+}
+
 $out = [
     'ok' => true,
     'updated_at' => gmdate('c'),
@@ -767,6 +775,7 @@ $out = [
     'hot_sensors' => $hotSensors,
     'cabinet_health' => $cabinetHealth,
     'recent_alerts' => $recentAlerts,
+    'firewalls' => $firewalls,
 ];
 
 if ($includeScene) {

@@ -257,6 +257,123 @@ class FirewallPoll
             $patch['serial_no'] = (string)$snapshot['serial'];
         }
         Database::update('firewalls', $patch, 'firewall_id = :id', [':id' => $id]);
+        self::recordSample($fw, $snapshot, (string)$patch['snmp_last_poll_at']);
+    }
+
+    /**
+     * Keep a short history so utilization is the change since the previous poll.
+     *
+     * @param array<string,mixed> $fw
+     * @param array<string,mixed> $snapshot
+     */
+    private static function recordSample(array $fw, array $snapshot, string $polledAt): void
+    {
+        $id = (int)($fw['firewall_id'] ?? 0);
+        if ($id < 1) {
+            return;
+        }
+        try {
+            self::insertSampleRows($fw, $snapshot, $polledAt);
+        } catch (Throwable $e) {
+            try {
+                require_once dirname(__DIR__) . '/Schema.php';
+                Schema::ensureFirewalls();
+                self::insertSampleRows($fw, $snapshot, $polledAt);
+            } catch (Throwable $e2) {
+                // The live snapshot is already saved. Charts wait until the tables exist.
+            }
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $fw
+     * @param array<string,mixed> $snapshot
+     */
+    private static function insertSampleRows(array $fw, array $snapshot, string $polledAt): void
+    {
+        $id = (int)$fw['firewall_id'];
+        $existing = (int)Database::fetchValue(
+            'SELECT COUNT(*) FROM firewall_samples WHERE firewall_id = ?',
+            [$id]
+        );
+        if ($existing === 0 && !empty($fw['last_poll_json'])) {
+            $old = json_decode((string)$fw['last_poll_json'], true);
+            $oldAt = is_array($old) ? strtotime((string)($old['polled_at'] ?? '')) : false;
+            $newAt = strtotime($polledAt . ' UTC');
+            if (is_array($old) && $oldAt !== false && $newAt !== false && abs($newAt - $oldAt) >= 20) {
+                self::writeSample($id, $old, gmdate('Y-m-d H:i:s', $oldAt));
+            }
+        }
+        self::writeSample($id, $snapshot, $polledAt);
+        Database::query(
+            'DELETE FROM firewall_samples WHERE firewall_id = ? AND polled_at < DATEADD(day, -14, SYSUTCDATETIME())',
+            [$id]
+        );
+        Database::query(
+            'DELETE FROM firewall_if_samples WHERE firewall_id = ? AND polled_at < DATEADD(day, -14, SYSUTCDATETIME())',
+            [$id]
+        );
+    }
+
+    /** @param array<string,mixed> $snapshot */
+    private static function writeSample(int $id, array $snapshot, string $polledAt): void
+    {
+        $mem = is_array($snapshot['memory'] ?? null) ? $snapshot['memory'] : [];
+        $fail = is_array($snapshot['failover'] ?? null) ? $snapshot['failover'] : [];
+        Database::insert('firewall_samples', [
+            'firewall_id' => $id,
+            'cpu_pct' => isset($snapshot['cpu_pct']) && is_numeric($snapshot['cpu_pct'])
+                ? round((float)$snapshot['cpu_pct'], 2) : null,
+            'memory_pct' => isset($mem['pct']) && is_numeric($mem['pct']) ? round((float)$mem['pct'], 2) : null,
+            'connections' => isset($snapshot['connections']) && $snapshot['connections'] !== null
+                ? (int)$snapshot['connections'] : null,
+            'cps' => isset($snapshot['connections_per_sec']) && $snapshot['connections_per_sec'] !== null
+                ? (int)$snapshot['connections_per_sec'] : null,
+            'failover' => isset($fail['this_unit']) && $fail['this_unit'] !== null && $fail['this_unit'] !== ''
+                ? substr((string)$fail['this_unit'], 0, 40) : null,
+            'polled_at' => $polledAt,
+        ]);
+        $ifaces = is_array($snapshot['interfaces'] ?? null) ? $snapshot['interfaces'] : [];
+        foreach ($ifaces as $iface) {
+            if (!is_array($iface)) {
+                continue;
+            }
+            $name = trim((string)($iface['name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            Database::insert('firewall_if_samples', [
+                'firewall_id' => $id,
+                'if_name' => substr($name, 0, 128),
+                'oper' => substr((string)($iface['oper'] ?? ''), 0, 20) ?: null,
+                'speed_mbps' => isset($iface['speed_mbps']) && is_numeric($iface['speed_mbps'])
+                    ? (int)$iface['speed_mbps'] : null,
+                'in_octets' => self::octetString($iface['in_octets'] ?? null),
+                'out_octets' => self::octetString($iface['out_octets'] ?? null),
+                'polled_at' => $polledAt,
+            ]);
+        }
+    }
+
+    /** @param mixed $raw */
+    private static function octetString($raw): ?string
+    {
+        if (is_int($raw)) {
+            return $raw >= 0 ? (string)$raw : null;
+        }
+        if (is_float($raw) && is_finite($raw) && $raw >= 0) {
+            return sprintf('%.0f', $raw);
+        }
+        if (is_string($raw)) {
+            $s = trim($raw);
+            if (preg_match('/^\d+$/', $s)) {
+                return $s;
+            }
+            if (preg_match('/^(?:Counter64|Counter32|Gauge32|Unsigned32|INTEGER|Integer32)\s*:\s*(\d+)\s*$/i', $s, $m)) {
+                return $m[1];
+            }
+        }
+        return null;
     }
 
     /** @param array<string,mixed> $fw */
@@ -300,8 +417,8 @@ class FirewallPoll
                 'name' => $name,
                 'oper' => self::ifOper($op),
                 'speed_mbps' => ($sp = self::numeric($speed[$idx] ?? null)) !== null ? (int)round($sp) : null,
-                'in_octets' => ($n = self::numeric($inB[$idx] ?? null)) !== null ? (int)round($n) : null,
-                'out_octets' => ($n = self::numeric($outB[$idx] ?? null)) !== null ? (int)round($n) : null,
+                'in_octets' => self::octetString($inB[$idx] ?? null),
+                'out_octets' => self::octetString($outB[$idx] ?? null),
             ];
             if (count($rows) >= 32) {
                 break;

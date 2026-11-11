@@ -4392,3 +4392,70 @@ body.site-tour-open { overflow: hidden; }
 @media (max-width: 720px) {
   .docs-toc-list { columns: 1; }
 }
+
+/* Firewall detail charts */
+.fw-charts { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1rem; }
+.fw-chart-note { margin: 0; }
+.fw-chart-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+.fw-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem .85rem;
+  padding: .15rem .85rem .55rem;
+  font-size: .75rem;
+  color: var(--muted);
+}
+.fw-legend span { display: inline-flex; align-items: center; gap: .35rem; }
+.fw-legend i {
+  width: .55rem; height: .55rem; border-radius: 50%; display: inline-block;
+}
+.fw-if-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: .75rem;
+}
+.fw-if-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .75rem .85rem .65rem;
+}
+.fw-if-head {
+  display: flex;
+  justify-content: space-between;
+  gap: .75rem;
+  align-items: baseline;
+  margin-bottom: .45rem;
+}
+.fw-if-head span { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+.fw-util-row {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+  gap: .4rem;
+  align-items: center;
+  margin-top: .28rem;
+  font-size: .78rem;
+}
+.fw-util-k { color: var(--muted); }
+.fw-util-v { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fw-util-bar {
+  height: 8px;
+  background: rgba(51, 65, 85, .65);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.fw-util-bar > i { display: block; height: 100%; border-radius: 999px; max-width: 100%; }
+.fw-util-bar.in > i { background: linear-gradient(90deg, #22d3ee, #38bdf8); }
+.fw-util-bar.out > i { background: linear-gradient(90deg, #fb923c, #f97316); }
+.fw-util-bar.hot > i { background: linear-gradient(90deg, #fbbf24, #f87171); }
+.fw-if-spark { margin-top: .35rem; }
+.fw-if-spark .pc-axis { fill: var(--muted); font-size: 10px; font-family: inherit; }
+.fw-if-spark .pc-grid { stroke: rgba(148, 163, 184, .18); stroke-width: 1; }
+.fw-if-card .fw-legend { padding: .2rem 0 0; }
+@media (max-width: 800px) {
+  .fw-chart-grid { grid-template-columns: 1fr; }
+}

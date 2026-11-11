@@ -167,8 +167,13 @@ class SnmpPoller
             );
             foreach ($firewalls as $fw) {
                 $last = $fw['snmp_last_poll_at'] ?? null;
+                // One-minute samples. The fleet interval is often five minutes, which is too coarse
+                // for interface utilization. The scheduler task already ticks every minute.
+                $fwInterval = class_exists('SnmpSchedulerService')
+                    ? SnmpSchedulerService::MIN_INTERVAL_SEC
+                    : 60;
                 if (class_exists('SnmpSchedulerService')
-                    && !SnmpSchedulerService::isDue(is_string($last) ? $last : null, $defaultInterval)
+                    && !SnmpSchedulerService::isDue(is_string($last) ? $last : null, $fwInterval)
                 ) {
                     $skipped++;
                     continue;

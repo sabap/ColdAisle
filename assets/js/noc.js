@@ -55,6 +55,10 @@
     return d.innerHTML;
   }
 
+  function attrEsc(s) {
+    return esc(s).replace(/"/g, '&quot;');
+  }
+
   function fmtNum(n, d) {
     if (n == null || isNaN(n)) return '—';
     var x = Number(n);
@@ -146,15 +150,15 @@
       '</div>';
   }
 
-  /** SVG area sparkline from kw array */
-  function sparklineSvg(kwArr, color) {
+  /** SVG area sparkline. emptyMsg and ariaLabel are optional. */
+  function sparklineSvg(kwArr, color, emptyMsg, ariaLabel) {
     color = color || '#38bdf8';
     var vals = (kwArr || []).map(function (v) {
       return v == null || isNaN(v) ? null : Number(v);
     });
     var nums = vals.filter(function (v) { return v != null; });
     if (!nums.length) {
-      return '<div class="noc-empty">No power history yet (poll PDUs to build the chart)</div>';
+      return '<div class="noc-empty">' + esc(emptyMsg || 'No power history yet (poll PDUs to build the chart)') + '</div>';
     }
     var w = 640, h = 140, pad = 8;
     var min = Math.min.apply(null, nums);
@@ -185,12 +189,13 @@
       first = false;
     }
     if (!pts.length) {
-      return '<div class="noc-empty">No numeric power samples</div>';
+      return '<div class="noc-empty">' + esc(emptyMsg || 'No numeric power samples') + '</div>';
     }
     var area = line + ' L ' + pts[pts.length - 1].x.toFixed(1) + ' ' + (h - pad) +
       ' L ' + pts[0].x.toFixed(1) + ' ' + (h - pad) + ' Z';
     var gid = 'ng' + Math.random().toString(36).slice(2, 7);
-    return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" role="img" aria-label="Power kW 24h">' +
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" role="img" aria-label="' +
+      attrEsc(ariaLabel || 'Power kW 24h') + '">' +
       '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
       '<stop offset="0%" stop-color="' + color + '" stop-opacity="0.4"/>' +
       '<stop offset="100%" stop-color="' + color + '" stop-opacity="0.02"/>' +
@@ -463,7 +468,7 @@
     return html;
   }
 
-  function sparklineMulti(series, emptyMsg) {
+  function sparklineMulti(series, emptyMsg, ariaLabel, withLegend) {
     series = series || [];
     var w = 640, h = 148, pad = 10;
     var all = [];
@@ -506,15 +511,19 @@
       paths += '<path d="' + line + '" fill="none" stroke="' + (s.color || '#38bdf8') +
         '" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>';
     });
-    var legend = '<div class="noc-legend">';
-    series.forEach(function (s) {
-      var has = (s.values || []).some(function (v) { return v != null && !isNaN(Number(v)); });
-      if (!has) return;
-      legend += '<span class="noc-leg"><i style="background:' + (s.color || '#38bdf8') + '"></i>' +
-        esc(s.name || '') + '</span>';
-    });
-    legend += '</div>';
-    return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" role="img" aria-label="Temperature 24h">' +
+    var legend = '';
+    if (withLegend !== false) {
+      legend = '<div class="noc-legend">';
+      series.forEach(function (s) {
+        var has = (s.values || []).some(function (v) { return v != null && !isNaN(Number(v)); });
+        if (!has) return;
+        legend += '<span class="noc-leg"><i style="background:' + (s.color || '#38bdf8') + '"></i>' +
+          esc(s.name || '') + '</span>';
+      });
+      legend += '</div>';
+    }
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" role="img" aria-label="' +
+      attrEsc(ariaLabel || 'Temperature 24h') + '">' +
       paths + '</svg>' + legend;
   }
 
@@ -982,17 +991,172 @@
     }
   }
 
+  function fmtInt(n) {
+    if (n == null || isNaN(n)) return '—';
+    return Math.round(Number(n)).toLocaleString();
+  }
+
+  function pctTone(v) {
+    if (v == null || isNaN(v)) return '';
+    if (Number(v) >= 85) return 'crit';
+    if (Number(v) >= 70) return 'warn';
+    return 'ok';
+  }
+
+  function failTone(s) {
+    var t = String(s || '').toLowerCase();
+    if (t.indexOf('active') >= 0) return 'ok';
+    if (t.indexOf('standby') >= 0) return 'warn';
+    return '';
+  }
+
+  function seriesHas(arr) {
+    return (arr || []).some(function (v) { return v != null && !isNaN(Number(v)); });
+  }
+
+  function utilLabel(pct, text) {
+    if (pct == null || isNaN(pct)) return '—';
+    var s = fmtNum(pct, 1) + '%';
+    if (text) s += ' · ' + text;
+    return s;
+  }
+
+  function syncFirewallPanel(data) {
+    var list = (data && data.firewalls) || [];
+    var has = list.length > 0;
+    var tab = document.querySelector('.noc-tab[data-panel="firewalls"]');
+    var panel = $('panel-firewalls');
+    if (tab) {
+      if (has) tab.removeAttribute('hidden');
+      else tab.setAttribute('hidden', '');
+    }
+    if (panel) {
+      if (has) panel.removeAttribute('hidden');
+      else panel.setAttribute('hidden', '');
+    }
+    var idx = panels.indexOf('firewalls');
+    if (has && idx < 0) {
+      panels.push('firewalls');
+    } else if (!has && idx >= 0) {
+      panels.splice(idx, 1);
+      if (panelIdx >= panels.length) panelIdx = 0;
+      if (panel && panel.classList.contains('active')) {
+        showPanel(panels[panelIdx] || 'overview');
+      }
+    }
+  }
+
+  function renderFirewalls(data) {
+    var list = data.firewalls || [];
+    var fw = list[0];
+    if (!fw) {
+      return '<div class="noc-panel-frame noc-frame-empty"><div class="noc-empty">No firewalls</div></div>';
+    }
+    var ifaces = (fw.interfaces || []).slice(0, 5);
+    var role = fw.failover || '—';
+    var html = '<div class="noc-panel-frame noc-frame-fw">';
+    html += '<div class="noc-section-head">' +
+      '<span class="noc-section-label">' + esc(fw.name || 'Firewall') +
+      (fw.model ? ' · ' + esc(fw.model) : '') + '</span>' +
+      '<span class="noc-section-count">Last ' + fmtNum(fw.window_hours || 6, 0) + 'h</span></div>';
+    if (list.length > 1) {
+      html += '<div class="noc-fw-chips">';
+      list.slice(1).forEach(function (other) {
+        html += '<div class="noc-fw-chip"><span class="noc-fw-chip-name">' + esc(other.name || 'Firewall') + '</span>' +
+          '<span>' + fmtNum(other.cpu, 0) + '% CPU</span>' +
+          '<span>' + fmtInt(other.connections) + ' conn</span></div>';
+      });
+      html += '</div>';
+    }
+    html += '<div class="noc-hero-row">';
+    html += heroStat(pctTone(fw.cpu), 'CPU',
+      fmtNum(fw.cpu, 1) + '<span class="unit">%</span>', '5 min average');
+    html += heroStat(pctTone(fw.memory), 'Memory',
+      fmtNum(fw.memory, 1) + '<span class="unit">%</span>', 'Used');
+    html += heroStat('accent', 'Connections', fmtInt(fw.connections),
+      fw.cps != null ? fmtInt(fw.cps) + ' /s' : 'Current');
+    var roleHtml = role.length > 14
+      ? '<span class="noc-fw-role">' + esc(role) + '</span>'
+      : esc(role);
+    html += heroStat(failTone(role), 'This unit', roleHtml, fw.model ? esc(fw.model) : '');
+    html += '</div>';
+
+    html += '<div class="noc-viz-row">';
+    html += '<div class="noc-dual-col">' +
+      '<div class="noc-chart-wrap noc-chart-hero">' +
+      sparklineMulti([
+        { name: 'CPU', color: '#38bdf8', values: fw.cpu_series || [] },
+        { name: 'Memory', color: '#a78bfa', values: fw.memory_series || [] },
+      ], 'History starts after the next polls', 'CPU and memory', false) +
+      '</div>' +
+      '<div class="noc-legend"><span class="noc-leg"><i style="background:#38bdf8"></i>CPU</span>' +
+      '<span class="noc-leg"><i style="background:#a78bfa"></i>Memory</span></div></div>';
+    html += '<div class="noc-dual-col">' +
+      '<div class="noc-chart-wrap noc-chart-hero">' +
+      sparklineSvg(fw.connection_series || [], '#34d399',
+        'Connection history starts after the next polls', 'Connections') +
+      '</div>' +
+      '<div class="noc-legend"><span class="noc-leg"><i style="background:#34d399"></i>Connections</span></div></div>';
+    html += '</div>';
+
+    html += '<div class="noc-section-head"><span class="noc-section-label">Interface utilization</span>' +
+      '<span class="noc-section-count">' + ifaces.length +
+      ((fw.interfaces || []).length > ifaces.length ? ' of ' + (fw.interfaces || []).length : '') +
+      '</span></div>';
+    if ((fw.sample_count || 0) < 2) {
+      html += '<div class="noc-empty-inline">' + esc(fw.note || 'Utilization starts after the next poll.') + '</div>';
+    }
+    if (!ifaces.length) {
+      html += '<div class="noc-empty-inline">No up interfaces with a reported speed.</div>';
+    } else {
+      html += '<div class="noc-fw-list">';
+      ifaces.forEach(function (iface) {
+        var inHot = iface.in_util != null && Number(iface.in_util) >= 70;
+        var outHot = iface.out_util != null && Number(iface.out_util) >= 70;
+        var inW = iface.in_util == null ? 0 : Math.max(0, Math.min(100, Number(iface.in_util)));
+        var outW = iface.out_util == null ? 0 : Math.max(0, Math.min(100, Number(iface.out_util)));
+        html += '<div class="noc-fw-if">' +
+          '<div class="noc-fw-if-name">' + esc(iface.name || 'Interface') +
+          '<div class="noc-fw-if-speed">' + esc(iface.speed_text || '') + '</div></div>' +
+          '<div class="noc-fw-bars">' +
+          '<div class="noc-fw-barline"><span>In</span>' +
+          '<div class="noc-mini-bar' + (inHot ? ' hot' : '') + '"><i style="width:' + inW.toFixed(1) + '%"></i></div>' +
+          '<span class="noc-fw-barval">' + esc(utilLabel(iface.in_util, iface.in_text)) + '</span></div>' +
+          '<div class="noc-fw-barline"><span>Out</span>' +
+          '<div class="noc-mini-bar out' + (outHot ? ' hot' : '') + '"><i style="width:' + outW.toFixed(1) + '%"></i></div>' +
+          '<span class="noc-fw-barval">' + esc(utilLabel(iface.out_util, iface.out_text)) + '</span></div>' +
+          '</div>';
+        if (seriesHas(iface.in_series) || seriesHas(iface.out_series)) {
+          html += '<div class="noc-fw-spark">' + sparklineMulti([
+            { name: 'In', color: '#22d3ee', values: iface.in_series || [] },
+            { name: 'Out', color: '#fb923c', values: iface.out_series || [] },
+          ], '', (iface.name || 'Interface') + ' utilization', false) + '</div>';
+        } else {
+          html += '<div class="noc-fw-spark noc-fw-spark-empty">—</div>';
+        }
+        html += '</div>';
+      });
+      html += '</div>';
+      html += moreNote(ifaces.length, (fw.interfaces || []).length, 'interfaces');
+    }
+    html += '</div>';
+    return html;
+  }
+
   function renderAll(data) {
     lastData = data;
     if (data.noc) applyNocDisplaySettings(data.noc);
+    syncFirewallPanel(data);
     var o = $('panel-overview');
     var p = $('panel-power');
     var z = $('panel-zones');
     var c = $('panel-cooling');
+    var f = $('panel-firewalls');
     if (o) o.innerHTML = renderOverview(data);
     if (p) p.innerHTML = renderPower(data);
     if (z) z.innerHTML = renderZones(data);
     if (c) c.innerHTML = renderCooling(data);
+    if (f && !f.hidden) f.innerHTML = renderFirewalls(data);
     renderRecentAlerts(data);
 
     var upd = $('nocUpdated');
