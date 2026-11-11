@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.8] - 2026-11-11
+
+### Enhancements
+
+- **NOC / Firewalls:** The NOC Firewalls panel and the firewall detail page chart CPU, memory, connections, and per-interface utilization. Utilization is the octet change since the previous sample, compared with that interface's speed. Scheduled firewall polls run about once a minute, separately from the slower PDU poll. The wall reads stored samples and does not query the firewall
+
+---
 ## [1.0.7] - 2026-11-11
 
 ### New features
