@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.10] - 2026-11-11
+
+### Enhancements
+
+- **NOC / Firewalls:** Flow-lane throughput is a stream of small particles. A busier link shows more of them, and they move faster. The color still warms as the link fills
+
+---
 ## [1.0.9] - 2026-11-11
 
 ### Enhancements
