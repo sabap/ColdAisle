@@ -1,7 +1,8 @@
 /**
- * Firewall throughput lanes. Small particles spiral through the tube.
- * Density, travel speed, and spiral speed follow the last measured rate.
- * A negative animation delay keeps the helix in phase when the wall redraws.
+ * Firewall throughput lanes. Specks fill a glass tube.
+ * Inbound stays in the top half, outbound in the bottom half.
+ * Density, travel speed, and swirl speed follow the last measured rate.
+ * A negative animation delay keeps each speck in place when the wall redraws.
  */
 (function () {
   'use strict';
@@ -50,11 +51,10 @@
   }
 
   function moteCount(util) {
-    var u = Number(util);
-    if (!isFinite(u) || u <= 0) return 0;
-    if (u > 100) u = 100;
-    // A quiet link keeps a few sparks. A full link becomes a dense stream.
-    return Math.round(5 + Math.pow(u / 100, 0.7) * 27);
+    var u = utilUnit(util);
+    if (u <= 0) return 0;
+    // A quiet link keeps a few sparks. A full link fills its half of the tube.
+    return Math.min(120, Math.round(14 + Math.pow(u / 100, 0.5) * 110));
   }
 
   function utilUnit(util) {
@@ -68,9 +68,22 @@
     return 6.4 - (utilUnit(util) / 100) * 4.8;
   }
 
-  /** Revolutions while a particle crosses the lane. Hotter links spin faster. */
+  /** Swirls while a speck crosses. Hotter links swirl faster. */
   function spiralTurns(util) {
     return 1.15 + (utilUnit(util) / 100) * 3.4;
+  }
+
+  function hashUnit(n) {
+    var x = Math.sin(n * 12.9898) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  /** Vertical home of one direction, kept off the centerline and the glass wall. */
+  function bandFor(compact, kind) {
+    if (compact) {
+      return kind === 'in' ? { lo: 5, hi: 15, amp: 2.4 } : { lo: 21, hi: 31, amp: 2.4 };
+    }
+    return kind === 'in' ? { lo: 6, hi: 19, amp: 3 } : { lo: 27, hi: 40, amp: 3 };
   }
 
   function readText(kind, util, text) {
@@ -80,24 +93,41 @@
     return (kind === 'out' ? 'Out ' : 'In ') + (bits.length ? bits.join(' · ') : '—');
   }
 
-  function motes(kind, util, center, amp) {
+  function motes(kind, util, compact) {
     var n = moteCount(util);
     if (!n) return '';
-    var dur = durationSec(util);
-    var spin = dur / spiralTurns(util);
+    var baseDur = durationSec(util);
+    var turns = spiralTurns(util);
     var color = moteColor(util, kind);
+    var band = bandFor(compact, kind);
     var now = Date.now() / 1000;
+    var seed = kind === 'out' ? 800 : 0;
     var html = '';
     for (var i = 0; i < n; i++) {
-      var delay = -((now + (i / n) * dur) % dur);
-      var faint = (i % 3) === 0;
+      var h1 = hashUnit(i + 1 + seed);
+      var h2 = hashUnit(i + 2 + seed);
+      var h3 = hashUnit(i + 3 + seed);
+      var h4 = hashUnit(i + 4 + seed);
+      var h5 = hashUnit(i + 5 + seed);
+      // Same metric speed, with a little scatter so the specks are not one file.
+      var dur = baseDur / (0.84 + h1 * 0.32);
+      var spin = (dur / turns) * (0.8 + h2 * 0.45);
+      var travelDelay = -((now + h3 * dur) % dur);
+      var spinDelay = -((now + h4 * spin) % spin);
+      var tw = (1.15 - (utilUnit(util) / 100) * 0.6) * (0.55 + h5 * 0.9);
+      var twDelay = -((now + hashUnit(i + 6 + seed) * tw) % tw);
+      var y = band.lo + hashUnit(i + 7 + seed) * (band.hi - band.lo);
+      var amp = band.amp * (0.35 + hashUnit(i + 8 + seed) * 0.65);
+      var glow = (0.55 + hashUnit(i + 9 + seed) * 0.45).toFixed(2);
+      var lg = hashUnit(i + 10 + seed) > 0.82;
       html += '<span class="fw-lane-runner ' + kind + '" style="animation-duration:' +
-        dur.toFixed(2) + 's;animation-delay:' + delay.toFixed(3) + 's">' +
-        '<span class="fw-lane-dot' + (faint ? ' sm' : '') + '" style="top:' + center +
-        'px;--fw-amp:' + amp + 'px;animation-duration:' + spin.toFixed(2) +
-        's;animation-delay:' + delay.toFixed(3) + 's;background:' + color +
-        ';opacity:' + (faint ? '0.72' : '1') +
-        ';box-shadow:0 0 6px ' + color + '"></span></span>';
+        dur.toFixed(2) + 's;animation-delay:' + travelDelay.toFixed(3) + 's">' +
+        '<span class="fw-lane-dot' + (lg ? ' lg' : '') + '" style="top:' + y.toFixed(1) +
+        'px;--fw-amp:' + amp.toFixed(2) + 'px;--fw-glow:' + glow +
+        ';animation-duration:' + spin.toFixed(2) + 's,' + tw.toFixed(2) +
+        's;animation-delay:' + spinDelay.toFixed(3) + 's,' + twDelay.toFixed(3) +
+        's;background:' + color +
+        ';box-shadow:0 0 2px rgba(255,255,255,0.9),0 0 7px ' + color + '"></span></span>';
     }
     return html;
   }
@@ -124,8 +154,6 @@
     if (isFinite(inN)) heat = Math.max(heat, inN);
     if (isFinite(outN)) heat = Math.max(heat, outN);
     heat = Math.max(0, Math.min(100, heat)) / 100;
-    var center = compact ? 18 : 23;
-    var amp = compact ? 11 : 15;
     var inColor = moteColor(inU, 'in');
     var outColor = moteColor(outU, 'out');
     var html = '<div class="fw-lane' + (compact ? ' fw-lane-compact' : ' fw-lane-block') + '">';
@@ -138,8 +166,8 @@
       '<span class="fw-lane-fill in" style="width:' + fillWidth(inU) + ';background:' + inColor + '"></span>' +
       '<span class="fw-lane-fill out" style="width:' + fillWidth(outU) + ';background:' + outColor + '"></span>' +
       '<span class="fw-lane-sheen"></span>' +
-      motes('in', inU, center, amp) +
-      motes('out', outU, center, amp) +
+      motes('in', inU, compact) +
+      motes('out', outU, compact) +
       '</div>';
     html += '<div class="fw-lane-read">' +
       '<span class="fw-lane-stat in" style="color:' + inColor + '"><i></i>' +
