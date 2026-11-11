@@ -1,7 +1,7 @@
 /**
- * Firewall throughput lanes. Small particles stream at the last measured rate.
- * Density and speed follow that rate. A negative animation delay keeps them
- * in phase when the wall redraws.
+ * Firewall throughput lanes. Small particles spiral through the tube.
+ * Density, travel speed, and spiral speed follow the last measured rate.
+ * A negative animation delay keeps the helix in phase when the wall redraws.
  */
 (function () {
   'use strict';
@@ -57,11 +57,20 @@
     return Math.round(5 + Math.pow(u / 100, 0.7) * 27);
   }
 
-  function durationSec(util) {
+  function utilUnit(util) {
     var u = Number(util);
     if (!isFinite(u) || u < 0) u = 0;
     if (u > 100) u = 100;
-    return 6.4 - (u / 100) * 4.8;
+    return u;
+  }
+
+  function durationSec(util) {
+    return 6.4 - (utilUnit(util) / 100) * 4.8;
+  }
+
+  /** Revolutions while a particle crosses the lane. Hotter links spin faster. */
+  function spiralTurns(util) {
+    return 1.15 + (utilUnit(util) / 100) * 3.4;
   }
 
   function readText(kind, util, text) {
@@ -71,21 +80,23 @@
     return (kind === 'out' ? 'Out ' : 'In ') + (bits.length ? bits.join(' · ') : '—');
   }
 
-  function motes(kind, util, tops) {
+  function motes(kind, util, center, amp) {
     var n = moteCount(util);
     if (!n) return '';
     var dur = durationSec(util);
+    var spin = dur / spiralTurns(util);
     var color = moteColor(util, kind);
     var now = Date.now() / 1000;
     var html = '';
     for (var i = 0; i < n; i++) {
       var delay = -((now + (i / n) * dur) % dur);
-      var top = tops[(i * 2) % tops.length];
       var faint = (i % 3) === 0;
       html += '<span class="fw-lane-runner ' + kind + '" style="animation-duration:' +
         dur.toFixed(2) + 's;animation-delay:' + delay.toFixed(3) + 's">' +
-        '<span class="fw-lane-dot' + (faint ? ' sm' : '') + '" style="top:' + top +
-        'px;background:' + color + ';opacity:' + (faint ? '0.72' : '1') +
+        '<span class="fw-lane-dot' + (faint ? ' sm' : '') + '" style="top:' + center +
+        'px;--fw-amp:' + amp + 'px;animation-duration:' + spin.toFixed(2) +
+        's;animation-delay:' + delay.toFixed(3) + 's;background:' + color +
+        ';opacity:' + (faint ? '0.72' : '1') +
         ';box-shadow:0 0 6px ' + color + '"></span></span>';
     }
     return html;
@@ -113,8 +124,8 @@
     if (isFinite(inN)) heat = Math.max(heat, inN);
     if (isFinite(outN)) heat = Math.max(heat, outN);
     heat = Math.max(0, Math.min(100, heat)) / 100;
-    var topsIn = compact ? [6, 8, 11, 13, 16] : [8, 11, 14, 17, 20];
-    var topsOut = compact ? [21, 24, 26, 29, 32] : [27, 30, 33, 36, 40];
+    var center = compact ? 18 : 23;
+    var amp = compact ? 11 : 15;
     var inColor = moteColor(inU, 'in');
     var outColor = moteColor(outU, 'out');
     var html = '<div class="fw-lane' + (compact ? ' fw-lane-compact' : ' fw-lane-block') + '">';
@@ -127,8 +138,8 @@
       '<span class="fw-lane-fill in" style="width:' + fillWidth(inU) + ';background:' + inColor + '"></span>' +
       '<span class="fw-lane-fill out" style="width:' + fillWidth(outU) + ';background:' + outColor + '"></span>' +
       '<span class="fw-lane-sheen"></span>' +
-      motes('in', inU, topsIn) +
-      motes('out', outU, topsOut) +
+      motes('in', inU, center, amp) +
+      motes('out', outU, center, amp) +
       '</div>';
     html += '<div class="fw-lane-read">' +
       '<span class="fw-lane-stat in" style="color:' + inColor + '"><i></i>' +

@@ -76,12 +76,16 @@
   height: 3px;
   margin-top: -1.5px;
   border-radius: 50%;
+  animation-name: fwLaneSpiral;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
 }
 .fw-lane-dot.sm {
   width: 2px;
   height: 2px;
   margin-top: -1px;
 }
+.fw-lane-runner.out .fw-lane-dot { animation-direction: reverse; }
 .fw-lane-fill { display: none; }
 .fw-lane-read {
   display: flex;
@@ -112,6 +116,17 @@
   background: currentColor;
   box-shadow: 0 0 6px currentColor;
   flex: 0 0 auto;
+}
+@keyframes fwLaneSpiral {
+  0% { transform: translateY(0); }
+  12.5% { transform: translateY(calc(var(--fw-amp, 10px) * 0.707)); }
+  25% { transform: translateY(var(--fw-amp, 10px)); }
+  37.5% { transform: translateY(calc(var(--fw-amp, 10px) * 0.707)); }
+  50% { transform: translateY(0); }
+  62.5% { transform: translateY(calc(var(--fw-amp, 10px) * -0.707)); }
+  75% { transform: translateY(calc(var(--fw-amp, 10px) * -1)); }
+  87.5% { transform: translateY(calc(var(--fw-amp, 10px) * -0.707)); }
+  100% { transform: translateY(0); }
 }
 @keyframes fwLaneIn {
   from { transform: translateX(-8%); }
