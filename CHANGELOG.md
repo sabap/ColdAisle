@@ -13,16 +13,23 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
-- **Firewalls:** Plant → Firewalls inventories a Cisco ASA and polls it over SNMP (read-only). The first pass shows software version, failover role, CPU, memory, current connections, connections per second, and external interface status and octet counters. An ASA 9.12 unit such as the 5525 needs an SNMP host whose view includes IF-MIB and CISCO-FIREWALL-MIB. On a multiple-context ASA, set the SNMP context to the admin context. The activation key is not collected.
-
 ### Enhancements
+
+### Bug fixes
+
+---
+
+## [1.0.7] - 2026-11-11
+
+### New features
+
+- **Firewalls:** Plant → Firewalls inventories a Cisco ASA and polls it over SNMP (read-only). The first pass shows software version, failover role, CPU, memory, current connections, connections per second, and external interface status and octet counters. An ASA 9.12 unit such as the 5525 needs an SNMP host whose view includes IF-MIB and CISCO-FIREWALL-MIB. On a multiple-context ASA, set the SNMP context to the admin context. The activation key is not collected.
 
 ### Bug fixes
 
 - **PHP runtime:** the repository now tells operators to upgrade PHP for CVE-2026-109618 and CVE-2026-109619. Updating ColdAisle does not replace PHP. New installs pin PHP 8.3.36; an existing `php-cgi.exe` is left as-is.
 
 ---
-
 ## [1.0.6] - 2026-09-29
 
 ### Bug fixes
