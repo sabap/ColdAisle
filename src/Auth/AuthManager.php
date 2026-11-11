@@ -33,6 +33,7 @@ class AuthManager
         'view_cables',
         'view_ipam',
         'view_snmp',
+        'view_firewalls',
         'view_disposals',
         'view_work_orders',
         'view_audits',
@@ -50,6 +51,7 @@ class AuthManager
         'edit_work_orders',
         'edit_audits',
         'edit_snmp',
+        'edit_firewalls',
         'manage_users',
         'manage_settings',
     ];
@@ -75,6 +77,7 @@ class AuthManager
         'cables' => 'view_cables',
         'ipam' => 'view_ipam',
         'snmp' => 'view_snmp',
+        'firewalls' => 'view_firewalls',
         'disposals' => 'view_disposals',
         'work_orders' => 'view_work_orders',
         'audits' => 'view_audits',
@@ -93,7 +96,7 @@ class AuthManager
     {
         $viewAll = [
             'view_dashboard', 'view_floorplan', 'view_datacenters', 'view_cabinets',
-            'view_devices', 'view_power', 'view_cooling', 'view_cables', 'view_ipam', 'view_snmp', 'view_disposals',
+            'view_devices', 'view_power', 'view_cooling', 'view_cables', 'view_ipam', 'view_snmp', 'view_firewalls', 'view_disposals',
             'view_work_orders',
             'view_audits', 'view_reports', 'view_notifications',
         ];
@@ -125,6 +128,7 @@ class AuthManager
                     'edit_work_orders',
                     'edit_audits',
                     'edit_snmp',
+                    'edit_firewalls',
                 ]),
             ],
             'Global Admin' => [
@@ -538,6 +542,7 @@ class AuthManager
             'disposals' => ['view_disposals', 'edit_disposals'],
             'work_orders' => ['view_work_orders', 'edit_work_orders'],
             'snmp' => ['view_snmp', 'edit_snmp'],
+            'firewalls' => ['view_firewalls', 'edit_firewalls'],
         ];
 
         $roleName = (string)($user['role_name'] ?? '');
@@ -565,6 +570,7 @@ class AuthManager
                 'view_work_orders' => ['edit_work_orders'],
                 'view_audits' => ['edit_audits'],
                 'view_snmp' => ['edit_snmp'],
+                'view_firewalls' => ['edit_firewalls'],
             ];
             foreach ($editImplies[$permission] ?? [] as $ep) {
                 if (in_array($ep, $perms, true)) {
@@ -672,6 +678,7 @@ class AuthManager
             ['label' => 'Cables', 'view' => 'view_cables', 'edit' => 'edit_cables', 'edit_dept' => null],
             ['label' => 'IPAM', 'view' => 'view_ipam', 'edit' => 'edit_ipam', 'edit_dept' => null],
             ['label' => 'SNMP', 'view' => 'view_snmp', 'edit' => 'edit_snmp', 'edit_dept' => null],
+            ['label' => 'Firewalls', 'view' => 'view_firewalls', 'edit' => 'edit_firewalls', 'edit_dept' => null],
             ['label' => 'Disposals', 'view' => 'view_disposals', 'edit' => 'edit_disposals', 'edit_dept' => null],
             ['label' => 'Work orders', 'view' => 'view_work_orders', 'edit' => 'edit_work_orders', 'edit_dept' => null],
             ['label' => 'Audits', 'view' => 'view_audits', 'edit' => 'edit_audits', 'edit_dept' => null],

@@ -421,6 +421,14 @@ class SnmpPollPool
                 }
                 SnmpPoller::pollUpsUnit($u);
                 return;
+            case 'firewall':
+                $fw = Database::fetchOne('SELECT * FROM firewalls WHERE firewall_id = ? AND is_active = 1', [$id]);
+                if (!$fw) {
+                    throw new RuntimeException('Firewall not found');
+                }
+                require_once __DIR__ . '/FirewallPoll.php';
+                FirewallPoll::poll($fw);
+                return;
             case 'cooling':
                 $c = Database::fetchOne(
                     'SELECT * FROM cooling_units WHERE cooling_unit_id = ? AND is_active = 1',

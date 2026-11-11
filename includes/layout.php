@@ -132,6 +132,7 @@ function layout_nav_groups(): array
                 ['key' => 'cables', 'label' => 'Cabling', 'href' => 'pages/cables.php', 'icon' => '🔌', 'tour' => 'nav-cables'],
                 ['key' => 'ipam', 'label' => 'IPAM', 'href' => 'pages/ipam.php', 'icon' => '🔢', 'tour' => 'nav-ipam'],
                 ['key' => 'snmp', 'label' => 'SNMP', 'href' => 'pages/snmp.php', 'icon' => '📡', 'tour' => 'nav-snmp'],
+                ['key' => 'firewalls', 'label' => 'Firewalls', 'href' => 'pages/firewalls.php', 'icon' => '🛡', 'tour' => null],
             ],
         ],
         [

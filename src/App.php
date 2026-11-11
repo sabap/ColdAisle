@@ -158,6 +158,7 @@ class App
                 if (is_array($ens) && empty($ens['ok']) && !empty($ens['error'])) {
                     self::log('Schema ensure: ' . (string)$ens['error'], 'warning');
                 }
+                Schema::ensureFirewalls();
             } catch (Throwable $e) {
                 // Non-fatal: features depending on new columns degrade gracefully
                 self::log('Schema ensure: ' . $e->getMessage(), 'warning');

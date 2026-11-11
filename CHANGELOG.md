@@ -13,6 +13,8 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ### New features
 
+- **Firewalls:** Plant → Firewalls inventories a Cisco ASA and polls it over SNMP (read-only). The first pass shows software version, failover role, CPU, memory, current connections, connections per second, and external interface status and octet counters. An ASA 9.12 unit such as the 5525 needs an SNMP host whose view includes IF-MIB and CISCO-FIREWALL-MIB. On a multiple-context ASA, set the SNMP context to the admin context. The activation key is not collected.
+
 ### Enhancements
 
 ### Bug fixes

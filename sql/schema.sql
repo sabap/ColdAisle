@@ -1411,3 +1411,42 @@ CREATE TABLE env_readings (
     recorded_at DATETIME2 NOT NULL CONSTRAINT DF_er_at DEFAULT SYSUTCDATETIME()
 );
 GO
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'firewalls')
+CREATE TABLE firewalls (
+    firewall_id INT IDENTITY(1,1) PRIMARY KEY,
+    name NVARCHAR(150) NOT NULL,
+    vendor NVARCHAR(100) NULL,
+    model NVARCHAR(100) NULL,
+    hostname NVARCHAR(255) NULL,
+    primary_ip NVARCHAR(45) NULL,
+    serial_no NVARCHAR(100) NULL,
+    room_id INT NULL,
+    ha_role NVARCHAR(30) NULL,
+    snmp_enabled BIT NOT NULL CONSTRAINT DF_fw_snmp_en DEFAULT 0,
+    snmp_version NVARCHAR(10) NULL,
+    snmp_community NVARCHAR(255) NULL,
+    snmp_port INT NULL,
+    snmp_v3_sec_level NVARCHAR(30) NULL,
+    snmp_security_name NVARCHAR(100) NULL,
+    snmp_auth_protocol NVARCHAR(20) NULL,
+    snmp_auth_passphrase NVARCHAR(255) NULL,
+    snmp_priv_protocol NVARCHAR(20) NULL,
+    snmp_priv_passphrase NVARCHAR(255) NULL,
+    snmp_context NVARCHAR(100) NULL,
+    snmp_engine_id NVARCHAR(80) NULL,
+    snmp_auto_poll BIT NOT NULL CONSTRAINT DF_fw_snmp_auto DEFAULT 0,
+    snmp_last_poll_at DATETIME2 NULL,
+    last_poll_json NVARCHAR(MAX) NULL,
+    last_error NVARCHAR(400) NULL,
+    last_version NVARCHAR(40) NULL,
+    last_failover NVARCHAR(40) NULL,
+    last_cpu_pct DECIMAL(6,2) NULL,
+    last_connections INT NULL,
+    last_cps INT NULL,
+    notes NVARCHAR(MAX) NULL,
+    is_active BIT NOT NULL CONSTRAINT DF_fw_active DEFAULT 1,
+    created_at DATETIME2 NOT NULL CONSTRAINT DF_fw_created DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 NOT NULL CONSTRAINT DF_fw_updated DEFAULT SYSUTCDATETIME()
+);
+GO

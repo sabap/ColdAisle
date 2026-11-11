@@ -158,6 +158,31 @@ class SnmpPoller
             // table may not exist yet
         }
 
+        // 6) Firewalls (built-in ASA OIDs; no site template required)
+        try {
+            $firewalls = Database::fetchAll(
+                'SELECT firewall_id, name, snmp_last_poll_at FROM firewalls
+                 WHERE is_active = 1 AND snmp_enabled = 1 AND snmp_auto_poll = 1
+                   AND primary_ip IS NOT NULL AND primary_ip <> \'\''
+            );
+            foreach ($firewalls as $fw) {
+                $last = $fw['snmp_last_poll_at'] ?? null;
+                if (class_exists('SnmpSchedulerService')
+                    && !SnmpSchedulerService::isDue(is_string($last) ? $last : null, $defaultInterval)
+                ) {
+                    $skipped++;
+                    continue;
+                }
+                $jobs[] = [
+                    'type' => 'firewall',
+                    'id' => (int)$fw['firewall_id'],
+                    'name' => (string)($fw['name'] ?? ('firewall #' . $fw['firewall_id'])),
+                ];
+            }
+        } catch (Throwable $e) {
+            // table may not exist yet
+        }
+
         if (!class_exists('SnmpPollPool')) {
             require_once __DIR__ . '/SnmpPollPool.php';
         }
@@ -3114,6 +3139,48 @@ class SnmpPoller
      * Prefer an IP for SNMP when the host is a DNS name (Windows Net-SNMP can be flaky with FQDNs).
      * Falls back to the original name if resolution fails.
      */
+    public static function resolveSnmpHostPublic(string $host): string
+    {
+        return self::resolveSnmpHost($host);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public static function openSessionPublic(
+        string $host,
+        int $port,
+        string $version,
+        string $user,
+        string $authProto,
+        string $authPass,
+        string $privProto,
+        string $privPass,
+        string $context,
+        string $secLevel = '',
+        string $engineId = ''
+    ) {
+        return self::openSession(
+            $host,
+            $port,
+            $version,
+            $user,
+            $authProto,
+            $authPass,
+            $privProto,
+            $privPass,
+            $context,
+            $secLevel,
+            $engineId
+        );
+    }
+
+    /** @param array<string,mixed> $session */
+    public static function closeSessionPublic($session): void
+    {
+        self::closeSession($session);
+    }
+
     private static function resolveSnmpHost(string $host): string
     {
         $host = trim($host);
