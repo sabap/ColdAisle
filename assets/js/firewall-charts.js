@@ -160,11 +160,13 @@
       { name: 'In', color: '#22d3ee', values: iface.in_series || [] },
       { name: 'Out', color: '#fb923c', values: iface.out_series || [] }
     ];
+    var lane = window.ColdAisleFirewallLanes
+      ? ColdAisleFirewallLanes.markup(iface)
+      : (bar('In', iface.in_util, iface.in_text, 'in') + bar('Out', iface.out_util, iface.out_text, 'out'));
     return '<div class="fw-if-card">' +
       '<div class="fw-if-head"><strong>' + esc(iface.name || 'Interface') + '</strong>' +
       '<span>' + esc(iface.speed_text || '') + '</span></div>' +
-      bar('In', iface.in_util, iface.in_text, 'in') +
-      bar('Out', iface.out_util, iface.out_text, 'out') +
+      lane +
       '<div class="fw-if-spark">' + chartSvg(series, { yMin: 0, yMax: 100, height: 96 }) + '</div>' +
       legend(series) +
       '</div>';

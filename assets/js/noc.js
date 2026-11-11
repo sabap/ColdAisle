@@ -1010,10 +1010,6 @@
     return '';
   }
 
-  function seriesHas(arr) {
-    return (arr || []).some(function (v) { return v != null && !isNaN(Number(v)); });
-  }
-
   function utilLabel(pct, text) {
     if (pct == null || isNaN(pct)) return '—';
     var s = fmtNum(pct, 1) + '%';
@@ -1099,7 +1095,7 @@
       '<div class="noc-legend"><span class="noc-leg"><i style="background:#34d399"></i>Connections</span></div></div>';
     html += '</div>';
 
-    html += '<div class="noc-section-head"><span class="noc-section-label">Interface utilization</span>' +
+    html += '<div class="noc-section-head"><span class="noc-section-label">Throughput</span>' +
       '<span class="noc-section-count">' + ifaces.length +
       ((fw.interfaces || []).length > ifaces.length ? ' of ' + (fw.interfaces || []).length : '') +
       '</span></div>';
@@ -1111,30 +1107,16 @@
     } else {
       html += '<div class="noc-fw-list">';
       ifaces.forEach(function (iface) {
-        var inHot = iface.in_util != null && Number(iface.in_util) >= 70;
-        var outHot = iface.out_util != null && Number(iface.out_util) >= 70;
-        var inW = iface.in_util == null ? 0 : Math.max(0, Math.min(100, Number(iface.in_util)));
-        var outW = iface.out_util == null ? 0 : Math.max(0, Math.min(100, Number(iface.out_util)));
+        if (window.ColdAisleFirewallLanes) {
+          html += ColdAisleFirewallLanes.markup(iface, { compact: true });
+          return;
+        }
         html += '<div class="noc-fw-if">' +
           '<div class="noc-fw-if-name">' + esc(iface.name || 'Interface') +
           '<div class="noc-fw-if-speed">' + esc(iface.speed_text || '') + '</div></div>' +
-          '<div class="noc-fw-bars">' +
-          '<div class="noc-fw-barline"><span>In</span>' +
-          '<div class="noc-mini-bar' + (inHot ? ' hot' : '') + '"><i style="width:' + inW.toFixed(1) + '%"></i></div>' +
-          '<span class="noc-fw-barval">' + esc(utilLabel(iface.in_util, iface.in_text)) + '</span></div>' +
-          '<div class="noc-fw-barline"><span>Out</span>' +
-          '<div class="noc-mini-bar out' + (outHot ? ' hot' : '') + '"><i style="width:' + outW.toFixed(1) + '%"></i></div>' +
-          '<span class="noc-fw-barval">' + esc(utilLabel(iface.out_util, iface.out_text)) + '</span></div>' +
-          '</div>';
-        if (seriesHas(iface.in_series) || seriesHas(iface.out_series)) {
-          html += '<div class="noc-fw-spark">' + sparklineMulti([
-            { name: 'In', color: '#22d3ee', values: iface.in_series || [] },
-            { name: 'Out', color: '#fb923c', values: iface.out_series || [] },
-          ], '', (iface.name || 'Interface') + ' utilization', false) + '</div>';
-        } else {
-          html += '<div class="noc-fw-spark noc-fw-spark-empty">—</div>';
-        }
-        html += '</div>';
+          '<div class="noc-fw-bars"><div class="noc-fw-barline"><span>' +
+          esc(utilLabel(iface.in_util, iface.in_text)) + ' in · ' +
+          esc(utilLabel(iface.out_util, iface.out_text)) + ' out</span></div></div></div>';
       });
       html += '</div>';
       html += moreNote(ifaces.length, (fw.interfaces || []).length, 'interfaces');
