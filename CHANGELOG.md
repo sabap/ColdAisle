@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.12] - 2026-11-11
+
+### Enhancements
+
+- **NOC / Firewalls:** Throughput is a field of specks inside the glass lane. Inbound stays in the top half and outbound stays in the bottom half. A busier link is denser, crosses faster, and swirls faster
+
+---
 ## [1.0.11] - 2026-11-11
 
 ### Enhancements
