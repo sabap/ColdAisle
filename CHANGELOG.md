@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.11] - 2026-11-11
+
+### Enhancements
+
+- **NOC / Firewalls:** Throughput particles spiral through the lane as they cross it. A busier link travels faster and spins faster
+
+---
 ## [1.0.10] - 2026-11-11
 
 ### Enhancements
