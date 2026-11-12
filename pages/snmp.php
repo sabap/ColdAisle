@@ -176,7 +176,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
         if (in_array($action, [
             'add_profile', 'update_profile', 'deactivate_profile',
             'add_target', 'update_target', 'toggle', 'delete_target',
-            'unschedule_pdu', 'unschedule_device',
+            'unschedule_pdu', 'unschedule_device', 'unschedule_firewall',
             'upload_mib', 'delete_mib',
         ], true) && !AuthManager::canEditSnmp($user)) {
             throw new RuntimeException('You do not have permission to edit SNMP settings.');
@@ -400,6 +400,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             ], 'cooling_unit_id = :id', [':id' => $cid]);
             App::flash('success', 'Cooling unit removed from scheduled polling.');
         }
+        if ($action === 'unschedule_firewall') {
+            $fid = (int)($_POST['firewall_id'] ?? 0);
+            if ($fid <= 0) {
+                throw new RuntimeException('Firewall id required.');
+            }
+            Database::update('firewalls', [
+                'snmp_auto_poll' => 0,
+                'updated_at' => gmdate('Y-m-d H:i:s'),
+            ], 'firewall_id = :id', [':id' => $fid]);
+            App::flash('success', 'Firewall removed from scheduled polling.');
+        }
         if ($action === 'poll_now') {
             require_once dirname(__DIR__) . '/src/Services/SnmpPoller.php';
             $result = SnmpPoller::pollAll();
@@ -493,6 +504,7 @@ $scheduledPdus = [];
 $scheduledDevices = [];
 $scheduledUps = [];
 $scheduledCooling = [];
+$scheduledFirewalls = [];
 try {
     $scheduledPdus = Database::fetchAll(
         'SELECT p.pdu_id, p.name, p.ip_address, p.snmp_version, p.last_poll_at, p.last_poll_watts, p.last_poll_amps,
@@ -546,8 +558,19 @@ try {
 } catch (Throwable $e) {
     $scheduledCooling = [];
 }
+try {
+    $scheduledFirewalls = Database::fetchAll(
+        'SELECT firewall_id, name, primary_ip, snmp_version, snmp_enabled, snmp_last_poll_at,
+                last_cpu_pct, last_connections, last_error
+         FROM firewalls
+         WHERE is_active = 1 AND snmp_auto_poll = 1
+         ORDER BY name'
+    );
+} catch (Throwable $e) {
+    $scheduledFirewalls = [];
+}
 $scheduledJobCount = count($scheduledPdus) + count($scheduledDevices)
-    + count($scheduledUps) + count($scheduledCooling) + count($targets);
+    + count($scheduledUps) + count($scheduledCooling) + count($scheduledFirewalls) + count($targets);
 // Global schedule policy (Settings → SNMP schedule); mute this section when off
 if (!class_exists('SnmpSchedulerService')
     && is_file(dirname(__DIR__) . '/src/Services/SnmpSchedulerService.php')
@@ -758,6 +781,7 @@ layout_header('SNMP Polling', $user, 'snmp');
 ?>
 <p class="text-muted" style="margin-top:0;font-size:.85rem">
     Profiles, site templates, and schedule live here. <strong>Discover OIDs</strong> runs on the PDU, device, UPS, or cooling unit.
+    Firewalls use a built-in poll and show under <strong>Scheduled polling</strong> when that checkbox is on.
     <a href="<?= App::e(App::url('pages/docs.php#snmp-discover')) ?>">How Discover works</a>
 </p>
 
@@ -1092,7 +1116,8 @@ layout_header('SNMP Polling', $user, 'snmp');
             <?php else: ?>
                 Everything the SNMP scheduler will poll:
                 PDUs, devices, <strong>UPS</strong>, and cooling units with <strong>Scheduled poll</strong>
-                enabled (site OID template + IP), plus any free-standing targets added below.
+                enabled (site OID template + IP), firewalls with scheduled poll and an address,
+                plus any free-standing targets added below.
                 <strong>Poll now</strong> on a unit uses the site template only and does not require a target row.
             <?php endif; ?>
         </p>
@@ -1332,6 +1357,66 @@ layout_header('SNMP Polling', $user, 'snmp');
                 </tr>
             <?php endforeach; ?>
 
+            <?php foreach ($scheduledFirewalls as $sf):
+                $host = trim((string)($sf['primary_ip'] ?? ''));
+                $last = (string)($sf['snmp_last_poll_at'] ?? '');
+                $ready = !empty($sf['snmp_enabled']) && $host !== '';
+                $bits = [];
+                if ($sf['last_cpu_pct'] !== null && $sf['last_cpu_pct'] !== '') {
+                    $bits[] = rtrim(rtrim(sprintf('%.0F', (float)$sf['last_cpu_pct']), '0'), '.') . '% CPU';
+                }
+                if ($sf['last_connections'] !== null && $sf['last_connections'] !== '') {
+                    $bits[] = number_format((int)$sf['last_connections']) . ' conn';
+                }
+                ?>
+                <tr>
+                    <td><span class="badge" style="background:#c2410c">Firewall</span></td>
+                    <td>
+                        <a href="<?= App::e(App::url('pages/firewalls.php?id=' . (int)$sf['firewall_id'])) ?>">
+                            <?= App::e((string)$sf['name']) ?>
+                        </a>
+                    </td>
+                    <td><?= App::e($host !== '' ? $host : '—') ?></td>
+                    <td style="font-size:.85rem"><span class="text-muted">Built-in ASA</span></td>
+                    <td style="font-size:.85rem">
+                        <?= snmp_poll_age_html($last !== '' ? $last : null, $ready, $last) ?>
+                        <?php if ($bits): ?> · <?= App::e(implode(' · ', $bits)) ?><?php endif; ?>
+                        <?php if (!empty($sf['last_error'])):
+                            $err = (string)$sf['last_error'];
+                            $shown = function_exists('mb_strimwidth')
+                                ? mb_strimwidth($err, 0, 140, '…')
+                                : (strlen($err) > 140 ? substr($err, 0, 137) . '...' : $err);
+                            ?>
+                            <div class="text-muted" style="font-size:.72rem" title="<?= App::e($err) ?>">
+                                <?= App::e($shown) ?>
+                            </div>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <?php if ($ready): ?>
+                            <span class="badge badge-success">Scheduled</span>
+                        <?php else: ?>
+                            <span class="badge badge-warning" title="Needs SNMP enabled and a management address">
+                                Incomplete
+                            </span>
+                        <?php endif; ?>
+                    </td>
+                    <td class="actions" style="white-space:nowrap">
+                        <a class="btn btn-sm btn-secondary"
+                           href="<?= App::e(App::url('pages/firewalls.php?id=' . (int)$sf['firewall_id'])) ?>">Open</a>
+                        <?php if ($canEdit): ?>
+                        <form method="post" style="display:inline"
+                              onsubmit="return confirm('Turn off scheduled poll for this firewall?');">
+                            <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+                            <input type="hidden" name="action" value="unschedule_firewall">
+                            <input type="hidden" name="firewall_id" value="<?= (int)$sf['firewall_id'] ?>">
+                            <button class="btn btn-sm btn-ghost" type="submit">Unschedule</button>
+                        </form>
+                        <?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+
             <?php foreach ($targets as $t):
                 $tplLab = '';
                 $stId = (int)($t['site_template_id'] ?? 0);
@@ -1383,11 +1468,13 @@ layout_header('SNMP Polling', $user, 'snmp');
                 </tr>
             <?php endforeach; ?>
 
-            <?php if (!$scheduledPdus && !$scheduledDevices && !$scheduledUps && !$scheduledCooling && !$targets): ?>
+            <?php if (!$scheduledPdus && !$scheduledDevices && !$scheduledUps && !$scheduledCooling && !$scheduledFirewalls && !$targets): ?>
                 <tr>
                     <td colspan="7" class="text-muted">
                         Nothing scheduled yet. On a PDU, device, UPS, or cooling unit, run <strong>Discover OIDs</strong>,
-                        then turn on <strong>Scheduled poll</strong>. Optional free-standing targets: <strong>Add target</strong>.
+                        then turn on <strong>Scheduled poll</strong>. On a firewall, turn on
+                        <strong>Include in scheduled SNMP polling</strong>.
+                        Optional free-standing targets: <strong>Add target</strong>.
                     </td>
                 </tr>
             <?php endif; ?>

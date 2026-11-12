@@ -1685,7 +1685,7 @@ class Schema
                 snmp_priv_passphrase NVARCHAR(255) NULL,
                 snmp_context NVARCHAR(100) NULL,
                 snmp_engine_id NVARCHAR(80) NULL,
-                snmp_auto_poll BIT NOT NULL CONSTRAINT DF_fw_snmp_auto DEFAULT 0,
+                snmp_auto_poll BIT NOT NULL CONSTRAINT DF_fw_snmp_auto DEFAULT 1,
                 snmp_last_poll_at DATETIME2 NULL,
                 last_poll_json NVARCHAR(MAX) NULL,
                 last_error NVARCHAR(400) NULL,
@@ -1728,6 +1728,7 @@ class Schema
         );
         self::ensureIndex('firewall_samples', 'IX_fw_samples_fw_time', 'firewall_id, polled_at DESC');
         self::ensureIndex('firewall_if_samples', 'IX_fw_if_samples_fw_time', 'firewall_id, polled_at DESC');
+        self::enableExistingFirewallSchedule();
         $version = class_exists('App') ? App::VERSION : '0';
         $stamp = App::ROOT . '/storage/tmp/firewall_grants_' . $version . '.flag';
         if (is_file($stamp)) {
@@ -1778,6 +1779,37 @@ class Schema
             );
         }
         return true;
+    }
+
+    /**
+     * Firewalls shipped with scheduled poll off, and the SNMP page did not list them.
+     * Turn the poll on once for units that already have SNMP and an address.
+     * A later Unschedule stays off.
+     */
+    public static function enableExistingFirewallSchedule(): void
+    {
+        $stamp = App::ROOT . '/storage/tmp/firewall_schedule_backfill.flag';
+        if (is_file($stamp)) {
+            return;
+        }
+        try {
+            $n = Database::exec(
+                "UPDATE firewalls
+                 SET snmp_auto_poll = 1, updated_at = SYSUTCDATETIME()
+                 WHERE is_active = 1 AND snmp_enabled = 1 AND snmp_auto_poll = 0
+                   AND primary_ip IS NOT NULL AND LTRIM(RTRIM(primary_ip)) <> ''"
+            );
+        } catch (Throwable $e) {
+            return;
+        }
+        if ($n === false) {
+            return;
+        }
+        $dir = dirname($stamp);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
+        @file_put_contents($stamp, gmdate('c') . ' enrolled=' . (int)$n . "\n");
     }
 
     private static function ensureIndex(string $table, string $index, string $columns): void

@@ -63,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'snmp_auth_protocol' => trim((string)($_POST['snmp_auth_protocol'] ?? '')) ?: 'SHA',
                 'snmp_priv_protocol' => trim((string)($_POST['snmp_priv_protocol'] ?? '')) ?: 'AES',
                 'snmp_context' => trim((string)($_POST['snmp_context'] ?? '')) ?: null,
-                'snmp_auto_poll' => !empty($_POST['snmp_auto_poll']) ? 1 : 0,
+                'snmp_auto_poll' => (!empty($_POST['snmp_enabled']) && !empty($_POST['snmp_auto_poll'])) ? 1 : 0,
                 'notes' => trim((string)($_POST['notes'] ?? '')) ?: null,
                 'updated_at' => gmdate('Y-m-d H:i:s'),
             ];
@@ -168,7 +168,7 @@ if ($action === 'new' || ($action === 'edit' && $id > 0)) {
         'snmp_priv_protocol' => 'AES',
         'snmp_v3_sec_level' => 'authPriv',
         'snmp_context' => '',
-        'snmp_auto_poll' => 0,
+        'snmp_auto_poll' => 1,
         'notes' => '',
     ];
     if ($action === 'edit') {
@@ -375,7 +375,7 @@ function firewall_form(array $fw, array $rooms): void
             <input id="fw_priv" name="snmp_priv_passphrase" type="password" autocomplete="new-password" placeholder="<?= $fid ? 'Leave blank to keep' : '' ?>">
         </div>
         <div class="form-row">
-            <label><input type="checkbox" name="snmp_auto_poll" value="1" <?= !empty($fw['snmp_auto_poll']) ? 'checked' : '' ?>> Include in the scheduled SNMP poll</label>
+            <label><input type="checkbox" name="snmp_auto_poll" value="1" <?= !empty($fw['snmp_auto_poll']) ? 'checked' : '' ?>> Include in scheduled SNMP polling</label>
         </div>
         <div class="form-row">
             <label for="fw_notes">Notes</label>
@@ -442,6 +442,10 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
     <?php endif; ?>
     <div class="card" style="padding:1rem 1.25rem;margin-bottom:1rem">
         <p><strong>Management IP</strong> <?= App::e((string)($fw['primary_ip'] ?? '—')) ?></p>
+        <p><strong>Scheduled poll</strong>
+            <?= !empty($fw['snmp_auto_poll']) ? 'On, about once a minute' : 'Off' ?>
+            · <a href="<?= App::e(App::url('pages/snmp.php#targets')) ?>">SNMP Polling</a>
+        </p>
         <?php if (!empty($fw['serial_no'])): ?>
             <p><strong>Serial</strong> <?= App::e((string)$fw['serial_no']) ?></p>
         <?php endif; ?>
@@ -485,10 +489,10 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
          data-api="<?= App::e(App::url('api/firewall_history.php')) ?>">
         <p class="text-muted">Loading charts…</p>
     </div>
-    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/firewall-lanes.css')) ?>?v=4">
+    <link rel="stylesheet" href="<?= App::e(App::url('assets/css/firewall-lanes.css')) ?>?v=5">
     <script type="application/json" id="fwHistoryBoot"><?= $historyJson ?></script>
-    <script src="<?= App::e(App::url('assets/js/firewall-lanes.js')) ?>?v=4"></script>
-    <script src="<?= App::e(App::url('assets/js/firewall-charts.js')) ?>?v=2"></script>
+    <script src="<?= App::e(App::url('assets/js/firewall-lanes.js')) ?>?v=5"></script>
+    <script src="<?= App::e(App::url('assets/js/firewall-charts.js')) ?>?v=3"></script>
     <div class="card">
         <p class="text-muted" style="margin:.75rem 1rem .25rem">In and out rates are the change since the previous poll, as a percent of interface speed. Octet counters are totals since the interface came up. Down interfaces, and links with no reported speed, stay in this table only.</p>
         <table class="table">

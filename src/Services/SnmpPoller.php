@@ -160,6 +160,9 @@ class SnmpPoller
 
         // 6) Firewalls (built-in ASA OIDs; no site template required)
         try {
+            if (class_exists('Schema')) {
+                Schema::enableExistingFirewallSchedule();
+            }
             $firewalls = Database::fetchAll(
                 'SELECT firewall_id, name, snmp_last_poll_at FROM firewalls
                  WHERE is_active = 1 AND snmp_enabled = 1 AND snmp_auto_poll = 1

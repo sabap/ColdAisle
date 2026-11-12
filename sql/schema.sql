@@ -1435,7 +1435,7 @@ CREATE TABLE firewalls (
     snmp_priv_passphrase NVARCHAR(255) NULL,
     snmp_context NVARCHAR(100) NULL,
     snmp_engine_id NVARCHAR(80) NULL,
-    snmp_auto_poll BIT NOT NULL CONSTRAINT DF_fw_snmp_auto DEFAULT 0,
+    snmp_auto_poll BIT NOT NULL CONSTRAINT DF_fw_snmp_auto DEFAULT 1,
     snmp_last_poll_at DATETIME2 NULL,
     last_poll_json NVARCHAR(MAX) NULL,
     last_error NVARCHAR(400) NULL,

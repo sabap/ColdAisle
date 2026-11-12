@@ -8,9 +8,12 @@ declare(strict_types=1);
 class FirewallHistory
 {
     public const WINDOW_HOURS = 6;
+    public const THROUGHPUT_HOURS = 24;
+    public const SHORT_WINDOW_MIN = 30;
     public const MIN_DT_SEC = 20;
     public const MAX_DT_SEC = 900;
     public const CHART_POINTS = 180;
+    public const SHORT_CHART_POINTS = 60;
 
     /** @return list<array<string,mixed>> */
     public static function wall(): array
@@ -152,7 +155,7 @@ class FirewallHistory
             $ifRows = Database::fetchAll(
                 'SELECT if_name, oper, speed_mbps, in_octets, out_octets, polled_at
                  FROM firewall_if_samples
-                 WHERE firewall_id = ? AND polled_at >= DATEADD(hour, -' . self::WINDOW_HOURS . ', SYSUTCDATETIME())
+                 WHERE firewall_id = ? AND polled_at >= DATEADD(hour, -' . self::THROUGHPUT_HOURS . ', SYSUTCDATETIME())
                  ORDER BY polled_at, if_name',
                 [$id]
             );
@@ -226,8 +229,7 @@ class FirewallHistory
             if ($oper !== 'up' || $speed === null || $speed <= 0) {
                 continue;
             }
-            $inSeries = [];
-            $outSeries = [];
+            $seriesPoints = [];
             $now = null;
             $prev = null;
             foreach ($points as $point) {
@@ -236,8 +238,11 @@ class FirewallHistory
                     $speedNow = $point['speed_mbps'] ?? $speed;
                     $inRate = self::counterDelta($prev['in_octets'], $point['in_octets'], $dt, $speedNow);
                     $outRate = self::counterDelta($prev['out_octets'], $point['out_octets'], $dt, $speedNow);
-                    $inSeries[] = $inRate['util'] ?? null;
-                    $outSeries[] = $outRate['util'] ?? null;
+                    $seriesPoints[] = [
+                        't' => $point['polled_at'],
+                        'in' => $inRate['util'] ?? null,
+                        'out' => $outRate['util'] ?? null,
+                    ];
                     if ($inRate !== null || $outRate !== null) {
                         $now = [
                             'in_util' => $inRate['util'] ?? null,
@@ -253,7 +258,8 @@ class FirewallHistory
                 }
                 $prev = $point;
             }
-            [$inSeries, $outSeries] = self::thinPair($inSeries, $outSeries);
+            [$inShort, $outShort] = self::windowPair($seriesPoints, self::SHORT_WINDOW_MIN, self::SHORT_CHART_POINTS);
+            [$inLong, $outLong] = self::windowPair($seriesPoints, self::THROUGHPUT_HOURS * 60, self::CHART_POINTS);
             $interfaces[] = [
                 'name' => $name,
                 'oper' => 'up',
@@ -263,8 +269,12 @@ class FirewallHistory
                 'out_util' => $now['out_util'] ?? null,
                 'in_text' => $now['in_text'] ?? null,
                 'out_text' => $now['out_text'] ?? null,
-                'in_series' => $inSeries,
-                'out_series' => $outSeries,
+                'in_series' => $inLong,
+                'out_series' => $outLong,
+                'in_series_30m' => $inShort,
+                'out_series_30m' => $outShort,
+                'in_series_24h' => $inLong,
+                'out_series_24h' => $outLong,
             ];
         }
         usort($interfaces, static function (array $a, array $b): int {
@@ -279,7 +289,7 @@ class FirewallHistory
         $sampleCount = count($samples);
         $note = $sampleCount < 2
             ? 'Interface utilization starts after the next poll. With scheduled SNMP polling on, this firewall is sampled about once a minute.'
-            : 'Last ' . self::WINDOW_HOURS . ' hours. Utilization compares the octets since the previous sample with the interface speed.';
+            : 'Throughput is the last 30 minutes and the last 24 hours. Utilization compares the octets since the previous sample with the interface speed.';
 
         return [
             'firewall_id' => $id,
@@ -380,14 +390,44 @@ class FirewallHistory
     }
 
     /**
+     * Keep samples inside the last $minutes before the newest point, then thin.
+     *
+     * @param list<array{t:string,in:float|null,out:float|null}> $points
+     * @return array{0:list<float|null>,1:list<float|null>}
+     */
+    private static function windowPair(array $points, int $minutes, int $maxPoints): array
+    {
+        if (!$points) {
+            return [[], []];
+        }
+        $lastRaw = substr(trim((string)$points[count($points) - 1]['t']), 0, 19);
+        $last = strtotime($lastRaw);
+        $cut = $last === false ? 0 : $last - ($minutes * 60);
+        $in = [];
+        $out = [];
+        foreach ($points as $point) {
+            $t = strtotime(substr(trim((string)$point['t']), 0, 19));
+            if ($t === false || $t < $cut) {
+                continue;
+            }
+            $in[] = $point['in'];
+            $out[] = $point['out'];
+        }
+        return self::thinPair($in, $out, $maxPoints);
+    }
+
+    /**
      * @param list<mixed> $a
      * @param list<mixed> $b
      * @return array{0:list<mixed>,1:list<mixed>}
      */
-    private static function thinPair(array $a, array $b): array
+    private static function thinPair(array $a, array $b, ?int $max = null): array
     {
         $n = max(count($a), count($b));
-        $max = self::CHART_POINTS;
+        $max = $max ?? self::CHART_POINTS;
+        if ($max < 2) {
+            $max = 2;
+        }
         if ($n <= $max) {
             return [$a, $b];
         }
