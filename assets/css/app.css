@@ -4509,6 +4509,21 @@ body.site-tour-open { overflow: hidden; }
 .fw-if-spark .pc-axis { fill: var(--muted); font-size: 10px; font-family: inherit; }
 .fw-if-spark .pc-grid { stroke: rgba(148, 163, 184, .18); stroke-width: 1; }
 .fw-if-card .fw-legend { padding: .2rem 0 0; }
+.fw-chart-foot {
+  margin: 0;
+  padding: 0 .85rem .6rem;
+  color: var(--muted);
+  font-size: .75rem;
+}
+.fw-if-fault { color: #fca5a5; }
+.fw-if-toggle-label { font-weight: 650; }
+.fw-if-toggle-list {
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+}
+.fw-if-switch { margin: .2rem 0; }
+.fw-if-switch-name { font-size: .92rem; }
 @media (max-width: 800px) {
   .fw-chart-grid { grid-template-columns: 1fr; }
   .fw-if-spans { grid-template-columns: 1fr; }

@@ -1252,6 +1252,46 @@ html, body {
   margin-left: auto;
 }
 .noc-fw-chart-rate + .noc-fw-chart-rate { margin-left: 0.65rem; }
+.noc-fw-chart-fault {
+  color: #fca5a5;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.noc-fw-alerts {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.35);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 8px;
+  padding: 0.28rem 0.55rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.noc-fw-gauges {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+}
+.noc-fw-gauge-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  font-weight: 650;
+}
+.noc-fw-gauge-label strong {
+  color: #e2e8f0;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+}
+.noc-fw-gauge svg { width: 100%; height: 52px; display: block; }
+.noc-fw-gauge .noc-empty { min-height: 52px; }
 .noc-fw-chart-pair {
   display: grid;
   grid-template-columns: 1fr 1fr;

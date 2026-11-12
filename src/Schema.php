@@ -1688,6 +1688,7 @@ class Schema
                 snmp_auto_poll BIT NOT NULL CONSTRAINT DF_fw_snmp_auto DEFAULT 1,
                 snmp_last_poll_at DATETIME2 NULL,
                 last_poll_json NVARCHAR(MAX) NULL,
+                if_graph_json NVARCHAR(MAX) NULL,
                 last_error NVARCHAR(400) NULL,
                 last_version NVARCHAR(40) NULL,
                 last_failover NVARCHAR(40) NULL,
@@ -1709,6 +1710,17 @@ class Schema
                 memory_pct DECIMAL(6,2) NULL,
                 connections INT NULL,
                 cps INT NULL,
+                conn_peak INT NULL,
+                xlate_pat INT NULL,
+                xlate_nat INT NULL,
+                vpn_sessions INT NULL,
+                vpn_peak INT NULL,
+                vpn_ipsec INT NULL,
+                vpn_svc INT NULL,
+                vpn_webvpn INT NULL,
+                vpn_l2l INT NULL,
+                ipsec_tunnels INT NULL,
+                ike_tunnels INT NULL,
                 failover NVARCHAR(40) NULL,
                 polled_at DATETIME2 NOT NULL
             )"
@@ -1723,12 +1735,18 @@ class Schema
                 speed_mbps INT NULL,
                 in_octets BIGINT NULL,
                 out_octets BIGINT NULL,
+                in_errors BIGINT NULL,
+                out_errors BIGINT NULL,
+                in_discards BIGINT NULL,
+                out_discards BIGINT NULL,
                 polled_at DATETIME2 NOT NULL
             )"
         );
         self::ensureIndex('firewall_samples', 'IX_fw_samples_fw_time', 'firewall_id, polled_at DESC');
         self::ensureIndex('firewall_if_samples', 'IX_fw_if_samples_fw_time', 'firewall_id, polled_at DESC');
         self::enableExistingFirewallSchedule();
+        // Columns land even when the grants stamp already exists.
+        self::ensureFirewallColumns();
         $version = class_exists('App') ? App::VERSION : '0';
         $stamp = App::ROOT . '/storage/tmp/firewall_grants_' . $version . '.flag';
         if (is_file($stamp)) {
@@ -1740,6 +1758,35 @@ class Schema
                 @mkdir($dir, 0775, true);
             }
             @file_put_contents($stamp, gmdate('c') . "\n");
+        }
+    }
+
+    /** Nullable gauges and the interface-graph preference. Safe on every call. */
+    private static function ensureFirewallColumns(): void
+    {
+        self::ensureColumn('firewalls', 'if_graph_json', 'NVARCHAR(MAX) NULL');
+        foreach ([
+            'conn_peak' => 'INT NULL',
+            'xlate_pat' => 'INT NULL',
+            'xlate_nat' => 'INT NULL',
+            'vpn_sessions' => 'INT NULL',
+            'vpn_peak' => 'INT NULL',
+            'vpn_ipsec' => 'INT NULL',
+            'vpn_svc' => 'INT NULL',
+            'vpn_webvpn' => 'INT NULL',
+            'vpn_l2l' => 'INT NULL',
+            'ipsec_tunnels' => 'INT NULL',
+            'ike_tunnels' => 'INT NULL',
+        ] as $column => $definition) {
+            self::ensureColumn('firewall_samples', $column, $definition);
+        }
+        foreach ([
+            'in_errors' => 'BIGINT NULL',
+            'out_errors' => 'BIGINT NULL',
+            'in_discards' => 'BIGINT NULL',
+            'out_discards' => 'BIGINT NULL',
+        ] as $column => $definition) {
+            self::ensureColumn('firewall_if_samples', $column, $definition);
         }
     }
 

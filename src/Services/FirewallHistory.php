@@ -105,6 +105,37 @@ class FirewallHistory
         return ['bps' => $bps, 'util' => $util];
     }
 
+    /**
+     * Error or discard count between two samples.
+     * Null when the gap is too short, too long, or the counter reset.
+     *
+     * @return array{delta:float,per_sec:float}|null
+     */
+    public static function counterCount(?string $older, ?string $newer, int $dtSec): ?array
+    {
+        if ($older === null || $newer === null || $dtSec < self::MIN_DT_SEC || $dtSec > self::MAX_DT_SEC) {
+            return null;
+        }
+        if (!preg_match('/^\d+$/', $older) || !preg_match('/^\d+$/', $newer)) {
+            return null;
+        }
+        if (function_exists('bccomp')) {
+            if (bccomp($newer, $older, 0) < 0) {
+                return null;
+            }
+            $delta = bcsub($newer, $older, 0);
+        } elseif ((float)$newer < (float)$older) {
+            return null;
+        } else {
+            $delta = sprintf('%.0f', (float)$newer - (float)$older);
+        }
+        $n = (float)$delta;
+        if (!is_finite($n) || $n < 0) {
+            return null;
+        }
+        return ['delta' => $n, 'per_sec' => $n / $dtSec];
+    }
+
     public static function formatBps(float $bps): string
     {
         $sign = $bps < 0 ? '-' : '';
@@ -133,6 +164,110 @@ class FirewallHistory
     }
 
     /**
+     * Interface names whose throughput charts are turned off.
+     * A missing preference means every interface is graphed.
+     *
+     * @return array<string,true>
+     */
+    public static function graphDisabled(?string $json): array
+    {
+        if ($json === null || trim($json) === '') {
+            return [];
+        }
+        $data = json_decode($json, true);
+        if (!is_array($data)) {
+            return [];
+        }
+        $off = [];
+        foreach ($data as $name => $flag) {
+            $name = self::ifKey((string)$name);
+            if ($name === '') {
+                continue;
+            }
+            if ($flag === 0 || $flag === '0' || $flag === false) {
+                $off[$name] = true;
+            }
+        }
+        return $off;
+    }
+
+    /**
+     * Remember which of the known interfaces were left unchecked.
+     * Names that are not on this form keep their previous setting.
+     *
+     * @param list<string> $known
+     * @param list<string> $enabled
+     */
+    public static function encodeGraphPref(?string $previous, array $known, array $enabled): ?string
+    {
+        $off = self::graphDisabled($previous);
+        $enabledMap = [];
+        foreach ($enabled as $name) {
+            $name = self::ifKey((string)$name);
+            if ($name !== '') {
+                $enabledMap[$name] = true;
+            }
+        }
+        foreach ($known as $name) {
+            $name = self::ifKey((string)$name);
+            if ($name === '') {
+                continue;
+            }
+            if (isset($enabledMap[$name])) {
+                unset($off[$name]);
+            } else {
+                $off[$name] = true;
+            }
+        }
+        if (!$off) {
+            return null;
+        }
+        $payload = [];
+        foreach (array_keys($off) as $name) {
+            $payload[$name] = 0;
+        }
+        ksort($payload);
+        $json = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        return $json === false ? null : $json;
+    }
+
+    /**
+     * Names from the last poll, plus any name already switched off.
+     *
+     * @param array<string,mixed> $fw
+     * @return list<string>
+     */
+    public static function interfaceChoices(array $fw): array
+    {
+        $names = [];
+        $snap = self::decode($fw['last_poll_json'] ?? null);
+        $rows = $snap['interfaces'] ?? null;
+        if (is_array($rows)) {
+            foreach ($rows as $iface) {
+                if (!is_array($iface)) {
+                    continue;
+                }
+                $name = self::ifKey((string)($iface['name'] ?? ''));
+                if ($name !== '') {
+                    $names[$name] = true;
+                }
+            }
+        }
+        $raw = $fw['if_graph_json'] ?? null;
+        foreach (array_keys(self::graphDisabled($raw === null ? null : (string)$raw)) as $name) {
+            $names[$name] = true;
+        }
+        $list = array_keys($names);
+        natcasesort($list);
+        return array_values($list);
+    }
+
+    private static function ifKey(string $name): string
+    {
+        return substr(trim($name), 0, 128);
+    }
+
+    /**
      * @param array<string,mixed> $fw
      * @return array<string,mixed>|null
      */
@@ -145,20 +280,8 @@ class FirewallHistory
         $samples = [];
         $ifRows = [];
         try {
-            $samples = Database::fetchAll(
-                'SELECT cpu_pct, memory_pct, connections, cps, failover, polled_at
-                 FROM firewall_samples
-                 WHERE firewall_id = ? AND polled_at >= DATEADD(hour, -' . self::WINDOW_HOURS . ', SYSUTCDATETIME())
-                 ORDER BY polled_at',
-                [$id]
-            );
-            $ifRows = Database::fetchAll(
-                'SELECT if_name, oper, speed_mbps, in_octets, out_octets, polled_at
-                 FROM firewall_if_samples
-                 WHERE firewall_id = ? AND polled_at >= DATEADD(hour, -' . self::THROUGHPUT_HOURS . ', SYSUTCDATETIME())
-                 ORDER BY polled_at, if_name',
-                [$id]
-            );
+            $samples = self::fetchSamples($id);
+            $ifRows = self::fetchIfSamples($id);
         } catch (Throwable $e) {
             $samples = [];
             $ifRows = [];
@@ -168,14 +291,21 @@ class FirewallHistory
         $memory = [];
         $connections = [];
         $cpsSeries = [];
+        $connPeakSeries = [];
+        $xlateSeries = [];
+        $vpnSeries = [];
+        $ipsecSeries = [];
         foreach ($samples as $sample) {
             $cpu[] = self::numOrNull($sample['cpu_pct'] ?? null);
             $memory[] = self::numOrNull($sample['memory_pct'] ?? null);
-            $connections[] = isset($sample['connections']) && $sample['connections'] !== null && $sample['connections'] !== ''
-                ? (int)$sample['connections'] : null;
-            $cpsSeries[] = isset($sample['cps']) && $sample['cps'] !== null && $sample['cps'] !== ''
-                ? (int)$sample['cps'] : null;
+            $connections[] = self::intOrNull($sample['connections'] ?? null);
+            $cpsSeries[] = self::intOrNull($sample['cps'] ?? null);
+            $connPeakSeries[] = self::intOrNull($sample['conn_peak'] ?? null);
+            $xlateSeries[] = self::intOrNull($sample['xlate_pat'] ?? null);
+            $vpnSeries[] = self::intOrNull($sample['vpn_sessions'] ?? null);
+            $ipsecSeries[] = self::intOrNull($sample['ipsec_tunnels'] ?? null);
         }
+        $snap = self::decode($fw['last_poll_json'] ?? null);
         $latest = $samples ? $samples[count($samples) - 1] : null;
         $cpuNow = $latest ? self::numOrNull($latest['cpu_pct'] ?? null) : self::numOrNull($fw['last_cpu_pct'] ?? null);
         $memNow = $latest ? self::numOrNull($latest['memory_pct'] ?? null) : null;
@@ -202,6 +332,10 @@ class FirewallHistory
                     ? (int)$row['speed_mbps'] : null,
                 'in_octets' => self::digits($row['in_octets'] ?? null),
                 'out_octets' => self::digits($row['out_octets'] ?? null),
+                'in_errors' => self::digits($row['in_errors'] ?? null),
+                'out_errors' => self::digits($row['out_errors'] ?? null),
+                'in_discards' => self::digits($row['in_discards'] ?? null),
+                'out_discards' => self::digits($row['out_discards'] ?? null),
                 'polled_at' => (string)($row['polled_at'] ?? ''),
             ];
         }
@@ -221,6 +355,7 @@ class FirewallHistory
             }
         }
 
+        $graphOff = self::graphDisabled(self::graphJson($id, $fw));
         $interfaces = [];
         foreach ($grouped as $name => $points) {
             $last = $points[count($points) - 1];
@@ -231,6 +366,7 @@ class FirewallHistory
             }
             $seriesPoints = [];
             $now = null;
+            $fault = null;
             $prev = null;
             foreach ($points as $point) {
                 if ($prev !== null && $prev['polled_at'] !== '' && $point['polled_at'] !== '') {
@@ -238,6 +374,10 @@ class FirewallHistory
                     $speedNow = $point['speed_mbps'] ?? $speed;
                     $inRate = self::counterDelta($prev['in_octets'], $point['in_octets'], $dt, $speedNow);
                     $outRate = self::counterDelta($prev['out_octets'], $point['out_octets'], $dt, $speedNow);
+                    $inErr = self::counterCount($prev['in_errors'] ?? null, $point['in_errors'] ?? null, $dt);
+                    $outErr = self::counterCount($prev['out_errors'] ?? null, $point['out_errors'] ?? null, $dt);
+                    $inDrop = self::counterCount($prev['in_discards'] ?? null, $point['in_discards'] ?? null, $dt);
+                    $outDrop = self::counterCount($prev['out_discards'] ?? null, $point['out_discards'] ?? null, $dt);
                     $seriesPoints[] = [
                         't' => $point['polled_at'],
                         'in' => $inRate['util'] ?? null,
@@ -255,6 +395,16 @@ class FirewallHistory
                     } else {
                         $now = null;
                     }
+                    if ($inErr !== null || $outErr !== null || $inDrop !== null || $outDrop !== null) {
+                        $fault = [
+                            'in_err' => $inErr !== null ? (int)round($inErr['delta']) : null,
+                            'out_err' => $outErr !== null ? (int)round($outErr['delta']) : null,
+                            'in_discard' => $inDrop !== null ? (int)round($inDrop['delta']) : null,
+                            'out_discard' => $outDrop !== null ? (int)round($outDrop['delta']) : null,
+                        ];
+                    } else {
+                        $fault = null;
+                    }
                 }
                 $prev = $point;
             }
@@ -269,6 +419,11 @@ class FirewallHistory
                 'out_util' => $now['out_util'] ?? null,
                 'in_text' => $now['in_text'] ?? null,
                 'out_text' => $now['out_text'] ?? null,
+                'in_err' => $fault['in_err'] ?? null,
+                'out_err' => $fault['out_err'] ?? null,
+                'in_discard' => $fault['in_discard'] ?? null,
+                'out_discard' => $fault['out_discard'] ?? null,
+                'graph' => !isset($graphOff[self::ifKey((string)$name)]),
                 'in_series' => $inLong,
                 'out_series' => $outLong,
                 'in_series_30m' => $inShort,
@@ -300,16 +455,119 @@ class FirewallHistory
             'memory' => $memNow,
             'connections' => $connNow,
             'cps' => $cpsNow,
+            'conn_peak' => self::seriesNow($samples, 'conn_peak', $snap),
+            'xlate_pat' => self::seriesNow($samples, 'xlate_pat', $snap),
+            'xlate_nat' => self::seriesNow($samples, 'xlate_nat', $snap),
+            'xlate_source' => is_string($snap['xlate_source'] ?? null) ? (string)$snap['xlate_source'] : null,
+            'vpn_sessions' => self::seriesNow($samples, 'vpn_sessions', $snap),
+            'vpn_peak' => self::seriesNow($samples, 'vpn_peak', $snap),
+            'vpn_ipsec' => self::seriesNow($samples, 'vpn_ipsec', $snap),
+            'vpn_svc' => self::seriesNow($samples, 'vpn_svc', $snap),
+            'vpn_webvpn' => self::seriesNow($samples, 'vpn_webvpn', $snap),
+            'vpn_l2l' => self::seriesNow($samples, 'vpn_l2l', $snap),
+            'ipsec_tunnels' => self::seriesNow($samples, 'ipsec_tunnels', $snap),
+            'ike_tunnels' => self::seriesNow($samples, 'ike_tunnels', $snap),
+            'alerts' => self::hardwareAlerts($snap),
             'polled_at' => $latest['polled_at'] ?? ($fw['snmp_last_poll_at'] ?? null),
             'sample_count' => $sampleCount,
             'window_hours' => self::WINDOW_HOURS,
             'cpu_series' => self::thinList($cpu),
             'memory_series' => self::thinList($memory),
             'connection_series' => self::thinList($connections),
+            'conn_peak_series' => self::thinList($connPeakSeries),
             'cps_series' => self::thinList($cpsSeries),
+            'xlate_pat_series' => self::thinList($xlateSeries),
+            'vpn_sessions_series' => self::thinList($vpnSeries),
+            'ipsec_series' => self::thinList($ipsecSeries),
             'interfaces' => $interfaces,
             'note' => $note,
         ];
+    }
+
+    /** @return list<array<string,mixed>> */
+    private static function fetchSamples(int $id): array
+    {
+        $where = ' FROM firewall_samples
+            WHERE firewall_id = ? AND polled_at >= DATEADD(hour, -' . self::WINDOW_HOURS . ', SYSUTCDATETIME())
+            ORDER BY polled_at';
+        $extra = 'cpu_pct, memory_pct, connections, cps, conn_peak, xlate_pat, xlate_nat, vpn_sessions, vpn_peak, vpn_ipsec, vpn_svc, vpn_webvpn, vpn_l2l, ipsec_tunnels, ike_tunnels, failover, polled_at';
+        $base = 'cpu_pct, memory_pct, connections, cps, failover, polled_at';
+        try {
+            return Database::fetchAll('SELECT ' . $extra . $where, [$id]);
+        } catch (Throwable $e) {
+            return Database::fetchAll('SELECT ' . $base . $where, [$id]);
+        }
+    }
+
+    /** @return list<array<string,mixed>> */
+    private static function fetchIfSamples(int $id): array
+    {
+        $where = ' FROM firewall_if_samples
+            WHERE firewall_id = ? AND polled_at >= DATEADD(hour, -' . self::THROUGHPUT_HOURS . ', SYSUTCDATETIME())
+            ORDER BY polled_at, if_name';
+        $extra = 'if_name, oper, speed_mbps, in_octets, out_octets, in_errors, out_errors, in_discards, out_discards, polled_at';
+        $base = 'if_name, oper, speed_mbps, in_octets, out_octets, polled_at';
+        try {
+            return Database::fetchAll('SELECT ' . $extra . $where, [$id]);
+        } catch (Throwable $e) {
+            return Database::fetchAll('SELECT ' . $base . $where, [$id]);
+        }
+    }
+
+    /** @param array<string,mixed> $fw */
+    private static function graphJson(int $id, array $fw): ?string
+    {
+        if (array_key_exists('if_graph_json', $fw)) {
+            $raw = $fw['if_graph_json'];
+            return $raw === null ? null : (string)$raw;
+        }
+        try {
+            $raw = Database::fetchValue('SELECT if_graph_json FROM firewalls WHERE firewall_id = ?', [$id]);
+        } catch (Throwable $e) {
+            return null;
+        }
+        if ($raw === null || $raw === false) {
+            return null;
+        }
+        return (string)$raw;
+    }
+
+    /**
+     * @param list<array<string,mixed>> $samples
+     * @param array<string,mixed> $snap
+     */
+    private static function seriesNow(array $samples, string $col, array $snap): ?int
+    {
+        if ($samples) {
+            $last = $samples[count($samples) - 1];
+            if (array_key_exists($col, $last)) {
+                return self::intOrNull($last[$col]);
+            }
+        }
+        return self::intOrNull($snap[$col] ?? null);
+    }
+
+    /** @param mixed $raw */
+    private static function intOrNull($raw): ?int
+    {
+        if ($raw === null || $raw === '' || !is_numeric($raw)) {
+            return null;
+        }
+        return (int)round((float)$raw);
+    }
+
+    /**
+     * @param array<string,mixed> $snap
+     * @return list<array{label:string,detail:string,status:string}>
+     */
+    private static function hardwareAlerts(array $snap): array
+    {
+        $fail = is_array($snap['failover'] ?? null) ? $snap['failover'] : [];
+        $rows = is_array($fail['rows'] ?? null) ? $fail['rows'] : [];
+        if (!class_exists('FirewallPoll', false)) {
+            require_once __DIR__ . '/FirewallPoll.php';
+        }
+        return FirewallPoll::hardwareAlerts($rows);
     }
 
     /** @param mixed $raw */

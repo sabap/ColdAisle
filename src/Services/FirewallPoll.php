@@ -7,6 +7,21 @@ declare(strict_types=1);
 
 class FirewallPoll
 {
+    /** NAPT / PAT port binds. The port-bind table itself is not walked. */
+    public const OID_XLATE_PAT = '1.3.6.1.4.1.9.10.77.1.2.3.0';
+    /** One-to-one address binds. Not the PAT table. */
+    public const OID_XLATE_NAT = '1.3.6.1.4.1.9.10.77.1.2.1.0';
+    /** Active address translations. Used only when the port-bind scalar is missing. */
+    public const OID_XLATE_ACTIVE = '1.3.6.1.4.1.9.9.532.1.1.1.1';
+    public const OID_VPN_SESSIONS = '1.3.6.1.4.1.9.9.392.1.3.1.0';
+    public const OID_VPN_IPSEC = '1.3.6.1.4.1.9.9.392.1.3.26.0';
+    public const OID_VPN_L2L = '1.3.6.1.4.1.9.9.392.1.3.29.0';
+    public const OID_VPN_SVC = '1.3.6.1.4.1.9.9.392.1.3.35.0';
+    public const OID_VPN_WEBVPN = '1.3.6.1.4.1.9.9.392.1.3.38.0';
+    public const OID_VPN_PEAK = '1.3.6.1.4.1.9.9.392.1.3.41.0';
+    public const OID_IKE_TUNNELS = '1.3.6.1.4.1.9.9.171.1.2.1.1.0';
+    public const OID_IPSEC_TUNNELS = '1.3.6.1.4.1.9.9.171.1.3.1.1.0';
+
     /**
      * @param array<string,mixed> $fw firewalls row
      * @return array<string,mixed> snapshot stored in last_poll_json
@@ -107,8 +122,16 @@ class FirewallPoll
         $connDesc = self::walkText(self::reindex(SnmpPoller::sessionWalk($session, $connDescOid), $connDescOid));
         $connVal = self::reindex(SnmpPoller::sessionWalk($session, $connValOid), $connValOid);
         $connections = self::pickConnections($connDesc, $connVal);
+        $connPeak = self::pickConnectionPeak($connDesc, $connVal);
         $cps = self::numeric(self::tryGet($session, '1.3.6.1.4.1.9.9.147.1.2.2.3.0'));
         $cpsPeak = self::numeric(self::tryGet($session, '1.3.6.1.4.1.9.9.147.1.2.2.4.0'));
+        $xlatePat = self::gauge(self::tryGet($session, self::OID_XLATE_PAT));
+        $xlateNat = self::gauge(self::tryGet($session, self::OID_XLATE_NAT));
+        $xlateSource = $xlatePat !== null ? 'port' : null;
+        if ($xlatePat === null) {
+            $xlatePat = self::translationActive($session);
+            $xlateSource = $xlatePat !== null ? 'active' : null;
+        }
         if ($ident['model'] === null) {
             $ident['model'] = self::modelFromEntities($session);
         }
@@ -130,8 +153,21 @@ class FirewallPoll
             'memory' => $mem,
             'failover' => $failover,
             'connections' => $connections,
+            'conn_peak' => $connPeak,
             'connections_per_sec' => $cps !== null ? (int)round($cps) : null,
             'connections_per_sec_peak' => $cpsPeak !== null ? (int)round($cpsPeak) : null,
+            'xlate_pat' => $xlatePat,
+            'xlate_nat' => $xlateNat,
+            'xlate_source' => $xlateSource,
+            // Counts only. The remote-access session table is not read.
+            'vpn_sessions' => self::gauge(self::tryGet($session, self::OID_VPN_SESSIONS)),
+            'vpn_peak' => self::gauge(self::tryGet($session, self::OID_VPN_PEAK)),
+            'vpn_ipsec' => self::gauge(self::tryGet($session, self::OID_VPN_IPSEC)),
+            'vpn_svc' => self::gauge(self::tryGet($session, self::OID_VPN_SVC)),
+            'vpn_webvpn' => self::gauge(self::tryGet($session, self::OID_VPN_WEBVPN)),
+            'vpn_l2l' => self::gauge(self::tryGet($session, self::OID_VPN_L2L)),
+            'ipsec_tunnels' => self::gauge(self::tryGet($session, self::OID_IPSEC_TUNNELS)),
+            'ike_tunnels' => self::gauge(self::tryGet($session, self::OID_IKE_TUNNELS)),
             'serial' => $serial,
             'interfaces' => $interfaces,
         ];
@@ -189,6 +225,47 @@ class FirewallPoll
     }
 
     /**
+     * Power, fan, and temperature rows that are not in a normal state.
+     * Failover role rows are left out. Healthy supplies and fans are left out.
+     *
+     * @param list<array<string,mixed>> $rows
+     * @return list<array{label:string,detail:string,status:string}>
+     */
+    public static function hardwareAlerts(array $rows): array
+    {
+        $out = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $label = trim((string)($row['label'] ?? ''));
+            $detail = trim((string)($row['detail'] ?? ''));
+            $status = trim((string)($row['status'] ?? ''));
+            $blob = strtolower($label . ' ' . $detail);
+            if (!preg_match('/power|psu|fan|temp|thermal|voltage/', $blob)) {
+                continue;
+            }
+            if ($status === '' || self::hardwareHealthy($status)) {
+                continue;
+            }
+            $out[] = ['label' => $label, 'detail' => $detail, 'status' => $status];
+            if (count($out) >= 8) {
+                break;
+            }
+        }
+        return $out;
+    }
+
+    private static function hardwareHealthy(string $status): bool
+    {
+        $s = strtolower(trim($status));
+        if (in_array($s, ['up', 'active', 'ok', 'normal', 'standby', 'backup', 'other'], true)) {
+            return true;
+        }
+        return str_contains($s, 'normal') || preg_match('/\b(ok|good)\b/', $s) === 1;
+    }
+
+    /**
      * @param array<string,string> $desc
      * @param array<string,mixed> $values
      */
@@ -222,6 +299,47 @@ class FirewallPoll
             }
         }
         return $sawInUse ? $best : null;
+    }
+
+    /**
+     * Connection-table high-water mark from the description text.
+     * The stat type number is not assumed. Per-second peaks are ignored.
+     *
+     * @param array<string,string> $desc
+     * @param array<string,mixed> $values
+     */
+    public static function pickConnectionPeak(array $desc, array $values): ?int
+    {
+        $best = null;
+        $bestScore = -1;
+        $saw = false;
+        foreach ($values as $suffix => $raw) {
+            $n = self::numeric($raw);
+            if ($n === null) {
+                continue;
+            }
+            $text = strtolower((string)($desc[$suffix] ?? ''));
+            if ($text === '' || str_contains($text, 'per second') || str_contains($text, 'per-second')) {
+                continue;
+            }
+            $peakish = str_contains($text, 'peak')
+                || str_contains($text, 'highest')
+                || str_contains($text, 'maximum')
+                || preg_match('/\bmost\b/', $text) === 1;
+            if (!$peakish) {
+                continue;
+            }
+            $saw = true;
+            $score = 2;
+            if (str_contains($text, 'entire') || str_contains($text, 'firewall') || str_contains($text, 'global')) {
+                $score += 3;
+            }
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $best = (int)round($n);
+            }
+        }
+        return $saw ? $best : null;
     }
 
     /**
@@ -333,6 +451,17 @@ class FirewallPoll
                 ? (int)$snapshot['connections'] : null,
             'cps' => isset($snapshot['connections_per_sec']) && $snapshot['connections_per_sec'] !== null
                 ? (int)$snapshot['connections_per_sec'] : null,
+            'conn_peak' => self::sampleInt($snapshot, 'conn_peak'),
+            'xlate_pat' => self::sampleInt($snapshot, 'xlate_pat'),
+            'xlate_nat' => self::sampleInt($snapshot, 'xlate_nat'),
+            'vpn_sessions' => self::sampleInt($snapshot, 'vpn_sessions'),
+            'vpn_peak' => self::sampleInt($snapshot, 'vpn_peak'),
+            'vpn_ipsec' => self::sampleInt($snapshot, 'vpn_ipsec'),
+            'vpn_svc' => self::sampleInt($snapshot, 'vpn_svc'),
+            'vpn_webvpn' => self::sampleInt($snapshot, 'vpn_webvpn'),
+            'vpn_l2l' => self::sampleInt($snapshot, 'vpn_l2l'),
+            'ipsec_tunnels' => self::sampleInt($snapshot, 'ipsec_tunnels'),
+            'ike_tunnels' => self::sampleInt($snapshot, 'ike_tunnels'),
             'failover' => isset($fail['this_unit']) && $fail['this_unit'] !== null && $fail['this_unit'] !== ''
                 ? substr((string)$fail['this_unit'], 0, 40) : null,
             'polled_at' => $polledAt,
@@ -354,6 +483,10 @@ class FirewallPoll
                     ? (int)$iface['speed_mbps'] : null,
                 'in_octets' => self::octetString($iface['in_octets'] ?? null),
                 'out_octets' => self::octetString($iface['out_octets'] ?? null),
+                'in_errors' => self::octetString($iface['in_errors'] ?? null),
+                'out_errors' => self::octetString($iface['out_errors'] ?? null),
+                'in_discards' => self::octetString($iface['in_discards'] ?? null),
+                'out_discards' => self::octetString($iface['out_discards'] ?? null),
                 'polled_at' => $polledAt,
             ]);
         }
@@ -405,14 +538,22 @@ class FirewallPoll
         $speedOid = '1.3.6.1.2.1.31.1.1.1.15';
         $inOid = '1.3.6.1.2.1.31.1.1.1.6';
         $outOid = '1.3.6.1.2.1.31.1.1.1.10';
+        $inErrOid = '1.3.6.1.2.1.2.2.1.14';
+        $outErrOid = '1.3.6.1.2.1.2.2.1.20';
+        $inDropOid = '1.3.6.1.2.1.2.2.1.13';
+        $outDropOid = '1.3.6.1.2.1.2.2.1.19';
         $names = self::walkText(self::reindex(SnmpPoller::sessionWalk($session, $nameOid), $nameOid));
         $oper = self::reindex(SnmpPoller::sessionWalk($session, $operOid), $operOid);
         $speed = self::reindex(SnmpPoller::sessionWalk($session, $speedOid), $speedOid);
         $inB = self::reindex(SnmpPoller::sessionWalk($session, $inOid), $inOid);
         $outB = self::reindex(SnmpPoller::sessionWalk($session, $outOid), $outOid);
+        $inErr = self::walkQuiet($session, $inErrOid);
+        $outErr = self::walkQuiet($session, $outErrOid);
+        $inDrop = self::walkQuiet($session, $inDropOid);
+        $outDrop = self::walkQuiet($session, $outDropOid);
         $rows = [];
         foreach ($names as $idx => $name) {
-            $name = trim($name);
+            $name = substr(trim($name), 0, 128);
             if ($name === '' || preg_match('/^Internal-/i', $name)) {
                 continue;
             }
@@ -423,6 +564,10 @@ class FirewallPoll
                 'speed_mbps' => ($sp = self::numeric($speed[$idx] ?? null)) !== null ? (int)round($sp) : null,
                 'in_octets' => self::octetString($inB[$idx] ?? null),
                 'out_octets' => self::octetString($outB[$idx] ?? null),
+                'in_errors' => self::octetString($inErr[$idx] ?? null),
+                'out_errors' => self::octetString($outErr[$idx] ?? null),
+                'in_discards' => self::octetString($inDrop[$idx] ?? null),
+                'out_discards' => self::octetString($outDrop[$idx] ?? null),
             ];
             if (count($rows) >= 32) {
                 break;
@@ -599,7 +744,7 @@ class FirewallPoll
         return trim($s, "\" \t");
     }
 
-    /** @param mixed $raw */
+    /** @param array<string,mixed> $session */
     private static function tryGet(array $session, string $oid)
     {
         try {
@@ -607,6 +752,68 @@ class FirewallPoll
         } catch (Throwable $e) {
             return null;
         }
+    }
+
+    /**
+     * A missing counter must not fail the poll.
+     *
+     * @param array<string,mixed> $session
+     * @return array<string,mixed>
+     */
+    private static function walkQuiet(array $session, string $oid): array
+    {
+        try {
+            return self::reindex(SnmpPoller::sessionWalk($session, $oid), $oid);
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    /** @param mixed $raw */
+    private static function gauge($raw): ?int
+    {
+        $n = self::numeric($raw);
+        if ($n === null || $n < 0 || !is_finite($n)) {
+            return null;
+        }
+        return (int)round($n);
+    }
+
+    /** @param array<string,mixed> $snapshot */
+    private static function sampleInt(array $snapshot, string $key): ?int
+    {
+        if (!array_key_exists($key, $snapshot) || $snapshot[$key] === null || $snapshot[$key] === '') {
+            return null;
+        }
+        if (!is_numeric($snapshot[$key])) {
+            return null;
+        }
+        $n = (float)$snapshot[$key];
+        if ($n < 0 || !is_finite($n)) {
+            return null;
+        }
+        return (int)round($n);
+    }
+
+    /**
+     * Largest active-translation gauge on the box.
+     * The maximum avoids adding the same count once per entity.
+     *
+     * @param array<string,mixed> $session
+     */
+    private static function translationActive(array $session): ?int
+    {
+        $best = null;
+        foreach (self::walkQuiet($session, self::OID_XLATE_ACTIVE) as $raw) {
+            $n = self::gauge($raw);
+            if ($n === null) {
+                continue;
+            }
+            if ($best === null || $n > $best) {
+                $best = $n;
+            }
+        }
+        return $best;
     }
 
     private static function hardwareStatus(?float $code, string $detail): string

@@ -1119,13 +1119,32 @@
     }
   }
 
+  function seriesHasNum(arr) {
+    return (arr || []).some(function (v) { return v != null && !isNaN(Number(v)); });
+  }
+
+  function fwFaultText(iface) {
+    var parts = [];
+    function add(n, label) {
+      if (n == null || isNaN(n) || Number(n) <= 0) return;
+      parts.push(label + ' ' + fmtInt(n));
+    }
+    add(iface.in_err, 'in err');
+    add(iface.out_err, 'out err');
+    add(iface.in_discard, 'in drop');
+    add(iface.out_discard, 'out drop');
+    return parts.join(' · ');
+  }
+
   function renderFirewalls(data) {
     var list = data.firewalls || [];
     var fw = list[0];
     if (!fw) {
       return '<div class="noc-panel-frame noc-frame-empty"><div class="noc-empty">No firewalls</div></div>';
     }
-    var ifaces = (fw.interfaces || []).slice(0, 5);
+    var rawIfaces = fw.interfaces || [];
+    var graphed = rawIfaces.filter(function (iface) { return iface.graph !== false; });
+    var ifaces = graphed.slice(0, 5);
     var role = fw.failover || '—';
     var html = '<div class="noc-panel-frame noc-frame-fw">';
     html += '<div class="noc-section-head">' +
@@ -1168,19 +1187,57 @@
       '<div class="noc-chart-wrap noc-chart-hero">' +
       sparklineSvg(fw.connection_series || [], '#34d399',
         'Connection history starts after the next polls', 'Connections') +
-      '</div>' +
-      '<div class="noc-legend"><span class="noc-leg"><i style="background:#34d399"></i>Connections</span></div></div>';
+      '</div>';
+    var connLegend = 'Connections';
+    if (fw.conn_peak != null && !isNaN(fw.conn_peak)) connLegend += ' · peak ' + fmtInt(fw.conn_peak);
+    html += '<div class="noc-legend"><span class="noc-leg"><i style="background:#34d399"></i>' + esc(connLegend) + '</span></div></div>';
     html += '</div>';
+
+    var alerts = fw.alerts || [];
+    if (alerts.length) {
+      html += '<div class="noc-fw-alerts">' + alerts.map(function (alert) {
+        var text = [alert.label, alert.detail].filter(Boolean).join(' ');
+        return esc(text) + ' — ' + esc(alert.status || '');
+      }).join(' · ') + '</div>';
+    }
+
+    var gaugeCols = '';
+    if (seriesHasNum(fw.xlate_pat_series)) {
+      var patName = fw.xlate_source === 'active' ? 'Translations' : 'PAT xlates';
+      gaugeCols += '<div class="noc-fw-gauge"><div class="noc-fw-gauge-label">' + esc(patName) +
+        ' <strong>' + esc(fmtInt(fw.xlate_pat)) + '</strong></div>' +
+        sparklineSvg(fw.xlate_pat_series || [], '#f472b6', 'PAT history starts after the next polls', patName) +
+        '</div>';
+    }
+    if (seriesHasNum(fw.vpn_sessions_series) || seriesHasNum(fw.ipsec_series)) {
+      var vpnNow = [];
+      if (fw.vpn_sessions != null && !isNaN(fw.vpn_sessions)) vpnNow.push(fmtInt(fw.vpn_sessions) + ' sessions');
+      if (fw.ipsec_tunnels != null && !isNaN(fw.ipsec_tunnels)) vpnNow.push(fmtInt(fw.ipsec_tunnels) + ' IPsec');
+      var vpnSeries = [];
+      if (seriesHasNum(fw.vpn_sessions_series)) {
+        vpnSeries.push({ name: 'Remote access', color: '#22d3ee', values: fw.vpn_sessions_series || [] });
+      }
+      if (seriesHasNum(fw.ipsec_series)) {
+        vpnSeries.push({ name: 'IPsec', color: '#c4b5fd', values: fw.ipsec_series || [] });
+      }
+      gaugeCols += '<div class="noc-fw-gauge"><div class="noc-fw-gauge-label">VPN <strong>' +
+        esc(vpnNow.join(' · ') || '—') + '</strong></div>' +
+        sparklineMulti(vpnSeries, 'VPN history starts after the next polls', 'VPN', false) +
+        '</div>';
+    }
+    if (gaugeCols) html += '<div class="noc-fw-gauges">' + gaugeCols + '</div>';
 
     html += '<div class="noc-section-head"><span class="noc-section-label">Throughput</span>' +
       '<span class="noc-section-count">' + ifaces.length +
-      ((fw.interfaces || []).length > ifaces.length ? ' of ' + (fw.interfaces || []).length : '') +
+      (graphed.length > ifaces.length ? ' of ' + graphed.length : '') +
       '</span></div>';
     if ((fw.sample_count || 0) < 2) {
       html += '<div class="noc-empty-inline">' + esc(fw.note || 'Utilization starts after the next poll.') + '</div>';
     }
     if (!ifaces.length) {
-      html += '<div class="noc-empty-inline">No up interfaces with a reported speed.</div>';
+      html += '<div class="noc-empty-inline">' + (rawIfaces.length
+        ? 'Interface graphs are turned off.'
+        : 'No up interfaces with a reported speed.') + '</div>';
     } else {
       html += '<div class="noc-fw-list">';
       ifaces.forEach(function (iface) {
@@ -1190,7 +1247,9 @@
           '<span class="noc-fw-chart-rate" style="color:#38bdf8">' +
           esc(utilLabel(iface.in_util, iface.in_text)) + ' in</span>' +
           '<span class="noc-fw-chart-rate" style="color:#fb923c">' +
-          esc(utilLabel(iface.out_util, iface.out_text)) + ' out</span></div>' +
+          esc(utilLabel(iface.out_util, iface.out_text)) + ' out</span>' +
+          (fwFaultText(iface) ? '<span class="noc-fw-chart-fault">' + esc(fwFaultText(iface)) + '</span>' : '') +
+          '</div>' +
           '<div class="noc-fw-chart-pair">' +
           '<div class="noc-fw-chart-col"><span>30 min</span><div class="noc-fw-chart-plot">' +
           utilPairSvg(iface.in_series_30m, iface.out_series_30m, iface.in_util, iface.out_util) + '</div></div>' +
@@ -1199,7 +1258,7 @@
           '</div></div></div></div>';
       });
       html += '</div>';
-      html += moreNote(ifaces.length, (fw.interfaces || []).length, 'interfaces');
+      html += moreNote(ifaces.length, graphed.length, 'interfaces');
     }
     html += '</div>';
     return html;

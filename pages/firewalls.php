@@ -67,6 +67,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'notes' => trim((string)($_POST['notes'] ?? '')) ?: null,
                 'updated_at' => gmdate('Y-m-d H:i:s'),
             ];
+            if ($prev && isset($_POST['if_graph_form'])) {
+                $known = isset($_POST['if_known']) && is_array($_POST['if_known'])
+                    ? array_map('strval', $_POST['if_known']) : [];
+                $enabled = isset($_POST['if_graph']) && is_array($_POST['if_graph'])
+                    ? array_map('strval', $_POST['if_graph']) : [];
+                $row['if_graph_json'] = FirewallHistory::encodeGraphPref(
+                    isset($prev['if_graph_json']) ? (string)$prev['if_graph_json'] : null,
+                    $known,
+                    $enabled
+                );
+            }
             if ($community !== '') {
                 $row['snmp_community'] = Crypto::encrypt($community);
             } elseif (!$prev) {
@@ -223,7 +234,7 @@ layout_header('Firewalls', $user, 'firewalls');
 <div class="flex-between mb-2">
     <div>
         <h1 class="page-title" style="margin:0">Firewalls</h1>
-        <p class="text-muted" style="margin:.35rem 0 0">Cisco ASA stats over SNMP. The first devices are ASA 5525-class units on 9.12. ColdAisle reads version, failover, CPU, memory, connections, and interface counters. It does not collect the activation key. On a multiple-context ASA, set the SNMP context to the admin context.</p>
+        <p class="text-muted" style="margin:.35rem 0 0">Cisco ASA stats over SNMP. The first devices are ASA 5525-class units on 9.12. ColdAisle reads version, failover, CPU, memory, connections, PAT xlates, VPN session and tunnel counts, and interface counters. It does not collect the activation key or VPN user sessions. On a multiple-context ASA, set the SNMP context to the admin context.</p>
     </div>
     <?php if ($canEdit): ?>
         <a class="btn btn-primary" href="?action=new">Add firewall</a>
@@ -377,6 +388,33 @@ function firewall_form(array $fw, array $rooms): void
         <div class="form-row">
             <label><input type="checkbox" name="snmp_auto_poll" value="1" <?= !empty($fw['snmp_auto_poll']) ? 'checked' : '' ?>> Include in scheduled SNMP polling</label>
         </div>
+        <?php if ($fid > 0): ?>
+            <?php
+            $ifChoices = FirewallHistory::interfaceChoices($fw);
+            $ifOff = FirewallHistory::graphDisabled(isset($fw['if_graph_json']) ? (string)$fw['if_graph_json'] : null);
+            ?>
+            <div class="form-row">
+                <input type="hidden" name="if_graph_form" value="1">
+                <span class="fw-if-toggle-label">Interface graphs</span>
+                <p class="text-muted" style="margin:.2rem 0 .55rem">Turn off control-plane, failover, and any other interface that only adds noise. The status table still lists every interface. Throughput charts, including the NOC, show only the ones left on. A new interface starts on.</p>
+                <?php if (!$ifChoices): ?>
+                    <p class="text-muted" style="margin:0">Graph switches appear after the first poll.</p>
+                <?php else: ?>
+                    <div class="fw-if-toggle-list">
+                        <?php foreach ($ifChoices as $ifName): ?>
+                            <input type="hidden" name="if_known[]" value="<?= App::e($ifName) ?>">
+                            <label class="tech-mode-switch fw-if-switch">
+                                <span class="tech-mode-switch-track">
+                                    <input type="checkbox" name="if_graph[]" value="<?= App::e($ifName) ?>" <?= !isset($ifOff[$ifName]) ? 'checked' : '' ?>>
+                                    <span class="tech-mode-switch-thumb" aria-hidden="true"></span>
+                                </span>
+                                <span class="fw-if-switch-name"><?= App::e($ifName) ?></span>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
         <div class="form-row">
             <label for="fw_notes">Notes</label>
             <textarea id="fw_notes" name="notes" rows="3"><?= App::e((string)($fw['notes'] ?? '')) ?></textarea>
@@ -398,6 +436,7 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
     $mem = is_array($snap['memory'] ?? null) ? $snap['memory'] : [];
     $fail = is_array($snap['failover'] ?? null) ? $snap['failover'] : [];
     $ifaces = is_array($snap['interfaces'] ?? null) ? $snap['interfaces'] : [];
+    $graphOff = FirewallHistory::graphDisabled(isset($fw['if_graph_json']) ? (string)$fw['if_graph_json'] : null);
     $rateByName = [];
     if (is_array($history) && !empty($history['interfaces']) && is_array($history['interfaces'])) {
         foreach ($history['interfaces'] as $hif) {
@@ -470,11 +509,32 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
             <?php else: ?>—<?php endif; ?>
         </p>
         <p><strong>Connections</strong> <?= isset($snap['connections']) ? number_format((int)$snap['connections']) : '—' ?>
+            <?php if (isset($snap['conn_peak'])): ?>
+                · table peak <?= number_format((int)$snap['conn_peak']) ?>
+            <?php endif; ?>
             <?php if (isset($snap['connections_per_sec'])): ?>
                 · <?= number_format((int)$snap['connections_per_sec']) ?> /s
                 <?php if (isset($snap['connections_per_sec_peak'])): ?>
                     (peak <?= number_format((int)$snap['connections_per_sec_peak']) ?>)
                 <?php endif; ?>
+            <?php endif; ?>
+        </p>
+        <p><strong><?= (($snap['xlate_source'] ?? '') === 'active') ? 'Translations' : 'PAT xlates' ?></strong>
+            <?= isset($snap['xlate_pat']) ? number_format((int)$snap['xlate_pat']) : '—' ?>
+            <?php if (isset($snap['xlate_nat'])): ?>
+                · <?= number_format((int)$snap['xlate_nat']) ?> address binds
+            <?php endif; ?>
+        </p>
+        <p><strong>VPN</strong>
+            <?= isset($snap['vpn_sessions']) ? number_format((int)$snap['vpn_sessions']) . ' sessions' : '—' ?>
+            <?php if (isset($snap['ipsec_tunnels'])): ?>
+                · <?= number_format((int)$snap['ipsec_tunnels']) ?> IPsec tunnels
+            <?php endif; ?>
+            <?php if (isset($snap['ike_tunnels'])): ?>
+                · <?= number_format((int)$snap['ike_tunnels']) ?> IKE
+            <?php endif; ?>
+            <?php if (isset($snap['vpn_peak'])): ?>
+                · peak <?= number_format((int)$snap['vpn_peak']) ?>
             <?php endif; ?>
         </p>
         <?php if (!empty($snap['polled_at'])): ?>
@@ -484,6 +544,15 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
             <p class="text-muted" style="white-space:pre-wrap"><?= App::e((string)$snap['sys_descr']) ?></p>
         <?php endif; ?>
     </div>
+    <?php
+    $hwAlerts = FirewallPoll::hardwareAlerts(is_array($fail['rows'] ?? null) ? $fail['rows'] : []);
+    if ($hwAlerts): ?>
+        <div class="alert alert-warning">
+            <?php foreach ($hwAlerts as $alert): ?>
+                <div><?= App::e(trim($alert['label'] . ' ' . $alert['detail'])) ?> — <?= App::e($alert['status']) ?></div>
+            <?php endforeach; ?>
+        </div>
+    <?php endif; ?>
     <div id="fwCharts" class="fw-charts"
          data-id="<?= (int)$fw['firewall_id'] ?>"
          data-api="<?= App::e(App::url('api/firewall_history.php')) ?>">
@@ -491,25 +560,28 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
     </div>
     <script type="application/json" id="fwHistoryBoot"><?= $historyJson ?></script>
     <script src="<?= App::e(App::url('assets/js/firewall-specks.js')) ?>?v=1"></script>
-    <script src="<?= App::e(App::url('assets/js/firewall-charts.js')) ?>?v=6"></script>
+    <script src="<?= App::e(App::url('assets/js/firewall-charts.js')) ?>?v=7"></script>
     <div class="card">
-        <p class="text-muted" style="margin:.75rem 1rem .25rem">In and out rates are the change since the previous poll, as a percent of interface speed. Octet counters are totals since the interface came up. Down interfaces, and links with no reported speed, stay in this table only.</p>
+        <p class="text-muted" style="margin:.75rem 1rem .25rem">In and out rates are the change since the previous poll, as a percent of interface speed. Errors and discards are the count since that same poll. Octet counters are totals since the interface came up. Down interfaces, links with no reported speed, and interfaces with graphing turned off stay in this table only.</p>
         <table class="table">
             <thead>
                 <tr>
                     <th>Interface</th><th>Status</th><th>Speed</th>
                     <th>In rate</th><th>Out rate</th>
+                    <th>Errors</th><th>Graph</th>
                     <th>In octets</th><th>Out octets</th>
                 </tr>
             </thead>
             <tbody>
             <?php if (!$ifaces): ?>
-                <tr><td colspan="7" class="text-muted">No external interfaces in the last poll. Internal-Data interfaces are hidden.</td></tr>
+                <tr><td colspan="9" class="text-muted">No external interfaces in the last poll. Internal-Data interfaces are hidden.</td></tr>
             <?php endif; ?>
             <?php foreach ($ifaces as $iface): ?>
                 <?php if (!is_array($iface)) { continue; } ?>
                 <?php
-                $rate = $rateByName[(string)($iface['name'] ?? '')] ?? null;
+                $ifLabel = substr(trim((string)($iface['name'] ?? '')), 0, 128);
+                $rate = $rateByName[$ifLabel] ?? null;
+                $graphed = !isset($graphOff[$ifLabel]);
                 $speedText = isset($iface['speed_mbps']) ? FirewallHistory::formatSpeed((int)$iface['speed_mbps']) : '';
                 if ($speedText === '' && isset($iface['speed_mbps'])) {
                     $speedText = number_format((int)$iface['speed_mbps']) . ' Mb/s';
@@ -521,6 +593,8 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
                     <td><?= App::e($speedText) ?></td>
                     <td><?= App::e(firewall_rate_label(is_array($rate) ? $rate : null, 'in')) ?></td>
                     <td><?= App::e(firewall_rate_label(is_array($rate) ? $rate : null, 'out')) ?></td>
+                    <td><?= App::e(firewall_fault_label(is_array($rate) ? $rate : null)) ?></td>
+                    <td><?= $graphed ? 'On' : 'Off' ?></td>
                     <td><?= isset($iface['in_octets']) ? number_format((int)$iface['in_octets']) : '' ?></td>
                     <td><?= isset($iface['out_octets']) ? number_format((int)$iface['out_octets']) : '' ?></td>
                 </tr>
@@ -555,6 +629,35 @@ function firewall_rate_label(?array $rate, string $which): string
         $label .= ' · ' . $text;
     }
     return $label;
+}
+
+/** @param array<string,mixed>|null $rate */
+function firewall_fault_label(?array $rate): string
+{
+    if ($rate === null) {
+        return '—';
+    }
+    $parts = [];
+    $any = false;
+    foreach ([
+        'in_err' => 'in err',
+        'out_err' => 'out err',
+        'in_discard' => 'in drop',
+        'out_discard' => 'out drop',
+    ] as $key => $label) {
+        if (!array_key_exists($key, $rate) || $rate[$key] === null || $rate[$key] === '') {
+            continue;
+        }
+        $any = true;
+        $n = (int)$rate[$key];
+        if ($n > 0) {
+            $parts[] = $label . ' ' . number_format($n);
+        }
+    }
+    if (!$any) {
+        return '—';
+    }
+    return $parts ? implode(' · ', $parts) : '0';
 }
 
 function firewall_uptime(?int $sec): string

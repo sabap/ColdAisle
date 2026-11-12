@@ -196,7 +196,7 @@ function layout_header(string $title, array $user, string $active = ''): void
     // Flashes already read; free session lock so media.php / parallel requests are not blocked
     App::releaseSessionLock();
 
-    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '72';
+    $cssV = preg_replace('/\W+/', '', (string)App::VERSION) . '73';
     $helpId = layout_help_id_for_active($active);
     $helpCatalog = layout_help_catalog();
     $wizAuto = false;

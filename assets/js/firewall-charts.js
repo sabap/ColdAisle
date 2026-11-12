@@ -165,13 +165,27 @@
     return html;
   }
 
-  function chartCard(label, nowText, series, opts) {
+  function chartCard(label, nowText, series, opts, foot) {
     return '<div class="power-chart power-chart-lg">' +
       '<div class="power-chart-head"><span class="power-chart-label">' + esc(label) + '</span>' +
       '<span class="power-chart-now">' + esc(nowText) + '</span></div>' +
       chartSvg(series, opts) +
       legend(series) +
+      (foot ? '<p class="fw-chart-foot">' + esc(foot) + '</p>' : '') +
       '</div>';
+  }
+
+  function faultText(iface) {
+    var parts = [];
+    function add(n, label) {
+      if (n == null || isNaN(n) || Number(n) <= 0) return;
+      parts.push(label + ' ' + fmtInt(n));
+    }
+    add(iface.in_err, 'in err');
+    add(iface.out_err, 'out err');
+    add(iface.in_discard, 'in drop');
+    add(iface.out_discard, 'out drop');
+    return parts.join(' · ');
   }
 
   var IN_BLUE = '#38bdf8';
@@ -202,6 +216,7 @@
       '<div class="fw-if-rates">' +
       rateBit('In', iface.in_util, iface.in_text, IN_BLUE) +
       rateBit('Out', iface.out_util, iface.out_text, OUT_ORANGE) +
+      (faultText(iface) ? '<span class="fw-if-fault">' + esc(faultText(iface)) + '</span>' : '') +
       '</div>' +
       '<div class="fw-if-spans">' +
       spanChart('30 minutes', iface.in_series_30m, iface.out_series_30m, iface.in_util, iface.out_util) +
@@ -223,18 +238,58 @@
     html += chartCard('CPU and memory',
       fmtNum(fw.cpu, 1) + '% CPU · ' + fmtNum(fw.memory, 1) + '% memory',
       cpuMem, { yMin: 0, yMax: 100 });
-    html += chartCard('Connections', fmtInt(fw.connections), [
+    var connSeries = [
       { name: 'Connections', color: '#34d399', values: fw.connection_series || [] }
-    ], {});
+    ];
+    var connNow = fmtInt(fw.connections);
+    if (fw.conn_peak != null && !isNaN(fw.conn_peak)) connNow += ' · peak ' + fmtInt(fw.conn_peak);
+    if (hasNum(fw.conn_peak_series)) {
+      connSeries.push({ name: 'Peak', color: '#86efac', values: fw.conn_peak_series });
+    }
+    html += chartCard('Connections', connNow, connSeries, {});
     if (hasNum(fw.cps_series)) {
       html += chartCard('Connections per second', fmtInt(fw.cps) + ' /s', [
         { name: 'Per second', color: '#fbbf24', values: fw.cps_series || [] }
       ], {});
     }
+    if (hasNum(fw.xlate_pat_series)) {
+      var patNow = fmtInt(fw.xlate_pat);
+      if (fw.xlate_nat != null && !isNaN(fw.xlate_nat)) patNow += ' · ' + fmtInt(fw.xlate_nat) + ' address binds';
+      var patLabel = fw.xlate_source === 'active' ? 'Address translations' : 'PAT xlates';
+      var patFoot = fw.xlate_source === 'active'
+        ? 'The port-bind counter was not returned, so this is the active translation count.'
+        : 'Port binds in the PAT table. SNMP does not report a platform maximum.';
+      html += chartCard(patLabel, patNow, [
+        { name: patLabel, color: '#f472b6', values: fw.xlate_pat_series || [] }
+      ], {}, patFoot);
+    }
+    if (hasNum(fw.vpn_sessions_series) || hasNum(fw.ipsec_series)) {
+      var vpnSeries = [];
+      if (hasNum(fw.vpn_sessions_series)) {
+        vpnSeries.push({ name: 'Remote access', color: '#22d3ee', values: fw.vpn_sessions_series || [] });
+      }
+      if (hasNum(fw.ipsec_series)) {
+        vpnSeries.push({ name: 'IPsec tunnels', color: '#c4b5fd', values: fw.ipsec_series || [] });
+      }
+      var vpnBits = [];
+      if (fw.vpn_sessions != null && !isNaN(fw.vpn_sessions)) vpnBits.push(fmtInt(fw.vpn_sessions) + ' sessions');
+      if (fw.ipsec_tunnels != null && !isNaN(fw.ipsec_tunnels)) vpnBits.push(fmtInt(fw.ipsec_tunnels) + ' IPsec');
+      if (fw.ike_tunnels != null && !isNaN(fw.ike_tunnels)) vpnBits.push(fmtInt(fw.ike_tunnels) + ' IKE');
+      if (fw.vpn_peak != null && !isNaN(fw.vpn_peak)) vpnBits.push('peak ' + fmtInt(fw.vpn_peak));
+      var vpnParts = [];
+      if (fw.vpn_svc != null && !isNaN(fw.vpn_svc)) vpnParts.push('AnyConnect ' + fmtInt(fw.vpn_svc));
+      if (fw.vpn_webvpn != null && !isNaN(fw.vpn_webvpn)) vpnParts.push('clientless ' + fmtInt(fw.vpn_webvpn));
+      if (fw.vpn_l2l != null && !isNaN(fw.vpn_l2l)) vpnParts.push('LAN-to-LAN ' + fmtInt(fw.vpn_l2l));
+      if (fw.vpn_ipsec != null && !isNaN(fw.vpn_ipsec)) vpnParts.push('remote IPsec ' + fmtInt(fw.vpn_ipsec));
+      html += chartCard('VPN', vpnBits.join(' · ') || '—', vpnSeries, {}, vpnParts.join(' · '));
+    }
     html += '</div>';
-    var ifaces = fw.interfaces || [];
+    var rawIfaces = fw.interfaces || [];
+    var ifaces = rawIfaces.filter(function (iface) { return iface.graph !== false; });
     if (!ifaces.length) {
-      html += '<p class="text-muted">No up interfaces with a reported speed in the last poll.</p>';
+      html += '<p class="text-muted">' + (rawIfaces.length
+        ? 'Interface graphs are turned off for the up links. Turn them on from the firewall properties page.'
+        : 'No up interfaces with a reported speed in the last poll.') + '</p>';
     } else {
       html += '<div class="fw-if-grid">';
       ifaces.forEach(function (iface) { html += ifCard(iface); });
