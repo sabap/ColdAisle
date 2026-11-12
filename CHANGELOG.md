@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.16] - 2026-11-12
+
+### Enhancements
+
+- **NOC / Firewalls:** Throughput uses the same line chart as Connections. Inbound is blue and outbound is orange, with a shaded gradient under each line. Each interface shows the last 30 minutes and the last 24 hours
+
+---
 ## [1.0.15] - 2026-11-12
 
 ### Enhancements
