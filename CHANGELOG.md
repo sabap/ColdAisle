@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.17] - 2026-11-12
+
+### Bug fixes
+
+- **NOC / Firewalls:** Scheduled polling reads the firewall's last poll time as UTC, so the minute job stores a sample the throughput charts can use. A missed poll no longer breaks the line
+
+---
 ## [1.0.16] - 2026-11-12
 
 ### Enhancements
