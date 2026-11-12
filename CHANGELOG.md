@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.20] - 2026-11-12
+
+### Enhancements
+
+- **NOC / Firewalls:** IPSec tunnels and AnyConnect sessions each have their own chart. On the firewall page they sit in the space beside VPN sessions, and the NOC shows the same charts
+
+---
 ## [1.0.19] - 2026-11-12
 
 ### Enhancements
