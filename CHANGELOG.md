@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.14] - 2026-11-12
+
+### Enhancements
+
+- **NOC / Firewalls:** Each throughput chart keeps inbound in the top half and outbound in the bottom half. The line on each half is heavier so a climb stays visible
+
+---
 ## [1.0.13] - 2026-11-12
 
 ### Enhancements
