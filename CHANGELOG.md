@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.19] - 2026-11-12
+
+### Enhancements
+
+- **NOC / Firewalls:** Charts PAT xlates, VPN session and IPsec tunnel counts, and the connection-table peak. Interface errors and discards show beside utilization. Power, fan, and temperature rows show when they are not normal. Each interface has a graph switch on the firewall properties page, and only enabled interfaces are charted on the firewall page and the NOC
+
+---
 ## [1.0.18] - 2026-11-12
 
 ### Enhancements
