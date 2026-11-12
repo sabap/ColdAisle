@@ -1221,11 +1221,56 @@ html, body {
 .noc-fw-list {
   display: flex;
   flex-direction: column;
-  gap: 0.28rem;
+  gap: 0.4rem;
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;
 }
+.noc-fw-chart { min-width: 0; }
+.noc-fw-chart-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem 0.65rem;
+  min-width: 0;
+}
+.noc-fw-chart-name {
+  font-weight: 650;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.noc-fw-chart-speed {
+  color: #64748b;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+.noc-fw-chart-rate {
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.noc-fw-chart-rate + .noc-fw-chart-rate { margin-left: 0.65rem; }
+.noc-fw-chart-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+  margin-top: 0.12rem;
+}
+.noc-fw-chart-col > span {
+  display: block;
+  font-size: 0.6rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  font-weight: 650;
+}
+.noc-fw-chart-plot {
+  height: 72px;
+  min-height: 72px;
+}
+.noc-fw-chart-plot svg { width: 100%; height: 100%; display: block; }
 .noc-fw-if {
   display: grid;
   grid-template-columns: minmax(7.5rem, 0.9fr) minmax(0, 1.5fr) 5.5rem;

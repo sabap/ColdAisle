@@ -18,8 +18,9 @@
 
   function fmtNum(n, d) {
     if (n == null || isNaN(n)) return '—';
-    var x = Number(n);
-    return x.toFixed(d).replace(/\.?0+$/, '');
+    var s = Number(n).toFixed(d);
+    if (s.indexOf('.') !== -1) s = s.replace(/0+$/, '').replace(/\.$/, '');
+    return s;
   }
 
   function fmtInt(n) {
@@ -79,49 +80,62 @@
       grid += '<text class="pc-axis" x="' + (padL - 6) + '" y="' + (gy + 3).toFixed(1) +
         '" text-anchor="end">' + esc(fmtNum(gv, gv >= 100 ? 0 : 1)) + '</text>';
     }
-    var paths = '';
+    var fills = '';
+    var strokes = '';
     var gidBase = 'fwg' + Math.random().toString(36).slice(2, 7);
+    var baseY = (padT + plotH).toFixed(1);
     (series || []).forEach(function (s, si) {
       var vals = s.values || [];
       var n = vals.length;
-      var line = '';
-      var first = true;
-      var firstX = 0;
-      var lastX = 0;
-      var count = 0;
+      var color = s.color || '#38bdf8';
+      var parts = [];
+      var seg = [];
+      function pushPart() {
+        if (seg.length) parts.push(seg);
+        seg = [];
+      }
       for (var i = 0; i < n; i++) {
-        if (vals[i] == null || isNaN(Number(vals[i]))) continue;
+        if (vals[i] == null || isNaN(Number(vals[i]))) {
+          if (opts.breakGaps) pushPart();
+          continue;
+        }
         var x = xAt(i, n);
         var y = yAt(vals[i]);
-        if (n === 1) {
+        if (!opts.breakGaps && n === 1) {
           var x2 = Math.min(padL + plotW, x + Math.max(24, plotW * 0.08));
-          line = 'M ' + x.toFixed(1) + ' ' + y.toFixed(1) + ' L ' + x2.toFixed(1) + ' ' + y.toFixed(1);
-          firstX = x;
-          lastX = x2;
-          count = 1;
+          parts.push([{ x: x, y: y }, { x: x2, y: y }]);
+          seg = [];
           break;
         }
-        line += (first ? 'M ' : ' L ') + x.toFixed(1) + ' ' + y.toFixed(1);
-        if (first) firstX = x;
-        lastX = x;
-        first = false;
-        count++;
+        seg.push({ x: x, y: y });
       }
-      if (!line || count < 1) return;
-      var color = s.color || '#38bdf8';
-      if (si === 0) {
-        var gid = gidBase + si;
-        var area = line + ' L ' + lastX.toFixed(1) + ' ' + (padT + plotH).toFixed(1) +
-          ' L ' + firstX.toFixed(1) + ' ' + (padT + plotH).toFixed(1) + ' Z';
-        paths += '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
-          '<stop offset="0%" stop-color="' + color + '" stop-opacity="0.35"/>' +
-          '<stop offset="100%" stop-color="' + color + '" stop-opacity="0.02"/>' +
-          '</linearGradient></defs>';
-        paths += '<path d="' + area + '" fill="url(#' + gid + ')"/>';
-      }
-      paths += '<path class="pc-line" d="' + line + '" fill="none" stroke="' + color +
-        '" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>';
+      pushPart();
+      parts.forEach(function (part, pi) {
+        if (!part.length) return;
+        var draw = part;
+        if (part.length === 1) {
+          var x3 = Math.min(padL + plotW, part[0].x + Math.max(24, plotW * 0.08));
+          draw = [part[0], { x: x3, y: part[0].y }];
+        }
+        var line = '';
+        draw.forEach(function (p, idx) {
+          line += (idx ? ' L ' : 'M ') + p.x.toFixed(1) + ' ' + p.y.toFixed(1);
+        });
+        if (opts.fillEach || si === 0) {
+          var gid = gidBase + si + 'p' + pi;
+          var area = line + ' L ' + draw[draw.length - 1].x.toFixed(1) + ' ' + baseY +
+            ' L ' + draw[0].x.toFixed(1) + ' ' + baseY + ' Z';
+          fills += '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
+            '<stop offset="0%" stop-color="' + color + '" stop-opacity="0.35"/>' +
+            '<stop offset="100%" stop-color="' + color + '" stop-opacity="0.02"/>' +
+            '</linearGradient></defs>';
+          fills += '<path d="' + area + '" fill="url(#' + gid + ')"/>';
+        }
+        strokes += '<path class="pc-line" d="' + line + '" fill="none" stroke="' + color +
+          '" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>';
+      });
     });
+    var paths = fills + strokes;
     return '<svg class="power-chart-svg" viewBox="0 0 ' + w + ' ' + h +
       '" preserveAspectRatio="none" role="img">' + grid + paths + '</svg>';
   }
@@ -145,33 +159,39 @@
       '</div>';
   }
 
-  function bar(label, util, text, kind) {
-    var hot = util != null && !isNaN(util) && Number(util) >= 70;
-    var width = util == null || isNaN(util) ? 0 : Math.max(0, Math.min(100, Number(util)));
+  var IN_BLUE = '#38bdf8';
+  var OUT_ORANGE = '#fb923c';
+
+  function rateBit(label, util, text, color) {
     var value = util == null || isNaN(util) ? '—' : fmtNum(util, 1) + '%';
     if (text) value += ' · ' + text;
-    return '<div class="fw-util-row"><span class="fw-util-k">' + esc(label) + '</span>' +
-      '<div class="fw-util-bar ' + kind + (hot ? ' hot' : '') + '"><i style="width:' + width.toFixed(1) + '%"></i></div>' +
-      '<span class="fw-util-v">' + esc(value) + '</span></div>';
+    return '<span style="color:' + color + '">' + esc(label) + ' ' + esc(value) + '</span>';
+  }
+
+  function spanChart(label, inVals, outVals) {
+    var series = [
+      { name: 'Inbound', color: IN_BLUE, values: inVals || [] },
+      { name: 'Outbound', color: OUT_ORANGE, values: outVals || [] }
+    ];
+    return '<div class="power-chart fw-if-span">' +
+      '<div class="power-chart-head"><span class="power-chart-label">' + esc(label) + '</span></div>' +
+      chartSvg(series, { yMin: 0, yMax: 100, height: 148, fillEach: true, breakGaps: true }) +
+      legend(series) +
+      '</div>';
   }
 
   function ifCard(iface) {
-    var head = '<div class="fw-if-card">' +
+    return '<div class="fw-if-card">' +
       '<div class="fw-if-head"><strong>' + esc(iface.name || 'Interface') + '</strong>' +
-      '<span>' + esc(iface.speed_text || '') + '</span></div>';
-    if (window.ColdAisleFirewallLanes) {
-      return head + ColdAisleFirewallLanes.markup(iface) + '</div>';
-    }
-    var series = [
-      { name: 'In', color: '#22d3ee', values: iface.in_series || [] },
-      { name: 'Out', color: '#fb923c', values: iface.out_series || [] }
-    ];
-    return head +
-      bar('In', iface.in_util, iface.in_text, 'in') +
-      bar('Out', iface.out_util, iface.out_text, 'out') +
-      '<div class="fw-if-spark">' + chartSvg(series, { yMin: 0, yMax: 100, height: 96 }) + '</div>' +
-      legend(series) +
-      '</div>';
+      '<span>' + esc(iface.speed_text || '') + '</span></div>' +
+      '<div class="fw-if-rates">' +
+      rateBit('In', iface.in_util, iface.in_text, IN_BLUE) +
+      rateBit('Out', iface.out_util, iface.out_text, OUT_ORANGE) +
+      '</div>' +
+      '<div class="fw-if-spans">' +
+      spanChart('30 minutes', iface.in_series_30m, iface.out_series_30m) +
+      spanChart('24 hours', iface.in_series_24h || iface.in_series, iface.out_series_24h || iface.out_series) +
+      '</div></div>';
   }
 
   function paint(fw) {

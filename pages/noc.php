@@ -36,10 +36,8 @@ $apiUrl = App::url('api/noc.php');
 if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
-$cssUrl = App::url('assets/css/noc.css') . '?v=14';
-$lanesCssUrl = App::url('assets/css/firewall-lanes.css') . '?v=7';
-$lanesJsUrl = App::url('assets/js/firewall-lanes.js') . '?v=7';
-$jsUrl = App::url('assets/js/noc.js') . '?v=22';
+$cssUrl = App::url('assets/css/noc.css') . '?v=15';
+$jsUrl = App::url('assets/js/noc.js') . '?v=23';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
 $dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=41';
 $org = '';
@@ -80,7 +78,6 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
   <meta name="theme-color" content="#05080f">
   <title><?= App::e($title) ?></title>
   <link rel="stylesheet" href="<?= App::e($cssUrl) ?>">
-  <link rel="stylesheet" href="<?= App::e($lanesCssUrl) ?>">
   <script>
     window.ColdAisle = window.ColdAisle || {};
     window.ColdAisle.baseUrl = <?= json_encode($base, JSON_UNESCAPED_SLASHES) ?>;
@@ -159,7 +156,6 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
       <span id="nocAppVer"><?= App::e(App::APP_NAME) ?> v<?= App::e(App::VERSION) ?></span>
     </footer>
   </div>
-  <script src="<?= App::e($lanesJsUrl) ?>" defer></script>
   <script src="<?= App::e($jsUrl) ?>" defer></script>
 </body>
 </html>

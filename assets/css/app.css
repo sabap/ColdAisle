@@ -4452,10 +4452,25 @@ body.site-tour-open { overflow: hidden; }
 .fw-util-bar.in > i { background: linear-gradient(90deg, #22d3ee, #38bdf8); }
 .fw-util-bar.out > i { background: linear-gradient(90deg, #fb923c, #f97316); }
 .fw-util-bar.hot > i { background: linear-gradient(90deg, #fbbf24, #f87171); }
+.fw-if-rates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem 1rem;
+  margin: 0 0 .45rem;
+  font-size: .82rem;
+  font-variant-numeric: tabular-nums;
+}
+.fw-if-spans {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .75rem;
+}
+.fw-if-span { min-height: 0; }
 .fw-if-spark { margin-top: .35rem; }
 .fw-if-spark .pc-axis { fill: var(--muted); font-size: 10px; font-family: inherit; }
 .fw-if-spark .pc-grid { stroke: rgba(148, 163, 184, .18); stroke-width: 1; }
 .fw-if-card .fw-legend { padding: .2rem 0 0; }
 @media (max-width: 800px) {
   .fw-chart-grid { grid-template-columns: 1fr; }
+  .fw-if-spans { grid-template-columns: 1fr; }
 }

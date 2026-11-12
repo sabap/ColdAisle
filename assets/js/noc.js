@@ -207,6 +207,74 @@
       '</svg>';
   }
 
+  function utilPairSvg(inVals, outVals) {
+    var series = [
+      { color: '#38bdf8', values: inVals || [] },
+      { color: '#fb923c', values: outVals || [] }
+    ];
+    var w = 640, h = 120, padX = 8, padY = 8;
+    var min = 0, max = 100, has = false;
+    series.forEach(function (s) {
+      (s.values || []).forEach(function (v) {
+        if (v == null || isNaN(Number(v))) return;
+        has = true;
+        if (Number(v) > max) max = Number(v);
+      });
+    });
+    if (!has) return '<div class="noc-empty">Waiting for samples</div>';
+    var span = max - min || 1;
+    function xAt(i, n) {
+      if (n <= 1) return w / 2;
+      return padX + (i / (n - 1)) * (w - padX * 2);
+    }
+    function yAt(v) {
+      return padY + (1 - (Number(v) - min) / span) * (h - padY * 2);
+    }
+    var fills = '';
+    var lines = '';
+    var seq = 0;
+    var gidBase = 'ug' + Math.random().toString(36).slice(2, 7);
+    var base = (h - padY).toFixed(1);
+    series.forEach(function (s) {
+      var vals = s.values || [];
+      var n = vals.length;
+      var seg = [];
+      function flush() {
+        if (!seg.length) { seg = []; return; }
+        var draw = seg;
+        if (seg.length === 1) {
+          var x2 = Math.min(w - padX, seg[0].x + 28);
+          draw = [seg[0], { x: x2, y: seg[0].y }];
+        }
+        var line = '';
+        draw.forEach(function (p, i) {
+          line += (i ? ' L ' : 'M ') + p.x.toFixed(1) + ' ' + p.y.toFixed(1);
+        });
+        var gid = gidBase + (seq++);
+        var area = line + ' L ' + draw[draw.length - 1].x.toFixed(1) + ' ' + base +
+          ' L ' + draw[0].x.toFixed(1) + ' ' + base + ' Z';
+        fills += '<defs><linearGradient id="' + gid + '" x1="0" y1="0" x2="0" y2="1">' +
+          '<stop offset="0%" stop-color="' + s.color + '" stop-opacity="0.38"/>' +
+          '<stop offset="100%" stop-color="' + s.color + '" stop-opacity="0.02"/>' +
+          '</linearGradient></defs>';
+        fills += '<path d="' + area + '" fill="url(#' + gid + ')"/>';
+        lines += '<path d="' + line + '" fill="none" stroke="' + s.color +
+          '" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>';
+        seg = [];
+      }
+      for (var i = 0; i < n; i++) {
+        if (vals[i] == null || isNaN(Number(vals[i]))) {
+          flush();
+          continue;
+        }
+        seg.push({ x: xAt(i, n), y: yAt(vals[i]) });
+      }
+      flush();
+    });
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" role="img" aria-label="Inbound and outbound utilization">' +
+      fills + lines + '</svg>';
+  }
+
   function badge(st) {
     var s = (st || 'unknown').toLowerCase();
     if (s !== 'ok' && s !== 'warn' && s !== 'crit') s = 'unknown';
@@ -1107,16 +1175,19 @@
     } else {
       html += '<div class="noc-fw-list">';
       ifaces.forEach(function (iface) {
-        if (window.ColdAisleFirewallLanes) {
-          html += ColdAisleFirewallLanes.markup(iface, { compact: true });
-          return;
-        }
-        html += '<div class="noc-fw-if">' +
-          '<div class="noc-fw-if-name">' + esc(iface.name || 'Interface') +
-          '<div class="noc-fw-if-speed">' + esc(iface.speed_text || '') + '</div></div>' +
-          '<div class="noc-fw-bars"><div class="noc-fw-barline"><span>' +
-          esc(utilLabel(iface.in_util, iface.in_text)) + ' in · ' +
-          esc(utilLabel(iface.out_util, iface.out_text)) + ' out</span></div></div></div>';
+        html += '<div class="noc-fw-chart">' +
+          '<div class="noc-fw-chart-top"><span class="noc-fw-chart-name">' + esc(iface.name || 'Interface') +
+          '</span><span class="noc-fw-chart-speed">' + esc(iface.speed_text || '') + '</span>' +
+          '<span class="noc-fw-chart-rate" style="color:#38bdf8">' +
+          esc(utilLabel(iface.in_util, iface.in_text)) + ' in</span>' +
+          '<span class="noc-fw-chart-rate" style="color:#fb923c">' +
+          esc(utilLabel(iface.out_util, iface.out_text)) + ' out</span></div>' +
+          '<div class="noc-fw-chart-pair">' +
+          '<div class="noc-fw-chart-col"><span>30 min</span><div class="noc-fw-chart-plot">' +
+          utilPairSvg(iface.in_series_30m, iface.out_series_30m) + '</div></div>' +
+          '<div class="noc-fw-chart-col"><span>24 hours</span><div class="noc-fw-chart-plot">' +
+          utilPairSvg(iface.in_series_24h || iface.in_series, iface.out_series_24h || iface.out_series) +
+          '</div></div></div></div>';
       });
       html += '</div>';
       html += moreNote(ifaces.length, (fw.interfaces || []).length, 'interfaces');
