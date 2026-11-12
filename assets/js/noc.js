@@ -263,10 +263,7 @@
         seg = [];
       }
       for (var i = 0; i < n; i++) {
-        if (vals[i] == null || isNaN(Number(vals[i]))) {
-          flush();
-          continue;
-        }
+        if (vals[i] == null || isNaN(Number(vals[i]))) continue;
         seg.push({ x: xAt(i, n), y: yAt(vals[i]) });
       }
       flush();

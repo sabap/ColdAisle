@@ -236,6 +236,7 @@ class FirewallPoll
         }
         $failover = is_array($snapshot['failover'] ?? null) ? $snapshot['failover'] : [];
         $patch = [
+            // UTC digits. The scheduler must use isDueUtc(), not isDue().
             'snmp_last_poll_at' => gmdate('Y-m-d H:i:s'),
             'last_poll_json' => json_encode($snapshot, JSON_UNESCAPED_SLASHES),
             'last_error' => null,
@@ -280,7 +281,10 @@ class FirewallPoll
                 Schema::ensureFirewalls();
                 self::insertSampleRows($fw, $snapshot, $polledAt);
             } catch (Throwable $e2) {
-                // The live snapshot is already saved. Charts wait until the tables exist.
+                // The live snapshot is already saved. Charts wait until a later poll can insert.
+                if (class_exists('App')) {
+                    App::log('Firewall sample was not stored: ' . $e2->getMessage(), 'warning');
+                }
             }
         }
     }

@@ -175,7 +175,7 @@
     ];
     return '<div class="power-chart fw-if-span">' +
       '<div class="power-chart-head"><span class="power-chart-label">' + esc(label) + '</span></div>' +
-      chartSvg(series, { yMin: 0, yMax: 100, height: 148, fillEach: true, breakGaps: true }) +
+      chartSvg(series, { yMin: 0, yMax: 100, height: 148, fillEach: true }) +
       legend(series) +
       '</div>';
   }

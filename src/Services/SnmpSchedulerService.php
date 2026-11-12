@@ -171,12 +171,10 @@ class SnmpSchedulerService
         SettingsService::set(self::SETTING_LAST_RESULT, substr($summary, 0, 500), 'snmp');
     }
 
-    /** Whether a target is due based on last success timestamp. */
+    /** Whether a target is due based on last success timestamp (site local time). */
     public static function isDue(?string $lastPollAt, ?int $intervalSec = null): bool
     {
-        $interval = $intervalSec !== null
-            ? max(self::MIN_INTERVAL_SEC, min(self::MAX_INTERVAL_SEC, $intervalSec))
-            : self::intervalSec();
+        $interval = self::clampInterval($intervalSec);
         if ($lastPollAt === null || trim($lastPollAt) === '') {
             return true;
         }
@@ -185,6 +183,56 @@ class SnmpSchedulerService
             return true;
         }
         return (time() - $ts) >= $interval;
+    }
+
+    /**
+     * Same as isDue, but the stored clock digits are UTC.
+     * Firewall polls are written with gmdate. Reading them as site local time
+     * makes the target look hours ahead and the minute job skips it.
+     *
+     * @param mixed $lastPollAt
+     */
+    public static function isDueUtc($lastPollAt, ?int $intervalSec = null): bool
+    {
+        $interval = self::clampInterval($intervalSec);
+        $ts = self::utcTimestamp($lastPollAt);
+        if ($ts === null) {
+            return true;
+        }
+        return (time() - $ts) >= $interval;
+    }
+
+    /** @param int|null $intervalSec */
+    private static function clampInterval(?int $intervalSec): int
+    {
+        return $intervalSec !== null
+            ? max(self::MIN_INTERVAL_SEC, min(self::MAX_INTERVAL_SEC, $intervalSec))
+            : self::intervalSec();
+    }
+
+    /**
+     * Clock digits written by gmdate, or a DATETIME2 value holding those digits.
+     *
+     * @param mixed $raw
+     */
+    private static function utcTimestamp($raw): ?int
+    {
+        if ($raw instanceof DateTimeInterface) {
+            $raw = $raw->format('Y-m-d H:i:s');
+        }
+        if (!is_string($raw)) {
+            return null;
+        }
+        $raw = trim($raw);
+        if ($raw === '' || !preg_match('/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/', $raw, $m)) {
+            return null;
+        }
+        $dt = DateTimeImmutable::createFromFormat(
+            '!Y-m-d H:i:s',
+            $m[1] . ' ' . $m[2],
+            new DateTimeZone('UTC')
+        );
+        return $dt ? $dt->getTimestamp() : null;
     }
 
     public static function scriptPath(): string

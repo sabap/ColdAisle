@@ -172,11 +172,13 @@ class SnmpPoller
                 $last = $fw['snmp_last_poll_at'] ?? null;
                 // One-minute samples. The fleet interval is often five minutes, which is too coarse
                 // for interface utilization. The scheduler task already ticks every minute.
+                // snmp_last_poll_at is gmdate (UTC digits). isDue() reads site local time and
+                // would skip this firewall for the whole UTC offset.
                 $fwInterval = class_exists('SnmpSchedulerService')
                     ? SnmpSchedulerService::MIN_INTERVAL_SEC
                     : 60;
                 if (class_exists('SnmpSchedulerService')
-                    && !SnmpSchedulerService::isDue(is_string($last) ? $last : null, $fwInterval)
+                    && !SnmpSchedulerService::isDueUtc($last, $fwInterval)
                 ) {
                     $skipped++;
                     continue;

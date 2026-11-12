@@ -490,7 +490,7 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
         <p class="text-muted">Loading charts…</p>
     </div>
     <script type="application/json" id="fwHistoryBoot"><?= $historyJson ?></script>
-    <script src="<?= App::e(App::url('assets/js/firewall-charts.js')) ?>?v=4"></script>
+    <script src="<?= App::e(App::url('assets/js/firewall-charts.js')) ?>?v=5"></script>
     <div class="card">
         <p class="text-muted" style="margin:.75rem 1rem .25rem">In and out rates are the change since the previous poll, as a percent of interface speed. Octet counters are totals since the interface came up. Down interfaces, and links with no reported speed, stay in this table only.</p>
         <table class="table">
