@@ -230,40 +230,22 @@
 
   function vpnRow(fw) {
     var cards = [];
-    if (hasNum(fw.vpn_sessions_series)) {
-      var vpnBits = [];
-      if (hasCount(fw.vpn_sessions)) vpnBits.push(fmtInt(fw.vpn_sessions) + ' sessions');
-      if (hasCount(fw.vpn_peak)) vpnBits.push('peak ' + fmtInt(fw.vpn_peak));
-      var vpnParts = [];
-      if (hasCount(fw.vpn_webvpn)) vpnParts.push('clientless ' + fmtInt(fw.vpn_webvpn));
-      if (hasCount(fw.vpn_l2l)) vpnParts.push('LAN-to-LAN ' + fmtInt(fw.vpn_l2l));
-      if (hasCount(fw.vpn_ipsec)) vpnParts.push('remote IPsec ' + fmtInt(fw.vpn_ipsec));
-      cards.push(chartCard('VPN sessions', vpnBits.join(' · ') || '—', [
-        { name: 'Remote access', color: '#22d3ee', values: fw.vpn_sessions_series || [] }
-      ], {}, vpnParts.join(' · ')));
+    if (hasNum(fw.anyconnect_series)) {
+      cards.push(chartCard('AnyConnect', hasCount(fw.vpn_svc) ? fmtInt(fw.vpn_svc) : '—', [
+        { name: 'AnyConnect', color: '#4ade80', values: fw.anyconnect_series || [] }
+      ], {}));
     }
-    var side = [];
     if (hasNum(fw.ipsec_series)) {
       var ipsecBits = [];
       if (hasCount(fw.ipsec_tunnels)) ipsecBits.push(fmtInt(fw.ipsec_tunnels) + ' tunnels');
       if (hasCount(fw.ike_tunnels)) ipsecBits.push(fmtInt(fw.ike_tunnels) + ' IKE');
-      side.push(chartCard('IPSec tunnels', ipsecBits.join(' · ') || '—', [
+      cards.push(chartCard('IPSec tunnels', ipsecBits.join(' · ') || '—', [
         { name: 'IPSec', color: '#c4b5fd', values: fw.ipsec_series || [] }
       ], {}));
     }
-    if (hasNum(fw.anyconnect_series)) {
-      side.push(chartCard('AnyConnect', hasCount(fw.vpn_svc) ? fmtInt(fw.vpn_svc) : '—', [
-        { name: 'AnyConnect', color: '#4ade80', values: fw.anyconnect_series || [] }
-      ], {}));
-    }
-    if (!cards.length && !side.length) return '';
-    if (cards.length && side.length > 1) {
-      return '<div class="fw-vpn-row">' + cards[0] +
-        '<div class="fw-vpn-side">' + side.join('') + '</div></div>';
-    }
-    var all = cards.concat(side);
-    var cls = 'fw-vpn-row' + (all.length === 1 ? ' fw-vpn-row-one' : '');
-    return '<div class="' + cls + '">' + all.join('') + '</div>';
+    if (!cards.length) return '';
+    var cls = 'fw-vpn-row' + (cards.length === 1 ? ' fw-vpn-row-one' : '');
+    return '<div class="' + cls + '">' + cards.join('') + '</div>';
   }
 
   function paint(fw) {

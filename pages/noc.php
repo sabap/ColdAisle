@@ -37,7 +37,7 @@ if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
 $cssUrl = App::url('assets/css/noc.css') . '?v=17';
-$jsUrl = App::url('assets/js/noc.js') . '?v=27';
+$jsUrl = App::url('assets/js/noc.js') . '?v=28';
 $speckUrl = App::url('assets/js/firewall-specks.js') . '?v=1';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
 $dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=41';

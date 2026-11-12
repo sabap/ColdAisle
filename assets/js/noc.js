@@ -1207,24 +1207,27 @@
         sparklineSvg(series || [], color, label + ' history starts after the next polls', label) +
         '</div>';
     }
-    var gaugeCols = '';
+    var patCol = '';
     if (seriesHasNum(fw.xlate_pat_series)) {
       var patName = fw.xlate_source === 'active' ? 'Translations' : 'PAT xlates';
-      gaugeCols += gaugeCard(patName, fmtInt(fw.xlate_pat), fw.xlate_pat_series, '#f472b6');
+      patCol = gaugeCard(patName, fmtInt(fw.xlate_pat), fw.xlate_pat_series, '#f472b6');
     }
-    if (seriesHasNum(fw.vpn_sessions_series)) {
-      var vpnNow = (fw.vpn_sessions != null && !isNaN(fw.vpn_sessions)) ? fmtInt(fw.vpn_sessions) : '—';
-      if (fw.vpn_peak != null && !isNaN(fw.vpn_peak)) vpnNow += ' · peak ' + fmtInt(fw.vpn_peak);
-      gaugeCols += gaugeCard('VPN sessions', vpnNow, fw.vpn_sessions_series, '#22d3ee');
+    var acCol = '';
+    if (seriesHasNum(fw.anyconnect_series)) {
+      var acNow = (fw.vpn_svc != null && !isNaN(fw.vpn_svc)) ? fmtInt(fw.vpn_svc) : '—';
+      acCol = gaugeCard('AnyConnect', acNow, fw.anyconnect_series, '#4ade80');
     }
+    var ipsecCol = '';
     if (seriesHasNum(fw.ipsec_series)) {
       var ipsecNow = (fw.ipsec_tunnels != null && !isNaN(fw.ipsec_tunnels)) ? fmtInt(fw.ipsec_tunnels) : '—';
       if (fw.ike_tunnels != null && !isNaN(fw.ike_tunnels)) ipsecNow += ' · ' + fmtInt(fw.ike_tunnels) + ' IKE';
-      gaugeCols += gaugeCard('IPSec tunnels', ipsecNow, fw.ipsec_series, '#c4b5fd');
+      ipsecCol = gaugeCard('IPSec tunnels', ipsecNow, fw.ipsec_series, '#c4b5fd');
     }
-    if (seriesHasNum(fw.anyconnect_series)) {
-      var acNow = (fw.vpn_svc != null && !isNaN(fw.vpn_svc)) ? fmtInt(fw.vpn_svc) : '—';
-      gaugeCols += gaugeCard('AnyConnect', acNow, fw.anyconnect_series, '#4ade80');
+    var gaugeCols = '';
+    if (acCol && ipsecCol) {
+      gaugeCols = acCol + ipsecCol + patCol;
+    } else {
+      gaugeCols = patCol + acCol + ipsecCol;
     }
     if (gaugeCols) html += '<div class="noc-fw-gauges">' + gaugeCols + '</div>';
 

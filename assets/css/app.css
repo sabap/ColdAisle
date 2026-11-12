@@ -4407,23 +4407,6 @@ body.site-tour-open { overflow: hidden; }
   gap: 1rem;
 }
 .fw-vpn-row-one { grid-template-columns: 1fr; }
-.fw-vpn-side {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  min-width: 0;
-}
-.fw-vpn-side > .power-chart {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.fw-vpn-side .power-chart-svg {
-  flex: 1 1 auto;
-  width: 100%;
-  height: 0;
-  min-height: 140px;
-}
 .fw-legend {
   display: flex;
   flex-wrap: wrap;
@@ -4548,7 +4531,6 @@ body.site-tour-open { overflow: hidden; }
 .fw-if-switch { margin: .2rem 0; }
 .fw-if-switch-name { font-size: .92rem; }
 @media (max-width: 800px) {
-  .fw-chart-grid, .fw-vpn-row, .fw-vpn-side { grid-template-columns: 1fr; }
+  .fw-chart-grid, .fw-vpn-row { grid-template-columns: 1fr; }
   .fw-if-spans { grid-template-columns: 1fr; }
-  .fw-vpn-side .power-chart-svg { height: auto; flex: none; min-height: 0; }
 }
