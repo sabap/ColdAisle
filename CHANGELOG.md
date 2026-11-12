@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.15] - 2026-11-12
+
+### Enhancements
+
+- **NOC / Firewalls:** Each throughput chart draws a solid line. Flow specks fill the area under that line, inbound in the top half and outbound in the bottom half
+
+---
 ## [1.0.14] - 2026-11-12
 
 ### Enhancements
