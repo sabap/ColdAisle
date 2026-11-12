@@ -129,23 +129,53 @@
     return fmtNum(scale.max, scale.max >= 100 ? 0 : 1);
   }
 
-  function linePath(vals, scale, band) {
+  // A filled ribbon, not an SVG stroke. A stretched viewBox turns a stroke into a hairline.
+  function ribbonPath(vals, scale, band, half) {
     var n = (vals || []).length;
+    if (!n) return '';
+    var lo = band === BAND.out ? 52 : 2;
+    var hi = band === BAND.out ? 98 : 48;
+    function clampY(y) {
+      if (y < lo) return lo;
+      if (y > hi) return hi;
+      return y;
+    }
+    function poly(seg) {
+      if (!seg.length) return '';
+      var up = [];
+      var dn = [];
+      for (var i = 0; i < seg.length; i++) {
+        up.push(seg[i].x.toFixed(2) + ' ' + clampY(seg[i].y - half).toFixed(2));
+        dn.push(seg[i].x.toFixed(2) + ' ' + clampY(seg[i].y + half).toFixed(2));
+      }
+      return 'M ' + up[0] + ' L ' + up.slice(1).join(' L ') +
+        ' L ' + dn.reverse().join(' L ') + ' Z ';
+    }
+    function build(points) {
+      return poly(points);
+    }
+    if (n === 1 && vals[0] != null && !isNaN(Number(vals[0]))) {
+      var y0 = yOf(vals[0], scale, band);
+      return build([{ x: 4, y: y0 }, { x: 96, y: y0 }]);
+    }
     var d = '';
-    var pen = false;
+    var seg = [];
+    function flush() {
+      if (seg.length === 1) {
+        d += build([{ x: Math.max(0, seg[0].x - 1.2), y: seg[0].y }, { x: Math.min(100, seg[0].x + 1.2), y: seg[0].y }]);
+      } else if (seg.length) {
+        d += build(seg);
+      }
+      seg = [];
+    }
     for (var i = 0; i < n; i++) {
       if (vals[i] == null || isNaN(Number(vals[i]))) {
-        pen = false;
+        flush();
         continue;
       }
-      var x = xOf(i, n);
-      var y = yOf(vals[i], scale, band);
-      if (n === 1) {
-        return 'M 4 ' + y.toFixed(2) + ' L 96 ' + y.toFixed(2);
-      }
-      d += (pen ? ' L ' : 'M ') + x.toFixed(2) + ' ' + y.toFixed(2) + ' ';
-      pen = true;
+      seg.push({ x: xOf(i, n), y: yOf(vals[i], scale, band) });
     }
+    flush();
     return d.trim();
   }
 
@@ -233,10 +263,12 @@
       '<line class="fw-flow-grid" x1="0" y1="' + band.base.toFixed(2) + '" x2="100" y2="' + band.base.toFixed(2) + '"/>';
   }
 
-  function strokePair(d, color) {
-    if (!d) return '';
-    return '<path class="fw-flow-halo" d="' + d + '"/>' +
-      '<path class="fw-flow-line" d="' + d + '" stroke="' + color + '"/>';
+  function strokePair(vals, scale, band, color) {
+    var body = ribbonPath(vals, scale, band, 5.2);
+    var core = ribbonPath(vals, scale, band, 2.1);
+    if (!body) return '';
+    return '<path class="fw-flow-stroke" d="' + body + '" fill="' + color + '"/>' +
+      '<path class="fw-flow-core" d="' + core + '" fill="#f8fafc"/>';
   }
 
   function chartHtml(label, inVals, outVals, iface, compact) {
@@ -245,8 +277,6 @@
     var gid = 'fwf' + (++flowSeq);
     var inArea = areaPath(inVals, inScale, BAND.in);
     var outArea = areaPath(outVals, outScale, BAND.out);
-    var inLine = linePath(inVals, inScale, BAND.in);
-    var outLine = linePath(outVals, outScale, BAND.out);
     var inStroke = moteColor(iface.in_util, 'in');
     var outStroke = moteColor(iface.out_util, 'out');
     var ready = hasPoint(inVals) || hasPoint(outVals);
@@ -256,20 +286,20 @@
         esc(label + ' inbound above, outbound below') + '">' +
         '<defs>' +
         '<linearGradient id="' + gid + 'in" x1="0" y1="0" x2="0" y2="1">' +
-        '<stop offset="0%" stop-color="' + inStroke + '" stop-opacity="0.34"/>' +
-        '<stop offset="100%" stop-color="' + inStroke + '" stop-opacity="0.05"/>' +
+        '<stop offset="0%" stop-color="' + inStroke + '" stop-opacity="0.14"/>' +
+        '<stop offset="100%" stop-color="' + inStroke + '" stop-opacity="0.03"/>' +
         '</linearGradient>' +
         '<linearGradient id="' + gid + 'out" x1="0" y1="0" x2="0" y2="1">' +
-        '<stop offset="0%" stop-color="' + outStroke + '" stop-opacity="0.34"/>' +
-        '<stop offset="100%" stop-color="' + outStroke + '" stop-opacity="0.05"/>' +
+        '<stop offset="0%" stop-color="' + outStroke + '" stop-opacity="0.14"/>' +
+        '<stop offset="100%" stop-color="' + outStroke + '" stop-opacity="0.03"/>' +
         '</linearGradient></defs>' +
         bandGuides(BAND.in) +
         bandGuides(BAND.out) +
         '<line class="fw-flow-split" x1="0" y1="50" x2="100" y2="50"/>' +
         (inArea ? '<path d="' + inArea + '" fill="url(#' + gid + 'in)"/>' : '') +
         (outArea ? '<path d="' + outArea + '" fill="url(#' + gid + 'out)"/>' : '') +
-        strokePair(inLine, inStroke) +
-        strokePair(outLine, outStroke) +
+        strokePair(inVals, inScale, BAND.in, inStroke) +
+        strokePair(outVals, outScale, BAND.out, outStroke) +
         '</svg>';
     }
     var inClip = clipPolygon(inVals, inScale, BAND.in);

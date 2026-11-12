@@ -271,20 +271,9 @@
   stroke-width: 1.5px;
   vector-effect: non-scaling-stroke;
 }
-.fw-flow-halo {
-  fill: none;
-  stroke: #020617;
-  stroke-width: 6.5px;
-  vector-effect: non-scaling-stroke;
-  stroke-linejoin: round;
-  stroke-linecap: round;
-}
-.fw-flow-line {
-  fill: none;
-  stroke-width: 3px;
-  vector-effect: non-scaling-stroke;
-  stroke-linejoin: round;
-  stroke-linecap: round;
+.fw-flow-stroke,
+.fw-flow-core {
+  stroke: none;
 }
 .fw-flow-layer {
   position: absolute;
@@ -323,9 +312,8 @@
   inset: 0;
   z-index: 3;
   pointer-events: none;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 22%);
-  mix-blend-mode: screen;
-  opacity: 0.28;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 18%);
+  opacity: 0.35;
 }
 .fw-flow-empty {
   position: absolute;
