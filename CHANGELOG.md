@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.21] - 2026-11-12
+
+### Enhancements
+
+- **NOC / Firewalls:** The VPN sessions chart is gone. AnyConnect is on the left and IPSec tunnels are on the right, on the firewall page and the NOC
+
+---
 ## [1.0.20] - 2026-11-12
 
 ### Enhancements
