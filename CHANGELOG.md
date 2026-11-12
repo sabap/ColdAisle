@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.18] - 2026-11-12
+
+### Enhancements
+
+- **NOC / Firewalls:** Faint specks drift in the shaded area under each throughput line. Inbound moves one way and outbound the other. Density follows the latest poll
+
+---
 ## [1.0.17] - 2026-11-12
 
 ### Bug fixes
