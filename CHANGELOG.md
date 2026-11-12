@@ -19,6 +19,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.13] - 2026-11-12
+
+### Enhancements
+
+- **NOC / Firewalls:** Throughput is two overlaid lines, inbound and outbound, with the shaded area under each line carrying flow specks. Density follows the latest poll. Each interface shows the last 30 minutes and the last 24 hours
+
+### Bug fixes
+
+- **SNMP / Firewalls:** Firewalls show on the SNMP Polling schedule and join the minute poll. A firewall already saved with SNMP and an address is added to that schedule once
+
+---
 ## [1.0.12] - 2026-11-11
 
 ### Enhancements
