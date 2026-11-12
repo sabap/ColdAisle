@@ -1201,29 +1201,30 @@
       }).join(' · ') + '</div>';
     }
 
+    function gaugeCard(label, valueText, series, color) {
+      return '<div class="noc-fw-gauge"><div class="noc-fw-gauge-label">' + esc(label) +
+        ' <strong>' + esc(valueText) + '</strong></div>' +
+        sparklineSvg(series || [], color, label + ' history starts after the next polls', label) +
+        '</div>';
+    }
     var gaugeCols = '';
     if (seriesHasNum(fw.xlate_pat_series)) {
       var patName = fw.xlate_source === 'active' ? 'Translations' : 'PAT xlates';
-      gaugeCols += '<div class="noc-fw-gauge"><div class="noc-fw-gauge-label">' + esc(patName) +
-        ' <strong>' + esc(fmtInt(fw.xlate_pat)) + '</strong></div>' +
-        sparklineSvg(fw.xlate_pat_series || [], '#f472b6', 'PAT history starts after the next polls', patName) +
-        '</div>';
+      gaugeCols += gaugeCard(patName, fmtInt(fw.xlate_pat), fw.xlate_pat_series, '#f472b6');
     }
-    if (seriesHasNum(fw.vpn_sessions_series) || seriesHasNum(fw.ipsec_series)) {
-      var vpnNow = [];
-      if (fw.vpn_sessions != null && !isNaN(fw.vpn_sessions)) vpnNow.push(fmtInt(fw.vpn_sessions) + ' sessions');
-      if (fw.ipsec_tunnels != null && !isNaN(fw.ipsec_tunnels)) vpnNow.push(fmtInt(fw.ipsec_tunnels) + ' IPsec');
-      var vpnSeries = [];
-      if (seriesHasNum(fw.vpn_sessions_series)) {
-        vpnSeries.push({ name: 'Remote access', color: '#22d3ee', values: fw.vpn_sessions_series || [] });
-      }
-      if (seriesHasNum(fw.ipsec_series)) {
-        vpnSeries.push({ name: 'IPsec', color: '#c4b5fd', values: fw.ipsec_series || [] });
-      }
-      gaugeCols += '<div class="noc-fw-gauge"><div class="noc-fw-gauge-label">VPN <strong>' +
-        esc(vpnNow.join(' · ') || '—') + '</strong></div>' +
-        sparklineMulti(vpnSeries, 'VPN history starts after the next polls', 'VPN', false) +
-        '</div>';
+    if (seriesHasNum(fw.vpn_sessions_series)) {
+      var vpnNow = (fw.vpn_sessions != null && !isNaN(fw.vpn_sessions)) ? fmtInt(fw.vpn_sessions) : '—';
+      if (fw.vpn_peak != null && !isNaN(fw.vpn_peak)) vpnNow += ' · peak ' + fmtInt(fw.vpn_peak);
+      gaugeCols += gaugeCard('VPN sessions', vpnNow, fw.vpn_sessions_series, '#22d3ee');
+    }
+    if (seriesHasNum(fw.ipsec_series)) {
+      var ipsecNow = (fw.ipsec_tunnels != null && !isNaN(fw.ipsec_tunnels)) ? fmtInt(fw.ipsec_tunnels) : '—';
+      if (fw.ike_tunnels != null && !isNaN(fw.ike_tunnels)) ipsecNow += ' · ' + fmtInt(fw.ike_tunnels) + ' IKE';
+      gaugeCols += gaugeCard('IPSec tunnels', ipsecNow, fw.ipsec_series, '#c4b5fd');
+    }
+    if (seriesHasNum(fw.anyconnect_series)) {
+      var acNow = (fw.vpn_svc != null && !isNaN(fw.vpn_svc)) ? fmtInt(fw.vpn_svc) : '—';
+      gaugeCols += gaugeCard('AnyConnect', acNow, fw.anyconnect_series, '#4ade80');
     }
     if (gaugeCols) html += '<div class="noc-fw-gauges">' + gaugeCols + '</div>';
 

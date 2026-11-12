@@ -295,6 +295,7 @@ class FirewallHistory
         $xlateSeries = [];
         $vpnSeries = [];
         $ipsecSeries = [];
+        $anyConnectSeries = [];
         foreach ($samples as $sample) {
             $cpu[] = self::numOrNull($sample['cpu_pct'] ?? null);
             $memory[] = self::numOrNull($sample['memory_pct'] ?? null);
@@ -304,6 +305,7 @@ class FirewallHistory
             $xlateSeries[] = self::intOrNull($sample['xlate_pat'] ?? null);
             $vpnSeries[] = self::intOrNull($sample['vpn_sessions'] ?? null);
             $ipsecSeries[] = self::intOrNull($sample['ipsec_tunnels'] ?? null);
+            $anyConnectSeries[] = self::intOrNull($sample['vpn_svc'] ?? null);
         }
         $snap = self::decode($fw['last_poll_json'] ?? null);
         $latest = $samples ? $samples[count($samples) - 1] : null;
@@ -479,6 +481,7 @@ class FirewallHistory
             'xlate_pat_series' => self::thinList($xlateSeries),
             'vpn_sessions_series' => self::thinList($vpnSeries),
             'ipsec_series' => self::thinList($ipsecSeries),
+            'anyconnect_series' => self::thinList($anyConnectSeries),
             'interfaces' => $interfaces,
             'note' => $note,
         ];

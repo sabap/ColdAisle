@@ -224,6 +224,48 @@
       '</div></div>';
   }
 
+  function hasCount(n) {
+    return n != null && !isNaN(n);
+  }
+
+  function vpnRow(fw) {
+    var cards = [];
+    if (hasNum(fw.vpn_sessions_series)) {
+      var vpnBits = [];
+      if (hasCount(fw.vpn_sessions)) vpnBits.push(fmtInt(fw.vpn_sessions) + ' sessions');
+      if (hasCount(fw.vpn_peak)) vpnBits.push('peak ' + fmtInt(fw.vpn_peak));
+      var vpnParts = [];
+      if (hasCount(fw.vpn_webvpn)) vpnParts.push('clientless ' + fmtInt(fw.vpn_webvpn));
+      if (hasCount(fw.vpn_l2l)) vpnParts.push('LAN-to-LAN ' + fmtInt(fw.vpn_l2l));
+      if (hasCount(fw.vpn_ipsec)) vpnParts.push('remote IPsec ' + fmtInt(fw.vpn_ipsec));
+      cards.push(chartCard('VPN sessions', vpnBits.join(' · ') || '—', [
+        { name: 'Remote access', color: '#22d3ee', values: fw.vpn_sessions_series || [] }
+      ], {}, vpnParts.join(' · ')));
+    }
+    var side = [];
+    if (hasNum(fw.ipsec_series)) {
+      var ipsecBits = [];
+      if (hasCount(fw.ipsec_tunnels)) ipsecBits.push(fmtInt(fw.ipsec_tunnels) + ' tunnels');
+      if (hasCount(fw.ike_tunnels)) ipsecBits.push(fmtInt(fw.ike_tunnels) + ' IKE');
+      side.push(chartCard('IPSec tunnels', ipsecBits.join(' · ') || '—', [
+        { name: 'IPSec', color: '#c4b5fd', values: fw.ipsec_series || [] }
+      ], {}));
+    }
+    if (hasNum(fw.anyconnect_series)) {
+      side.push(chartCard('AnyConnect', hasCount(fw.vpn_svc) ? fmtInt(fw.vpn_svc) : '—', [
+        { name: 'AnyConnect', color: '#4ade80', values: fw.anyconnect_series || [] }
+      ], {}));
+    }
+    if (!cards.length && !side.length) return '';
+    if (cards.length && side.length > 1) {
+      return '<div class="fw-vpn-row">' + cards[0] +
+        '<div class="fw-vpn-side">' + side.join('') + '</div></div>';
+    }
+    var all = cards.concat(side);
+    var cls = 'fw-vpn-row' + (all.length === 1 ? ' fw-vpn-row-one' : '');
+    return '<div class="' + cls + '">' + all.join('') + '</div>';
+  }
+
   function paint(fw) {
     if (!fw) {
       root.innerHTML = '<p class="text-muted">Charts appear after the firewall is polled.</p>';
@@ -263,27 +305,8 @@
         { name: patLabel, color: '#f472b6', values: fw.xlate_pat_series || [] }
       ], {}, patFoot);
     }
-    if (hasNum(fw.vpn_sessions_series) || hasNum(fw.ipsec_series)) {
-      var vpnSeries = [];
-      if (hasNum(fw.vpn_sessions_series)) {
-        vpnSeries.push({ name: 'Remote access', color: '#22d3ee', values: fw.vpn_sessions_series || [] });
-      }
-      if (hasNum(fw.ipsec_series)) {
-        vpnSeries.push({ name: 'IPsec tunnels', color: '#c4b5fd', values: fw.ipsec_series || [] });
-      }
-      var vpnBits = [];
-      if (fw.vpn_sessions != null && !isNaN(fw.vpn_sessions)) vpnBits.push(fmtInt(fw.vpn_sessions) + ' sessions');
-      if (fw.ipsec_tunnels != null && !isNaN(fw.ipsec_tunnels)) vpnBits.push(fmtInt(fw.ipsec_tunnels) + ' IPsec');
-      if (fw.ike_tunnels != null && !isNaN(fw.ike_tunnels)) vpnBits.push(fmtInt(fw.ike_tunnels) + ' IKE');
-      if (fw.vpn_peak != null && !isNaN(fw.vpn_peak)) vpnBits.push('peak ' + fmtInt(fw.vpn_peak));
-      var vpnParts = [];
-      if (fw.vpn_svc != null && !isNaN(fw.vpn_svc)) vpnParts.push('AnyConnect ' + fmtInt(fw.vpn_svc));
-      if (fw.vpn_webvpn != null && !isNaN(fw.vpn_webvpn)) vpnParts.push('clientless ' + fmtInt(fw.vpn_webvpn));
-      if (fw.vpn_l2l != null && !isNaN(fw.vpn_l2l)) vpnParts.push('LAN-to-LAN ' + fmtInt(fw.vpn_l2l));
-      if (fw.vpn_ipsec != null && !isNaN(fw.vpn_ipsec)) vpnParts.push('remote IPsec ' + fmtInt(fw.vpn_ipsec));
-      html += chartCard('VPN', vpnBits.join(' · ') || '—', vpnSeries, {}, vpnParts.join(' · '));
-    }
     html += '</div>';
+    html += vpnRow(fw);
     var rawIfaces = fw.interfaces || [];
     var ifaces = rawIfaces.filter(function (iface) { return iface.graph !== false; });
     if (!ifaces.length) {
