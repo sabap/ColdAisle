@@ -82,8 +82,10 @@
     }
     var fills = '';
     var strokes = '';
+    var speckClips = [];
     var gidBase = 'fwg' + Math.random().toString(36).slice(2, 7);
-    var baseY = (padT + plotH).toFixed(1);
+    var baseYnum = padT + plotH;
+    var baseY = baseYnum.toFixed(1);
     (series || []).forEach(function (s, si) {
       var vals = s.values || [];
       var n = vals.length;
@@ -133,11 +135,24 @@
         }
         strokes += '<path class="pc-line" d="' + line + '" fill="none" stroke="' + color +
           '" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>';
+        if (s.speck && (opts.fillEach || si === 0)) {
+          speckClips.push({
+            color: color,
+            dir: s.dir || (si === 0 ? 'in' : 'out'),
+            util: s.util,
+            points: draw,
+            baseY: baseYnum
+          });
+        }
       });
     });
     var paths = fills + strokes;
-    return '<svg class="power-chart-svg" viewBox="0 0 ' + w + ' ' + h +
+    var svg = '<svg class="power-chart-svg" viewBox="0 0 ' + w + ' ' + h +
       '" preserveAspectRatio="none" role="img">' + grid + paths + '</svg>';
+    if (!speckClips.length || !window.ColdAisleFirewallSpecks) return svg;
+    return '<div class="fw-plot">' + svg +
+      window.ColdAisleFirewallSpecks.layers(speckClips, { w: w, h: h, max: opts.speckMax || 14 }) +
+      '</div>';
   }
 
   function legend(series) {
@@ -168,14 +183,14 @@
     return '<span style="color:' + color + '">' + esc(label) + ' ' + esc(value) + '</span>';
   }
 
-  function spanChart(label, inVals, outVals) {
+  function spanChart(label, inVals, outVals, inUtil, outUtil) {
     var series = [
-      { name: 'Inbound', color: IN_BLUE, values: inVals || [] },
-      { name: 'Outbound', color: OUT_ORANGE, values: outVals || [] }
+      { name: 'Inbound', color: IN_BLUE, values: inVals || [], speck: true, dir: 'in', util: inUtil },
+      { name: 'Outbound', color: OUT_ORANGE, values: outVals || [], speck: true, dir: 'out', util: outUtil }
     ];
     return '<div class="power-chart fw-if-span">' +
       '<div class="power-chart-head"><span class="power-chart-label">' + esc(label) + '</span></div>' +
-      chartSvg(series, { yMin: 0, yMax: 100, height: 148, fillEach: true }) +
+      chartSvg(series, { yMin: 0, yMax: 100, height: 148, fillEach: true, speckMax: 14 }) +
       legend(series) +
       '</div>';
   }
@@ -189,8 +204,8 @@
       rateBit('Out', iface.out_util, iface.out_text, OUT_ORANGE) +
       '</div>' +
       '<div class="fw-if-spans">' +
-      spanChart('30 minutes', iface.in_series_30m, iface.out_series_30m) +
-      spanChart('24 hours', iface.in_series_24h || iface.in_series, iface.out_series_24h || iface.out_series) +
+      spanChart('30 minutes', iface.in_series_30m, iface.out_series_30m, iface.in_util, iface.out_util) +
+      spanChart('24 hours', iface.in_series_24h || iface.in_series, iface.out_series_24h || iface.out_series, iface.in_util, iface.out_util) +
       '</div></div>';
   }
 

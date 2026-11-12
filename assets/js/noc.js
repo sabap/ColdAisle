@@ -207,10 +207,10 @@
       '</svg>';
   }
 
-  function utilPairSvg(inVals, outVals) {
+  function utilPairSvg(inVals, outVals, inUtil, outUtil) {
     var series = [
-      { color: '#38bdf8', values: inVals || [] },
-      { color: '#fb923c', values: outVals || [] }
+      { color: '#38bdf8', values: inVals || [], dir: 'in', util: inUtil },
+      { color: '#fb923c', values: outVals || [], dir: 'out', util: outUtil }
     ];
     var w = 640, h = 120, padX = 8, padY = 8;
     var min = 0, max = 100, has = false;
@@ -232,6 +232,7 @@
     }
     var fills = '';
     var lines = '';
+    var speckClips = [];
     var seq = 0;
     var gidBase = 'ug' + Math.random().toString(36).slice(2, 7);
     var base = (h - padY).toFixed(1);
@@ -260,6 +261,13 @@
         fills += '<path d="' + area + '" fill="url(#' + gid + ')"/>';
         lines += '<path d="' + line + '" fill="none" stroke="' + s.color +
           '" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>';
+        speckClips.push({
+          color: s.color,
+          dir: s.dir,
+          util: s.util,
+          points: draw,
+          baseY: h - padY
+        });
         seg = [];
       }
       for (var i = 0; i < n; i++) {
@@ -268,8 +276,12 @@
       }
       flush();
     });
-    return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" role="img" aria-label="Inbound and outbound utilization">' +
+    var svg = '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" role="img" aria-label="Inbound and outbound utilization">' +
       fills + lines + '</svg>';
+    if (!speckClips.length || !window.ColdAisleFirewallSpecks) return svg;
+    return '<div class="fw-plot">' + svg +
+      window.ColdAisleFirewallSpecks.layers(speckClips, { w: w, h: h, max: 8 }) +
+      '</div>';
   }
 
   function badge(st) {
@@ -1181,9 +1193,9 @@
           esc(utilLabel(iface.out_util, iface.out_text)) + ' out</span></div>' +
           '<div class="noc-fw-chart-pair">' +
           '<div class="noc-fw-chart-col"><span>30 min</span><div class="noc-fw-chart-plot">' +
-          utilPairSvg(iface.in_series_30m, iface.out_series_30m) + '</div></div>' +
+          utilPairSvg(iface.in_series_30m, iface.out_series_30m, iface.in_util, iface.out_util) + '</div></div>' +
           '<div class="noc-fw-chart-col"><span>24 hours</span><div class="noc-fw-chart-plot">' +
-          utilPairSvg(iface.in_series_24h || iface.in_series, iface.out_series_24h || iface.out_series) +
+          utilPairSvg(iface.in_series_24h || iface.in_series, iface.out_series_24h || iface.out_series, iface.in_util, iface.out_util) +
           '</div></div></div></div>';
       });
       html += '</div>';

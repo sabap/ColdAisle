@@ -36,8 +36,9 @@ $apiUrl = App::url('api/noc.php');
 if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
-$cssUrl = App::url('assets/css/noc.css') . '?v=15';
-$jsUrl = App::url('assets/js/noc.js') . '?v=24';
+$cssUrl = App::url('assets/css/noc.css') . '?v=16';
+$jsUrl = App::url('assets/js/noc.js') . '?v=25';
+$speckUrl = App::url('assets/js/firewall-specks.js') . '?v=1';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
 $dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=41';
 $org = '';
@@ -156,6 +157,7 @@ $title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
       <span id="nocAppVer"><?= App::e(App::APP_NAME) ?> v<?= App::e(App::VERSION) ?></span>
     </footer>
   </div>
+  <script src="<?= App::e($speckUrl) ?>" defer></script>
   <script src="<?= App::e($jsUrl) ?>" defer></script>
 </body>
 </html>

@@ -4466,6 +4466,45 @@ body.site-tour-open { overflow: hidden; }
   gap: .75rem;
 }
 .fw-if-span { min-height: 0; }
+.fw-plot { position: relative; }
+.fw-speck-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+.fw-speck-runner {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 0;
+  animation-name: fwSpeckIn;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  pointer-events: none;
+}
+.fw-speck-runner.out { animation-name: fwSpeckOut; }
+.fw-speck-runner > i {
+  position: absolute;
+  left: 0;
+  width: 2px;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 50%;
+  opacity: 0.55;
+}
+@keyframes fwSpeckIn {
+  from { transform: translateX(-3%); }
+  to { transform: translateX(103%); }
+}
+@keyframes fwSpeckOut {
+  from { transform: translateX(103%); }
+  to { transform: translateX(-3%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fw-speck-layer { display: none; }
+}
 .fw-if-spark { margin-top: .35rem; }
 .fw-if-spark .pc-axis { fill: var(--muted); font-size: 10px; font-family: inherit; }
 .fw-if-spark .pc-grid { stroke: rgba(148, 163, 184, .18); stroke-width: 1; }
