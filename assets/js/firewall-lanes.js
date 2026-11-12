@@ -1,5 +1,5 @@
 /**
- * Firewall throughput charts. Inbound and outbound share one plot.
+ * Firewall throughput charts. Each plot is split: inbound on top, outbound below.
  * The shaded area under each line carries flow specks.
  * Speck density and travel speed follow the latest sample.
  * A negative animation delay keeps specks in place when the wall redraws.
@@ -86,21 +86,26 @@
     return (vals || []).some(function (v) { return v != null && !isNaN(Number(v)); });
   }
 
-  function scaleOf(inVals, outVals) {
+  // Each half is its own 0–100 scale. The gap around 50 is the split.
+  var BAND = {
+    in: { top: 7, base: 46 },
+    out: { top: 54, base: 93 }
+  };
+
+  function scaleOf(vals) {
     var max = 100;
-    function peek(arr) {
-      (arr || []).forEach(function (v) {
-        if (v != null && !isNaN(Number(v)) && Number(v) > max) max = Number(v);
-      });
-    }
-    peek(inVals);
-    peek(outVals);
+    (vals || []).forEach(function (v) {
+      if (v != null && !isNaN(Number(v)) && Number(v) > max) max = Number(v);
+    });
     return { min: 0, max: max };
   }
 
-  function yOf(v, scale) {
+  function yOf(v, scale, band) {
     var span = (scale.max - scale.min) || 1;
-    return 100 - ((Number(v) - scale.min) / span) * 100;
+    var t = (Number(v) - scale.min) / span;
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    return band.base - t * (band.base - band.top);
   }
 
   function xOf(i, n) {
@@ -120,12 +125,11 @@
     return Math.max(0.18, Math.min(1, (sum / n) / yMax));
   }
 
-  function axisText(scale) {
-    var mid = (scale.min + scale.max) / 2;
-    return [fmtNum(scale.max, scale.max >= 100 ? 0 : 1), fmtNum(mid, mid >= 100 ? 0 : 1), '0'];
+  function axisMax(scale) {
+    return fmtNum(scale.max, scale.max >= 100 ? 0 : 1);
   }
 
-  function linePath(vals, scale) {
+  function linePath(vals, scale, band) {
     var n = (vals || []).length;
     var d = '';
     var pen = false;
@@ -135,9 +139,9 @@
         continue;
       }
       var x = xOf(i, n);
-      var y = yOf(vals[i], scale);
+      var y = yOf(vals[i], scale, band);
       if (n === 1) {
-        return 'M 8 ' + y.toFixed(2) + ' L 92 ' + y.toFixed(2);
+        return 'M 4 ' + y.toFixed(2) + ' L 96 ' + y.toFixed(2);
       }
       d += (pen ? ' L ' : 'M ') + x.toFixed(2) + ' ' + y.toFixed(2) + ' ';
       pen = true;
@@ -145,12 +149,13 @@
     return d.trim();
   }
 
-  function areaPath(vals, scale) {
+  function areaPath(vals, scale, band) {
     var n = (vals || []).length;
+    var floor = band.base.toFixed(2);
     if (!n) return '';
     if (n === 1 && vals[0] != null && !isNaN(Number(vals[0]))) {
-      var y = yOf(vals[0], scale).toFixed(2);
-      return 'M 8 ' + y + ' L 92 ' + y + ' L 92 100 L 8 100 Z';
+      var y = yOf(vals[0], scale, band).toFixed(2);
+      return 'M 4 ' + y + ' L 96 ' + y + ' L 96 ' + floor + ' L 4 ' + floor + ' Z';
     }
     var d = '';
     var seg = [];
@@ -160,7 +165,7 @@
       for (var i = 1; i < seg.length; i++) d += ' L ' + seg[i];
       var last = seg[seg.length - 1].split(' ');
       var first = seg[0].split(' ');
-      d += ' L ' + last[0] + ' 100 L ' + first[0] + ' 100 Z ';
+      d += ' L ' + last[0] + ' ' + floor + ' L ' + first[0] + ' ' + floor + ' Z ';
       seg = [];
     }
     for (var i = 0; i < n; i++) {
@@ -168,25 +173,26 @@
         flush();
         continue;
       }
-      seg.push(xOf(i, n).toFixed(2) + ' ' + yOf(vals[i], scale).toFixed(2));
+      seg.push(xOf(i, n).toFixed(2) + ' ' + yOf(vals[i], scale, band).toFixed(2));
     }
     flush();
     return d.trim();
   }
 
-  function clipPolygon(vals, scale) {
+  function clipPolygon(vals, scale, band) {
     var n = (vals || []).length;
     if (!hasPoint(vals)) return '';
+    var floor = band.base.toFixed(2);
     if (n === 1) {
-      var y1 = yOf(vals[0], scale).toFixed(2);
-      return 'polygon(8% ' + y1 + '%, 92% ' + y1 + '%, 92% 100%, 8% 100%)';
+      var y1 = yOf(vals[0], scale, band).toFixed(2);
+      return 'polygon(4% ' + y1 + '%, 96% ' + y1 + '%, 96% ' + floor + '%, 4% ' + floor + '%)';
     }
     var top = [];
     for (var i = 0; i < n; i++) {
-      var y = (vals[i] == null || isNaN(Number(vals[i]))) ? 100 : yOf(vals[i], scale);
+      var y = (vals[i] == null || isNaN(Number(vals[i]))) ? band.base : yOf(vals[i], scale, band);
       top.push(xOf(i, n).toFixed(2) + '% ' + y.toFixed(2) + '%');
     }
-    return 'polygon(' + top.join(', ') + ', 100% 100%, 0% 100%)';
+    return 'polygon(' + top.join(', ') + ', 100% ' + floor + '%, 0% ' + floor + '%)';
   }
 
   function specks(kind, util, vals, scale, compact) {
@@ -208,7 +214,8 @@
       var h3 = hashUnit(i + 3 + seed);
       var dur = baseDur / (0.84 + h1 * 0.32);
       var delay = -((now + h2 * dur) % dur);
-      var y = (4 + h3 * 92).toFixed(1);
+      var band = BAND[kind] || BAND.in;
+      var y = (band.top + 1.5 + h3 * (band.base - band.top - 3)).toFixed(1);
       var tw = (1.2 - (utilUnit(util) / 100) * 0.55) * (0.7 + hashUnit(i + 4 + seed) * 0.8);
       html += '<span class="fw-flow-runner ' + kind + '" style="top:' + y +
         '%;animation-duration:' + dur.toFixed(2) + 's;animation-delay:' + delay.toFixed(3) + 's">' +
@@ -219,50 +226,67 @@
     return html;
   }
 
+  function bandGuides(band) {
+    var mid = (band.top + band.base) / 2;
+    return '<line class="fw-flow-grid" x1="0" y1="' + band.top.toFixed(2) + '" x2="100" y2="' + band.top.toFixed(2) + '"/>' +
+      '<line class="fw-flow-grid" x1="0" y1="' + mid.toFixed(2) + '" x2="100" y2="' + mid.toFixed(2) + '"/>' +
+      '<line class="fw-flow-grid" x1="0" y1="' + band.base.toFixed(2) + '" x2="100" y2="' + band.base.toFixed(2) + '"/>';
+  }
+
+  function strokePair(d, color) {
+    if (!d) return '';
+    return '<path class="fw-flow-halo" d="' + d + '"/>' +
+      '<path class="fw-flow-line" d="' + d + '" stroke="' + color + '"/>';
+  }
+
   function chartHtml(label, inVals, outVals, iface, compact) {
-    var scale = scaleOf(inVals, outVals);
-    var axes = axisText(scale);
+    var inScale = scaleOf(inVals);
+    var outScale = scaleOf(outVals);
     var gid = 'fwf' + (++flowSeq);
-    var inArea = areaPath(inVals, scale);
-    var outArea = areaPath(outVals, scale);
-    var inLine = linePath(inVals, scale);
-    var outLine = linePath(outVals, scale);
+    var inArea = areaPath(inVals, inScale, BAND.in);
+    var outArea = areaPath(outVals, outScale, BAND.out);
+    var inLine = linePath(inVals, inScale, BAND.in);
+    var outLine = linePath(outVals, outScale, BAND.out);
+    var inStroke = moteColor(iface.in_util, 'in');
+    var outStroke = moteColor(iface.out_util, 'out');
     var ready = hasPoint(inVals) || hasPoint(outVals);
     var svg = '';
     if (ready) {
       svg = '<svg class="fw-flow-svg" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="' +
-        esc(label + ' inbound and outbound utilization') + '">' +
+        esc(label + ' inbound above, outbound below') + '">' +
         '<defs>' +
         '<linearGradient id="' + gid + 'in" x1="0" y1="0" x2="0" y2="1">' +
-        '<stop offset="0%" stop-color="' + IN_COLOR + '" stop-opacity="0.28"/>' +
-        '<stop offset="100%" stop-color="' + IN_COLOR + '" stop-opacity="0.05"/>' +
+        '<stop offset="0%" stop-color="' + inStroke + '" stop-opacity="0.34"/>' +
+        '<stop offset="100%" stop-color="' + inStroke + '" stop-opacity="0.05"/>' +
         '</linearGradient>' +
         '<linearGradient id="' + gid + 'out" x1="0" y1="0" x2="0" y2="1">' +
-        '<stop offset="0%" stop-color="' + OUT_COLOR + '" stop-opacity="0.26"/>' +
-        '<stop offset="100%" stop-color="' + OUT_COLOR + '" stop-opacity="0.05"/>' +
+        '<stop offset="0%" stop-color="' + outStroke + '" stop-opacity="0.34"/>' +
+        '<stop offset="100%" stop-color="' + outStroke + '" stop-opacity="0.05"/>' +
         '</linearGradient></defs>' +
-        '<line class="fw-flow-grid" x1="0" y1="' + yOf(scale.max, scale).toFixed(2) + '" x2="100" y2="' + yOf(scale.max, scale).toFixed(2) + '"/>' +
-        '<line class="fw-flow-grid" x1="0" y1="' + yOf((scale.min + scale.max) / 2, scale).toFixed(2) + '" x2="100" y2="' + yOf((scale.min + scale.max) / 2, scale).toFixed(2) + '"/>' +
-        '<line class="fw-flow-grid" x1="0" y1="100" x2="100" y2="100"/>' +
+        bandGuides(BAND.in) +
+        bandGuides(BAND.out) +
+        '<line class="fw-flow-split" x1="0" y1="50" x2="100" y2="50"/>' +
         (inArea ? '<path d="' + inArea + '" fill="url(#' + gid + 'in)"/>' : '') +
         (outArea ? '<path d="' + outArea + '" fill="url(#' + gid + 'out)"/>' : '') +
-        (inLine ? '<path class="fw-flow-line" d="' + inLine + '" stroke="' + IN_COLOR + '"/>' : '') +
-        (outLine ? '<path class="fw-flow-line" d="' + outLine + '" stroke="' + OUT_COLOR + '"/>' : '') +
+        strokePair(inLine, inStroke) +
+        strokePair(outLine, outStroke) +
         '</svg>';
     }
-    var inClip = clipPolygon(inVals, scale);
-    var outClip = clipPolygon(outVals, scale);
+    var inClip = clipPolygon(inVals, inScale, BAND.in);
+    var outClip = clipPolygon(outVals, outScale, BAND.out);
     var html = '<div class="fw-flow-col"><div class="fw-flow-label">' + esc(label) + '</div>' +
-      '<div class="fw-flow-stage"><div class="fw-flow-y"><span>' + esc(axes[0]) + '</span><span>' +
-      esc(axes[1]) + '</span><span>' + esc(axes[2]) + '</span></div><div class="fw-flow-plot">' +
+      '<div class="fw-flow-stage"><div class="fw-flow-y">' +
+      '<span class="fw-flow-y-band in"><span>' + esc(axisMax(inScale)) + '</span><span>0</span></span>' +
+      '<span class="fw-flow-y-band out"><span>' + esc(axisMax(outScale)) + '</span><span>0</span></span>' +
+      '</div><div class="fw-flow-plot">' +
       (ready ? svg : '<div class="fw-flow-empty">Waiting for samples</div>');
     if (inClip) {
       html += '<div class="fw-flow-layer" style="clip-path:' + inClip + '">' +
-        specks('in', iface.in_util, inVals, scale, compact) + '</div>';
+        specks('in', iface.in_util, inVals, inScale, compact) + '</div>';
     }
     if (outClip) {
       html += '<div class="fw-flow-layer" style="clip-path:' + outClip + '">' +
-        specks('out', iface.out_util, outVals, scale, compact) + '</div>';
+        specks('out', iface.out_util, outVals, outScale, compact) + '</div>';
     }
     html += '<div class="fw-flow-glass"></div></div></div></div>';
     return html;

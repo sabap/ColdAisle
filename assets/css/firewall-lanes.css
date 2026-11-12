@@ -223,17 +223,28 @@
 .fw-flow-y {
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  align-items: flex-end;
+  justify-content: stretch;
+  align-items: stretch;
+  height: 100%;
   color: #64748b;
   font-size: 0.62rem;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  padding: 1px 0;
+  padding: 2px 0;
 }
+.fw-flow-y-band {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  min-height: 0;
+}
+.fw-flow-y-band.in { color: #67e8f9; }
+.fw-flow-y-band.out { color: #fdba74; }
 .fw-flow-plot {
   position: relative;
-  height: 124px;
+  height: 168px;
   overflow: hidden;
   border-radius: 10px;
   background:
@@ -251,13 +262,26 @@
   pointer-events: none;
 }
 .fw-flow-grid {
-  stroke: rgba(148, 163, 184, 0.2);
+  stroke: rgba(148, 163, 184, 0.16);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
+.fw-flow-split {
+  stroke: rgba(226, 232, 240, 0.42);
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+.fw-flow-halo {
+  fill: none;
+  stroke: #020617;
+  stroke-width: 6.5px;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
 .fw-flow-line {
   fill: none;
-  stroke-width: 1.75;
+  stroke-width: 3px;
   vector-effect: non-scaling-stroke;
   stroke-linejoin: round;
   stroke-linecap: round;
@@ -299,9 +323,9 @@
   inset: 0;
   z-index: 3;
   pointer-events: none;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 36%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 22%);
   mix-blend-mode: screen;
-  opacity: 0.45;
+  opacity: 0.28;
 }
 .fw-flow-empty {
   position: absolute;
@@ -357,7 +381,7 @@
 }
 .fw-flow.is-compact .fw-flow-stage { grid-template-columns: 1.35rem minmax(0, 1fr); gap: 0.15rem; }
 .fw-flow.is-compact .fw-flow-y { font-size: 0.55rem; }
-.fw-flow.is-compact .fw-flow-plot { height: 76px; border-radius: 8px; }
+.fw-flow.is-compact .fw-flow-plot { height: 96px; border-radius: 8px; }
 @keyframes fwFlowIn {
   from { transform: translateX(-2%); }
   to { transform: translateX(102%); }
