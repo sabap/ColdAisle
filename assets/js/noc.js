@@ -44,6 +44,8 @@
   var panels = ['overview', 'power', 'zones', 'cooling'];
   var panelIdx = 0;
   var panelTimer = null;
+  var fwPageIdx = 0;
+  var fwPageTimer = null;
   var userPinned = false;
   var ALERT_SLOTS = 6; // 2 columns × 3 rows
 
@@ -1055,11 +1057,16 @@
         view3d.setCameraView({ phi: cam.phi, radius: cam.radius });
       }
     }
-    // Restart panel timer if interval changed
+    // Restart panel timer if interval changed. Firewall pages use half of that dwell.
     if (panelTimer && prevPanel !== panelRotateMs) {
       clearInterval(panelTimer);
       panelTimer = setInterval(nextPanel, panelRotateMs);
       restartRotateProgress();
+      if (fwPageTimer) {
+        clearInterval(fwPageTimer);
+        fwPageTimer = null;
+      }
+      syncFwPageTimer();
     }
     var hint = $('nocPanelHint');
     if (hint) {
@@ -1153,25 +1160,108 @@
     return order.map(function (key) { return map[key]; });
   }
 
+  // One screenful. An HA pair stays together. Two unpaired firewalls share a page.
+  // A pair is never split, and a third member of a group gets the next page.
+  function firewallPages(list) {
+    var slices = [];
+    firewallGroups(list).forEach(function (group) {
+      var members = group.members || [];
+      var i;
+      for (i = 0; i < members.length; i += 2) {
+        slices.push({
+          label: group.label || '',
+          members: members.slice(i, i + 2),
+        });
+      }
+    });
+    var pages = [];
+    var n = 0;
+    while (n < slices.length) {
+      var slice = slices[n];
+      var next = slices[n + 1];
+      if (slice.members.length >= 2 || !next || next.members.length !== 1) {
+        pages.push(slice);
+        n += 1;
+        continue;
+      }
+      pages.push({
+        label: slice.label && slice.label === next.label ? slice.label : '',
+        members: slice.members.concat(next.members),
+      });
+      n += 2;
+    }
+    return pages;
+  }
+
+  function fwPagerHtml(page, index, count) {
+    if (count < 2 && !page.label) return '';
+    var pos = count > 1
+      ? '<span class="noc-fw-pager-pos">' + (index + 1) + ' of ' + count + '</span>'
+      : '';
+    var label = page.label
+      ? '<span class="noc-fw-pager-label">' + esc(page.label) + '</span>'
+      : '';
+    return '<div class="noc-fw-pager">' + label + pos + '</div>';
+  }
+
+  function fwPageIntervalMs() {
+    return Math.max(8000, Math.round(panelRotateMs / 2));
+  }
+
+  function firewallPanelVisible() {
+    var panel = $('panel-firewalls');
+    return !!(panel && !panel.hidden && panel.classList.contains('active'));
+  }
+
+  function syncFwPageTimer() {
+    var pages = firewallPages((lastData && lastData.firewalls) || []);
+    var want = !hidden && firewallPanelVisible() && pages.length > 1;
+    if (!want) {
+      if (fwPageTimer) {
+        clearInterval(fwPageTimer);
+        fwPageTimer = null;
+      }
+      return;
+    }
+    if (fwPageTimer) return;
+    fwPageTimer = setInterval(advanceFwPage, fwPageIntervalMs());
+  }
+
+  function advanceFwPage() {
+    if (hidden || !lastData || !firewallPanelVisible()) return;
+    var pages = firewallPages(lastData.firewalls || []);
+    if (pages.length < 2) return;
+    fwPageIdx = (fwPageIdx + 1) % pages.length;
+    var panel = $('panel-firewalls');
+    if (panel) panel.innerHTML = renderFirewalls(lastData);
+  }
+
   function renderFirewalls(data) {
     var list = data.firewalls || [];
     if (!list.length) {
+      fwPageIdx = 0;
       return '<div class="noc-panel-frame noc-frame-empty"><div class="noc-empty">No firewalls</div></div>';
     }
-    var html = '<div class="noc-panel-frame noc-frame-fw">';
     if (list.length === 1) {
-      html += renderFirewallUnit(list[0], 5);
-    } else {
-      firewallGroups(list).forEach(function (group) {
-        if (group.members.length > 1 && group.label) {
-          html += '<div class="noc-fw-pair">' + esc(group.label) + '</div>';
-        }
-        group.members.forEach(function (fw) {
-          html += '<section class="noc-fw-unit">' + renderFirewallUnit(fw, 2) + '</section>';
-        });
-      });
+      return '<div class="noc-panel-frame noc-frame-fw noc-frame-fw-single">' +
+        renderFirewallUnit(list[0], 5) + '</div>';
     }
-    html += '</div>';
+    var pages = firewallPages(list);
+    if (!pages.length) {
+      fwPageIdx = 0;
+      return '<div class="noc-panel-frame noc-frame-empty"><div class="noc-empty">No firewalls</div></div>';
+    }
+    if (fwPageIdx >= pages.length || fwPageIdx < 0) fwPageIdx = 0;
+    var page = pages[fwPageIdx];
+    var sideBySide = page.members.length > 1;
+    var html = '<div class="noc-panel-frame noc-frame-fw">';
+    html += fwPagerHtml(page, fwPageIdx, pages.length);
+    html += '<div class="noc-fw-stage' + (sideBySide ? ' noc-fw-pair-row' : '') + '">';
+    var cap = 2;
+    page.members.forEach(function (fw) {
+      html += '<section class="noc-fw-unit">' + renderFirewallUnit(fw, cap) + '</section>';
+    });
+    html += '</div></div>';
     return html;
   }
 
@@ -1318,6 +1408,7 @@
     if (z) z.innerHTML = renderZones(data);
     if (c) c.innerHTML = renderCooling(data);
     if (f && !f.hidden) f.innerHTML = renderFirewalls(data);
+    syncFwPageTimer();
     renderRecentAlerts(data);
 
     var upd = $('nocUpdated');
@@ -1357,6 +1448,7 @@
         : 'Panel: ' + name + ' · auto-rotates';
     }
     restartRotateProgress();
+    syncFwPageTimer();
   }
 
   function nextPanel() {
@@ -1599,6 +1691,7 @@
       var bar = $('nocRotateBar');
       if (bar) bar.classList.remove('run');
     }
+    syncFwPageTimer();
   });
 
   setClock();

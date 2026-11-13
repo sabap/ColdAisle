@@ -1185,8 +1185,50 @@ html, body {
 .noc-tab[hidden],
 .noc-panel[hidden] { display: none !important; }
 
-.noc-panel-frame.noc-frame-fw { overflow-y: auto; }
+.noc-panel-frame.noc-frame-fw { overflow: hidden; }
+.noc-panel-frame.noc-frame-fw.noc-frame-fw-single { overflow-y: auto; }
 .noc-frame-fw { gap: 0.4rem; }
+.noc-fw-pager {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  min-width: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  font-weight: 700;
+}
+.noc-fw-pager-label {
+  min-width: 0;
+  color: #e2e8f0;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.noc-fw-pager-pos {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+.noc-fw-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.noc-fw-stage.noc-fw-pair-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: stretch;
+}
 .noc-fw-pair {
   flex: 0 0 auto;
   font-size: 0.72rem;
@@ -1197,11 +1239,13 @@ html, body {
   padding: 0.15rem 0 0;
 }
 .noc-fw-unit {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.35rem;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 .noc-fw-unit + .noc-fw-unit,
 .noc-fw-unit + .noc-fw-pair {
@@ -1209,9 +1253,54 @@ html, body {
   padding-top: 0.55rem;
   margin-top: 0.2rem;
 }
+.noc-fw-pair-row .noc-fw-unit + .noc-fw-unit {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+  border-left: 1px solid rgba(148, 163, 184, 0.22);
+  padding-left: 0.7rem;
+}
+.noc-fw-pair-row .noc-hero-stat {
+  min-height: 0;
+  padding: 0.4rem 0.5rem;
+}
+.noc-fw-pair-row .noc-hero-stat .hs-label {
+  font-size: 0.68rem;
+  margin-bottom: 0.1rem;
+}
+.noc-fw-pair-row .noc-hero-stat .hs-value {
+  font-size: 1.35rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.noc-fw-pair-row .noc-hero-stat .hs-hint {
+  margin-top: 0.12rem;
+  font-size: 0.68rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.noc-fw-pair-row .noc-fw-role { font-size: 1rem; }
+.noc-fw-pair-row .noc-chart-wrap.noc-chart-hero,
+.noc-fw-pair-row .noc-chart-wrap.noc-chart-side {
+  height: 72px;
+  min-height: 72px;
+  max-height: 72px;
+}
+.noc-fw-pair-row .noc-fw-gauge svg { height: 40px; }
+.noc-fw-pair-row .noc-fw-gauge-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .noc-fw-unit .noc-fw-list {
   flex: 0 0 auto;
   overflow: visible;
+}
+.noc-fw-stage .noc-fw-chart-plot {
+  height: 96px;
+  min-height: 96px;
 }
 .noc-fw-role {
   font-size: 1.15rem;
