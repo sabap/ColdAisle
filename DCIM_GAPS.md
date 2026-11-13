@@ -7,7 +7,7 @@
 - This file tracks **product / competitive gaps** so chat menus and compaction do not lose the map.  
 - Promote a gap into `BACKLOG.md` only when scope is confirmed and work is intentionally deferred.
 
-**Last reviewed:** 2026-09-04 (G-B8 / G-B9 / G-A3 cooling thermal closed **0.3.183–0.3.188**).
+**Last reviewed:** 2026-11-13 (Firewalls closed in **1.0.7–1.0.27**. Cooling thermal remains closed at **0.3.183–0.3.188**).
 
 ---
 
@@ -38,9 +38,9 @@
 |------|--------|--------------|
 | Rack inventory, elevations, templates, chassis children | U layout, conflict checks, openDCIM-style slots | Core |
 | Floor plan + 3D (Three.js) | Cabinets, row PDUs, cooling footprints, heat spheres | Core + cooling |
-| NOC wall | Live metrics, optional token, spinning 3D | 0.3.x |
+| NOC wall | Live metrics, optional token, spinning 3D, firewall panel paged by pair | 0.3.x; firewalls **1.0.8–1.0.27** |
 | Power zones, row/rack PDUs, outlets, multi-phase | Templates, Discover/Poll, history charts, facility rollup modes | Power arc |
-| SNMP v2c/v3, MIBs, site OID templates, scheduler | PDU, device, UPS; scheduled inventory list includes UPS/cooling | Through 0.3.108 |
+| SNMP v2c/v3, MIBs, site OID templates, scheduler | PDU, device, UPS, cooling; firewalls use a built-in poll on the same schedule | Through 0.3.108; firewalls **1.0.7–1.0.27** |
 | UPS inventory + load/battery history charts | PowerNet UPS path; hold/carry-forward series | UPS arc |
 | Auth | Local, LDAPS, Entra ID; RBAC roles | Core |
 | Updates, site backup/restore, SMB copy, storage housekeeping | Settings-driven | 0.2–0.3 |
@@ -48,6 +48,7 @@
 | Cooling unit inventory + env sensors (manual) | Active/standby pairs, ASHRAE guidance copy | **0.3.5** foundation |
 | Cabling (port–port), disposals, audits, reports | Depth varies — see Partial below | Core |
 | IPAM (address plan, subnet plan, aligned groups) | Prefixes + host records; Excel import; Viewer vs edit; not DDI | **0.3.167–0.3.175** |
+| Firewalls | Cisco ASA and Threat Defense read-only SNMP, charts, dashboard WAN card, rack-device link, NOC panel | **1.0.7–1.0.27** |
 | Facility load without rack+row double-count | prefer_upstream / manual / sum all | **0.3.101** |
 | PDU list split (row vs cabinet) | Power → PDUs | **0.3.104** |
 
@@ -83,9 +84,9 @@ These are **not** free-form suggestions; they have acceptance criteria in the ba
 | ID | Gap | Status | vs peers | ColdAisle today | Suggested slice |
 |----|-----|--------|----------|-----------------|-----------------|
 | **G-B1** | **Structured cable plant** | **Closed (v1)** — **0.3.122** | Patch panels, trunks, pathways | Raceways on floor plan, feed OH/UF, media/speed colors, circuit IDs | Patch-panel device templates; multi-path hop list; bulk CSV |
-| **G-B2** | **Change / move work orders** | **Closed (v1)** — **0.3.116**; **ITSM** — Unreleased | ITSM-linked moves, approvals | Ticket, from/to, checklist, apply inventory; SDP Cloud, ServiceNow, Zendesk, Jira, Freshservice (outbound + pull) | Extra vendors later if requested |
+| **G-B2** | **Change / move work orders** | **Closed (v1)** — **0.3.116**; **ITSM** — **0.3.160** | ITSM-linked moves, approvals | Ticket, from/to, checklist, apply inventory; SDP Cloud, ServiceNow, Zendesk, Jira, Freshservice (outbound + pull) | Extra vendors later if requested |
 | **G-B3** | **Asset lifecycle depth** | **Closed (v1)** — **0.3.119** | PO/RMA/warranty campaigns | PO/RMA fields, custody event log, warranty digests + report | Multi-entity warranty (PDU/UPS); full ITAM campaigns later |
-| **G-B4-net** | **IPAM / network-DCIM bridge** | **Closed (v1 IPAM)** — **0.3.167–0.3.175** | phpIPAM nested subnets / NetBox containers (not DDI) | Address plan (host records, next-free); subnet plan (manual Parent, holes, carve `/n`); aligned groups (same host index across prefixes, e.g. multi-homed WAN last octet); Excel per-worksheet import; inventory link + conflicts; Viewer look / DC Admin edit | Leftover (out of default scope): switch interface inventory, IPv6, DNS/DHCP server, Infoblox-class DDI |
+| **G-B4-net** | **IPAM / network-DCIM bridge** | **Closed (v1 IPAM)** — **0.3.167–0.3.175** | phpIPAM nested subnets / NetBox containers (not DDI) | Address plan (host records, next-free); subnet plan (manual Parent, holes, carve `/n`); aligned groups (same host index across prefixes, e.g. multi-homed WAN last octet); Excel per-worksheet import; inventory link + conflicts; Viewer look / DC Admin edit. Firewall health and WAN status are **Plant → Firewalls**, not IPAM | Leftover (out of default scope): switch interface inventory, IPv6, DNS/DHCP server, Infoblox-class DDI |
 | **G-B5** | **Mail product flows** | **Closed (v1)** — **0.3.118** | Welcome, password reset, lifecycle mail | Welcome, local forgot/reset, disposal due-soon digests | Optional: must-change-password gate; richer templates |
 
 ### Tier C — Low priority / out of scope unless asked
@@ -123,6 +124,7 @@ Use as a **discussion default**, not a commitment.
 
 | Former gap | Delivered | Release / notes |
 |------------|-----------|-----------------|
+| **Firewalls** | ASA and Threat Defense read-only SNMP; 30-minute and 24-hour throughput charts; PAT, AnyConnect, and IPSec; HA pairs not summed; NOC paging; dashboard WAN card; rack device link; removed or admin-down tunnels drop off the interface table | **1.0.7–1.0.27** |
 | **G-B8 / G-A3 thermal** | Liebert DS SNMPv3 Engine ID, Discover leaves, poll snapshot, NOC cooling history | **0.3.183–0.3.188** |
 | **G-B9 Airflow particles** | Vents/returns, particles, rainbow from supply/aisle/return, SNMP active/standby in 3D | **0.3.176–0.3.188** |
 | **G-B4-net IPAM v1** | Address vs subnet plans; aligned groups (same index across prefixes); Excel import; inventory link; IPAM RBAC | **0.3.167–0.3.175** (aligned **0.3.174**, permissions **0.3.175**) |
@@ -170,6 +172,7 @@ Use as a **discussion default**, not a commitment.
 
 | Date | Change |
 |------|--------|
+| 2026-11-13 | Firewalls recorded as shipped (**1.0.7–1.0.27**): ASA and Threat Defense SNMP, charts, NOC paging, dashboard WAN card, rack-device link, tunnel status. G-B2 ITSM corrected to **0.3.160** (it had been left as Unreleased). G-B4-net leftover stays switch-interface IPAM, not the firewall page. |
 | 2026-09-04 | **G-B8 / G-B9 / G-A3** closed: Liebert DS live telemetry, airflow rainbow, NOC cooling history (**0.3.183–0.3.188**). 1.0 surface: [`docs/WHAT_1.0_INCLUDES.md`](docs/WHAT_1.0_INCLUDES.md). |
 | 2026-08-28 | **G-B4-net** closed as IPAM v1 (**0.3.167–0.3.175**). Remaining Device42/NetBox slice (interfaces, IPv6, DDI) stays out of default scope. |
 | 2026-08-11 | Initial formal gap list (tiers A–C, backlog links, closed gaps through 0.3.108) |

@@ -33,6 +33,7 @@ $woUrl = $href('work_orders', 'pages/work_orders.php');
 $cabUrl = $href('cabinets', 'pages/cabinets.php');
 $techUrl = App::url('pages/tech.php');
 $cablesUrl = $href('cables', 'pages/cables.php');
+$fwUrl = $href('firewalls', 'pages/firewalls.php');
 
 layout_header('Documentation', $user, 'docs');
 ?>
@@ -42,7 +43,7 @@ layout_header('Documentation', $user, 'docs');
             <p class="text-muted mb-0">
                 Operator reference for ColdAisle <strong><?= App::e($version) ?></strong>.
                 What 1.0 includes, how-tos for the floor planner, IPAM (including aligned groups), SNMP Discover,
-                applying a work order to inventory, and Tech / field PWA — plus the external machine API for robots.
+                Firewalls, applying a work order to inventory, and Tech / field PWA — plus the external machine API for robots.
             </p>
         </div>
         <nav class="docs-jump" aria-label="Jump to section">
@@ -50,6 +51,7 @@ layout_header('Documentation', $user, 'docs');
             <a class="settings-jump-chip" href="#floorplan">Floor planner</a>
             <a class="settings-jump-chip" href="#ipam">IPAM</a>
             <a class="settings-jump-chip" href="#snmp-discover">SNMP Discover</a>
+            <a class="settings-jump-chip" href="#firewalls">Firewalls</a>
             <a class="settings-jump-chip" href="#work-orders">Work-order apply</a>
             <a class="settings-jump-chip" href="#tech-pwa">Tech / PWA</a>
             <a class="settings-jump-chip" href="#api">API</a>
@@ -68,6 +70,7 @@ layout_header('Documentation', $user, 'docs');
                 <li><a href="#floorplan">Floor planner</a></li>
                 <li><a href="#ipam">IPAM</a></li>
                 <li><a href="#snmp-discover">SNMP Discover</a></li>
+                <li><a href="#firewalls">Firewalls</a></li>
                 <li><a href="#work-orders">Work-order apply</a></li>
                 <li><a href="#tech-pwa">Tech mode &amp; PWA</a></li>
             </ol>
@@ -95,19 +98,21 @@ layout_header('Documentation', $user, 'docs');
         <div class="card-body docs-prose">
             <p>
                 ColdAisle <strong>1.0</strong> is the hall you can run every day: floor plan and 3D, power and UPS SNMP,
-                cooling inventory plus <strong>Liebert DS live telemetry</strong>, airflow particles, IPAM, raceways,
-                work orders, NOC wall, auth (local / LDAPS / Entra), and GitHub updates with site backup.
+                cooling inventory plus <strong>Liebert DS live telemetry</strong>, airflow particles, firewalls,
+                IPAM, raceways, work orders, NOC wall, auth (local / LDAPS / Entra), and GitHub updates with site backup.
                 App version <strong><?= App::e($version) ?></strong>.
             </p>
             <p>
                 <strong>In:</strong> racks and elevations; row/rack PDUs and power path; UPS; CRAC/CRAH with SNMPv3
                 (Engine ID, supply/return, humidity, states); env sensors (set Placement to Cold aisle or Hot aisle);
                 3D airflow rainbow (supply → cold aisle → hot aisle → return); NOC cooling pane and 24h temp history;
+                Cisco ASA and Threat Defense firewalls (read-only SNMP, charts, dashboard WAN card);
                 cabling and raceways; IPAM (not DDI); field QR / Tech mode.
             </p>
             <p>
-                <strong>Out of 1.0:</strong> cooling or PDU writes (setpoints, outlet reboot), Liebert discrete alarm-table
-                walks, PDU Locate blink, BMS/BACnet, CFD, multi-site, native mobile apps, Infoblox-class DNS/DHCP.
+                <strong>Out of 1.0:</strong> cooling or PDU writes (setpoints, outlet reboot), firewall policy edits or deploys,
+                Liebert discrete alarm-table walks, PDU Locate blink, BMS/BACnet, CFD, multi-site, native mobile apps,
+                Infoblox-class DNS/DHCP. Switch interfaces are not an IPAM inventory. Firewall status is Plant → Firewalls.
             </p>
             <p class="mb-0">
                 Full table (in vs out, operator checklist) lives in the repo as
@@ -290,7 +295,86 @@ layout_header('Documentation', $user, 'docs');
                 <li>No SNMP SET and no outlet on/off — ColdAisle only reads.</li>
                 <li>The machine API does not run Discover or return live OID walks. Session pages and <code>/api/snmp_*.php</code> stay cookie+CSRF.</li>
                 <li>Vendor MIB files on the SNMP page improve <em>names</em> during the walk; they are optional.</li>
+                <li>Plant → Firewalls does not use Discover or a site OID template. It has its own poll. A rack device whose type is Firewall is linked from the firewall page. See <a href="#firewalls">Firewalls</a>.</li>
             </ul>
+        </div>
+    </div>
+
+    <div class="card" id="firewalls">
+        <div class="card-header flex-between">
+            <h2 style="margin:0">Firewalls</h2>
+            <?php if ($fwUrl): ?>
+                <a class="btn btn-sm btn-secondary" href="<?= App::e($fwUrl) ?>">Open Firewalls</a>
+            <?php endif; ?>
+        </div>
+        <div class="card-body docs-prose">
+            <p>
+                Plant → Firewalls polls a <strong>Cisco ASA</strong> or a <strong>Secure Firewall Threat Defense</strong> over SNMP.
+                ColdAisle only reads. It does not change policy, and it does not collect the activation key or VPN user names.
+                Charts and the NOC use stored samples. They do not query the firewall while the page is open.
+            </p>
+            <h3 class="docs-h3">Add a firewall</h3>
+            <ol>
+                <li><strong>Add firewall</strong> and choose Cisco ASA or Threat Defense.</li>
+                <li>ASA starts as SNMPv2c. Threat Defense starts as SNMPv3 on the management address of that firewall. Set that SNMP in the management center platform settings and deploy it before the first poll.</li>
+                <li>On a multiple-context ASA, set the SNMP context to the admin context. Interface counters come from that context.</li>
+                <li>Leave <strong>Include in scheduled SNMP polling</strong> on. The firewall then appears under Plant → SNMP and is polled about once a minute. <strong>Poll now</strong> still works if the schedule is off.</li>
+                <li>A blank community or passphrase on a later edit keeps the saved secret.</li>
+            </ol>
+            <h3 class="docs-h3">Management center</h3>
+            <p>
+                Optional, and only for Threat Defense. Charts still come from SNMP on the firewall.
+                The center can fill health, software, and the HA pair name when SNMP left them blank.
+                A center that cannot be reached does not fail the SNMP poll.
+                Leave <strong>Verify TLS</strong> checked unless the center uses a private certificate.
+                ColdAisle does not edit policy and does not deploy.
+            </p>
+            <p>
+                Members that share an HA pair name are grouped on the NOC. Each member keeps its own charts.
+                The numbers are not added together.
+            </p>
+            <h3 class="docs-h3">SHA and AES</h3>
+            <p>
+                If the SNMP library on this server is Net-SNMP older than 5.8, SHA256 and AES256 do not authenticate.
+                Use SHA and AES on the firewall user and on this form. The edit page says so when that limit applies.
+                A newer ColdAisle release does not add those algorithms. An existing firewall saved with SHA256 or AES256
+                has to be edited to SHA and AES, with the device user configured the same way, before the next poll fills counters.
+            </p>
+            <h3 class="docs-h3">Link the chassis in a rack</h3>
+            <ol>
+                <li>On Devices, set <strong>Device type</strong> to Firewall. The device page keeps the rack location.</li>
+                <li>SNMP, charts, and credentials are edited on the firewall, not in the device SNMP card. Saving the device does not erase SNMP already stored on that device row, and it does not start a second poller.</li>
+                <li>Edit the firewall and choose that chassis under <strong>Rack device</strong>. Only devices whose type is Firewall are listed. One chassis links to one firewall.</li>
+                <li>Or open the device and use <strong>Add this firewall</strong>. Name, model, address, and room are filled from the chassis.</li>
+                <li>If the address already matches a firewall that is not linked, open that firewall and choose this rack device. If that firewall is already linked to a different chassis, ColdAisle says so and does not offer Add.</li>
+            </ol>
+            <h3 class="docs-h3">Interfaces</h3>
+            <ul>
+                <li>The table keeps up to 128 interfaces from the poll. Names that start with <code>Internal-</code> are omitted. The type is what the firewall reports. A virtual tunnel is labeled tunnel when that is the reported type.</li>
+                <li>Physical links show status, speed, in and out rate, errors, whether graphing is on, and octet totals. The rate is the change since the previous poll, as a percent of link speed. It appears after two polls within 15 minutes. A gap longer than 15 minutes has no rate for that step. Errors and discards are the count since the previous poll.</li>
+                <li>Down links, and links with no reported speed, stay in the table. They are not drawn on throughput charts.</li>
+                <li>Virtual tunnel interfaces have their own card. Status is Up or Down. Throughput is not charted for them.</li>
+                <li>A tunnel the firewall has removed (not present), or that is administratively down, leaves the table. A tunnel that is administratively up and operationally down stays and shows Down.</li>
+                <li><strong>Hide</strong> removes a name SNMP still reports. Edit firewall → <strong>Hidden interfaces</strong>, clear the box, and save to show it again. Saving also forgets a hidden name the last poll no longer reports, unless that poll returned no interfaces.</li>
+                <li><strong>Interface graphs</strong> turn off failover, management, and any other link that only adds noise. A new interface starts on. The status table still lists every interface that is not hidden. Throughput charts, including the NOC, show only the ones left on that are up and report a speed.</li>
+            </ul>
+            <h3 class="docs-h3">Charts</h3>
+            <ul>
+                <li>Each graphed physical interface has a 30-minute chart and a 24-hour chart. Inbound is blue and outbound is orange. Faint specks drift under the lines. How many there are follows the latest poll.</li>
+                <li>CPU, memory, and connections use a six-hour window.</li>
+                <li>PAT, AnyConnect, and IPSec each have a chart when the firewall reports them. Threat Defense adds data-plane, Snort, and disk charts when those readings exist.</li>
+                <li>Samples are kept for 14 days.</li>
+            </ul>
+            <h3 class="docs-h3">Dashboard and NOC</h3>
+            <ul>
+                <li>The dashboard <strong>Firewalls</strong> card is for anyone who can view firewalls. It lists up to eight firewalls. Each one shows the platform, the HA pair or failover role, and up to two WAN links with Up or Down. A rate is shown only when that link reports a speed. Tunnels, hidden interfaces, and <code>Internal-</code> names are skipped. Names that look like WAN, outside, internet, or external are preferred. Failover, management, diagnostic, and HA links are not. If no name looks like a WAN, the card prefers an up link, then the highest speed.</li>
+                <li><strong>NOC → Firewalls</strong> reads stored samples. One firewall keeps a fuller layout and up to five graphed interfaces. With more than one, the panel shows one pair at a time, side by side, up to two graphed interfaces each, and turns the page on its own. The wall includes the first 12 firewalls.</li>
+            </ul>
+            <p class="text-muted" style="margin-bottom:0">
+                View and edit are separate on Users → Platform roles. View opens this page, the dashboard card, and the NOC panel.
+                Edit is required to add a firewall, poll it, hide an interface, or link a rack device.
+                The machine API does not expose firewalls.
+            </p>
         </div>
     </div>
 

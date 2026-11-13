@@ -53,17 +53,21 @@ Each tagged release should have categorized notes in [`CHANGELOG.md`](CHANGELOG.
 |------|----------------|
 | **Auth** | Local passwords, LDAPS (Active Directory, nested groups), Microsoft Entra OIDC SSO |
 | **Setup** | Browser wizard creates DB, schema, and admin account; optional **restore from site backup** |
-| **Dashboard** | Capacity metrics + interactive **3D** rack floor view (Three.js) |
+| **Dashboard** | Capacity metrics, firewall WAN summary, interactive **3D** rack floor view (Three.js) |
 | **Floor planner** | Drag-and-drop cabinets, row PDUs, cooling units, raceways, supply vents and returns; 2D plan + 3D toggle |
 | **Cabinets** | Rectangular models by width/depth (mm) and U-height; rack elevation with U-mounted PDUs |
 | **Devices** | Manual entry, U-slot assignment, conflict checks, interfaces, power-supply lines → outlets |
 | **Power** | Power zones (A/B), panels, row/rack PDUs, multi-phase (1/2/3), outlet inventory, PDU templates |
 | **Cooling** | CRAC/CRAH inventory, env sensors, Liebert DS SNMPv3 telemetry, 3D airflow rainbow, NOC thermal pane — see [What 1.0 includes](docs/WHAT_1.0_INCLUDES.md) |
+| **Firewalls** | Cisco ASA and Threat Defense SNMP (read-only), interface and VPN charts, dashboard WAN card, NOC panel — see [What 1.0 includes](docs/WHAT_1.0_INCLUDES.md) |
+| **NOC** | Wall display with rotating panels: power, cooling, firewalls, and 3D |
 | **Cabling** | Port-to-port cables, media types, cable tray/underfloor routes |
 | **IPAM** | Address plan, subnet plan, aligned groups, Excel import (not DDI) |
-| **SNMP** | SNMPv2c/v3, encrypted secrets at rest, MIB upload, Discover + site OID templates, phase & outlet telemetry, scheduled poll worker |
+| **SNMP** | SNMPv2c/v3, encrypted secrets at rest, MIB upload, Discover + site OID templates, phase and outlet telemetry, scheduled poll worker. Firewalls use a built-in poll, not a Discover template |
 | **Power ops** | Near/overload alerts with batched email digests, short-term power history + charts, CSV/reports |
 | **Updates & backup** | One-click GitHub update with pre-update zip, site export/restore packages, storage housekeeping |
+| **Work orders** | Moves and changes, checklist, apply destinations to inventory, optional outbound ITSM |
+| **Field** | Tech mode and cabinet QR labels |
 | **Lifecycle** | Disposal workflow with notifications |
 | **Audits** | Physical audit jobs + system audit trail |
 | **Reports** | Inventory, utilization, power, warranty, cables, orphans, audits |
