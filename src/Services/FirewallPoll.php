@@ -1513,11 +1513,17 @@ class FirewallPoll
         return 'unknown';
     }
 
-    /** IF-MIB ifType. Unknown codes stay numeric so a new firewall value is still visible. */
+    /**
+     * IF-MIB ifType label. Parses the code locally so the firewall page can
+     * render a row without loading the SNMP poller.
+     */
     public static function ifTypeLabel($raw): string
     {
-        $n = self::numeric($raw);
-        if ($n === null) {
+        if (is_int($raw) || (is_float($raw) && is_finite($raw))) {
+            $code = (int)$raw;
+        } elseif (is_string($raw) && preg_match('/(\d+)/', $raw, $m)) {
+            $code = (int)$m[1];
+        } else {
             return '';
         }
         $map = [
@@ -1531,7 +1537,6 @@ class FirewallPoll
             136 => 'vlan',
             161 => 'lag',
         ];
-        $code = (int)$n;
         return $map[$code] ?? (string)$code;
     }
 }
