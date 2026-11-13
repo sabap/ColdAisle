@@ -19,6 +19,22 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.27] - 2026-11-13
+
+### New features
+
+- **Dashboard:** A Firewalls card lists each firewall and up to two WAN links, with Up or Down and a rate when the link reports a speed
+- **Devices:** A device whose type is Firewall keeps its rack placement and opens SNMP, charts, and credentials on Plant → Firewalls. Edit the firewall to link the rack device
+
+### Enhancements
+
+- **Firewalls:** The edit form uses the same field layout as the rest of ColdAisle. Virtual tunnel interfaces show Up or Down only. Throughput charts stay on links that report a speed
+
+### Bug fixes
+
+- **Firewalls:** A tunnel the firewall has removed, or that is administratively down, leaves the interface table. Hide is there for a tunnel SNMP still reports
+
+---
 ## [1.0.26] - 2026-11-13
 
 ### Enhancements
