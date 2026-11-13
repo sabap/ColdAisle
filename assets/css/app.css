@@ -4407,6 +4407,32 @@ body.site-tour-open { overflow: hidden; }
   gap: 1rem;
 }
 .fw-vpn-row-one { grid-template-columns: 1fr; }
+.fw-templates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .75rem;
+  margin: 0 0 1rem;
+}
+.fw-template {
+  text-align: left;
+  background: rgba(15, 23, 42, .45);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  padding: .75rem .9rem;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.fw-template strong { display: block; margin-bottom: .25rem; }
+.fw-template span { display: block; color: var(--muted); font-size: .82rem; line-height: 1.35; }
+.fw-template.is-selected {
+  border-color: #38bdf8;
+  box-shadow: inset 0 0 0 1px #38bdf8;
+}
+.fw-fmc-title {
+  margin: .4rem 0 .35rem;
+  font-size: 1rem;
+}
 .fw-legend {
   display: flex;
   flex-wrap: wrap;
@@ -4531,6 +4557,6 @@ body.site-tour-open { overflow: hidden; }
 .fw-if-switch { margin: .2rem 0; }
 .fw-if-switch-name { font-size: .92rem; }
 @media (max-width: 800px) {
-  .fw-chart-grid, .fw-vpn-row { grid-template-columns: 1fr; }
+  .fw-chart-grid, .fw-vpn-row, .fw-templates { grid-template-columns: 1fr; }
   .fw-if-spans { grid-template-columns: 1fr; }
 }

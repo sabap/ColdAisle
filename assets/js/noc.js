@@ -1136,30 +1136,54 @@
     return parts.join(' · ');
   }
 
+  function firewallGroups(list) {
+    var order = [];
+    var map = {};
+    list.forEach(function (fw) {
+      var label = String(fw.ha_group || '').trim() || String(fw.ha_pair || '').trim();
+      var key = label
+        ? ('pair:' + label.toLowerCase())
+        : ('id:' + String(fw.firewall_id != null ? fw.firewall_id : fw.name || order.length));
+      if (!map[key]) {
+        map[key] = { label: label, members: [] };
+        order.push(key);
+      }
+      map[key].members.push(fw);
+    });
+    return order.map(function (key) { return map[key]; });
+  }
+
   function renderFirewalls(data) {
     var list = data.firewalls || [];
-    var fw = list[0];
-    if (!fw) {
+    if (!list.length) {
       return '<div class="noc-panel-frame noc-frame-empty"><div class="noc-empty">No firewalls</div></div>';
     }
+    var html = '<div class="noc-panel-frame noc-frame-fw">';
+    if (list.length === 1) {
+      html += renderFirewallUnit(list[0], 5);
+    } else {
+      firewallGroups(list).forEach(function (group) {
+        if (group.members.length > 1 && group.label) {
+          html += '<div class="noc-fw-pair">' + esc(group.label) + '</div>';
+        }
+        group.members.forEach(function (fw) {
+          html += '<section class="noc-fw-unit">' + renderFirewallUnit(fw, 2) + '</section>';
+        });
+      });
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderFirewallUnit(fw, ifaceCap) {
     var rawIfaces = fw.interfaces || [];
     var graphed = rawIfaces.filter(function (iface) { return iface.graph !== false; });
-    var ifaces = graphed.slice(0, 5);
+    var ifaces = graphed.slice(0, ifaceCap);
     var role = fw.failover || '—';
-    var html = '<div class="noc-panel-frame noc-frame-fw">';
-    html += '<div class="noc-section-head">' +
+    var html = '<div class="noc-section-head">' +
       '<span class="noc-section-label">' + esc(fw.name || 'Firewall') +
       (fw.model ? ' · ' + esc(fw.model) : '') + '</span>' +
       '<span class="noc-section-count">Last ' + fmtNum(fw.window_hours || 6, 0) + 'h</span></div>';
-    if (list.length > 1) {
-      html += '<div class="noc-fw-chips">';
-      list.slice(1).forEach(function (other) {
-        html += '<div class="noc-fw-chip"><span class="noc-fw-chip-name">' + esc(other.name || 'Firewall') + '</span>' +
-          '<span>' + fmtNum(other.cpu, 0) + '% CPU</span>' +
-          '<span>' + fmtInt(other.connections) + ' conn</span></div>';
-      });
-      html += '</div>';
-    }
     html += '<div class="noc-hero-row">';
     html += heroStat(pctTone(fw.cpu), 'CPU',
       fmtNum(fw.cpu, 1) + '<span class="unit">%</span>', '5 min average');
@@ -1229,6 +1253,19 @@
     } else {
       gaugeCols = patCol + acCol + ipsecCol;
     }
+    function pctGauge(label, value, series, color) {
+      if (!seriesHasNum(series)) return '';
+      var now = '—';
+      if (value != null && !isNaN(value)) {
+        var s = Number(value).toFixed(1);
+        if (s.indexOf('.') !== -1) s = s.replace(/0+$/, '').replace(/\.$/, '');
+        now = s + '%';
+      }
+      return gaugeCard(label, now, series, color);
+    }
+    gaugeCols += pctGauge('Data plane', fw.cpu_lina, fw.cpu_lina_series, '#38bdf8');
+    gaugeCols += pctGauge('Snort', fw.cpu_snort, fw.cpu_snort_series, '#fbbf24');
+    gaugeCols += pctGauge('Disk', fw.disk, fw.disk_series, '#fb7185');
     if (gaugeCols) html += '<div class="noc-fw-gauges">' + gaugeCols + '</div>';
 
     html += '<div class="noc-section-head"><span class="noc-section-label">Throughput</span>' +
@@ -1264,7 +1301,6 @@
       html += '</div>';
       html += moreNote(ifaces.length, graphed.length, 'interfaces');
     }
-    html += '</div>';
     return html;
   }
 

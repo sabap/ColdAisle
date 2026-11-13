@@ -1439,6 +1439,13 @@ CREATE TABLE firewalls (
     snmp_last_poll_at DATETIME2 NULL,
     last_poll_json NVARCHAR(MAX) NULL,
     if_graph_json NVARCHAR(MAX) NULL,
+    platform NVARCHAR(20) NULL,
+    ha_group NVARCHAR(80) NULL,
+    fmc_host NVARCHAR(255) NULL,
+    fmc_port INT NULL,
+    fmc_username NVARCHAR(150) NULL,
+    fmc_password NVARCHAR(255) NULL,
+    fmc_verify_tls BIT NULL,
     last_error NVARCHAR(400) NULL,
     last_version NVARCHAR(40) NULL,
     last_failover NVARCHAR(40) NULL,
@@ -1471,6 +1478,9 @@ CREATE TABLE firewall_samples (
     vpn_l2l INT NULL,
     ipsec_tunnels INT NULL,
     ike_tunnels INT NULL,
+    cpu_lina_pct DECIMAL(6,2) NULL,
+    cpu_snort_pct DECIMAL(6,2) NULL,
+    disk_pct DECIMAL(6,2) NULL,
     failover NVARCHAR(40) NULL,
     polled_at DATETIME2 NOT NULL
 );

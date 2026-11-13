@@ -60,11 +60,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'snmp_port' => (int)($_POST['snmp_port'] ?? 161) > 0 ? (int)$_POST['snmp_port'] : 161,
                 'snmp_v3_sec_level' => trim((string)($_POST['snmp_v3_sec_level'] ?? '')) ?: null,
                 'snmp_security_name' => trim((string)($_POST['snmp_security_name'] ?? '')) ?: null,
-                'snmp_auth_protocol' => trim((string)($_POST['snmp_auth_protocol'] ?? '')) ?: 'SHA',
-                'snmp_priv_protocol' => trim((string)($_POST['snmp_priv_protocol'] ?? '')) ?: 'AES',
+                'snmp_auth_protocol' => firewall_snmp_proto((string)($_POST['snmp_auth_protocol'] ?? ''), 'auth'),
+                'snmp_priv_protocol' => firewall_snmp_proto((string)($_POST['snmp_priv_protocol'] ?? ''), 'priv'),
                 'snmp_context' => trim((string)($_POST['snmp_context'] ?? '')) ?: null,
                 'snmp_auto_poll' => (!empty($_POST['snmp_enabled']) && !empty($_POST['snmp_auto_poll'])) ? 1 : 0,
                 'notes' => trim((string)($_POST['notes'] ?? '')) ?: null,
+                'platform' => (($_POST['platform'] ?? '') === 'ftd') ? 'ftd' : 'asa',
+                'ha_group' => trim((string)($_POST['ha_group'] ?? '')) !== ''
+                    ? substr(trim((string)$_POST['ha_group']), 0, 80) : null,
+                'fmc_host' => ($fmcHost = trim((string)($_POST['fmc_host'] ?? ''))) !== '' ? substr($fmcHost, 0, 255) : null,
+                'fmc_port' => (int)($_POST['fmc_port'] ?? 443) > 0 ? (int)$_POST['fmc_port'] : 443,
+                'fmc_username' => ($fmcUser = trim((string)($_POST['fmc_username'] ?? ''))) !== '' ? substr($fmcUser, 0, 150) : null,
+                'fmc_verify_tls' => !empty($_POST['fmc_verify_tls']) ? 1 : 0,
                 'updated_at' => gmdate('Y-m-d H:i:s'),
             ];
             if ($prev && isset($_POST['if_graph_form'])) {
@@ -92,6 +99,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 $row['snmp_priv_passphrase'] = Crypto::encrypt($privPass);
             } elseif (!$prev) {
                 $row['snmp_priv_passphrase'] = null;
+            }
+            $fmcPass = (string)($_POST['fmc_password'] ?? '');
+            if ($fmcPass !== '') {
+                $row['fmc_password'] = Crypto::encrypt($fmcPass);
+            } elseif (!$prev) {
+                $row['fmc_password'] = null;
             }
             if ($prev) {
                 Database::update('firewalls', $row, 'firewall_id = :id', [':id' => $fid]);
@@ -181,7 +194,21 @@ if ($action === 'new' || ($action === 'edit' && $id > 0)) {
         'snmp_context' => '',
         'snmp_auto_poll' => 1,
         'notes' => '',
+        'platform' => 'asa',
+        'ha_group' => '',
+        'fmc_host' => '',
+        'fmc_port' => 443,
+        'fmc_username' => '',
+        'fmc_verify_tls' => 1,
     ];
+    if ($action === 'new' && (string)($_GET['template'] ?? '') === 'ftd') {
+        $fw['platform'] = 'ftd';
+        $fw['model'] = '';
+        $fw['snmp_version'] = '3';
+        $fw['snmp_auth_protocol'] = 'SHA256';
+        $fw['snmp_priv_protocol'] = 'AES256';
+        $fw['snmp_v3_sec_level'] = 'authPriv';
+    }
     if ($action === 'edit') {
         $loaded = Database::fetchOne('SELECT * FROM firewalls WHERE firewall_id = ? AND is_active = 1', [$id]);
         if (!$loaded) {
@@ -234,7 +261,7 @@ layout_header('Firewalls', $user, 'firewalls');
 <div class="flex-between mb-2">
     <div>
         <h1 class="page-title" style="margin:0">Firewalls</h1>
-        <p class="text-muted" style="margin:.35rem 0 0">Cisco ASA stats over SNMP. The first devices are ASA 5525-class units on 9.12. ColdAisle reads version, failover, CPU, memory, connections, PAT xlates, VPN session and tunnel counts, and interface counters. It does not collect the activation key or VPN user sessions. On a multiple-context ASA, set the SNMP context to the admin context.</p>
+        <p class="text-muted" style="margin:.35rem 0 0">Add a Cisco ASA or a Secure Firewall Threat Defense. Each firewall keeps its own charts. An HA pair name groups the two members on the NOC without adding their numbers together. ColdAisle reads version, failover, CPU, memory, connections, and interface counters, and, when the firewall reports them, PAT xlates, VPN session and tunnel counts, data-plane and Snort CPU, and disk use. It does not collect the activation key or VPN user sessions. On a multiple-context ASA, set the SNMP context to the admin context. Threat Defense is polled with SNMPv3 on the firewall. An optional management center adds health and the HA pair name, and does not replace those charts.</p>
     </div>
     <?php if ($canEdit): ?>
         <a class="btn btn-primary" href="?action=new">Add firewall</a>
@@ -256,11 +283,12 @@ layout_header('Firewalls', $user, 'firewalls');
         </thead>
         <tbody>
         <?php if (!$list): ?>
-            <tr><td colspan="8" class="text-muted">No firewalls yet. Add the ASA and point SNMP at its management address.</td></tr>
+            <tr><td colspan="8" class="text-muted">No firewalls yet. Add one and choose the ASA or Threat Defense template.</td></tr>
         <?php endif; ?>
         <?php foreach ($list as $row): ?>
             <tr>
-                <td><a href="?id=<?= (int)$row['firewall_id'] ?>"><?= App::e((string)$row['name']) ?></a></td>
+                <td><a href="?id=<?= (int)$row['firewall_id'] ?>"><?= App::e((string)$row['name']) ?></a>
+                    <div class="text-muted"><?= (($row['platform'] ?? '') === 'ftd') ? 'Threat Defense' : 'ASA' ?><?php if (!empty($row['ha_group'])): ?> · <?= App::e((string)$row['ha_group']) ?><?php endif; ?></div></td>
                 <td><?= App::e((string)($row['model'] ?? '')) ?></td>
                 <td><?= App::e((string)($row['primary_ip'] ?? '')) ?></td>
                 <td><?= App::e((string)($row['last_version'] ?? '')) ?></td>
@@ -283,6 +311,34 @@ layout_footer();
 function firewall_form(array $fw, array $rooms): void
 {
     $fid = (int)($fw['firewall_id'] ?? 0);
+    $platform = strtolower((string)($fw['platform'] ?? 'asa')) === 'ftd' ? 'ftd' : 'asa';
+    $authChoices = ['MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512'];
+    $privChoices = ['DES', 'AES', 'AES192', 'AES256'];
+    $authNow = strtoupper(str_replace(['-', ' '], '', (string)($fw['snmp_auth_protocol'] ?? 'SHA')));
+    if ($authNow === 'SHA1') {
+        $authNow = 'SHA';
+    }
+    if ($authNow === '') {
+        $authNow = 'SHA';
+    }
+    if (!in_array($authNow, $authChoices, true)) {
+        array_unshift($authChoices, $authNow);
+    }
+    $privNow = strtoupper(str_replace(['-', ' '], '', (string)($fw['snmp_priv_protocol'] ?? 'AES')));
+    if ($privNow === 'AES128') {
+        $privNow = 'AES';
+    }
+    if ($privNow === '') {
+        $privNow = 'AES';
+    }
+    if (!in_array($privNow, $privChoices, true)) {
+        array_unshift($privChoices, $privNow);
+    }
+    $fmcVerify = $fw['fmc_verify_tls'] ?? null;
+    $fmcVerifyOn = !($fmcVerify === 0 || $fmcVerify === '0' || $fmcVerify === false);
+    $ctxHelp = $platform === 'ftd'
+        ? 'Usually blank. SNMP is set in the management center platform settings, deployed, and polled on this firewall\'s management address.'
+        : 'Blank for single context. Admin context name when the ASA is in multiple mode.';
     ?>
     <div class="flex-between mb-2">
         <h1 class="page-title" style="margin:0"><?= $fid ? 'Edit firewall' : 'Add firewall' ?></h1>
@@ -292,6 +348,17 @@ function firewall_form(array $fw, array $rooms): void
         <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
         <input type="hidden" name="action" value="save_firewall">
         <input type="hidden" name="firewall_id" value="<?= $fid ?>">
+        <input type="hidden" name="platform" id="fw_platform" value="<?= App::e($platform) ?>">
+        <div class="fw-templates" id="fwTemplates" data-mode="<?= $fid ? 'edit' : 'new' ?>">
+            <button type="button" class="fw-template<?= $platform === 'asa' ? ' is-selected' : '' ?>" data-platform="asa" aria-pressed="<?= $platform === 'asa' ? 'true' : 'false' ?>">
+                <strong>Cisco ASA</strong>
+                <span>SNMPv2c template. VPN, PAT, and interface charts. On a multiple-context ASA, set the context to the admin context.</span>
+            </button>
+            <button type="button" class="fw-template<?= $platform === 'ftd' ? ' is-selected' : '' ?>" data-platform="ftd" aria-pressed="<?= $platform === 'ftd' ? 'true' : 'false' ?>">
+                <strong>Cisco Secure Firewall Threat Defense</strong>
+                <span>SNMPv3 template for the firewall management address. Set SNMP in the management center platform settings and deploy it. Charts stay on this firewall.</span>
+            </button>
+        </div>
         <div class="form-row">
             <label for="fw_name">Name</label>
             <input id="fw_name" name="name" required value="<?= App::e((string)$fw['name']) ?>">
@@ -302,7 +369,7 @@ function firewall_form(array $fw, array $rooms): void
         </div>
         <div class="form-row">
             <label for="fw_model">Model</label>
-            <input id="fw_model" name="model" value="<?= App::e((string)($fw['model'] ?? '')) ?>" placeholder="ASA5525">
+            <input id="fw_model" name="model" value="<?= App::e((string)($fw['model'] ?? '')) ?>" placeholder="<?= $platform === 'ftd' ? 'Discovered from the firewall' : 'ASA5525' ?>">
         </div>
         <div class="form-row">
             <label for="fw_host">Hostname</label>
@@ -336,6 +403,11 @@ function firewall_form(array $fw, array $rooms): void
             </select>
         </div>
         <div class="form-row">
+            <label for="fw_ha_group">HA pair name</label>
+            <input id="fw_ha_group" name="ha_group" maxlength="80" value="<?= App::e((string)($fw['ha_group'] ?? '')) ?>" placeholder="Same name on both members">
+            <p class="text-muted" style="margin:.35rem 0 0">Members with the same name are grouped on the NOC. Each member keeps its own charts. The numbers are not added together.</p>
+        </div>
+        <div class="form-row">
             <label><input type="checkbox" name="snmp_enabled" value="1" <?= !empty($fw['snmp_enabled']) ? 'checked' : '' ?>> SNMP enabled</label>
         </div>
         <div class="form-row">
@@ -351,7 +423,8 @@ function firewall_form(array $fw, array $rooms): void
         </div>
         <div class="form-row">
             <label for="fw_ctx">SNMP context</label>
-            <input id="fw_ctx" name="snmp_context" value="<?= App::e((string)($fw['snmp_context'] ?? '')) ?>" placeholder="Blank for single context. Admin context name when the ASA is in multiple mode.">
+            <input id="fw_ctx" name="snmp_context" value="<?= App::e((string)($fw['snmp_context'] ?? '')) ?>">
+            <p class="text-muted" id="fw_ctx_help" style="margin:.35rem 0 0"><?= App::e($ctxHelp) ?></p>
         </div>
         <div class="form-row">
             <label for="fw_comm">SNMPv2c community</label>
@@ -371,7 +444,11 @@ function firewall_form(array $fw, array $rooms): void
         </div>
         <div class="form-row">
             <label for="fw_authp">Auth protocol</label>
-            <input id="fw_authp" name="snmp_auth_protocol" value="<?= App::e((string)($fw['snmp_auth_protocol'] ?? 'SHA')) ?>">
+            <select id="fw_authp" name="snmp_auth_protocol">
+                <?php foreach ($authChoices as $ap): ?>
+                    <option value="<?= App::e($ap) ?>" <?= $authNow === $ap ? 'selected' : '' ?>><?= App::e($ap) ?></option>
+                <?php endforeach; ?>
+            </select>
         </div>
         <div class="form-row">
             <label for="fw_auth">Auth passphrase</label>
@@ -379,7 +456,11 @@ function firewall_form(array $fw, array $rooms): void
         </div>
         <div class="form-row">
             <label for="fw_privp">Privacy protocol</label>
-            <input id="fw_privp" name="snmp_priv_protocol" value="<?= App::e((string)($fw['snmp_priv_protocol'] ?? 'AES')) ?>">
+            <select id="fw_privp" name="snmp_priv_protocol">
+                <?php foreach ($privChoices as $pp): ?>
+                    <option value="<?= App::e($pp) ?>" <?= $privNow === $pp ? 'selected' : '' ?>><?= App::e($pp) ?></option>
+                <?php endforeach; ?>
+            </select>
         </div>
         <div class="form-row">
             <label for="fw_priv">Privacy passphrase</label>
@@ -387,6 +468,29 @@ function firewall_form(array $fw, array $rooms): void
         </div>
         <div class="form-row">
             <label><input type="checkbox" name="snmp_auto_poll" value="1" <?= !empty($fw['snmp_auto_poll']) ? 'checked' : '' ?>> Include in scheduled SNMP polling</label>
+        </div>
+        <div id="fwFmc" <?= $platform === 'ftd' ? '' : 'hidden' ?>>
+            <h2 class="fw-fmc-title">Management center</h2>
+            <p class="text-muted" style="margin:0 0 .75rem">Optional. Charts still come from SNMP on this firewall. The center adds health, software, and the HA pair name when SNMP left them blank. A center that cannot be reached does not fail the SNMP poll. Leave Verify TLS checked unless the center uses a private certificate.</p>
+            <div class="form-row">
+                <label for="fw_fmc_host">Host</label>
+                <input id="fw_fmc_host" name="fmc_host" value="<?= App::e((string)($fw['fmc_host'] ?? '')) ?>" placeholder="Management center address">
+            </div>
+            <div class="form-row">
+                <label for="fw_fmc_port">Port</label>
+                <input id="fw_fmc_port" name="fmc_port" value="<?= (int)($fw['fmc_port'] ?? 443) > 0 ? (int)$fw['fmc_port'] : 443 ?>">
+            </div>
+            <div class="form-row">
+                <label for="fw_fmc_user">Username</label>
+                <input id="fw_fmc_user" name="fmc_username" value="<?= App::e((string)($fw['fmc_username'] ?? '')) ?>" autocomplete="off">
+            </div>
+            <div class="form-row">
+                <label for="fw_fmc_pass">Password</label>
+                <input id="fw_fmc_pass" name="fmc_password" type="password" autocomplete="new-password" placeholder="<?= $fid ? 'Leave blank to keep' : '' ?>">
+            </div>
+            <div class="form-row">
+                <label><input type="checkbox" name="fmc_verify_tls" value="1" <?= $fmcVerifyOn ? 'checked' : '' ?>> Verify TLS</label>
+            </div>
         </div>
         <?php if ($fid > 0): ?>
             <?php
@@ -421,7 +525,80 @@ function firewall_form(array $fw, array $rooms): void
         </div>
         <button class="btn btn-primary" type="submit">Save</button>
     </form>
+    <script>
+    (function () {
+        var root = document.getElementById('fwTemplates');
+        var platform = document.getElementById('fw_platform');
+        if (!root || !platform) return;
+        var fresh = root.getAttribute('data-mode') === 'new';
+        var fmc = document.getElementById('fwFmc');
+        var model = document.getElementById('fw_model');
+        var ver = document.getElementById('fw_snmp_ver');
+        var auth = document.getElementById('fw_authp');
+        var priv = document.getElementById('fw_privp');
+        var level = document.getElementById('fw_level');
+        var help = document.getElementById('fw_ctx_help');
+        function apply(kind, fill) {
+            kind = kind === 'ftd' ? 'ftd' : 'asa';
+            platform.value = kind;
+            root.querySelectorAll('.fw-template').forEach(function (btn) {
+                var on = btn.getAttribute('data-platform') === kind;
+                btn.classList.toggle('is-selected', on);
+                btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+            });
+            if (fmc) fmc.hidden = kind !== 'ftd';
+            if (help) {
+                help.textContent = kind === 'ftd'
+                    ? 'Usually blank. SNMP is set in the management center platform settings, deployed, and polled on this firewall\'s management address.'
+                    : 'Blank for single context. Admin context name when the ASA is in multiple mode.';
+            }
+            if (model) model.placeholder = kind === 'ftd' ? 'Discovered from the firewall' : 'ASA5525';
+            if (!fill) return;
+            if (kind === 'ftd') {
+                if (model && (model.value === '' || model.value === 'ASA5525')) model.value = '';
+                if (ver) ver.value = '3';
+                if (auth) auth.value = 'SHA256';
+                if (priv) priv.value = 'AES256';
+                if (level) level.value = 'authPriv';
+            } else {
+                if (model && model.value === '') model.value = 'ASA5525';
+                if (ver) ver.value = '2c';
+                if (auth) auth.value = 'SHA';
+                if (priv) priv.value = 'AES';
+                if (level) level.value = 'authPriv';
+            }
+        }
+        root.addEventListener('click', function (ev) {
+            var btn = ev.target.closest ? ev.target.closest('.fw-template') : null;
+            if (!btn) return;
+            apply(btn.getAttribute('data-platform') || 'asa', fresh);
+        });
+        apply(platform.value, false);
+    })();
+    </script>
     <?php
+}
+
+/** Keep a known SNMP protocol, and pass an uncommon one through instead of wiping it. */
+function firewall_snmp_proto(string $raw, string $kind): string
+{
+    $p = strtoupper(str_replace(['-', ' '], '', trim($raw)));
+    if ($kind === 'auth') {
+        if ($p === 'SHA1') {
+            return 'SHA';
+        }
+        if (in_array($p, ['MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512'], true)) {
+            return $p;
+        }
+        return $p !== '' ? substr($p, 0, 20) : 'SHA';
+    }
+    if ($p === 'AES128') {
+        return 'AES';
+    }
+    if (in_array($p, ['DES', 'AES', 'AES192', 'AES256'], true)) {
+        return $p;
+    }
+    return $p !== '' ? substr($p, 0, 20) : 'AES';
 }
 
 /**
@@ -445,6 +622,7 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
             }
         }
     }
+    $isFtd = strtolower((string)($fw['platform'] ?? ($snap['platform'] ?? ''))) === 'ftd';
     $historyJson = json_encode(
         $history,
         JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_SLASHES
@@ -458,6 +636,7 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
             <h1 class="page-title" style="margin:0"><?= App::e((string)$fw['name']) ?></h1>
             <p class="text-muted" style="margin:.35rem 0 0">
                 <?= App::e(trim((string)($fw['vendor'] ?? '') . ' ' . (string)($fw['model'] ?? ''))) ?>
+                · <?= $isFtd ? 'Threat Defense' : 'ASA' ?>
                 <?php if (!empty($fw['dc_name']) || !empty($fw['room_name'])): ?>
                     · <?= App::e(trim((string)($fw['dc_name'] ?? '') . ' / ' . (string)($fw['room_name'] ?? ''), ' /')) ?>
                 <?php endif; ?>
@@ -508,9 +687,19 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
                 <?= App::e((string)$mem['pct']) ?>% used<?= !empty($mem['label']) ? ' (' . App::e((string)$mem['label']) . ')' : '' ?>
             <?php else: ?>—<?php endif; ?>
         </p>
+        <?php if ($isFtd || isset($snap['cpu_lina_pct']) || isset($snap['cpu_snort_pct'])): ?>
+            <p><strong>Data plane</strong> <?= isset($snap['cpu_lina_pct']) ? App::e((string)$snap['cpu_lina_pct']) . '%' : '—' ?>
+                · <strong>Snort</strong> <?= isset($snap['cpu_snort_pct']) ? App::e((string)$snap['cpu_snort_pct']) . '%' : '—' ?></p>
+        <?php endif; ?>
+        <?php if ($isFtd || isset($snap['disk_pct'])): ?>
+            <p><strong>Disk</strong> <?= isset($snap['disk_pct']) ? App::e((string)$snap['disk_pct']) . '%' : '—' ?></p>
+        <?php endif; ?>
         <p><strong>Connections</strong> <?= isset($snap['connections']) ? number_format((int)$snap['connections']) : '—' ?>
             <?php if (isset($snap['conn_peak'])): ?>
                 · table peak <?= number_format((int)$snap['conn_peak']) ?>
+            <?php endif; ?>
+            <?php if (isset($snap['conn_half_open'])): ?>
+                · <?= number_format((int)$snap['conn_half_open']) ?> half-open
             <?php endif; ?>
             <?php if (isset($snap['connections_per_sec'])): ?>
                 · <?= number_format((int)$snap['connections_per_sec']) ?> /s
@@ -519,12 +708,25 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
                 <?php endif; ?>
             <?php endif; ?>
         </p>
+        <?php
+        $patAny = isset($snap['xlate_pat']) || isset($snap['xlate_nat']);
+        $vpnAny = false;
+        foreach (['vpn_sessions', 'ipsec_tunnels', 'ike_tunnels', 'vpn_peak', 'vpn_svc', 'vpn_webvpn', 'vpn_l2l', 'vpn_ipsec'] as $vpnKey) {
+            if (isset($snap[$vpnKey]) && $snap[$vpnKey] !== '' && $snap[$vpnKey] !== null) {
+                $vpnAny = true;
+                break;
+            }
+        }
+        ?>
+        <?php if (!$isFtd || $patAny): ?>
         <p><strong><?= (($snap['xlate_source'] ?? '') === 'active') ? 'Translations' : 'PAT xlates' ?></strong>
             <?= isset($snap['xlate_pat']) ? number_format((int)$snap['xlate_pat']) : '—' ?>
             <?php if (isset($snap['xlate_nat'])): ?>
                 · <?= number_format((int)$snap['xlate_nat']) ?> address binds
             <?php endif; ?>
         </p>
+        <?php endif; ?>
+        <?php if (!$isFtd || $vpnAny): ?>
         <p><strong>VPN</strong>
             <?= isset($snap['vpn_sessions']) ? number_format((int)$snap['vpn_sessions']) . ' sessions' : '—' ?>
             <?php if (isset($snap['ipsec_tunnels'])): ?>
@@ -537,6 +739,23 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
                 · peak <?= number_format((int)$snap['vpn_peak']) ?>
             <?php endif; ?>
         </p>
+        <?php endif; ?>
+        <?php if (isset($snap['remote_access_total'])): ?>
+            <p><strong>Remote-access connections since boot</strong> <?= number_format((int)$snap['remote_access_total']) ?></p>
+        <?php endif; ?>
+        <?php
+        $pairName = trim((string)($fw['ha_group'] ?? ''));
+        $fmcPair = trim((string)($snap['ha_pair'] ?? ''));
+        if ($pairName !== '' || $fmcPair !== ''):
+        ?>
+            <p><strong>HA pair</strong> <?= App::e($pairName !== '' ? $pairName : $fmcPair) ?><?php if ($pairName !== '' && $fmcPair !== '' && strcasecmp($pairName, $fmcPair) !== 0): ?> · <?= App::e($fmcPair) ?><?php endif; ?></p>
+        <?php endif; ?>
+        <?php if (!empty($snap['fmc_health'])): ?>
+            <p><strong>Management center health</strong> <?= App::e((string)$snap['fmc_health']) ?></p>
+        <?php endif; ?>
+        <?php if (!empty($snap['fmc_error'])): ?>
+            <p><strong>Management center</strong> <?= App::e((string)$snap['fmc_error']) ?></p>
+        <?php endif; ?>
         <?php if (!empty($snap['polled_at'])): ?>
             <p class="text-muted">Last poll <?= App::e((string)$snap['polled_at']) ?> UTC</p>
         <?php endif; ?>
@@ -546,6 +765,21 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
     </div>
     <?php
     $hwAlerts = FirewallPoll::hardwareAlerts(is_array($fail['rows'] ?? null) ? $fail['rows'] : []);
+    foreach (is_array($snap['fmc_alerts'] ?? null) ? $snap['fmc_alerts'] : [] as $fmcAlert) {
+        if (!is_array($fmcAlert)) {
+            continue;
+        }
+        $fmcLabel = trim((string)($fmcAlert['label'] ?? ''));
+        $fmcStatus = trim((string)($fmcAlert['status'] ?? ''));
+        if ($fmcLabel === '' || $fmcStatus === '') {
+            continue;
+        }
+        $hwAlerts[] = [
+            'label' => $fmcLabel,
+            'detail' => trim((string)($fmcAlert['detail'] ?? '')),
+            'status' => $fmcStatus,
+        ];
+    }
     if ($hwAlerts): ?>
         <div class="alert alert-warning">
             <?php foreach ($hwAlerts as $alert): ?>
@@ -560,7 +794,7 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
     </div>
     <script type="application/json" id="fwHistoryBoot"><?= $historyJson ?></script>
     <script src="<?= App::e(App::url('assets/js/firewall-specks.js')) ?>?v=1"></script>
-    <script src="<?= App::e(App::url('assets/js/firewall-charts.js')) ?>?v=9"></script>
+    <script src="<?= App::e(App::url('assets/js/firewall-charts.js')) ?>?v=10"></script>
     <div class="card">
         <p class="text-muted" style="margin:.75rem 1rem .25rem">In and out rates are the change since the previous poll, as a percent of interface speed. Errors and discards are the count since that same poll. Octet counters are totals since the interface came up. Down interfaces, links with no reported speed, and interfaces with graphing turned off stay in this table only.</p>
         <table class="table">

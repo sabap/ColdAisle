@@ -1765,6 +1765,13 @@ class Schema
     private static function ensureFirewallColumns(): void
     {
         self::ensureColumn('firewalls', 'if_graph_json', 'NVARCHAR(MAX) NULL');
+        self::ensureColumn('firewalls', 'platform', 'NVARCHAR(20) NULL');
+        self::ensureColumn('firewalls', 'ha_group', 'NVARCHAR(80) NULL');
+        self::ensureColumn('firewalls', 'fmc_host', 'NVARCHAR(255) NULL');
+        self::ensureColumn('firewalls', 'fmc_port', 'INT NULL');
+        self::ensureColumn('firewalls', 'fmc_username', 'NVARCHAR(150) NULL');
+        self::ensureColumn('firewalls', 'fmc_password', 'NVARCHAR(255) NULL');
+        self::ensureColumn('firewalls', 'fmc_verify_tls', 'BIT NULL');
         foreach ([
             'conn_peak' => 'INT NULL',
             'xlate_pat' => 'INT NULL',
@@ -1777,6 +1784,9 @@ class Schema
             'vpn_l2l' => 'INT NULL',
             'ipsec_tunnels' => 'INT NULL',
             'ike_tunnels' => 'INT NULL',
+            'cpu_lina_pct' => 'DECIMAL(6,2) NULL',
+            'cpu_snort_pct' => 'DECIMAL(6,2) NULL',
+            'disk_pct' => 'DECIMAL(6,2) NULL',
         ] as $column => $definition) {
             self::ensureColumn('firewall_samples', $column, $definition);
         }

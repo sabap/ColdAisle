@@ -1185,7 +1185,34 @@ html, body {
 .noc-tab[hidden],
 .noc-panel[hidden] { display: none !important; }
 
+.noc-panel-frame.noc-frame-fw { overflow-y: auto; }
 .noc-frame-fw { gap: 0.4rem; }
+.noc-fw-pair {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  font-weight: 700;
+  padding: 0.15rem 0 0;
+}
+.noc-fw-unit {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.noc-fw-unit + .noc-fw-unit,
+.noc-fw-unit + .noc-fw-pair {
+  border-top: 1px solid rgba(148, 163, 184, 0.22);
+  padding-top: 0.55rem;
+  margin-top: 0.2rem;
+}
+.noc-fw-unit .noc-fw-list {
+  flex: 0 0 auto;
+  overflow: visible;
+}
 .noc-fw-role {
   font-size: 1.15rem;
   line-height: 1.15;

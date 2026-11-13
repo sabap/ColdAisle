@@ -64,6 +64,9 @@ class FirewallPoll
             'priv_passphrase' => $privPass,
         ]);
         $pollHost = SnmpPoller::resolveSnmpHostPublic($host);
+        $platform = self::platformOf($fw);
+        $snapshot = null;
+        $snmpError = null;
         try {
             $session = SnmpPoller::openSessionPublic(
                 $pollHost,
@@ -79,16 +82,41 @@ class FirewallPoll
                 (string)($fw['snmp_engine_id'] ?? '')
             );
             try {
-                $snapshot = self::collect($session);
+                $snapshot = $platform === 'ftd' ? self::collectFtd($session) : self::collect($session);
             } finally {
                 SnmpPoller::closeSessionPublic($session);
             }
-            self::save($fw, $snapshot);
-            return $snapshot;
         } catch (Throwable $e) {
-            self::recordError($fw, $e->getMessage());
-            throw $e;
+            $snmpError = $e->getMessage();
         }
+        if (!is_array($snapshot)) {
+            $snapshot = ['platform' => $platform];
+        }
+        $snapshot['platform'] = $platform;
+        if ($platform === 'ftd') {
+            require_once __DIR__ . '/FmcClient.php';
+            $snapshot = FmcClient::enrich($fw, $snapshot);
+        }
+        $snmpUseful = $snmpError === null && self::snapshotHasCounters($snapshot);
+        $fmcUseful = trim((string)($snapshot['fmc_health'] ?? '')) !== ''
+            || trim((string)($snapshot['ha_pair'] ?? '')) !== ''
+            || !empty($snapshot['fmc_alerts']);
+        if (!$snmpUseful && !$fmcUseful) {
+            $message = $snmpError ?? 'SNMP answered no firewall counters.';
+            self::recordError($fw, $message);
+            throw new RuntimeException($message);
+        }
+        self::save($fw, $snapshot);
+        if ($snmpError !== null) {
+            self::recordError($fw, $snmpError);
+        }
+        return $snapshot;
+    }
+
+    public static function platformOf(array $fw): string
+    {
+        $platform = strtolower(trim((string)($fw['platform'] ?? 'asa')));
+        return $platform === 'ftd' ? 'ftd' : 'asa';
     }
 
     /**
@@ -187,8 +215,147 @@ class FirewallPoll
             $model = 'ASA' . strtoupper($m[1]);
         } elseif (preg_match('/\b(ASA[0-9]{4}[0-9A-Z-]*)\b/i', $descr, $m)) {
             $model = strtoupper($m[1]);
+        } elseif (preg_match('/\b(?:Secure Firewall|Firepower|FPR-?)\s*([0-9]{3,4}[0-9A-Z-]*)\b/i', $descr, $m)) {
+            $model = 'Secure Firewall ' . strtoupper($m[1]);
         }
         return ['version' => $version, 'model' => $model];
+    }
+
+    /**
+     * Threat Defense on the device management address. ASA counters are read when LINA still answers them.
+     *
+     * @param array<string,mixed> $session
+     * @return array<string,mixed>
+     */
+    public static function collectFtd(array $session): array
+    {
+        try {
+            $base = self::collect($session);
+        } catch (RuntimeException $e) {
+            if (!str_contains($e->getMessage(), 'no ASA system')) {
+                throw $e;
+            }
+            $base = [
+                'polled_at' => gmdate('c'),
+                'sys_name' => '',
+                'sys_descr' => '',
+                'version' => null,
+                'model_guess' => null,
+                'uptime_sec' => null,
+                'cpu_pct' => null,
+                'memory' => null,
+                'failover' => ['this_unit' => null, 'peer' => null, 'rows' => []],
+                'connections' => null,
+                'conn_peak' => null,
+                'connections_per_sec' => null,
+                'connections_per_sec_peak' => null,
+                'xlate_pat' => null,
+                'xlate_nat' => null,
+                'xlate_source' => null,
+                'vpn_sessions' => null,
+                'vpn_peak' => null,
+                'vpn_ipsec' => null,
+                'vpn_svc' => null,
+                'vpn_webvpn' => null,
+                'vpn_l2l' => null,
+                'ipsec_tunnels' => null,
+                'ike_tunnels' => null,
+                'serial' => null,
+                'interfaces' => [],
+            ];
+        }
+        $cpus = self::classifyCpus(self::cpuRows($session));
+        if ($cpus['cpu_pct'] !== null) {
+            $base['cpu_pct'] = $cpus['cpu_pct'];
+        }
+        $base['cpu_lina_pct'] = $cpus['cpu_lina_pct'];
+        $base['cpu_snort_pct'] = $cpus['cpu_snort_pct'];
+        $base['disk_pct'] = self::pickDisk(self::diskRows($session));
+        $active = self::gauge(self::tryGet($session, '1.3.6.1.4.1.9.9.491.1.1.1.6.0'));
+        if ($active !== null) {
+            $base['connections'] = $active;
+        }
+        $half = self::gauge(self::tryGet($session, '1.3.6.1.4.1.9.9.491.1.1.1.5.0'));
+        if ($half !== null) {
+            $base['conn_half_open'] = $half;
+        }
+        $rate = self::gauge(self::tryGet($session, '1.3.6.1.4.1.9.9.491.1.1.1.10.0'));
+        if ($rate !== null) {
+            $base['connections_per_sec'] = $rate;
+        }
+        $remote = self::gauge(self::tryGet($session, '1.3.6.1.4.1.9.9.491.1.1.1.12.0'));
+        if ($remote !== null) {
+            $base['remote_access_total'] = $remote;
+        }
+        $sensors = self::sensorRows($session);
+        if ($sensors) {
+            $fail = is_array($base['failover'] ?? null) ? $base['failover'] : [
+                'this_unit' => null,
+                'peer' => null,
+                'rows' => [],
+            ];
+            $rows = is_array($fail['rows'] ?? null) ? $fail['rows'] : [];
+            $fail['rows'] = array_merge($rows, $sensors);
+            $base['failover'] = $fail;
+        }
+        $base['platform'] = 'ftd';
+        return $base;
+    }
+
+    /**
+     * @param list<array{name:string,value:float}> $rows
+     * @return array{cpu_pct:?float,cpu_lina_pct:?float,cpu_snort_pct:?float}
+     */
+    public static function classifyCpus(array $rows): array
+    {
+        $lina = null;
+        $snort = null;
+        $system = null;
+        $plain = [];
+        foreach ($rows as $row) {
+            $value = $row['value'];
+            $label = strtolower($row['name']);
+            if (str_contains($label, 'snort')) {
+                $snort = $value;
+            } elseif (str_contains($label, 'lina') || str_contains($label, 'data plane') || str_contains($label, 'dataplane')) {
+                $lina = $value;
+            } elseif (str_contains($label, 'system') || str_contains($label, 'total') || $label === 'cpu') {
+                $system = $value;
+            } else {
+                $plain[] = $value;
+            }
+        }
+        if ($system === null && $plain) {
+            $system = round(array_sum($plain) / count($plain), 2);
+        }
+        return [
+            'cpu_pct' => $system,
+            'cpu_lina_pct' => $lina,
+            'cpu_snort_pct' => $snort,
+        ];
+    }
+
+    /**
+     * @param list<array{label:string,size:float,used:float}> $rows
+     */
+    public static function pickDisk(array $rows): ?float
+    {
+        $best = null;
+        $bestSize = -1.0;
+        foreach ($rows as $row) {
+            $label = strtolower($row['label']);
+            if (!str_contains($label, 'disk') && !str_contains($label, 'flash') && !str_contains($label, 'storage') && !str_contains($label, '/ngfw')) {
+                continue;
+            }
+            if ($row['size'] <= 0) {
+                continue;
+            }
+            if ($row['size'] > $bestSize) {
+                $bestSize = $row['size'];
+                $best = round(($row['used'] / $row['size']) * 100, 2);
+            }
+        }
+        return $best;
     }
 
     /**
@@ -462,6 +629,9 @@ class FirewallPoll
             'vpn_l2l' => self::sampleInt($snapshot, 'vpn_l2l'),
             'ipsec_tunnels' => self::sampleInt($snapshot, 'ipsec_tunnels'),
             'ike_tunnels' => self::sampleInt($snapshot, 'ike_tunnels'),
+            'cpu_lina_pct' => self::samplePct($snapshot, 'cpu_lina_pct'),
+            'cpu_snort_pct' => self::samplePct($snapshot, 'cpu_snort_pct'),
+            'disk_pct' => self::samplePct($snapshot, 'disk_pct'),
             'failover' => isset($fail['this_unit']) && $fail['this_unit'] !== null && $fail['this_unit'] !== ''
                 ? substr((string)$fail['this_unit'], 0, 40) : null,
             'polled_at' => $polledAt,
@@ -834,6 +1004,127 @@ class FirewallPoll
             return $map[(int)$code];
         }
         return $detail;
+    }
+
+    /** @param array<string,mixed> $snapshot */
+    private static function samplePct(array $snapshot, string $key): ?float
+    {
+        if (!isset($snapshot[$key]) || !is_numeric($snapshot[$key])) {
+            return null;
+        }
+        return round((float)$snapshot[$key], 2);
+    }
+
+    /** @param array<string,mixed> $snapshot */
+    private static function snapshotHasCounters(array $snapshot): bool
+    {
+        if (trim((string)($snapshot['sys_descr'] ?? '')) !== '' || trim((string)($snapshot['sys_name'] ?? '')) !== '') {
+            return true;
+        }
+        if (!empty($snapshot['interfaces'])) {
+            return true;
+        }
+        foreach (['connections', 'cpu_pct', 'cpu_lina_pct', 'cpu_snort_pct', 'disk_pct'] as $key) {
+            if (isset($snapshot[$key]) && is_numeric($snapshot[$key])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @param array<string,mixed> $session
+     * @return list<array{name:string,value:float}>
+     */
+    private static function cpuRows(array $session): array
+    {
+        $loadOid = '1.3.6.1.4.1.9.9.109.1.1.1.1.8';
+        $physOid = '1.3.6.1.4.1.9.9.109.1.1.1.1.2';
+        $nameOid = '1.3.6.1.2.1.47.1.1.1.1.7';
+        $loads = self::reindex(SnmpPoller::sessionWalk($session, $loadOid), $loadOid);
+        $phys = self::reindex(SnmpPoller::sessionWalk($session, $physOid), $physOid);
+        $names = self::walkText(self::reindex(SnmpPoller::sessionWalk($session, $nameOid), $nameOid));
+        $rows = [];
+        foreach ($loads as $idx => $raw) {
+            $value = self::numeric($raw);
+            if ($value === null) {
+                continue;
+            }
+            $physIdx = trim((string)($phys[$idx] ?? ''));
+            $physIdx = preg_replace('/\D+/', '', $physIdx) ?? '';
+            $rows[] = [
+                'name' => trim((string)($names[$physIdx] ?? '')),
+                'value' => $value,
+            ];
+        }
+        return $rows;
+    }
+
+    /**
+     * @param array<string,mixed> $session
+     * @return list<array{label:string,size:float,used:float}>
+     */
+    private static function diskRows(array $session): array
+    {
+        $descrOid = '1.3.6.1.2.1.25.2.3.1.3';
+        $sizeOid = '1.3.6.1.2.1.25.2.3.1.5';
+        $usedOid = '1.3.6.1.2.1.25.2.3.1.6';
+        $descr = self::walkText(self::reindex(SnmpPoller::sessionWalk($session, $descrOid), $descrOid));
+        $size = self::reindex(SnmpPoller::sessionWalk($session, $sizeOid), $sizeOid);
+        $used = self::reindex(SnmpPoller::sessionWalk($session, $usedOid), $usedOid);
+        $rows = [];
+        foreach ($descr as $idx => $label) {
+            $sizeN = self::numeric($size[$idx] ?? null);
+            $usedN = self::numeric($used[$idx] ?? null);
+            if ($sizeN === null || $usedN === null) {
+                continue;
+            }
+            $rows[] = ['label' => $label, 'size' => $sizeN, 'used' => $usedN];
+        }
+        return $rows;
+    }
+
+    /**
+     * Temperatures, fans, and power rails from ENTITY-SENSOR-MIB. Healthy rows stay out of the alert strip.
+     *
+     * @param array<string,mixed> $session
+     * @return list<array{label:string,detail:string,status:string}>
+     */
+    private static function sensorRows(array $session): array
+    {
+        $nameOid = '1.3.6.1.2.1.47.1.1.1.1.7';
+        $typeOid = '1.3.6.1.4.1.9.9.91.1.1.1.1.1';
+        $valueOid = '1.3.6.1.4.1.9.9.91.1.1.1.1.4';
+        $scaleOid = '1.3.6.1.4.1.9.9.91.1.1.1.1.2';
+        $names = self::walkText(self::reindex(SnmpPoller::sessionWalk($session, $nameOid), $nameOid));
+        $types = self::reindex(SnmpPoller::sessionWalk($session, $typeOid), $typeOid);
+        $values = self::reindex(SnmpPoller::sessionWalk($session, $valueOid), $valueOid);
+        $scales = self::reindex(SnmpPoller::sessionWalk($session, $scaleOid), $scaleOid);
+        $units = [4 => 'V', 5 => 'V', 6 => 'A', 8 => 'C', 10 => 'rpm'];
+        $rows = [];
+        foreach ($types as $idx => $rawType) {
+            $type = self::numeric($rawType);
+            if ($type === null || !isset($units[(int)$type])) {
+                continue;
+            }
+            $value = self::numeric($values[$idx] ?? null);
+            if ($value === null) {
+                continue;
+            }
+            $scale = self::numeric($scales[$idx] ?? null);
+            $scaled = $scale === null ? $value : $value * (10 ** ((int)$scale - 9));
+            $label = trim((string)($names[$idx] ?? 'Sensor'));
+            if ($label === '') {
+                $label = 'Sensor';
+            }
+            $unit = $units[(int)$type];
+            $shown = abs($scaled - round($scaled)) < 0.05 ? (string)(int)round($scaled) : (string)round($scaled, 1);
+            $rows[] = ['label' => $label, 'detail' => $shown . ' ' . $unit, 'status' => 'ok'];
+            if (count($rows) >= 24) {
+                break;
+            }
+        }
+        return $rows;
     }
 
     private static function ifOper(?float $code): string

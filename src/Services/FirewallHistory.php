@@ -19,13 +19,8 @@ class FirewallHistory
     public static function wall(): array
     {
         try {
-            $rows = Database::fetchAll(
-                'SELECT TOP 3 firewall_id, name, model, last_failover, last_cpu_pct, last_connections, last_cps,
-                        snmp_last_poll_at, last_poll_json
-                 FROM firewalls
-                 WHERE is_active = 1
-                 ORDER BY CASE WHEN last_connections IS NULL THEN 1 ELSE 0 END,
-                          last_connections DESC, name'
+            $rows = self::fetchFirewallList(
+                'WHERE is_active = 1 ORDER BY name'
             );
         } catch (Throwable $e) {
             return [];
@@ -37,14 +32,7 @@ class FirewallHistory
                 $out[] = $one;
             }
         }
-        usort($out, static function (array $a, array $b): int {
-            $c = ((int)($b['connections'] ?? -1)) <=> ((int)($a['connections'] ?? -1));
-            if ($c !== 0) {
-                return $c;
-            }
-            return strcasecmp((string)$a['name'], (string)$b['name']);
-        });
-        return array_slice($out, 0, 3);
+        return array_slice($out, 0, 12);
     }
 
     /** @return array<string,mixed>|null */
@@ -54,13 +42,8 @@ class FirewallHistory
             return null;
         }
         try {
-            $row = Database::fetchOne(
-                'SELECT firewall_id, name, model, last_failover, last_cpu_pct, last_connections, last_cps,
-                        snmp_last_poll_at, last_poll_json
-                 FROM firewalls
-                 WHERE firewall_id = ? AND is_active = 1',
-                [$firewallId]
-            );
+            $rows = self::fetchFirewallList('WHERE firewall_id = ? AND is_active = 1', [$firewallId]);
+            $row = $rows[0] ?? null;
         } catch (Throwable $e) {
             return null;
         }
@@ -296,6 +279,9 @@ class FirewallHistory
         $vpnSeries = [];
         $ipsecSeries = [];
         $anyConnectSeries = [];
+        $linaSeries = [];
+        $snortSeries = [];
+        $diskSeries = [];
         foreach ($samples as $sample) {
             $cpu[] = self::numOrNull($sample['cpu_pct'] ?? null);
             $memory[] = self::numOrNull($sample['memory_pct'] ?? null);
@@ -306,6 +292,9 @@ class FirewallHistory
             $vpnSeries[] = self::intOrNull($sample['vpn_sessions'] ?? null);
             $ipsecSeries[] = self::intOrNull($sample['ipsec_tunnels'] ?? null);
             $anyConnectSeries[] = self::intOrNull($sample['vpn_svc'] ?? null);
+            $linaSeries[] = self::numOrNull($sample['cpu_lina_pct'] ?? null);
+            $snortSeries[] = self::numOrNull($sample['cpu_snort_pct'] ?? null);
+            $diskSeries[] = self::numOrNull($sample['disk_pct'] ?? null);
         }
         $snap = self::decode($fw['last_poll_json'] ?? null);
         $latest = $samples ? $samples[count($samples) - 1] : null;
@@ -469,6 +458,13 @@ class FirewallHistory
             'vpn_l2l' => self::seriesNow($samples, 'vpn_l2l', $snap),
             'ipsec_tunnels' => self::seriesNow($samples, 'ipsec_tunnels', $snap),
             'ike_tunnels' => self::seriesNow($samples, 'ike_tunnels', $snap),
+            'platform' => self::platformOf($fw, $snap),
+            'ha_group' => trim((string)($fw['ha_group'] ?? '')),
+            'ha_pair' => trim((string)($snap['ha_pair'] ?? '')),
+            'cpu_lina' => self::latestOrSnap($latest, 'cpu_lina_pct', $snap, 'cpu_lina_pct'),
+            'cpu_snort' => self::latestOrSnap($latest, 'cpu_snort_pct', $snap, 'cpu_snort_pct'),
+            'disk' => self::latestOrSnap($latest, 'disk_pct', $snap, 'disk_pct'),
+            'conn_half_open' => self::intOrNull($snap['conn_half_open'] ?? null),
             'alerts' => self::hardwareAlerts($snap),
             'polled_at' => $latest['polled_at'] ?? ($fw['snmp_last_poll_at'] ?? null),
             'sample_count' => $sampleCount,
@@ -482,6 +478,9 @@ class FirewallHistory
             'vpn_sessions_series' => self::thinList($vpnSeries),
             'ipsec_series' => self::thinList($ipsecSeries),
             'anyconnect_series' => self::thinList($anyConnectSeries),
+            'cpu_lina_series' => self::thinList($linaSeries),
+            'cpu_snort_series' => self::thinList($snortSeries),
+            'disk_series' => self::thinList($diskSeries),
             'interfaces' => $interfaces,
             'note' => $note,
         ];
@@ -493,7 +492,7 @@ class FirewallHistory
         $where = ' FROM firewall_samples
             WHERE firewall_id = ? AND polled_at >= DATEADD(hour, -' . self::WINDOW_HOURS . ', SYSUTCDATETIME())
             ORDER BY polled_at';
-        $extra = 'cpu_pct, memory_pct, connections, cps, conn_peak, xlate_pat, xlate_nat, vpn_sessions, vpn_peak, vpn_ipsec, vpn_svc, vpn_webvpn, vpn_l2l, ipsec_tunnels, ike_tunnels, failover, polled_at';
+        $extra = 'cpu_pct, memory_pct, connections, cps, conn_peak, xlate_pat, xlate_nat, vpn_sessions, vpn_peak, vpn_ipsec, vpn_svc, vpn_webvpn, vpn_l2l, ipsec_tunnels, ike_tunnels, cpu_lina_pct, cpu_snort_pct, disk_pct, failover, polled_at';
         $base = 'cpu_pct, memory_pct, connections, cps, failover, polled_at';
         try {
             return Database::fetchAll('SELECT ' . $extra . $where, [$id]);
@@ -570,7 +569,50 @@ class FirewallHistory
         if (!class_exists('FirewallPoll', false)) {
             require_once __DIR__ . '/FirewallPoll.php';
         }
-        return FirewallPoll::hardwareAlerts($rows);
+        $alerts = FirewallPoll::hardwareAlerts($rows);
+        $extra = is_array($snap['fmc_alerts'] ?? null) ? $snap['fmc_alerts'] : [];
+        foreach ($extra as $alert) {
+            if (!is_array($alert)) {
+                continue;
+            }
+            $label = trim((string)($alert['label'] ?? ''));
+            $status = trim((string)($alert['status'] ?? ''));
+            if ($label === '' || $status === '') {
+                continue;
+            }
+            $alerts[] = [
+                'label' => $label,
+                'detail' => trim((string)($alert['detail'] ?? '')),
+                'status' => $status,
+            ];
+        }
+        return $alerts;
+    }
+
+    /**
+     * @param array<string,mixed> $fw
+     * @param array<string,mixed> $snap
+     */
+    private static function platformOf(array $fw, array $snap): string
+    {
+        $platform = strtolower(trim((string)($fw['platform'] ?? $snap['platform'] ?? 'asa')));
+        return $platform === 'ftd' ? 'ftd' : 'asa';
+    }
+
+    /**
+     * @param list<mixed> $params
+     * @return list<array<string,mixed>>
+     */
+    private static function fetchFirewallList(string $where, array $params = []): array
+    {
+        $wide = 'firewall_id, name, model, platform, ha_group, last_failover, last_cpu_pct, last_connections, last_cps, snmp_last_poll_at, last_poll_json';
+        $base = 'firewall_id, name, model, last_failover, last_cpu_pct, last_connections, last_cps, snmp_last_poll_at, last_poll_json';
+        $sql = 'SELECT TOP 12 ' . $wide . ' FROM firewalls ' . $where;
+        try {
+            return Database::fetchAll($sql, $params);
+        } catch (Throwable $e) {
+            return Database::fetchAll('SELECT TOP 12 ' . $base . ' FROM firewalls ' . $where, $params);
+        }
     }
 
     /** @param mixed $raw */
@@ -590,6 +632,18 @@ class FirewallHistory
         }
         $s = trim((string)$raw);
         return preg_match('/^\d+$/', $s) ? $s : null;
+    }
+
+    /**
+     * @param array<string,mixed>|null $latest
+     * @param array<string,mixed> $snap
+     */
+    private static function latestOrSnap(?array $latest, string $column, array $snap, string $snapKey): ?float
+    {
+        if (is_array($latest) && array_key_exists($column, $latest)) {
+            return self::numOrNull($latest[$column]);
+        }
+        return self::numOrNull($snap[$snapKey] ?? null);
     }
 
     /** @param mixed $raw */

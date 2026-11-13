@@ -287,6 +287,24 @@
         { name: patLabel, color: '#f472b6', values: fw.xlate_pat_series || [] }
       ], {}, patFoot);
     }
+    var planeSeries = [];
+    var planeNow = [];
+    if (hasNum(fw.cpu_lina_series)) {
+      planeSeries.push({ name: 'Data plane', color: '#38bdf8', values: fw.cpu_lina_series || [] });
+      planeNow.push((hasCount(fw.cpu_lina) ? fmtNum(fw.cpu_lina, 1) : '—') + '% data plane');
+    }
+    if (hasNum(fw.cpu_snort_series)) {
+      planeSeries.push({ name: 'Snort', color: '#fbbf24', values: fw.cpu_snort_series || [] });
+      planeNow.push((hasCount(fw.cpu_snort) ? fmtNum(fw.cpu_snort, 1) : '—') + '% Snort');
+    }
+    if (planeSeries.length) {
+      html += chartCard('Data plane and Snort', planeNow.join(' · '), planeSeries, { yMin: 0, yMax: 100 });
+    }
+    if (hasNum(fw.disk_series)) {
+      html += chartCard('Disk', hasCount(fw.disk) ? fmtNum(fw.disk, 1) + '%' : '—', [
+        { name: 'Disk', color: '#fb7185', values: fw.disk_series || [] }
+      ], { yMin: 0, yMax: 100 });
+    }
     html += '</div>';
     html += vpnRow(fw);
     var rawIfaces = fw.interfaces || [];
