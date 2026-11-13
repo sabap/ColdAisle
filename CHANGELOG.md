@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.23] - 2026-11-13
+
+### Bug fixes
+
+- **Firewalls:** A Threat Defense poll now reads the 1-minute CPU table, the enhanced memory pool, fixed disk, and the HA role when the older ASA objects are empty. If this server's SNMP library cannot authenticate SHA256 or AES256, the firewall shows that instead of a successful poll with blank counters
+
+---
 ## [1.0.22] - 2026-11-13
 
 ### Enhancements
