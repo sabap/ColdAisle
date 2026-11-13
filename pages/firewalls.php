@@ -201,12 +201,13 @@ if ($action === 'new' || ($action === 'edit' && $id > 0)) {
         'fmc_username' => '',
         'fmc_verify_tls' => 1,
     ];
+    $snmpSha2 = FirewallPoll::netSnmpSupportsSha2();
     if ($action === 'new' && (string)($_GET['template'] ?? '') === 'ftd') {
         $fw['platform'] = 'ftd';
         $fw['model'] = '';
         $fw['snmp_version'] = '3';
-        $fw['snmp_auth_protocol'] = 'SHA256';
-        $fw['snmp_priv_protocol'] = 'AES256';
+        $fw['snmp_auth_protocol'] = $snmpSha2 ? 'SHA256' : 'SHA';
+        $fw['snmp_priv_protocol'] = $snmpSha2 ? 'AES256' : 'AES';
         $fw['snmp_v3_sec_level'] = 'authPriv';
     }
     if ($action === 'edit') {
@@ -310,6 +311,7 @@ layout_footer();
  */
 function firewall_form(array $fw, array $rooms): void
 {
+    $snmpSha2 = FirewallPoll::netSnmpSupportsSha2();
     $fid = (int)($fw['firewall_id'] ?? 0);
     $platform = strtolower((string)($fw['platform'] ?? 'asa')) === 'ftd' ? 'ftd' : 'asa';
     $authChoices = ['MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512'];
@@ -349,7 +351,7 @@ function firewall_form(array $fw, array $rooms): void
         <input type="hidden" name="action" value="save_firewall">
         <input type="hidden" name="firewall_id" value="<?= $fid ?>">
         <input type="hidden" name="platform" id="fw_platform" value="<?= App::e($platform) ?>">
-        <div class="fw-templates" id="fwTemplates" data-mode="<?= $fid ? 'edit' : 'new' ?>">
+        <div class="fw-templates" id="fwTemplates" data-mode="<?= $fid ? 'edit' : 'new' ?>" data-snmp-sha2="<?= !empty($snmpSha2) ? '1' : '0' ?>">
             <button type="button" class="fw-template<?= $platform === 'asa' ? ' is-selected' : '' ?>" data-platform="asa" aria-pressed="<?= $platform === 'asa' ? 'true' : 'false' ?>">
                 <strong>Cisco ASA</strong>
                 <span>SNMPv2c template. VPN, PAT, and interface charts. On a multiple-context ASA, set the context to the admin context.</span>
@@ -444,6 +446,9 @@ function firewall_form(array $fw, array $rooms): void
         </div>
         <div class="form-row">
             <label for="fw_authp">Auth protocol</label>
+            <?php if (empty($snmpSha2)): ?>
+                <p class="text-muted" style="margin:.2rem 0 .45rem">This server's SNMP library is Net-SNMP <?= App::e(FirewallPoll::netSnmpVersion()) ?>. SHA256 and AES256 do not authenticate. Use SHA and AES.</p>
+            <?php endif; ?>
             <select id="fw_authp" name="snmp_auth_protocol">
                 <?php foreach ($authChoices as $ap): ?>
                     <option value="<?= App::e($ap) ?>" <?= $authNow === $ap ? 'selected' : '' ?>><?= App::e($ap) ?></option>
@@ -538,6 +543,7 @@ function firewall_form(array $fw, array $rooms): void
         var priv = document.getElementById('fw_privp');
         var level = document.getElementById('fw_level');
         var help = document.getElementById('fw_ctx_help');
+        var sha2 = root.getAttribute('data-snmp-sha2') === '1';
         function apply(kind, fill) {
             kind = kind === 'ftd' ? 'ftd' : 'asa';
             platform.value = kind;
@@ -557,8 +563,8 @@ function firewall_form(array $fw, array $rooms): void
             if (kind === 'ftd') {
                 if (model && (model.value === '' || model.value === 'ASA5525')) model.value = '';
                 if (ver) ver.value = '3';
-                if (auth) auth.value = 'SHA256';
-                if (priv) priv.value = 'AES256';
+                if (auth) auth.value = sha2 ? 'SHA256' : 'SHA';
+                if (priv) priv.value = sha2 ? 'AES256' : 'AES';
                 if (level) level.value = 'authPriv';
             } else {
                 if (model && model.value === '') model.value = 'ASA5525';

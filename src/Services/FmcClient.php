@@ -144,6 +144,15 @@ class FmcClient
         if ($version !== '' && empty($snapshot['version'])) {
             $snapshot['version'] = substr($version, 0, 40);
         }
+        if (trim((string)($snapshot['sys_name'] ?? '')) === '') {
+            $hostName = trim((string)($device['hostName'] ?? $device['hostname'] ?? ''));
+            if ($hostName === '') {
+                $hostName = trim((string)($device['name'] ?? ''));
+            }
+            if ($hostName !== '') {
+                $snapshot['sys_name'] = substr($hostName, 0, 128);
+            }
+        }
         $health = strtolower(trim((string)($device['healthStatus'] ?? '')));
         if ($health !== '') {
             $snapshot['fmc_health'] = $health;
@@ -163,11 +172,21 @@ class FmcClient
         if ($pair !== '') {
             $snapshot['ha_pair'] = substr($pair, 0, 80);
         }
-        foreach (['haRole', 'failoverRole', 'deviceRole'] as $key) {
+        $role = '';
+        foreach (['haRole', 'failoverRole', 'deviceRole', 'role', 'haStatus', 'failoverState'] as $key) {
             $role = trim((string)($meta[$key] ?? ''));
-            if ($role === '') {
-                continue;
+            if ($role !== '') {
+                break;
             }
+        }
+        if ($role === '' && is_array($meta['haDetails'] ?? null)) {
+            $details = $meta['haDetails'];
+            $role = trim((string)($details['role'] ?? $details['haRole'] ?? ''));
+        }
+        if ($role === '' && array_key_exists('isHASecondary', $meta)) {
+            $role = $meta['isHASecondary'] ? 'secondary' : 'primary';
+        }
+        if ($role !== '') {
             $fail = is_array($snapshot['failover'] ?? null) ? $snapshot['failover'] : [];
             if (empty($fail['this_unit'])) {
                 $fail['this_unit'] = substr($role, 0, 40);
@@ -175,7 +194,6 @@ class FmcClient
                 $fail['rows'] = is_array($fail['rows'] ?? null) ? $fail['rows'] : [];
                 $snapshot['failover'] = $fail;
             }
-            break;
         }
     }
 

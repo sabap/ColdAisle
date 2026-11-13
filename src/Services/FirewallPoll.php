@@ -21,6 +21,13 @@ class FirewallPoll
     public const OID_VPN_PEAK = '1.3.6.1.4.1.9.9.392.1.3.41.0';
     public const OID_IKE_TUNNELS = '1.3.6.1.4.1.9.9.171.1.2.1.1.0';
     public const OID_IPSEC_TUNNELS = '1.3.6.1.4.1.9.9.171.1.3.1.1.0';
+    /** cpmCPUTotal5minRev, then 1minRev, then the deprecated 5min and 1min columns. */
+    private const CPU_LOAD_OIDS = [
+        '1.3.6.1.4.1.9.9.109.1.1.1.1.8',
+        '1.3.6.1.4.1.9.9.109.1.1.1.1.7',
+        '1.3.6.1.4.1.9.9.109.1.1.1.1.5',
+        '1.3.6.1.4.1.9.9.109.1.1.1.1.4',
+    ];
 
     /**
      * @param array<string,mixed> $fw firewalls row
@@ -93,11 +100,16 @@ class FirewallPoll
             $snapshot = ['platform' => $platform];
         }
         $snapshot['platform'] = $platform;
+        // Judge the device poll before the management center fills blanks.
+        $snmpUseful = $snmpError === null && self::snapshotHasCounters($snapshot);
         if ($platform === 'ftd') {
             require_once __DIR__ . '/FmcClient.php';
             $snapshot = FmcClient::enrich($fw, $snapshot);
         }
-        $snmpUseful = $snmpError === null && self::snapshotHasCounters($snapshot);
+        if ($snmpError === null && !$snmpUseful && $platform === 'ftd') {
+            $snmpError = self::snmpLibraryBlock($authProto, $privProto)
+                ?? 'SNMP returned no Threat Defense hostname, uptime, or counters.';
+        }
         $fmcUseful = trim((string)($snapshot['fmc_health'] ?? '')) !== ''
             || trim((string)($snapshot['ha_pair'] ?? '')) !== ''
             || !empty($snapshot['fmc_alerts']);
@@ -127,9 +139,18 @@ class FirewallPoll
     {
         $descr = self::text(self::tryGet($session, '1.3.6.1.2.1.1.1.0'));
         $name = self::text(self::tryGet($session, '1.3.6.1.2.1.1.5.0'));
-        $ticks = self::numeric(self::tryGet($session, '1.3.6.1.2.1.1.3.0'));
+        $uptime = self::parseUptimeSec(self::tryGet($session, '1.3.6.1.2.1.1.3.0'));
+        if ($uptime === null) {
+            $uptime = self::parseUptimeSec(self::tryGet($session, '1.3.6.1.2.1.25.1.1.0'));
+        }
         $ident = self::parseSysDescr($descr);
-        $cpu = self::firstNumber(SnmpPoller::sessionWalk($session, '1.3.6.1.4.1.9.9.109.1.1.1.1.8'));
+        $cpu = null;
+        foreach (self::CPU_LOAD_OIDS as $cpuOid) {
+            $cpu = self::firstNumber(self::reindex(SnmpPoller::sessionWalk($session, $cpuOid), $cpuOid));
+            if ($cpu !== null) {
+                break;
+            }
+        }
         $memNames = '1.3.6.1.4.1.9.9.48.1.1.1.2';
         $memUsed = '1.3.6.1.4.1.9.9.48.1.1.1.5';
         $memFree = '1.3.6.1.4.1.9.9.48.1.1.1.6';
@@ -138,6 +159,15 @@ class FirewallPoll
             self::reindex(SnmpPoller::sessionWalk($session, $memUsed), $memUsed),
             self::reindex(SnmpPoller::sessionWalk($session, $memFree), $memFree)
         );
+        if ($mem['pct'] === null) {
+            $mem = self::enhancedMemory($session);
+        }
+        if ($mem['pct'] === null) {
+            $hostMem = self::hostMemory($session);
+            if ($hostMem['pct'] !== null) {
+                $mem = $hostMem;
+            }
+        }
         $hwInfoOid = '1.3.6.1.4.1.9.9.147.1.2.1.1.1.2';
         $hwDetailOid = '1.3.6.1.4.1.9.9.147.1.2.1.1.1.4';
         $hwValueOid = '1.3.6.1.4.1.9.9.147.1.2.1.1.1.3';
@@ -176,7 +206,7 @@ class FirewallPoll
             'sys_descr' => $descr,
             'version' => $ident['version'],
             'model_guess' => $ident['model'],
-            'uptime_sec' => $ticks !== null ? (int)round($ticks / 100) : null,
+            'uptime_sec' => $uptime,
             'cpu_pct' => $cpu,
             'memory' => $mem,
             'failover' => $failover,
@@ -298,6 +328,21 @@ class FirewallPoll
             $fail['rows'] = array_merge($rows, $sensors);
             $base['failover'] = $fail;
         }
+        $fail = is_array($base['failover'] ?? null) ? $base['failover'] : [
+            'this_unit' => null,
+            'peer' => null,
+            'rows' => [],
+        ];
+        if (empty($fail['this_unit'])) {
+            $haOid = '1.3.6.1.4.1.9.9.491.1.4.2.1.1.3';
+            $role = self::firstHaRole(self::reindex(SnmpPoller::sessionWalk($session, $haOid), $haOid));
+            if ($role !== null) {
+                $fail['this_unit'] = $role;
+                $fail['peer'] = $fail['peer'] ?? null;
+                $fail['rows'] = is_array($fail['rows'] ?? null) ? $fail['rows'] : [];
+                $base['failover'] = $fail;
+            }
+        }
         $base['platform'] = 'ftd';
         return $base;
     }
@@ -317,7 +362,7 @@ class FirewallPoll
             $label = strtolower($row['name']);
             if (str_contains($label, 'snort')) {
                 $snort = $value;
-            } elseif (str_contains($label, 'lina') || str_contains($label, 'data plane') || str_contains($label, 'dataplane')) {
+            } elseif (str_contains($label, 'lina') || str_contains($label, 'data plane') || str_contains($label, 'dataplane') || str_contains($label, 'data-plane') || str_contains($label, 'data path')) {
                 $lina = $value;
             } elseif (str_contains($label, 'system') || str_contains($label, 'total') || $label === 'cpu') {
                 $system = $value;
@@ -344,7 +389,8 @@ class FirewallPoll
         $bestSize = -1.0;
         foreach ($rows as $row) {
             $label = strtolower($row['label']);
-            if (!str_contains($label, 'disk') && !str_contains($label, 'flash') && !str_contains($label, 'storage') && !str_contains($label, '/ngfw')) {
+            $type = strtolower((string)($row['type'] ?? ''));
+            if (self::storageSkip($label, $type) || !self::storageKeep($label, $type)) {
                 continue;
             }
             if ($row['size'] <= 0) {
@@ -380,12 +426,12 @@ class FirewallPoll
             $status = self::hardwareStatus($code, $det);
             $rows[] = ['label' => $label, 'detail' => $det, 'status' => $status];
             $blob = strtolower($label . ' ' . $det);
-            if (str_contains($blob, 'this device')) {
+            $thisHost = str_contains($blob, 'this device') || str_contains($blob, 'this host') || str_contains($blob, 'this unit');
+            $otherHost = str_contains($blob, 'other host') || str_contains($blob, 'other device') || str_contains($blob, 'other unit');
+            if ($thisHost && !$otherHost) {
                 $thisUnit = $status !== '' ? $status : $det;
-            } elseif ($peer === null && (str_contains($blob, 'secondary') || str_contains($blob, 'primary'))) {
-                if (!str_contains($blob, 'this device')) {
-                    $peer = $status !== '' ? $status : $det;
-                }
+            } elseif ($otherHost || ($peer === null && (str_contains($blob, 'secondary') || str_contains($blob, 'primary')))) {
+                $peer = $status !== '' ? $status : $det;
             }
         }
         return ['this_unit' => $thisUnit, 'peer' => $peer, 'rows' => $rows];
@@ -465,7 +511,33 @@ class FirewallPoll
                 $best = (int)round($n);
             }
         }
-        return $sawInUse ? $best : null;
+        if ($sawInUse) {
+            return $best;
+        }
+        $best = null;
+        $bestScore = -1;
+        foreach ($values as $suffix => $raw) {
+            $n = self::numeric($raw);
+            if ($n === null) {
+                continue;
+            }
+            $text = strtolower((string)($desc[(string)$suffix] ?? ''));
+            if ($text === '' || str_contains($text, 'peak') || str_contains($text, 'highest') || str_contains($text, 'per second')) {
+                continue;
+            }
+            if (!str_contains($text, 'in use') && !str_contains($text, 'currently')) {
+                continue;
+            }
+            $score = 2;
+            if (str_contains($text, 'entire') || str_contains($text, 'firewall') || str_contains($text, 'global')) {
+                $score += 3;
+            }
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $best = (int)round($n);
+            }
+        }
+        return $best;
     }
 
     /**
@@ -785,6 +857,282 @@ class FirewallPoll
         ];
     }
 
+    /**
+     * CISCO-ENHANCED-MEMPOOL-MIB. 64-bit used/free when the agent has them.
+     * The processor pool is the one that matches show memory. Indexes differ by platform.
+     *
+     * @param array<string,mixed> $names
+     * @param array<string,mixed> $types
+     * @param array<string,mixed> $used
+     * @param array<string,mixed> $free
+     * @return array{used:?int,free:?int,pct:?float,label:?string}
+     */
+    public static function memoryFromEnhanced(array $names, array $types, array $used, array $free): array
+    {
+        $best = null;
+        $bestScore = -1000;
+        $bestTotal = -1.0;
+        foreach ($names as $idx => $label) {
+            $u = self::numeric($used[$idx] ?? null);
+            $f = self::numeric($free[$idx] ?? null);
+            if ($u === null || $f === null || ($u + $f) <= 0) {
+                continue;
+            }
+            $text = strtolower(self::text($label));
+            $type = self::numeric($types[$idx] ?? null);
+            $score = 0;
+            if ($type !== null && (int)$type === 2) {
+                $score += 5;
+            }
+            if (str_contains($text, 'processor') || str_contains($text, 'system') || str_contains($text, 'heap')) {
+                $score += 3;
+            }
+            if (str_contains($text, 'dma') || str_contains($text, 'buffer') || str_contains($text, 'block')) {
+                $score -= 2;
+            }
+            $total = $u + $f;
+            if ($score > $bestScore || ($score === $bestScore && $total > $bestTotal)) {
+                $bestScore = $score;
+                $bestTotal = $total;
+                $best = [
+                    'used' => (int)round($u),
+                    'free' => (int)round($f),
+                    'pct' => round($u / $total * 100, 1),
+                    'label' => self::text($label),
+                ];
+            }
+        }
+        return $best ?? ['used' => null, 'free' => null, 'pct' => null, 'label' => null];
+    }
+
+    /**
+     * HOST-RESOURCES physical memory. Percent uses allocation units, so they cancel.
+     *
+     * @param array<string,mixed> $descr
+     * @param array<string,mixed> $types
+     * @param array<string,mixed> $units
+     * @param array<string,mixed> $size
+     * @param array<string,mixed> $used
+     * @return array{used:?int,free:?int,pct:?float,label:?string}
+     */
+    public static function memoryFromStorage(array $descr, array $types, array $units, array $size, array $used): array
+    {
+        $best = null;
+        $bestTotal = -1.0;
+        foreach ($descr as $idx => $label) {
+            $text = strtolower(self::text($label));
+            $type = strtolower(self::text($types[$idx] ?? ''));
+            $ram = str_contains($type, '25.2.1.2') || str_contains($type, 'hrstorageram');
+            $physical = str_contains($text, 'physical') && str_contains($text, 'memory');
+            if (!$ram && !$physical) {
+                continue;
+            }
+            if (str_contains($text, 'virtual') || str_contains($text, 'swap')) {
+                continue;
+            }
+            $sizeN = self::numeric($size[$idx] ?? null);
+            $usedN = self::numeric($used[$idx] ?? null);
+            $unitN = self::numeric($units[$idx] ?? null);
+            if ($sizeN === null || $usedN === null || $sizeN <= 0) {
+                continue;
+            }
+            $scale = ($unitN !== null && $unitN > 0) ? $unitN : 1.0;
+            $total = $sizeN * $scale;
+            if ($total <= $bestTotal) {
+                continue;
+            }
+            $bestTotal = $total;
+            $usedBytes = $usedN * $scale;
+            $best = [
+                'used' => (int)round($usedBytes),
+                'free' => (int)round(max(0, $total - $usedBytes)),
+                'pct' => round($usedN / $sizeN * 100, 1),
+                'label' => self::text($label) !== '' ? self::text($label) : 'Physical memory',
+            ];
+        }
+        return $best ?? ['used' => null, 'free' => null, 'pct' => null, 'label' => null];
+    }
+
+    /** Timeticks, or a printed "N days, H:M:S" value. */
+    public static function parseUptimeSec($raw): ?int
+    {
+        $ticks = self::numeric($raw);
+        if ($ticks !== null) {
+            return (int)round($ticks / 100);
+        }
+        if (!is_string($raw)) {
+            return null;
+        }
+        if (preg_match('/(\d+)\s+days?,\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i', $raw, $m)) {
+            $sec = ((int)$m[1]) * 86400 + ((int)$m[2]) * 3600 + ((int)$m[3]) * 60 + (float)$m[4];
+            return (int)round($sec);
+        }
+        return null;
+    }
+
+    /** @param mixed $raw */
+    public static function haStateLabel($raw): ?string
+    {
+        $n = self::numeric($raw);
+        if ($n !== null) {
+            $map = [2 => 'up', 8 => 'backup', 9 => 'active', 10 => 'standby'];
+            if (isset($map[(int)$n])) {
+                return $map[(int)$n];
+            }
+        }
+        $text = strtolower(self::text($raw));
+        foreach (['active', 'standby', 'backup', 'primary', 'secondary'] as $word) {
+            if ($text !== '' && str_contains($text, $word)) {
+                return $word;
+            }
+        }
+        return null;
+    }
+
+    /** @param array<string,mixed> $values */
+    public static function firstHaRole(array $values): ?string
+    {
+        $fallback = null;
+        foreach ($values as $raw) {
+            $label = self::haStateLabel($raw);
+            if ($label === null) {
+                continue;
+            }
+            if (in_array($label, ['active', 'standby', 'backup', 'primary', 'secondary'], true)) {
+                return $label;
+            }
+            $fallback = $fallback ?? $label;
+        }
+        return $fallback;
+    }
+
+    /**
+     * Null when this Net-SNMP build can authenticate with the chosen protocols.
+     * SHA-2 and AES-192/256 arrived in Net-SNMP 5.8.
+     */
+    public static function libraryBlocksProtocol(string $netSnmpVersion, string $auth, string $priv): ?string
+    {
+        $auth = strtoupper(str_replace(['-', ' '], '', trim($auth)));
+        $priv = strtoupper(str_replace(['-', ' '], '', trim($priv)));
+        if ($auth === 'SHA1') {
+            $auth = 'SHA';
+        }
+        if ($priv === 'AES128') {
+            $priv = 'AES';
+        }
+        $modern = in_array($auth, ['SHA224', 'SHA256', 'SHA384', 'SHA512'], true)
+            || in_array($priv, ['AES192', 'AES256'], true);
+        if (!$modern) {
+            return null;
+        }
+        $netSnmpVersion = trim($netSnmpVersion);
+        if ($netSnmpVersion === '' || version_compare($netSnmpVersion, '5.8.0', '>=')) {
+            return null;
+        }
+        return 'SNMPv3 ' . $auth . '/' . $priv . ' does not authenticate with Net-SNMP ' . $netSnmpVersion
+            . ' on this server. Use SHA and AES, or a PHP build linked to Net-SNMP 5.8 or newer.';
+    }
+
+    public static function netSnmpVersion(): string
+    {
+        static $version = null;
+        if ($version !== null) {
+            return $version;
+        }
+        $version = '';
+        if (!function_exists('phpinfo')) {
+            return $version;
+        }
+        ob_start();
+        @phpinfo(INFO_MODULES);
+        $info = ob_get_clean();
+        if (is_string($info) && preg_match('/NET-SNMP Version\s*(?:=>|<\/td>\s*<td[^>]*>)\s*([0-9]+\.[0-9]+\.[0-9]+)/i', $info, $m)) {
+            $version = $m[1];
+        }
+        return $version;
+    }
+
+    public static function netSnmpSupportsSha2(): bool
+    {
+        $version = self::netSnmpVersion();
+        return $version === '' || version_compare($version, '5.8.0', '>=');
+    }
+
+    public static function snmpLibraryBlock(string $auth, string $priv): ?string
+    {
+        return self::libraryBlocksProtocol(self::netSnmpVersion(), $auth, $priv);
+    }
+
+    /** @param array<string,mixed> $session */
+    private static function enhancedMemory(array $session): array
+    {
+        $base = '1.3.6.1.4.1.9.9.221.1.1.1.1.';
+        $names = self::walkQuiet($session, $base . '3');
+        if (!$names) {
+            return ['used' => null, 'free' => null, 'pct' => null, 'label' => null];
+        }
+        $types = self::walkQuiet($session, $base . '2');
+        $used = self::walkQuiet($session, $base . '18');
+        $free = self::walkQuiet($session, $base . '20');
+        if (self::firstNumber($used) === null && self::firstNumber($free) === null) {
+            $used = self::walkQuiet($session, $base . '7');
+            $free = self::walkQuiet($session, $base . '8');
+        }
+        return self::memoryFromEnhanced($names, $types, $used, $free);
+    }
+
+    /** @param array<string,mixed> $session */
+    private static function hostMemory(array $session): array
+    {
+        $base = '1.3.6.1.2.1.25.2.3.1.';
+        return self::memoryFromStorage(
+            self::walkQuiet($session, $base . '3'),
+            self::walkQuiet($session, $base . '2'),
+            self::walkQuiet($session, $base . '4'),
+            self::walkQuiet($session, $base . '5'),
+            self::walkQuiet($session, $base . '6')
+        );
+    }
+
+    private static function storageSkip(string $label, string $type): bool
+    {
+        if (str_contains($type, '25.2.1.2') || str_contains($type, '25.2.1.3')) {
+            return true;
+        }
+        foreach (['memory', 'ram', 'swap', 'virtual', 'tmpfs', 'cgroup', 'shm'] as $word) {
+            if (str_contains($label, $word)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function storageKeep(string $label, string $type): bool
+    {
+        if (str_contains($type, '25.2.1.4') || str_contains($type, 'hrstoragefixeddisk')) {
+            return true;
+        }
+        foreach (['disk', 'flash', 'storage', 'ssd', 'nvme', 'mmc', 'volume', 'boot', '/ngfw', '/opt', '/var', 'hard disk', 'harddisk'] as $word) {
+            if (str_contains($label, $word)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** @param mixed $raw */
+    private static function indexNumber($raw): string
+    {
+        if (is_int($raw) || is_float($raw)) {
+            return (string)(int)$raw;
+        }
+        $text = self::text($raw);
+        if ($text !== '' && preg_match('/(\d+)\s*$/', $text, $m)) {
+            return $m[1];
+        }
+        return '';
+    }
+
     /** @param array<string,mixed> $walk */
     private static function firstNumber(array $walk): ?float
     {
@@ -1021,7 +1369,14 @@ class FirewallPoll
         if (trim((string)($snapshot['sys_descr'] ?? '')) !== '' || trim((string)($snapshot['sys_name'] ?? '')) !== '') {
             return true;
         }
+        if (isset($snapshot['uptime_sec']) && is_numeric($snapshot['uptime_sec'])) {
+            return true;
+        }
         if (!empty($snapshot['interfaces'])) {
+            return true;
+        }
+        $mem = is_array($snapshot['memory'] ?? null) ? $snapshot['memory'] : [];
+        if (isset($mem['pct']) && is_numeric($mem['pct'])) {
             return true;
         }
         foreach (['connections', 'cpu_pct', 'cpu_lina_pct', 'cpu_snort_pct', 'disk_pct'] as $key) {
@@ -1038,22 +1393,32 @@ class FirewallPoll
      */
     private static function cpuRows(array $session): array
     {
-        $loadOid = '1.3.6.1.4.1.9.9.109.1.1.1.1.8';
         $physOid = '1.3.6.1.4.1.9.9.109.1.1.1.1.2';
         $nameOid = '1.3.6.1.2.1.47.1.1.1.1.7';
-        $loads = self::reindex(SnmpPoller::sessionWalk($session, $loadOid), $loadOid);
+        $descrOid = '1.3.6.1.2.1.47.1.1.1.1.2';
+        $loads = [];
+        foreach (self::CPU_LOAD_OIDS as $loadOid) {
+            $loads = self::reindex(SnmpPoller::sessionWalk($session, $loadOid), $loadOid);
+            if (self::firstNumber($loads) !== null) {
+                break;
+            }
+        }
         $phys = self::reindex(SnmpPoller::sessionWalk($session, $physOid), $physOid);
         $names = self::walkText(self::reindex(SnmpPoller::sessionWalk($session, $nameOid), $nameOid));
+        $descrs = self::walkText(self::reindex(SnmpPoller::sessionWalk($session, $descrOid), $descrOid));
         $rows = [];
         foreach ($loads as $idx => $raw) {
             $value = self::numeric($raw);
             if ($value === null) {
                 continue;
             }
-            $physIdx = trim((string)($phys[$idx] ?? ''));
-            $physIdx = preg_replace('/\D+/', '', $physIdx) ?? '';
+            $physIdx = self::indexNumber($phys[$idx] ?? null);
+            $name = trim((string)($names[$physIdx] ?? ''));
+            if ($name === '') {
+                $name = trim((string)($descrs[$physIdx] ?? ''));
+            }
             $rows[] = [
-                'name' => trim((string)($names[$physIdx] ?? '')),
+                'name' => $name,
                 'value' => $value,
             ];
         }
@@ -1067,9 +1432,11 @@ class FirewallPoll
     private static function diskRows(array $session): array
     {
         $descrOid = '1.3.6.1.2.1.25.2.3.1.3';
+        $typeOid = '1.3.6.1.2.1.25.2.3.1.2';
         $sizeOid = '1.3.6.1.2.1.25.2.3.1.5';
         $usedOid = '1.3.6.1.2.1.25.2.3.1.6';
         $descr = self::walkText(self::reindex(SnmpPoller::sessionWalk($session, $descrOid), $descrOid));
+        $types = self::walkText(self::reindex(SnmpPoller::sessionWalk($session, $typeOid), $typeOid));
         $size = self::reindex(SnmpPoller::sessionWalk($session, $sizeOid), $sizeOid);
         $used = self::reindex(SnmpPoller::sessionWalk($session, $usedOid), $usedOid);
         $rows = [];
@@ -1079,7 +1446,12 @@ class FirewallPoll
             if ($sizeN === null || $usedN === null) {
                 continue;
             }
-            $rows[] = ['label' => $label, 'size' => $sizeN, 'used' => $usedN];
+            $rows[] = [
+                'label' => $label,
+                'type' => (string)($types[$idx] ?? ''),
+                'size' => $sizeN,
+                'used' => $usedN,
+            ];
         }
         return $rows;
     }
