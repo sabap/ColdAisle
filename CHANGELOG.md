@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.28] - 2026-11-13
+
+### Enhancements
+
+- **Documentation:** What 1.0 includes, in-app Documentation, the README, and the gap list describe Plant → Firewalls, the dashboard WAN card, rack links, and tunnel status
+
+---
 ## [1.0.27] - 2026-11-13
 
 ### New features
