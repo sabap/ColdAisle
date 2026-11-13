@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.25] - 2026-11-13
+
+### Bug fixes
+
+- **Firewalls:** The interface table renders again. Looking up the interface type no longer stops the page before the rows are printed
+
+---
 ## [1.0.24] - 2026-11-13
 
 ### Enhancements
