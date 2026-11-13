@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.26] - 2026-11-13
+
+### Enhancements
+
+- **NOC:** The Firewalls panel shows one pair at a time, side by side, and turns the page on its own. Throughput charts stay on the 1080p wall instead of scrolling below it
+
+---
 ## [1.0.25] - 2026-11-13
 
 ### Bug fixes
