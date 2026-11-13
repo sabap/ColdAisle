@@ -806,7 +806,7 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
         <table class="table">
             <thead>
                 <tr>
-                    <th>Interface</th><th>Status</th><th>Speed</th>
+                    <th>Interface</th><th>Type</th><th>Status</th><th>Speed</th>
                     <th>In rate</th><th>Out rate</th>
                     <th>Errors</th><th>Graph</th>
                     <th>In octets</th><th>Out octets</th>
@@ -814,7 +814,7 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
             </thead>
             <tbody>
             <?php if (!$ifaces): ?>
-                <tr><td colspan="9" class="text-muted">No external interfaces in the last poll. Internal-Data interfaces are hidden.</td></tr>
+                <tr><td colspan="10" class="text-muted">No external interfaces in the last poll. Internal-Data interfaces are hidden.</td></tr>
             <?php endif; ?>
             <?php foreach ($ifaces as $iface): ?>
                 <?php if (!is_array($iface)) { continue; } ?>
@@ -826,9 +826,11 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
                 if ($speedText === '' && isset($iface['speed_mbps'])) {
                     $speedText = number_format((int)$iface['speed_mbps']) . ' Mb/s';
                 }
+                $typeText = FirewallPoll::ifTypeLabel($iface['type'] ?? null);
                 ?>
                 <tr>
                     <td><?= App::e((string)($iface['name'] ?? '')) ?></td>
+                    <td><?= $typeText !== '' ? App::e($typeText) : '—' ?></td>
                     <td><?= App::e((string)($iface['oper'] ?? '')) ?></td>
                     <td><?= App::e($speedText) ?></td>
                     <td><?= App::e(firewall_rate_label(is_array($rate) ? $rate : null, 'in')) ?></td>

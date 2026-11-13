@@ -21,6 +21,8 @@ class FirewallPoll
     public const OID_VPN_PEAK = '1.3.6.1.4.1.9.9.392.1.3.41.0';
     public const OID_IKE_TUNNELS = '1.3.6.1.4.1.9.9.171.1.2.1.1.0';
     public const OID_IPSEC_TUNNELS = '1.3.6.1.4.1.9.9.171.1.3.1.1.0';
+    /** ifName rows kept per poll. Tunnel nameifs follow the physical ports, so a short cap drops them. */
+    private const INTERFACE_KEEP = 128;
     /** cpmCPUTotal5minRev, then 1minRev, then the deprecated 5min and 1min columns. */
     private const CPU_LOAD_OIDS = [
         '1.3.6.1.4.1.9.9.109.1.1.1.1.8',
@@ -793,6 +795,7 @@ class FirewallPoll
         $outErr = self::walkQuiet($session, $outErrOid);
         $inDrop = self::walkQuiet($session, $inDropOid);
         $outDrop = self::walkQuiet($session, $outDropOid);
+        $types = self::walkQuiet($session, '1.3.6.1.2.1.2.2.1.3');
         $rows = [];
         foreach ($names as $idx => $name) {
             $name = substr(trim($name), 0, 128);
@@ -800,8 +803,10 @@ class FirewallPoll
                 continue;
             }
             $op = self::numeric($oper[$idx] ?? null);
+            $typeN = self::numeric($types[$idx] ?? null);
             $rows[] = [
                 'name' => $name,
+                'type' => $typeN !== null ? (int)$typeN : null,
                 'oper' => self::ifOper($op),
                 'speed_mbps' => ($sp = self::numeric($speed[$idx] ?? null)) !== null ? (int)round($sp) : null,
                 'in_octets' => self::octetString($inB[$idx] ?? null),
@@ -811,7 +816,7 @@ class FirewallPoll
                 'in_discards' => self::octetString($inDrop[$idx] ?? null),
                 'out_discards' => self::octetString($outDrop[$idx] ?? null),
             ];
-            if (count($rows) >= 32) {
+            if (count($rows) >= self::INTERFACE_KEEP) {
                 break;
             }
         }
@@ -1506,5 +1511,27 @@ class FirewallPoll
             return $map[(int)$code];
         }
         return 'unknown';
+    }
+
+    /** IF-MIB ifType. Unknown codes stay numeric so a new firewall value is still visible. */
+    public static function ifTypeLabel($raw): string
+    {
+        $n = self::numeric($raw);
+        if ($n === null) {
+            return '';
+        }
+        $map = [
+            1 => 'other',
+            6 => 'ethernet',
+            24 => 'loopback',
+            53 => 'virtual',
+            117 => 'gigabit ethernet',
+            131 => 'tunnel',
+            135 => 'vlan',
+            136 => 'vlan',
+            161 => 'lag',
+        ];
+        $code = (int)$n;
+        return $map[$code] ?? (string)$code;
     }
 }
