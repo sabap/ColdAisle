@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.22] - 2026-11-13
+
+### Enhancements
+
+- **NOC / Firewalls:** Add a Cisco Secure Firewall Threat Defense template beside ASA. SNMP on each firewall supplies the charts, and an optional management center adds health and the HA pair name. Data-plane, Snort, and disk charts appear when those readings exist. The NOC keeps a separate chart section for every firewall, and members of an HA pair stay grouped without their numbers being added together
+
+---
 ## [1.0.21] - 2026-11-12
 
 ### Enhancements
