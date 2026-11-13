@@ -1439,6 +1439,8 @@ CREATE TABLE firewalls (
     snmp_last_poll_at DATETIME2 NULL,
     last_poll_json NVARCHAR(MAX) NULL,
     if_graph_json NVARCHAR(MAX) NULL,
+    if_hide_json NVARCHAR(MAX) NULL,
+    device_id INT NULL,
     platform NVARCHAR(20) NULL,
     ha_group NVARCHAR(80) NULL,
     fmc_host NVARCHAR(255) NULL,

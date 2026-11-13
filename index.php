@@ -241,6 +241,20 @@ if (AuthManager::can($user, 'manage_settings')) {
     }
 }
 
+$fwDash = null;
+$fwDashMore = false;
+if (AuthManager::can($user, 'view_firewalls')) {
+    try {
+        require_once __DIR__ . '/src/Services/FirewallHistory.php';
+        $fwBoard = FirewallHistory::wanBoard(8);
+        $fwDash = $fwBoard['rows'];
+        $fwDashMore = !empty($fwBoard['more']);
+    } catch (Throwable $e) {
+        $fwDash = [];
+        $fwDashMore = false;
+    }
+}
+
 layout_header('Dashboard', $user, 'dashboard');
 ?>
 
@@ -373,6 +387,81 @@ if (class_exists('SiteTourService')) {
         </div>
     </div>
 </div>
+
+<?php if (is_array($fwDash)): ?>
+<div class="card">
+    <div class="card-header">
+        <h2>Firewalls</h2>
+        <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('pages/firewalls.php')) ?>">Open Firewalls</a>
+    </div>
+    <div class="card-body">
+        <?php if (!$fwDash): ?>
+            <p class="text-muted" style="margin:0">No firewalls yet.
+                <?php if (AuthManager::can($user, 'edit_firewalls')): ?>
+                    <a href="<?= App::e(App::url('pages/firewalls.php?action=new')) ?>">Add a firewall</a> to see WAN status here.
+                <?php endif; ?>
+            </p>
+        <?php else: ?>
+            <div class="dash-fw-grid">
+                <?php foreach ($fwDash as $fwRow): ?>
+                    <?php
+                    $fwBits = [(($fwRow['platform'] ?? '') === 'ftd') ? 'Threat Defense' : 'ASA'];
+                    if (!empty($fwRow['ha_group'])) {
+                        $fwBits[] = (string)$fwRow['ha_group'];
+                    } elseif (!empty($fwRow['failover'])) {
+                        $fwBits[] = (string)$fwRow['failover'];
+                    }
+                    if (!empty($fwRow['model'])) {
+                        $fwBits[] = (string)$fwRow['model'];
+                    }
+                    ?>
+                    <div class="dash-fw-item">
+                        <a class="dash-fw-name" href="<?= App::e(App::url('pages/firewalls.php?id=' . (int)$fwRow['firewall_id'])) ?>"><?= App::e((string)$fwRow['name']) ?></a>
+                        <div class="text-muted" style="font-size:.78rem;margin-top:.15rem"><?= App::e(implode(' · ', $fwBits)) ?></div>
+                        <?php if (empty($fwRow['polled'])): ?>
+                            <p class="text-muted" style="margin:.45rem 0 0;font-size:.82rem">Not polled yet.</p>
+                        <?php elseif (empty($fwRow['links'])): ?>
+                            <p class="text-muted" style="margin:.45rem 0 0;font-size:.82rem">No WAN interface in the last poll.</p>
+                        <?php else: ?>
+                            <div class="dash-fw-links">
+                                <?php foreach ($fwRow['links'] as $link): ?>
+                                    <?php
+                                    $rateBits = [];
+                                    if (!empty($link['in_text'])) {
+                                        $rateBits[] = 'in ' . (string)$link['in_text'];
+                                    }
+                                    if (!empty($link['out_text'])) {
+                                        $rateBits[] = 'out ' . (string)$link['out_text'];
+                                    }
+                                    $oper = strtolower(trim((string)($link['oper'] ?? '')));
+                                    $badge = 'badge';
+                                    if ($oper === 'up') {
+                                        $badge = 'badge badge-success';
+                                    } elseif ($oper === 'down' || $oper === 'lower layer down') {
+                                        $badge = 'badge badge-danger';
+                                    }
+                                    $operLabel = $oper === '' ? 'Unknown' : ucfirst($oper);
+                                    ?>
+                                    <div>
+                                        <span><?= App::e((string)$link['name']) ?></span>
+                                        <span class="<?= $badge ?>"><?= App::e($operLabel) ?></span>
+                                    </div>
+                                    <?php if ($rateBits): ?>
+                                        <div class="text-muted"><?= App::e(implode(' · ', $rateBits)) ?></div>
+                                    <?php endif; ?>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+            <?php if ($fwDashMore): ?>
+                <p class="text-muted" style="margin:.75rem 0 0;font-size:.8rem">Showing the first 8. Open Firewalls for the rest.</p>
+            <?php endif; ?>
+        <?php endif; ?>
+    </div>
+</div>
+<?php endif; ?>
 
 <div class="dash-grid">
     <div class="card">

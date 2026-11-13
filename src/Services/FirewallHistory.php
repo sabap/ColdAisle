@@ -215,13 +215,16 @@ class FirewallHistory
     }
 
     /**
-     * Names from the last poll, plus any name already switched off.
+     * Names from the last poll only. Hidden tunnels and VTIs are omitted.
+     * A name that left the poll is not listed again just because graphing was turned off.
      *
      * @param array<string,mixed> $fw
      * @return list<string>
      */
     public static function interfaceChoices(array $fw): array
     {
+        $hidden = self::hiddenNames(isset($fw['if_hide_json']) ? (string)$fw['if_hide_json'] : null);
+        self::loadPoll();
         $names = [];
         $snap = self::decode($fw['last_poll_json'] ?? null);
         $rows = $snap['interfaces'] ?? null;
@@ -231,18 +234,485 @@ class FirewallHistory
                     continue;
                 }
                 $name = self::ifKey((string)($iface['name'] ?? ''));
-                if ($name !== '') {
-                    $names[$name] = true;
+                if ($name === '' || isset($hidden[$name]) || FirewallPoll::isVti($iface)) {
+                    continue;
                 }
+                $names[$name] = true;
             }
-        }
-        $raw = $fw['if_graph_json'] ?? null;
-        foreach (array_keys(self::graphDisabled($raw === null ? null : (string)$raw)) as $name) {
-            $names[$name] = true;
         }
         $list = array_keys($names);
         natcasesort($list);
         return array_values($list);
+    }
+
+    /**
+     * Hidden names that the last poll still reports, so Edit can show them again.
+     *
+     * @param array<string,mixed> $fw
+     * @return list<string>
+     */
+    public static function hiddenChoices(array $fw): array
+    {
+        $hidden = self::hiddenNames(isset($fw['if_hide_json']) ? (string)$fw['if_hide_json'] : null);
+        if (!$hidden) {
+            return [];
+        }
+        $names = [];
+        foreach (self::pollNames($fw) as $name) {
+            if (isset($hidden[$name])) {
+                $names[$name] = true;
+            }
+        }
+        $list = array_keys($names);
+        natcasesort($list);
+        return array_values($list);
+    }
+
+    /**
+     * Interface names in the stored poll. Empty when the firewall has not been polled.
+     *
+     * @param array<string,mixed> $fw
+     * @return list<string>
+     */
+    public static function pollNames(array $fw): array
+    {
+        $names = [];
+        $snap = self::decode($fw['last_poll_json'] ?? null);
+        $rows = $snap['interfaces'] ?? null;
+        if (!is_array($rows)) {
+            return [];
+        }
+        foreach ($rows as $iface) {
+            if (!is_array($iface)) {
+                continue;
+            }
+            $name = self::ifKey((string)($iface['name'] ?? ''));
+            if ($name !== '') {
+                $names[$name] = true;
+            }
+        }
+        return array_keys($names);
+    }
+
+    /**
+     * @return array<string,true>
+     */
+    public static function hiddenNames(?string $json): array
+    {
+        if ($json === null || trim($json) === '') {
+            return [];
+        }
+        $data = json_decode($json, true);
+        if (!is_array($data)) {
+            return [];
+        }
+        $hidden = [];
+        foreach ($data as $name => $flag) {
+            $name = self::ifKey((string)$name);
+            if ($name === '') {
+                continue;
+            }
+            if ($flag === 0 || $flag === '0' || $flag === false) {
+                $hidden[$name] = true;
+            }
+        }
+        return $hidden;
+    }
+
+    public static function hideName(?string $previous, string $name): ?string
+    {
+        $name = self::ifKey($name);
+        $hidden = self::hiddenNames($previous);
+        if ($name !== '') {
+            $hidden[$name] = true;
+        }
+        return self::encodeHideMap($hidden);
+    }
+
+    /**
+     * Checked names stay hidden. Names on the form that were cleared come back.
+     * Names the last poll no longer reports are dropped, unless that poll is empty.
+     *
+     * @param list<string> $known
+     * @param list<string> $keptHidden
+     * @param list<string> $present
+     */
+    public static function encodeHidePref(?string $previous, array $known, array $keptHidden, array $present): ?string
+    {
+        $hidden = self::hiddenNames($previous);
+        $kept = [];
+        foreach ($keptHidden as $name) {
+            $name = self::ifKey((string)$name);
+            if ($name !== '') {
+                $kept[$name] = true;
+            }
+        }
+        foreach ($known as $name) {
+            $name = self::ifKey((string)$name);
+            if ($name === '') {
+                continue;
+            }
+            if (isset($kept[$name])) {
+                $hidden[$name] = true;
+            } else {
+                unset($hidden[$name]);
+            }
+        }
+        $presentMap = [];
+        foreach ($present as $name) {
+            $name = self::ifKey((string)$name);
+            if ($name !== '') {
+                $presentMap[$name] = true;
+            }
+        }
+        if ($presentMap) {
+            foreach (array_keys($hidden) as $name) {
+                if (!isset($presentMap[$name])) {
+                    unset($hidden[$name]);
+                }
+            }
+        }
+        return self::encodeHideMap($hidden);
+    }
+
+    /**
+     * Up to two WAN-facing links. Tunnels are skipped.
+     * A name that looks like a WAN and is up ranks first. Otherwise the up link with the highest speed.
+     *
+     * @param list<array<string,mixed>> $interfaces
+     * @param array<string,true> $hidden
+     * @return list<array<string,mixed>>
+     */
+    public static function pickWan(array $interfaces, int $limit = 2, array $hidden = []): array
+    {
+        self::loadPoll();
+        $limit = max(1, min(4, $limit));
+        $scored = [];
+        foreach ($interfaces as $iface) {
+            if (!is_array($iface)) {
+                continue;
+            }
+            $name = self::ifKey((string)($iface['name'] ?? ''));
+            if ($name === '' || isset($hidden[$name]) || preg_match('/^Internal-/i', $name)) {
+                continue;
+            }
+            if (FirewallPoll::isVti($iface)) {
+                continue;
+            }
+            $score = self::wanScore($iface);
+            if ($score === null) {
+                continue;
+            }
+            $scored[] = ['score' => $score, 'iface' => $iface];
+        }
+        usort($scored, static function (array $a, array $b): int {
+            if ($a['score'] !== $b['score']) {
+                return $b['score'] <=> $a['score'];
+            }
+            $sa = (int)($a['iface']['speed_mbps'] ?? 0);
+            $sb = (int)($b['iface']['speed_mbps'] ?? 0);
+            if ($sa !== $sb) {
+                return $sb <=> $sa;
+            }
+            return strcasecmp((string)($a['iface']['name'] ?? ''), (string)($b['iface']['name'] ?? ''));
+        });
+        $out = [];
+        foreach ($scored as $row) {
+            $out[] = $row['iface'];
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Compact dashboard rows. Does not build chart series.
+     *
+     * @return array{rows:list<array<string,mixed>>,more:bool}
+     */
+    public static function wanBoard(int $limit = 8): array
+    {
+        $limit = max(1, min(12, $limit));
+        $take = $limit + 1;
+        $rows = [];
+        $wide = 'firewall_id, name, model, platform, ha_group, last_failover, last_poll_json, if_hide_json';
+        $base = 'firewall_id, name, model, platform, ha_group, last_failover, last_poll_json';
+        try {
+            $rows = Database::fetchAll(
+                'SELECT TOP ' . $take . ' ' . $wide . ' FROM firewalls WHERE is_active = 1 ORDER BY name'
+            );
+        } catch (Throwable $e) {
+            try {
+                $rows = Database::fetchAll(
+                    'SELECT TOP ' . $take . ' ' . $base . ' FROM firewalls WHERE is_active = 1 ORDER BY name'
+                );
+            } catch (Throwable $e2) {
+                return ['rows' => [], 'more' => false];
+            }
+        }
+        $more = count($rows) > $limit;
+        if ($more) {
+            $rows = array_slice($rows, 0, $limit);
+        }
+        $out = [];
+        foreach ($rows as $fw) {
+            $id = (int)($fw['firewall_id'] ?? 0);
+            if ($id < 1) {
+                continue;
+            }
+            $hidden = self::hiddenNames(isset($fw['if_hide_json']) ? (string)$fw['if_hide_json'] : null);
+            $snap = self::decode($fw['last_poll_json'] ?? null);
+            $ifaces = is_array($snap['interfaces'] ?? null) ? $snap['interfaces'] : [];
+            $picked = self::pickWan($ifaces, 2, $hidden);
+            $names = [];
+            foreach ($picked as $iface) {
+                $names[] = self::ifKey((string)($iface['name'] ?? ''));
+            }
+            $rates = self::latestRates($id, $names);
+            $links = [];
+            foreach ($picked as $iface) {
+                $name = self::ifKey((string)($iface['name'] ?? ''));
+                $speed = isset($iface['speed_mbps']) ? (int)$iface['speed_mbps'] : 0;
+                $rate = $rates[$name] ?? null;
+                $links[] = [
+                    'name' => $name,
+                    'oper' => (string)($iface['oper'] ?? ''),
+                    'speed_mbps' => $speed,
+                    'in_text' => ($speed > 0 && is_array($rate)) ? ($rate['in_text'] ?? null) : null,
+                    'out_text' => ($speed > 0 && is_array($rate)) ? ($rate['out_text'] ?? null) : null,
+                ];
+            }
+            $platform = strtolower(trim((string)($fw['platform'] ?? 'asa')));
+            $out[] = [
+                'firewall_id' => $id,
+                'name' => (string)($fw['name'] ?? ''),
+                'model' => (string)($fw['model'] ?? ''),
+                'platform' => $platform === 'ftd' ? 'ftd' : 'asa',
+                'ha_group' => trim((string)($fw['ha_group'] ?? '')),
+                'failover' => trim((string)($fw['last_failover'] ?? '')),
+                'polled' => $ifaces !== [],
+                'links' => $links,
+            ];
+        }
+        return ['rows' => $out, 'more' => $more];
+    }
+
+    /**
+     * Rack device first, then a firewall whose management address matches and is not linked elsewhere.
+     *
+     * @return array<string,mixed>|null
+     */
+    public static function matchDevice(int $deviceId, ?string $mgmt, ?string $primary): ?array
+    {
+        try {
+            if ($deviceId > 0) {
+                $row = Database::fetchOne(
+                    'SELECT TOP 1 firewall_id, name, primary_ip, device_id
+                     FROM firewalls WHERE is_active = 1 AND device_id = ?',
+                    [$deviceId]
+                );
+                if ($row) {
+                    $row['match'] = 'device';
+                    return $row;
+                }
+            }
+            $ips = [];
+            foreach ([$mgmt, $primary] as $ip) {
+                $ip = trim((string)$ip);
+                if ($ip !== '' && !in_array($ip, $ips, true)) {
+                    $ips[] = $ip;
+                }
+            }
+            foreach ($ips as $ip) {
+                $row = Database::fetchOne(
+                    'SELECT TOP 1 firewall_id, name, primary_ip, device_id
+                     FROM firewalls WHERE is_active = 1 AND primary_ip = ?',
+                    [$ip]
+                );
+                if ($row) {
+                    $row['match'] = 'ip';
+                    return $row;
+                }
+            }
+        } catch (Throwable $e) {
+            return null;
+        }
+        return null;
+    }
+
+    /**
+     * Identity fields copied from a Firewall rack device. SNMP stays on the firewall row.
+     *
+     * @return array<string,mixed>|null
+     */
+    public static function devicePrefill(int $deviceId): ?array
+    {
+        if ($deviceId < 1) {
+            return null;
+        }
+        try {
+            $row = Database::fetchOne(
+                'SELECT d.label, d.manufacturer, d.model, d.hostname, d.mgmt_ip, d.primary_ip, d.serial_no, r.room_id
+                 FROM devices d
+                 LEFT JOIN cabinets c ON c.cabinet_id = d.cabinet_id
+                 LEFT JOIN rooms r ON r.room_id = c.room_id
+                 WHERE d.device_id = ? AND d.is_active = 1 AND d.device_type = ?',
+                [$deviceId, 'firewall']
+            );
+        } catch (Throwable $e) {
+            return null;
+        }
+        if (!$row) {
+            return null;
+        }
+        $ip = trim((string)($row['mgmt_ip'] ?? ''));
+        if ($ip === '') {
+            $ip = trim((string)($row['primary_ip'] ?? ''));
+        }
+        $vendor = trim((string)($row['manufacturer'] ?? ''));
+        return [
+            'name' => trim((string)($row['label'] ?? '')),
+            'vendor' => $vendor !== '' ? $vendor : 'Cisco',
+            'model' => trim((string)($row['model'] ?? '')),
+            'hostname' => trim((string)($row['hostname'] ?? '')),
+            'primary_ip' => $ip,
+            'serial_no' => trim((string)($row['serial_no'] ?? '')),
+            'room_id' => !empty($row['room_id']) ? (int)$row['room_id'] : '',
+            'device_id' => $deviceId,
+        ];
+    }
+
+    /**
+     * Firewall-type rack devices that are free, plus the one already linked to this firewall.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public static function rackDevices(int $firewallId): array
+    {
+        try {
+            return Database::fetchAll(
+                'SELECT d.device_id, d.label, c.name AS cabinet_name
+                 FROM devices d
+                 LEFT JOIN cabinets c ON c.cabinet_id = d.cabinet_id
+                 WHERE d.is_active = 1
+                   AND (
+                        (d.device_type = ? AND NOT EXISTS (
+                            SELECT 1 FROM firewalls f
+                            WHERE f.device_id = d.device_id AND f.is_active = 1 AND f.firewall_id <> ?
+                        ))
+                        OR d.device_id = (SELECT device_id FROM firewalls WHERE firewall_id = ?)
+                   )
+                 ORDER BY d.label',
+                ['firewall', $firewallId, $firewallId]
+            );
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    /** @param array<string,true> $hidden */
+    private static function encodeHideMap(array $hidden): ?string
+    {
+        if (!$hidden) {
+            return null;
+        }
+        $payload = [];
+        foreach (array_keys($hidden) as $name) {
+            $payload[$name] = 0;
+        }
+        ksort($payload);
+        $json = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        return $json === false ? null : $json;
+    }
+
+    /** @param array<string,mixed> $iface */
+    private static function wanScore(array $iface): ?float
+    {
+        $name = strtolower(trim((string)($iface['name'] ?? '')));
+        if ($name === '') {
+            return null;
+        }
+        $score = 0.0;
+        if (preg_match('/wan|outside|internet|external/', $name)) {
+            $score += 100;
+        }
+        if (preg_match('/failover|management|diagnostic|mgmt|(^|[^a-z])ha([^a-z]|$)/', $name)) {
+            $score -= 40;
+        }
+        if (strtolower((string)($iface['oper'] ?? '')) === 'up') {
+            $score += 20;
+        }
+        $speed = (int)($iface['speed_mbps'] ?? 0);
+        if ($speed > 0) {
+            $score += min(40.0, log10($speed + 1) * 10);
+        }
+        return round($score, 2);
+    }
+
+    /**
+     * @param list<string> $names
+     * @return array<string,array{in_text:?string,out_text:?string}>
+     */
+    private static function latestRates(int $firewallId, array $names): array
+    {
+        $clean = [];
+        foreach ($names as $name) {
+            $name = self::ifKey((string)$name);
+            if ($name !== '') {
+                $clean[$name] = true;
+            }
+        }
+        $clean = array_keys($clean);
+        if ($firewallId < 1 || !$clean) {
+            return [];
+        }
+        $marks = implode(',', array_fill(0, count($clean), '?'));
+        $params = array_merge([$firewallId], $clean);
+        try {
+            $rows = Database::fetchAll(
+                'SELECT if_name, speed_mbps, in_octets, out_octets, polled_at
+                 FROM firewall_if_samples
+                 WHERE firewall_id = ? AND if_name IN (' . $marks . ')
+                   AND polled_at >= DATEADD(hour, -2, SYSUTCDATETIME())
+                 ORDER BY polled_at ASC',
+                $params
+            );
+        } catch (Throwable $e) {
+            return [];
+        }
+        $by = [];
+        foreach ($rows as $row) {
+            $by[(string)($row['if_name'] ?? '')][] = $row;
+        }
+        $out = [];
+        foreach ($by as $name => $points) {
+            if (count($points) < 2) {
+                continue;
+            }
+            $prev = $points[count($points) - 2];
+            $cur = $points[count($points) - 1];
+            $speed = isset($cur['speed_mbps']) && $cur['speed_mbps'] !== '' && $cur['speed_mbps'] !== null
+                ? (int)$cur['speed_mbps'] : 0;
+            if ($speed <= 0) {
+                continue;
+            }
+            $dt = self::secondsBetween((string)($prev['polled_at'] ?? ''), (string)($cur['polled_at'] ?? ''));
+            $in = self::counterDelta(self::digits($prev['in_octets'] ?? null), self::digits($cur['in_octets'] ?? null), $dt, $speed);
+            $outRate = self::counterDelta(self::digits($prev['out_octets'] ?? null), self::digits($cur['out_octets'] ?? null), $dt, $speed);
+            $out[$name] = [
+                'in_text' => is_array($in) && isset($in['bps']) ? self::formatBps($in['bps']) : null,
+                'out_text' => is_array($outRate) && isset($outRate['bps']) ? self::formatBps($outRate['bps']) : null,
+            ];
+        }
+        return $out;
+    }
+
+    private static function loadPoll(): void
+    {
+        if (!class_exists('FirewallPoll', false)) {
+            require_once __DIR__ . '/FirewallPoll.php';
+        }
     }
 
     private static function ifKey(string $name): string
@@ -347,8 +817,30 @@ class FirewallHistory
         }
 
         $graphOff = self::graphDisabled(self::graphJson($id, $fw));
+        $snapRows = self::snapshotInterfaces($fw['last_poll_json'] ?? null);
+        $snapByName = [];
+        foreach ($snapRows as $snapIface) {
+            $snapKey = self::ifKey((string)($snapIface['name'] ?? ''));
+            if ($snapKey !== '') {
+                $snapByName[$snapKey] = $snapIface;
+            }
+        }
+        $snapHasRows = $snapByName !== [];
+        $hiddenIf = self::hiddenNames(self::hideJson($id, $fw));
+        self::loadPoll();
         $interfaces = [];
         foreach ($grouped as $name => $points) {
+            $key = self::ifKey((string)$name);
+            if ($key === '' || isset($hiddenIf[$key])) {
+                continue;
+            }
+            if ($snapHasRows && !isset($snapByName[$key])) {
+                continue;
+            }
+            $meta = $snapByName[$key] ?? ['name' => $name];
+            if (FirewallPoll::isVti($meta)) {
+                continue;
+            }
             $last = $points[count($points) - 1];
             $speed = $last['speed_mbps'];
             $oper = strtolower((string)$last['oper']);
@@ -534,6 +1026,24 @@ class FirewallHistory
         return (string)$raw;
     }
 
+    /** @param array<string,mixed> $fw */
+    private static function hideJson(int $id, array $fw): ?string
+    {
+        if (array_key_exists('if_hide_json', $fw)) {
+            $raw = $fw['if_hide_json'];
+            return $raw === null ? null : (string)$raw;
+        }
+        try {
+            $raw = Database::fetchValue('SELECT if_hide_json FROM firewalls WHERE firewall_id = ?', [$id]);
+        } catch (Throwable $e) {
+            return null;
+        }
+        if ($raw === null || $raw === false) {
+            return null;
+        }
+        return (string)$raw;
+    }
+
     /**
      * @param list<array<string,mixed>> $samples
      * @param array<string,mixed> $snap
@@ -605,7 +1115,7 @@ class FirewallHistory
      */
     private static function fetchFirewallList(string $where, array $params = []): array
     {
-        $wide = 'firewall_id, name, model, platform, ha_group, last_failover, last_cpu_pct, last_connections, last_cps, snmp_last_poll_at, last_poll_json';
+        $wide = 'firewall_id, name, model, platform, ha_group, last_failover, last_cpu_pct, last_connections, last_cps, snmp_last_poll_at, last_poll_json, if_hide_json';
         $base = 'firewall_id, name, model, last_failover, last_cpu_pct, last_connections, last_cps, snmp_last_poll_at, last_poll_json';
         $sql = 'SELECT TOP 12 ' . $wide . ' FROM firewalls ' . $where;
         try {

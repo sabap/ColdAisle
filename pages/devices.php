@@ -193,7 +193,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         'tags' => device_empty_to_null($_POST['tags'] ?? null),
         'snmp_version' => device_empty_to_null($_POST['snmp_version'] ?? null),
         'snmp_community' => device_empty_to_null($_POST['snmp_community'] ?? null),
-        'snmp_fail_count' => $_POST['snmp_fail_count'] !== '' ? (int)$_POST['snmp_fail_count'] : 0,
+        'snmp_fail_count' => (isset($_POST['snmp_fail_count']) && $_POST['snmp_fail_count'] !== '')
+            ? (int)$_POST['snmp_fail_count'] : 0,
         'snmp_v3_profile_id' => !empty($_POST['snmp_v3_profile_id']) ? (int)$_POST['snmp_v3_profile_id'] : null,
         'snmp_v3_user' => device_empty_to_null($_POST['snmp_v3_user'] ?? null),
         'snmp_v3_sec_level' => device_empty_to_null($_POST['snmp_v3_sec_level'] ?? null),
@@ -360,6 +361,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
 
     // Seal SNMP secrets at rest (already-encrypted profile/device values unchanged)
     $data = Crypto::sealFields($data, ['snmp_community', 'snmp_v3_auth_pass', 'snmp_v3_priv_pass']);
+
+    // A Firewall device omits these inputs. Keep the row that is already stored.
+    if (!empty($_POST['device_id']) && !isset($_POST['snmp_form'])) {
+        $prevSnmp = Database::fetchOne(
+            'SELECT snmp_version, snmp_community, snmp_fail_count, snmp_v3_profile_id, snmp_v3_user,
+                    snmp_v3_sec_level, snmp_v3_auth_proto, snmp_v3_auth_pass, snmp_v3_priv_proto,
+                    snmp_v3_priv_pass, snmp_v3_context, snmp_engine_id
+             FROM devices WHERE device_id = ?',
+            [(int)$_POST['device_id']]
+        );
+        if ($prevSnmp) {
+            foreach ([
+                'snmp_version', 'snmp_community', 'snmp_fail_count', 'snmp_v3_profile_id', 'snmp_v3_user',
+                'snmp_v3_sec_level', 'snmp_v3_auth_proto', 'snmp_v3_auth_pass', 'snmp_v3_priv_proto',
+                'snmp_v3_priv_pass', 'snmp_v3_context', 'snmp_engine_id',
+            ] as $snmpCol) {
+                $data[$snmpCol] = $prevSnmp[$snmpCol];
+            }
+        }
+    }
 
     // Resolve primary contact: plain contact_id, or "user:123" → ensure contacts row
     $contactRaw = trim((string)($_POST['owner_contact_id'] ?? ''));
@@ -1103,7 +1124,12 @@ if ($action === 'new' || $id) {
         if (!empty($envSensors) || !empty($isEnvHostType)) {
             $devJump[] = ['id' => 'deviceEnvCard', 'label' => 'Env'];
         }
-        $devJump[] = ['id' => 'deviceSnmpCard', 'label' => 'SNMP'];
+        $devIsFirewall = strtolower((string)($device['device_type'] ?? '')) === 'firewall';
+        if ($devIsFirewall) {
+            $devJump[] = ['id' => 'deviceFirewallCard', 'label' => 'Firewall'];
+        } else {
+            $devJump[] = ['id' => 'deviceSnmpCard', 'label' => 'SNMP'];
+        }
         $devJump[] = ['id' => 'lifecycle-events', 'label' => 'Lifecycle'];
         layout_page_jump($devJump, 'Device sections');
         ?>
@@ -2304,7 +2330,44 @@ if ($action === 'new' || $id) {
                 endif; ?>
                 <?php endif; ?>
 
-                <?php if (!empty($device['snmp_version'])
+                <?php if (!empty($devIsFirewall)): ?>
+                <?php
+                    require_once dirname(__DIR__) . '/src/Services/FirewallHistory.php';
+                    $fwMatch = FirewallHistory::matchDevice(
+                        (int)$device['device_id'],
+                        isset($device['mgmt_ip']) ? (string)$device['mgmt_ip'] : null,
+                        isset($device['primary_ip']) ? (string)$device['primary_ip'] : null
+                    );
+                    $canViewFw = AuthManager::can($user, 'view_firewalls');
+                    $canEditFw = AuthManager::can($user, 'edit_firewalls');
+                ?>
+                <div class="card view-pane" id="deviceFirewallCard">
+                    <div class="card-header"><h2>Firewall</h2></div>
+                    <div class="card-body">
+                        <p style="margin-top:0">SNMP for this firewall is on the Firewalls page. This record keeps the rack location. Charts, interface status, and credentials stay with the firewall.</p>
+                        <?php if ($fwMatch && $canViewFw): ?>
+                            <p>
+                                <a class="btn btn-primary" href="<?= App::e(App::url('pages/firewalls.php?id=' . (int)$fwMatch['firewall_id'])) ?>">
+                                    Open <?= App::e((string)($fwMatch['name'] ?? 'firewall')) ?>
+                                </a>
+                            </p>
+                            <?php if (($fwMatch['match'] ?? '') === 'ip' && empty($fwMatch['device_id'])): ?>
+                                <p class="text-muted">This address matches that firewall. Open it and choose this rack device to link them.</p>
+                            <?php elseif (($fwMatch['match'] ?? '') === 'ip' && (int)($fwMatch['device_id'] ?? 0) !== (int)$device['device_id']): ?>
+                                <p class="text-muted">This address is already linked to another rack device.</p>
+                            <?php endif; ?>
+                        <?php elseif (!$fwMatch && $canEditFw): ?>
+                            <p>
+                                <a class="btn btn-primary" href="<?= App::e(App::url('pages/firewalls.php?action=new&device_id=' . (int)$device['device_id'])) ?>">
+                                    Add this firewall
+                                </a>
+                            </p>
+                        <?php else: ?>
+                            <p class="text-muted">No firewall is linked yet.</p>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <?php elseif (!empty($device['snmp_version'])
                     || !empty($device['snmp_v3_profile_id'])
                     || !empty($device['snmp_v3_user'])
                     || !empty($device['snmp_site_template_id'])):
@@ -3293,6 +3356,9 @@ if ($action === 'new' || $id) {
                         <strong>Env expansion module</strong> for probe expanders. If the U is already filled, ColdAisle will offer to open the existing device.
                     </p>
                     <?php endif; ?>
+                    <p class="text-muted" id="deviceFirewallTypeNote" style="font-size:.75rem;margin:.25rem 0 0" <?= (($device['device_type'] ?? ($defaults['device_type'] ?? '')) === 'firewall') ? '' : 'hidden' ?>>
+                        SNMP for a Firewall device is edited on the Firewalls page. Saving keeps any SNMP already stored on this device.
+                    </p>
                 </div>
                 <div class="form-row"><label>Device Template</label>
                     <select class="form-control" name="template_id" id="template_id">
@@ -3599,7 +3665,45 @@ if ($action === 'new' || $id) {
             </div>
         </div>
 
-        <!-- SNMP -->
+        <!-- Firewall link, or device SNMP. Firewall type posts no SNMP fields. -->
+        <?php
+        $editFirewall = $device && strtolower((string)($device['device_type'] ?? '')) === 'firewall';
+        $fwEditMatch = null;
+        if ($device) {
+            require_once dirname(__DIR__) . '/src/Services/FirewallHistory.php';
+            $fwEditMatch = FirewallHistory::matchDevice(
+                (int)$device['device_id'],
+                isset($device['mgmt_ip']) ? (string)$device['mgmt_ip'] : null,
+                isset($device['primary_ip']) ? (string)$device['primary_ip'] : null
+            );
+        }
+        $canViewFwEdit = AuthManager::can($user, 'view_firewalls');
+        $canEditFwEdit = AuthManager::can($user, 'edit_firewalls');
+        ?>
+        <?php if ($device): ?>
+        <div class="card" id="deviceFirewallEditCard" <?= $editFirewall ? '' : 'hidden' ?>>
+            <div class="card-header"><h2>Firewall</h2></div>
+            <div class="card-body">
+                <p style="margin-top:0">SNMP for this firewall is on the Firewalls page. This record keeps the rack location. Charts, interface status, and credentials stay with the firewall.</p>
+                <?php if ($fwEditMatch && $canViewFwEdit): ?>
+                    <a class="btn btn-primary" href="<?= App::e(App::url('pages/firewalls.php?id=' . (int)$fwEditMatch['firewall_id'])) ?>">
+                        Open <?= App::e((string)($fwEditMatch['name'] ?? 'firewall')) ?>
+                    </a>
+                    <?php if (($fwEditMatch['match'] ?? '') === 'ip' && empty($fwEditMatch['device_id'])): ?>
+                        <p class="text-muted">This address matches that firewall. Open it and choose this rack device to link them.</p>
+                    <?php elseif (($fwEditMatch['match'] ?? '') === 'ip' && (int)($fwEditMatch['device_id'] ?? 0) !== (int)$device['device_id']): ?>
+                        <p class="text-muted">This address is already linked to another rack device.</p>
+                    <?php endif; ?>
+                <?php elseif ($canEditFwEdit): ?>
+                    <a class="btn btn-primary" href="<?= App::e(App::url('pages/firewalls.php?action=new&device_id=' . (int)$device['device_id'])) ?>">
+                        Add this firewall
+                    </a>
+                <?php else: ?>
+                    <p class="text-muted" style="margin-bottom:0">No firewall is linked yet.</p>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php endif; ?>
         <?php
         // Normalize SNMP version for the select (aliases / driver type quirks)
         $devSnmpVerRaw = strtolower(trim((string)($device['snmp_version'] ?? '')));
@@ -3625,7 +3729,7 @@ if ($action === 'new' || $id) {
         $devAuthProtoOpts = ['MD5', 'SHA', 'SHA224', 'SHA256', 'SHA384', 'SHA512'];
         $devPrivProtoOpts = ['DES', 'AES', 'AES192', 'AES256'];
         ?>
-        <div class="card" id="deviceSnmpEditCard"
+        <div class="card" id="deviceSnmpEditCard" <?= !empty($editFirewall) ? 'hidden' : '' ?>
              data-snmp-version="<?= App::e($devSnmpVerNorm) ?>"
              data-snmp-profile="<?= (int)($device['snmp_v3_profile_id'] ?? 0) ?>"
              data-snmp-user="<?= App::e((string)($device['snmp_v3_user'] ?? '')) ?>"
@@ -3634,7 +3738,8 @@ if ($action === 'new' || $id) {
              data-snmp-priv="<?= App::e($devPrivProtoNorm) ?>"
              data-snmp-context="<?= App::e((string)($device['snmp_v3_context'] ?? '')) ?>">
             <div class="card-header"><h2>SNMP</h2></div>
-            <div class="card-body form-grid">
+            <fieldset class="card-body form-grid" id="deviceSnmpFields" <?= !empty($editFirewall) ? 'disabled' : '' ?> style="border:0;margin:0;min-width:0">
+                <input type="hidden" name="snmp_form" value="1">
                 <div class="form-row"><label>SNMP Version</label>
                     <select class="form-control" name="snmp_version" id="snmp_version" autocomplete="off">
                         <option value="" <?= $devSnmpVerNorm === '' ? 'selected' : '' ?>>— Disabled —</option>
@@ -3760,7 +3865,7 @@ if ($action === 'new' || $id) {
                     </p>
                 </div>
 
-            </div>
+            </fieldset>
         </div>
 
         <div class="card">
@@ -4183,6 +4288,24 @@ if ($action === 'new' || $id) {
                     snmpProf.value = '';
                 }
             });
+        }
+
+        var typeSel = document.querySelector('#deviceForm [name="device_type"]');
+        var snmpCard = document.getElementById('deviceSnmpEditCard');
+        var snmpFields = document.getElementById('deviceSnmpFields');
+        var fwEditCard = document.getElementById('deviceFirewallEditCard');
+        var fwTypeNote = document.getElementById('deviceFirewallTypeNote');
+        function syncFirewallSnmp() {
+            if (!typeSel) return;
+            var divert = typeSel.value === 'firewall';
+            if (fwTypeNote) fwTypeNote.hidden = !divert;
+            if (fwEditCard) fwEditCard.hidden = !divert;
+            if (snmpCard) snmpCard.hidden = divert;
+            if (snmpFields) snmpFields.disabled = divert;
+        }
+        if (typeSel) {
+            typeSel.addEventListener('change', syncFirewallSnmp);
+            syncFirewallSnmp();
         }
 
         // Power Supply line items (PSU ↔ cabinet PDU outlets)

@@ -74,6 +74,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                 'fmc_verify_tls' => !empty($_POST['fmc_verify_tls']) ? 1 : 0,
                 'updated_at' => gmdate('Y-m-d H:i:s'),
             ];
+            $linkId = (int)($_POST['device_id'] ?? 0);
+            if ($linkId > 0) {
+                $rack = Database::fetchOne(
+                    'SELECT device_id FROM devices WHERE device_id = ? AND is_active = 1 AND device_type = ?',
+                    [$linkId, 'firewall']
+                );
+                if (!$rack) {
+                    throw new RuntimeException('Choose a rack device whose type is Firewall.');
+                }
+                Database::update('firewalls', [
+                    'device_id' => null,
+                    'updated_at' => gmdate('Y-m-d H:i:s'),
+                ], 'device_id = :did AND is_active = 1 AND firewall_id <> :id', [
+                    ':did' => $linkId,
+                    ':id' => $fid,
+                ]);
+                $row['device_id'] = $linkId;
+            } else {
+                $row['device_id'] = null;
+            }
             if ($prev && isset($_POST['if_graph_form'])) {
                 $known = isset($_POST['if_known']) && is_array($_POST['if_known'])
                     ? array_map('strval', $_POST['if_known']) : [];
@@ -83,6 +103,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
                     isset($prev['if_graph_json']) ? (string)$prev['if_graph_json'] : null,
                     $known,
                     $enabled
+                );
+            }
+            if ($prev && isset($_POST['if_hide_form'])) {
+                $hideKnown = isset($_POST['if_hide_known']) && is_array($_POST['if_hide_known'])
+                    ? array_map('strval', $_POST['if_hide_known']) : [];
+                $hideKept = isset($_POST['if_hide']) && is_array($_POST['if_hide'])
+                    ? array_map('strval', $_POST['if_hide']) : [];
+                $row['if_hide_json'] = FirewallHistory::encodeHidePref(
+                    isset($prev['if_hide_json']) ? (string)$prev['if_hide_json'] : null,
+                    $hideKnown,
+                    $hideKept,
+                    FirewallHistory::pollNames($prev)
                 );
             }
             if ($community !== '') {
@@ -117,6 +149,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && App::verifyCsrf($_POST['_csrf'] ?? 
             AuditService::log((int)$user['user_id'], (string)($user['username'] ?? ''), 'create', 'firewall', $newId, ['name' => $name]);
             App::flash('success', 'Firewall added.');
             App::redirect('pages/firewalls.php?id=' . $newId);
+        }
+        if ($act === 'hide_interface') {
+            if (!$canEdit) {
+                throw new RuntimeException('You do not have permission to edit firewalls.');
+            }
+            $fid = (int)($_POST['firewall_id'] ?? 0);
+            $prev = Database::fetchOne(
+                'SELECT if_hide_json FROM firewalls WHERE firewall_id = ? AND is_active = 1',
+                [$fid]
+            );
+            if (!$prev) {
+                throw new RuntimeException('Firewall not found.');
+            }
+            $ifName = trim((string)($_POST['if_name'] ?? ''));
+            if ($ifName === '') {
+                throw new RuntimeException('Interface name is required.');
+            }
+            Database::update('firewalls', [
+                'if_hide_json' => FirewallHistory::hideName(
+                    isset($prev['if_hide_json']) ? (string)$prev['if_hide_json'] : null,
+                    $ifName
+                ),
+                'updated_at' => gmdate('Y-m-d H:i:s'),
+            ], 'firewall_id = :id', [':id' => $fid]);
+            App::flash('success', 'Interface hidden. Show it again from Edit firewall.');
+            App::redirect('pages/firewalls.php?id=' . $fid);
         }
         if ($act === 'delete_firewall') {
             if (!$canEdit) {
@@ -218,18 +276,35 @@ if ($action === 'new' || ($action === 'edit' && $id > 0)) {
         }
         $fw = array_merge($fw, $loaded);
     }
+    if ($action === 'new') {
+        $prefillId = (int)($_GET['device_id'] ?? 0);
+        if ($prefillId > 0) {
+            $src = FirewallHistory::devicePrefill($prefillId);
+            if ($src) {
+                foreach (['name', 'vendor', 'model', 'hostname', 'primary_ip', 'serial_no', 'room_id'] as $key) {
+                    if (isset($src[$key]) && $src[$key] !== '' && $src[$key] !== null) {
+                        $fw[$key] = $src[$key];
+                    }
+                }
+                $fw['device_id'] = $prefillId;
+            }
+        }
+    }
+    $rackDevices = FirewallHistory::rackDevices((int)($fw['firewall_id'] ?? 0));
     layout_header($action === 'edit' ? 'Edit firewall' : 'Add firewall', $user, 'firewalls');
-    firewall_form($fw, $rooms);
+    firewall_form($fw, $rooms, $rackDevices);
     layout_footer();
     exit;
 }
 
 if ($id > 0) {
     $fw = Database::fetchOne(
-        'SELECT f.*, r.name AS room_name, d.name AS dc_name
+        'SELECT f.*, r.name AS room_name, d.name AS dc_name,
+                dv.label AS device_label, dv.device_id AS linked_device_id
          FROM firewalls f
          LEFT JOIN rooms r ON r.room_id = f.room_id
          LEFT JOIN datacenters d ON d.datacenter_id = r.datacenter_id
+         LEFT JOIN devices dv ON dv.device_id = f.device_id AND dv.is_active = 1
          WHERE f.firewall_id = ? AND f.is_active = 1',
         [$id]
     );
@@ -251,9 +326,10 @@ if ($id > 0) {
 }
 
 $list = Database::fetchAll(
-    'SELECT f.*, r.name AS room_name
+    'SELECT f.*, r.name AS room_name, dv.label AS device_label
      FROM firewalls f
      LEFT JOIN rooms r ON r.room_id = f.room_id
+     LEFT JOIN devices dv ON dv.device_id = f.device_id AND dv.is_active = 1
      WHERE f.is_active = 1
      ORDER BY f.name'
 );
@@ -289,7 +365,7 @@ layout_header('Firewalls', $user, 'firewalls');
         <?php foreach ($list as $row): ?>
             <tr>
                 <td><a href="?id=<?= (int)$row['firewall_id'] ?>"><?= App::e((string)$row['name']) ?></a>
-                    <div class="text-muted"><?= (($row['platform'] ?? '') === 'ftd') ? 'Threat Defense' : 'ASA' ?><?php if (!empty($row['ha_group'])): ?> · <?= App::e((string)$row['ha_group']) ?><?php endif; ?></div></td>
+                    <div class="text-muted"><?= (($row['platform'] ?? '') === 'ftd') ? 'Threat Defense' : 'ASA' ?><?php if (!empty($row['ha_group'])): ?> · <?= App::e((string)$row['ha_group']) ?><?php endif; ?><?php if (!empty($row['device_label'])): ?> · Rack <?= App::e((string)$row['device_label']) ?><?php endif; ?></div></td>
                 <td><?= App::e((string)($row['model'] ?? '')) ?></td>
                 <td><?= App::e((string)($row['primary_ip'] ?? '')) ?></td>
                 <td><?= App::e((string)($row['last_version'] ?? '')) ?></td>
@@ -308,8 +384,9 @@ layout_footer();
 /**
  * @param array<string,mixed> $fw
  * @param list<array<string,mixed>> $rooms
+ * @param list<array<string,mixed>> $rackDevices
  */
-function firewall_form(array $fw, array $rooms): void
+function firewall_form(array $fw, array $rooms, array $rackDevices = []): void
 {
     $snmpSha2 = FirewallPoll::netSnmpSupportsSha2();
     $fid = (int)($fw['firewall_id'] ?? 0);
@@ -339,14 +416,15 @@ function firewall_form(array $fw, array $rooms): void
     $fmcVerify = $fw['fmc_verify_tls'] ?? null;
     $fmcVerifyOn = !($fmcVerify === 0 || $fmcVerify === '0' || $fmcVerify === false);
     $ctxHelp = $platform === 'ftd'
-        ? 'Usually blank. SNMP is set in the management center platform settings, deployed, and polled on this firewall\'s management address.'
+        ? 'Usually blank. SNMP is set in the management center platform settings, deployed, and polled on the management address of this firewall.'
         : 'Blank for single context. Admin context name when the ASA is in multiple mode.';
+    $linkedId = (int)($fw['device_id'] ?? 0);
     ?>
     <div class="flex-between mb-2">
         <h1 class="page-title" style="margin:0"><?= $fid ? 'Edit firewall' : 'Add firewall' ?></h1>
         <a class="btn btn-secondary" href="<?= App::e(App::url('pages/firewalls.php' . ($fid ? '?id=' . $fid : ''))) ?>">Cancel</a>
     </div>
-    <form method="post" class="card" style="padding:1rem 1.25rem">
+    <form method="post">
         <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
         <input type="hidden" name="action" value="save_firewall">
         <input type="hidden" name="firewall_id" value="<?= $fid ?>">
@@ -361,33 +439,36 @@ function firewall_form(array $fw, array $rooms): void
                 <span>SNMPv3 template for the firewall management address. Set SNMP in the management center platform settings and deploy it. Charts stay on this firewall.</span>
             </button>
         </div>
+        <div class="card">
+            <div class="card-header"><h2>Identity</h2></div>
+            <div class="card-body form-grid">
         <div class="form-row">
             <label for="fw_name">Name</label>
-            <input id="fw_name" name="name" required value="<?= App::e((string)$fw['name']) ?>">
+            <input class="form-control" id="fw_name" name="name" required value="<?= App::e((string)$fw['name']) ?>">
         </div>
         <div class="form-row">
             <label for="fw_vendor">Vendor</label>
-            <input id="fw_vendor" name="vendor" value="<?= App::e((string)($fw['vendor'] ?? 'Cisco')) ?>">
+            <input class="form-control" id="fw_vendor" name="vendor" value="<?= App::e((string)($fw['vendor'] ?? 'Cisco')) ?>">
         </div>
         <div class="form-row">
             <label for="fw_model">Model</label>
-            <input id="fw_model" name="model" value="<?= App::e((string)($fw['model'] ?? '')) ?>" placeholder="<?= $platform === 'ftd' ? 'Discovered from the firewall' : 'ASA5525' ?>">
+            <input class="form-control" id="fw_model" name="model" value="<?= App::e((string)($fw['model'] ?? '')) ?>" placeholder="<?= $platform === 'ftd' ? 'Discovered from the firewall' : 'ASA5525' ?>">
         </div>
         <div class="form-row">
             <label for="fw_host">Hostname</label>
-            <input id="fw_host" name="hostname" value="<?= App::e((string)($fw['hostname'] ?? '')) ?>">
+            <input class="form-control" id="fw_host" name="hostname" value="<?= App::e((string)($fw['hostname'] ?? '')) ?>">
         </div>
         <div class="form-row">
             <label for="fw_ip">Management IP</label>
-            <input id="fw_ip" name="primary_ip" value="<?= App::e((string)($fw['primary_ip'] ?? '')) ?>" placeholder="SNMP target">
+            <input class="form-control" id="fw_ip" name="primary_ip" value="<?= App::e((string)($fw['primary_ip'] ?? '')) ?>" placeholder="SNMP target">
         </div>
         <div class="form-row">
             <label for="fw_serial">Serial number</label>
-            <input id="fw_serial" name="serial_no" value="<?= App::e((string)($fw['serial_no'] ?? '')) ?>">
+            <input class="form-control" id="fw_serial" name="serial_no" value="<?= App::e((string)($fw['serial_no'] ?? '')) ?>">
         </div>
         <div class="form-row">
             <label for="fw_room">Room</label>
-            <select id="fw_room" name="room_id">
+            <select class="form-control" id="fw_room" name="room_id">
                 <option value="">Unplaced</option>
                 <?php foreach ($rooms as $room): ?>
                     <option value="<?= (int)$room['room_id'] ?>" <?= (int)($fw['room_id'] ?? 0) === (int)$room['room_id'] ? 'selected' : '' ?>>
@@ -398,47 +479,84 @@ function firewall_form(array $fw, array $rooms): void
         </div>
         <div class="form-row">
             <label for="fw_ha">Inventory role</label>
-            <select id="fw_ha" name="ha_role">
+            <select class="form-control" id="fw_ha" name="ha_role">
                 <?php foreach (['primary' => 'Primary', 'secondary' => 'Secondary', 'standalone' => 'Standalone'] as $k => $label): ?>
                     <option value="<?= App::e($k) ?>" <?= (string)($fw['ha_role'] ?? '') === $k ? 'selected' : '' ?>><?= App::e($label) ?></option>
                 <?php endforeach; ?>
             </select>
         </div>
-        <div class="form-row">
+        <div class="form-row full">
             <label for="fw_ha_group">HA pair name</label>
-            <input id="fw_ha_group" name="ha_group" maxlength="80" value="<?= App::e((string)($fw['ha_group'] ?? '')) ?>" placeholder="Same name on both members">
+            <input class="form-control" id="fw_ha_group" name="ha_group" maxlength="80" value="<?= App::e((string)($fw['ha_group'] ?? '')) ?>" placeholder="Same name on both members">
             <p class="text-muted" style="margin:.35rem 0 0">Members with the same name are grouped on the NOC. Each member keeps its own charts. The numbers are not added together.</p>
         </div>
-        <div class="form-row">
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header"><h2>Rack device</h2></div>
+            <div class="card-body form-grid">
+                <div class="form-row full">
+                    <label for="fw_device">Firewall in a rack</label>
+                    <select class="form-control" id="fw_device" name="device_id">
+                        <option value="">Not linked</option>
+                        <?php
+                        $linkedSeen = false;
+                        foreach ($rackDevices as $rack):
+                            $rackId = (int)($rack['device_id'] ?? 0);
+                            if ($rackId < 1) {
+                                continue;
+                            }
+                            if ($rackId === $linkedId) {
+                                $linkedSeen = true;
+                            }
+                            $rackLabel = trim((string)($rack['label'] ?? ''));
+                            if (!empty($rack['cabinet_name'])) {
+                                $rackLabel .= ' / ' . (string)$rack['cabinet_name'];
+                            }
+                            ?>
+                            <option value="<?= $rackId ?>" <?= $linkedId === $rackId ? 'selected' : '' ?>><?= App::e($rackLabel) ?></option>
+                        <?php endforeach; ?>
+                        <?php if ($linkedId > 0 && !$linkedSeen): ?>
+                            <option value="<?= $linkedId ?>" selected>Linked device <?= $linkedId ?></option>
+                        <?php endif; ?>
+                    </select>
+                    <p class="text-muted" style="margin:.35rem 0 0">Link the chassis in a rack to this firewall. SNMP for that device is edited here, not on the device page. Only devices whose type is Firewall are listed.</p>
+                </div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header"><h2>SNMP</h2></div>
+            <div class="card-body form-grid">
+        <div class="form-row full">
             <label><input type="checkbox" name="snmp_enabled" value="1" <?= !empty($fw['snmp_enabled']) ? 'checked' : '' ?>> SNMP enabled</label>
         </div>
         <div class="form-row">
             <label for="fw_snmp_ver">SNMP version</label>
-            <select id="fw_snmp_ver" name="snmp_version">
+            <select class="form-control" id="fw_snmp_ver" name="snmp_version">
                 <option value="2c" <?= (string)($fw['snmp_version'] ?? '2c') === '2c' ? 'selected' : '' ?>>v2c</option>
                 <option value="3" <?= (string)($fw['snmp_version'] ?? '') === '3' ? 'selected' : '' ?>>v3</option>
             </select>
         </div>
         <div class="form-row">
             <label for="fw_port">SNMP port</label>
-            <input id="fw_port" name="snmp_port" value="<?= (int)($fw['snmp_port'] ?? 161) ?>">
+            <input class="form-control" id="fw_port" name="snmp_port" value="<?= (int)($fw['snmp_port'] ?? 161) ?>">
         </div>
-        <div class="form-row">
+        <div class="form-row full">
             <label for="fw_ctx">SNMP context</label>
-            <input id="fw_ctx" name="snmp_context" value="<?= App::e((string)($fw['snmp_context'] ?? '')) ?>">
+            <input class="form-control" id="fw_ctx" name="snmp_context" value="<?= App::e((string)($fw['snmp_context'] ?? '')) ?>">
             <p class="text-muted" id="fw_ctx_help" style="margin:.35rem 0 0"><?= App::e($ctxHelp) ?></p>
         </div>
         <div class="form-row">
             <label for="fw_comm">SNMPv2c community</label>
-            <input id="fw_comm" name="snmp_community" type="password" autocomplete="new-password" placeholder="<?= $fid ? 'Leave blank to keep the saved community' : '' ?>">
+            <input class="form-control" id="fw_comm" name="snmp_community" type="password" autocomplete="new-password" placeholder="<?= $fid ? 'Leave blank to keep the saved community' : '' ?>">
         </div>
         <div class="form-row">
             <label for="fw_user">SNMPv3 user</label>
-            <input id="fw_user" name="snmp_security_name" value="<?= App::e((string)($fw['snmp_security_name'] ?? '')) ?>">
+            <input class="form-control" id="fw_user" name="snmp_security_name" value="<?= App::e((string)($fw['snmp_security_name'] ?? '')) ?>">
         </div>
         <div class="form-row">
             <label for="fw_level">SNMPv3 level</label>
-            <select id="fw_level" name="snmp_v3_sec_level">
+            <select class="form-control" id="fw_level" name="snmp_v3_sec_level">
                 <?php foreach (['authPriv', 'authNoPriv', 'noAuthNoPriv'] as $level): ?>
                     <option value="<?= App::e($level) ?>" <?= (string)($fw['snmp_v3_sec_level'] ?? 'authPriv') === $level ? 'selected' : '' ?>><?= App::e($level) ?></option>
                 <?php endforeach; ?>
@@ -447,9 +565,9 @@ function firewall_form(array $fw, array $rooms): void
         <div class="form-row">
             <label for="fw_authp">Auth protocol</label>
             <?php if (empty($snmpSha2)): ?>
-                <p class="text-muted" style="margin:.2rem 0 .45rem">This server's SNMP library is Net-SNMP <?= App::e(FirewallPoll::netSnmpVersion()) ?>. SHA256 and AES256 do not authenticate. Use SHA and AES.</p>
+                <p class="text-muted" style="margin:.2rem 0 .45rem">The SNMP library on this server is Net-SNMP <?= App::e(FirewallPoll::netSnmpVersion()) ?>. SHA256 and AES256 do not authenticate. Use SHA and AES.</p>
             <?php endif; ?>
-            <select id="fw_authp" name="snmp_auth_protocol">
+            <select class="form-control" id="fw_authp" name="snmp_auth_protocol">
                 <?php foreach ($authChoices as $ap): ?>
                     <option value="<?= App::e($ap) ?>" <?= $authNow === $ap ? 'selected' : '' ?>><?= App::e($ap) ?></option>
                 <?php endforeach; ?>
@@ -457,11 +575,11 @@ function firewall_form(array $fw, array $rooms): void
         </div>
         <div class="form-row">
             <label for="fw_auth">Auth passphrase</label>
-            <input id="fw_auth" name="snmp_auth_passphrase" type="password" autocomplete="new-password" placeholder="<?= $fid ? 'Leave blank to keep' : '' ?>">
+            <input class="form-control" id="fw_auth" name="snmp_auth_passphrase" type="password" autocomplete="new-password" placeholder="<?= $fid ? 'Leave blank to keep' : '' ?>">
         </div>
         <div class="form-row">
             <label for="fw_privp">Privacy protocol</label>
-            <select id="fw_privp" name="snmp_priv_protocol">
+            <select class="form-control" id="fw_privp" name="snmp_priv_protocol">
                 <?php foreach ($privChoices as $pp): ?>
                     <option value="<?= App::e($pp) ?>" <?= $privNow === $pp ? 'selected' : '' ?>><?= App::e($pp) ?></option>
                 <?php endforeach; ?>
@@ -469,32 +587,36 @@ function firewall_form(array $fw, array $rooms): void
         </div>
         <div class="form-row">
             <label for="fw_priv">Privacy passphrase</label>
-            <input id="fw_priv" name="snmp_priv_passphrase" type="password" autocomplete="new-password" placeholder="<?= $fid ? 'Leave blank to keep' : '' ?>">
+            <input class="form-control" id="fw_priv" name="snmp_priv_passphrase" type="password" autocomplete="new-password" placeholder="<?= $fid ? 'Leave blank to keep' : '' ?>">
         </div>
-        <div class="form-row">
+        <div class="form-row full">
             <label><input type="checkbox" name="snmp_auto_poll" value="1" <?= !empty($fw['snmp_auto_poll']) ? 'checked' : '' ?>> Include in scheduled SNMP polling</label>
         </div>
-        <div id="fwFmc" <?= $platform === 'ftd' ? '' : 'hidden' ?>>
-            <h2 class="fw-fmc-title">Management center</h2>
-            <p class="text-muted" style="margin:0 0 .75rem">Optional. Charts still come from SNMP on this firewall. The center adds health, software, and the HA pair name when SNMP left them blank. A center that cannot be reached does not fail the SNMP poll. Leave Verify TLS checked unless the center uses a private certificate.</p>
+            </div>
+        </div>
+        <div class="card" id="fwFmc" <?= $platform === 'ftd' ? '' : 'hidden' ?>>
+            <div class="card-header"><h2>Management center</h2></div>
+            <div class="card-body form-grid">
+            <p class="text-muted full" style="margin:0">Optional. Charts still come from SNMP on this firewall. The center adds health, software, and the HA pair name when SNMP left them blank. A center that cannot be reached does not fail the SNMP poll. Leave Verify TLS checked unless the center uses a private certificate.</p>
             <div class="form-row">
                 <label for="fw_fmc_host">Host</label>
-                <input id="fw_fmc_host" name="fmc_host" value="<?= App::e((string)($fw['fmc_host'] ?? '')) ?>" placeholder="Management center address">
+                <input class="form-control" id="fw_fmc_host" name="fmc_host" value="<?= App::e((string)($fw['fmc_host'] ?? '')) ?>" placeholder="Management center address">
             </div>
             <div class="form-row">
                 <label for="fw_fmc_port">Port</label>
-                <input id="fw_fmc_port" name="fmc_port" value="<?= (int)($fw['fmc_port'] ?? 443) > 0 ? (int)$fw['fmc_port'] : 443 ?>">
+                <input class="form-control" id="fw_fmc_port" name="fmc_port" value="<?= (int)($fw['fmc_port'] ?? 443) > 0 ? (int)$fw['fmc_port'] : 443 ?>">
             </div>
             <div class="form-row">
                 <label for="fw_fmc_user">Username</label>
-                <input id="fw_fmc_user" name="fmc_username" value="<?= App::e((string)($fw['fmc_username'] ?? '')) ?>" autocomplete="off">
+                <input class="form-control" id="fw_fmc_user" name="fmc_username" value="<?= App::e((string)($fw['fmc_username'] ?? '')) ?>" autocomplete="off">
             </div>
             <div class="form-row">
                 <label for="fw_fmc_pass">Password</label>
-                <input id="fw_fmc_pass" name="fmc_password" type="password" autocomplete="new-password" placeholder="<?= $fid ? 'Leave blank to keep' : '' ?>">
+                <input class="form-control" id="fw_fmc_pass" name="fmc_password" type="password" autocomplete="new-password" placeholder="<?= $fid ? 'Leave blank to keep' : '' ?>">
             </div>
-            <div class="form-row">
+            <div class="form-row full">
                 <label><input type="checkbox" name="fmc_verify_tls" value="1" <?= $fmcVerifyOn ? 'checked' : '' ?>> Verify TLS</label>
+            </div>
             </div>
         </div>
         <?php if ($fid > 0): ?>
@@ -502,10 +624,11 @@ function firewall_form(array $fw, array $rooms): void
             $ifChoices = FirewallHistory::interfaceChoices($fw);
             $ifOff = FirewallHistory::graphDisabled(isset($fw['if_graph_json']) ? (string)$fw['if_graph_json'] : null);
             ?>
-            <div class="form-row">
+            <div class="card">
+                <div class="card-header"><h2>Interface graphs</h2></div>
+                <div class="card-body">
                 <input type="hidden" name="if_graph_form" value="1">
-                <span class="fw-if-toggle-label">Interface graphs</span>
-                <p class="text-muted" style="margin:.2rem 0 .55rem">Turn off control-plane, failover, and any other interface that only adds noise. The status table still lists every interface. Throughput charts, including the NOC, show only the ones left on. A new interface starts on.</p>
+                <p class="text-muted" style="margin:0 0 .55rem">Turn off control-plane, failover, and any other interface that only adds noise. The status table still lists every interface that is not hidden. Throughput charts, including the NOC, show only the ones left on. A new interface starts on. Tunnel interfaces are status only and are not charted.</p>
                 <?php if (!$ifChoices): ?>
                     <p class="text-muted" style="margin:0">Graph switches appear after the first poll.</p>
                 <?php else: ?>
@@ -522,13 +645,49 @@ function firewall_form(array $fw, array $rooms): void
                         <?php endforeach; ?>
                     </div>
                 <?php endif; ?>
+                </div>
             </div>
         <?php endif; ?>
-        <div class="form-row">
-            <label for="fw_notes">Notes</label>
-            <textarea id="fw_notes" name="notes" rows="3"><?= App::e((string)($fw['notes'] ?? '')) ?></textarea>
+        <?php if ($fid > 0): ?>
+            <?php $hideChoices = FirewallHistory::hiddenChoices($fw); ?>
+            <div class="card">
+                <div class="card-header"><h2>Hidden interfaces</h2></div>
+                <div class="card-body">
+                    <input type="hidden" name="if_hide_form" value="1">
+                    <p class="text-muted" style="margin:0 0 .55rem">Hide an interface that should leave the status table and the charts. Clear the box and save to show it again. Saving also forgets a hidden name that the last poll no longer reports.</p>
+                    <?php if (!$hideChoices): ?>
+                        <p class="text-muted" style="margin:0">No interfaces are hidden.</p>
+                    <?php else: ?>
+                        <div class="fw-if-toggle-list">
+                            <?php foreach ($hideChoices as $hideName): ?>
+                                <input type="hidden" name="if_hide_known[]" value="<?= App::e($hideName) ?>">
+                                <label class="tech-mode-switch fw-if-switch">
+                                    <span class="tech-mode-switch-track">
+                                        <input type="checkbox" name="if_hide[]" value="<?= App::e($hideName) ?>" checked>
+                                        <span class="tech-mode-switch-thumb" aria-hidden="true"></span>
+                                    </span>
+                                    <span class="fw-if-switch-name"><?= App::e($hideName) ?></span>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+        <div class="card">
+            <div class="card-header"><h2>Notes</h2></div>
+            <div class="card-body form-grid">
+                <div class="form-row full">
+                    <label for="fw_notes">Notes</label>
+                    <textarea class="form-control" id="fw_notes" name="notes" rows="3"><?= App::e((string)($fw['notes'] ?? '')) ?></textarea>
+                </div>
+            </div>
         </div>
-        <button class="btn btn-primary" type="submit">Save</button>
+        <div class="card">
+            <div class="card-body form-actions">
+                <button class="btn btn-primary" type="submit">Save</button>
+            </div>
+        </div>
     </form>
     <script>
     (function () {
@@ -555,7 +714,7 @@ function firewall_form(array $fw, array $rooms): void
             if (fmc) fmc.hidden = kind !== 'ftd';
             if (help) {
                 help.textContent = kind === 'ftd'
-                    ? 'Usually blank. SNMP is set in the management center platform settings, deployed, and polled on this firewall\'s management address.'
+                    ? 'Usually blank. SNMP is set in the management center platform settings, deployed, and polled on the management address of this firewall.'
                     : 'Blank for single context. Admin context name when the ASA is in multiple mode.';
             }
             if (model) model.placeholder = kind === 'ftd' ? 'Discovered from the firewall' : 'ASA5525';
@@ -620,6 +779,23 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
     $fail = is_array($snap['failover'] ?? null) ? $snap['failover'] : [];
     $ifaces = is_array($snap['interfaces'] ?? null) ? $snap['interfaces'] : [];
     $graphOff = FirewallHistory::graphDisabled(isset($fw['if_graph_json']) ? (string)$fw['if_graph_json'] : null);
+    $hiddenIf = FirewallHistory::hiddenNames(isset($fw['if_hide_json']) ? (string)$fw['if_hide_json'] : null);
+    $physicalIf = [];
+    $tunnelIf = [];
+    foreach ($ifaces as $iface) {
+        if (!is_array($iface) || !FirewallPoll::keepInterface($iface)) {
+            continue;
+        }
+        $ifLabel = substr(trim((string)($iface['name'] ?? '')), 0, 128);
+        if ($ifLabel === '' || isset($hiddenIf[$ifLabel])) {
+            continue;
+        }
+        if (FirewallPoll::isVti($iface)) {
+            $tunnelIf[] = $iface;
+        } else {
+            $physicalIf[] = $iface;
+        }
+    }
     $rateByName = [];
     if (is_array($history) && !empty($history['interfaces']) && is_array($history['interfaces'])) {
         foreach ($history['interfaces'] as $hif) {
@@ -645,6 +821,9 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
                 · <?= $isFtd ? 'Threat Defense' : 'ASA' ?>
                 <?php if (!empty($fw['dc_name']) || !empty($fw['room_name'])): ?>
                     · <?= App::e(trim((string)($fw['dc_name'] ?? '') . ' / ' . (string)($fw['room_name'] ?? ''), ' /')) ?>
+                <?php endif; ?>
+                <?php if (!empty($fw['linked_device_id'])): ?>
+                    · Rack <a href="<?= App::e(App::url('pages/devices.php?id=' . (int)$fw['linked_device_id'])) ?>"><?= App::e((string)($fw['device_label'] ?? 'device')) ?></a>
                 <?php endif; ?>
             </p>
         </div>
@@ -802,7 +981,8 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
     <script src="<?= App::e(App::url('assets/js/firewall-specks.js')) ?>?v=1"></script>
     <script src="<?= App::e(App::url('assets/js/firewall-charts.js')) ?>?v=10"></script>
     <div class="card">
-        <p class="text-muted" style="margin:.75rem 1rem .25rem">In and out rates are the change since the previous poll, as a percent of interface speed. Errors and discards are the count since that same poll. Octet counters are totals since the interface came up. Down interfaces, links with no reported speed, and interfaces with graphing turned off stay in this table only.</p>
+        <div class="card-header"><h2>Interfaces</h2></div>
+        <p class="text-muted" style="margin:.75rem 1rem .25rem">In and out rates are the change since the previous poll, as a percent of interface speed. Errors and discards are the count since that same poll. Octet counters are totals since the interface came up. Down interfaces, links with no reported speed, and interfaces with graphing turned off stay in this table. Tunnel interfaces are listed by status only. Hidden interfaces stay off this page until Edit shows them again.</p>
         <table class="table">
             <thead>
                 <tr>
@@ -810,14 +990,14 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
                     <th>In rate</th><th>Out rate</th>
                     <th>Errors</th><th>Graph</th>
                     <th>In octets</th><th>Out octets</th>
+                    <?php if ($canEdit): ?><th></th><?php endif; ?>
                 </tr>
             </thead>
             <tbody>
-            <?php if (!$ifaces): ?>
-                <tr><td colspan="10" class="text-muted">No external interfaces in the last poll. Internal-Data interfaces are hidden.</td></tr>
+            <?php if (!$physicalIf): ?>
+                <tr><td colspan="<?= $canEdit ? 11 : 10 ?>" class="text-muted">No external interfaces in the last poll. Internal-Data interfaces are omitted. A tunnel that is administratively down is omitted.</td></tr>
             <?php endif; ?>
-            <?php foreach ($ifaces as $iface): ?>
-                <?php if (!is_array($iface)) { continue; } ?>
+            <?php foreach ($physicalIf as $iface): ?>
                 <?php
                 $ifLabel = substr(trim((string)($iface['name'] ?? '')), 0, 128);
                 $rate = $rateByName[$ifLabel] ?? null;
@@ -831,7 +1011,7 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
                 <tr>
                     <td><?= App::e((string)($iface['name'] ?? '')) ?></td>
                     <td><?= $typeText !== '' ? App::e($typeText) : '—' ?></td>
-                    <td><?= App::e((string)($iface['oper'] ?? '')) ?></td>
+                    <td><?= firewall_status_badge((string)($iface['oper'] ?? '')) ?></td>
                     <td><?= App::e($speedText) ?></td>
                     <td><?= App::e(firewall_rate_label(is_array($rate) ? $rate : null, 'in')) ?></td>
                     <td><?= App::e(firewall_rate_label(is_array($rate) ? $rate : null, 'out')) ?></td>
@@ -839,11 +1019,40 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
                     <td><?= $graphed ? 'On' : 'Off' ?></td>
                     <td><?= isset($iface['in_octets']) ? number_format((int)$iface['in_octets']) : '' ?></td>
                     <td><?= isset($iface['out_octets']) ? number_format((int)$iface['out_octets']) : '' ?></td>
+                    <?php if ($canEdit): ?><td><?php firewall_hide_button((int)$fw['firewall_id'], $ifLabel); ?></td><?php endif; ?>
                 </tr>
             <?php endforeach; ?>
             </tbody>
         </table>
     </div>
+    <?php if ($tunnelIf): ?>
+    <div class="card">
+        <div class="card-header"><h2>Virtual tunnel interfaces</h2></div>
+        <p class="text-muted" style="margin:.75rem 1rem .25rem">Tunnel status is Up or Down. Throughput is not charted for these interfaces.</p>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Interface</th><th>Type</th><th>Status</th>
+                    <?php if ($canEdit): ?><th></th><?php endif; ?>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($tunnelIf as $iface): ?>
+                <?php
+                $ifLabel = substr(trim((string)($iface['name'] ?? '')), 0, 128);
+                $typeText = FirewallPoll::ifTypeLabel($iface['type'] ?? null);
+                ?>
+                <tr>
+                    <td><?= App::e($ifLabel) ?></td>
+                    <td><?= $typeText !== '' ? App::e($typeText) : '—' ?></td>
+                    <td><?= firewall_status_badge((string)($iface['oper'] ?? '')) ?></td>
+                    <?php if ($canEdit): ?><td><?php firewall_hide_button((int)$fw['firewall_id'], $ifLabel); ?></td><?php endif; ?>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    <?php endif; ?>
     <?php if ($canEdit): ?>
         <form method="post" style="margin-top:1rem" onsubmit="return confirm('Remove this firewall from inventory?');">
             <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
@@ -852,6 +1061,35 @@ function firewall_detail(array $fw, array $snap, bool $canEdit, ?array $history 
             <button class="btn btn-danger" type="submit">Delete</button>
         </form>
     <?php endif; ?>
+    <?php
+}
+
+function firewall_status_badge(string $oper): string
+{
+    $raw = strtolower(trim($oper));
+    $cls = 'badge';
+    if ($raw === 'up') {
+        $cls = 'badge badge-success';
+    } elseif ($raw === 'down' || $raw === 'lower layer down' || $raw === 'not present') {
+        $cls = 'badge badge-danger';
+    }
+    $label = $raw === '' ? 'Unknown' : ucfirst($raw);
+    return '<span class="' . $cls . '">' . App::e($label) . '</span>';
+}
+
+function firewall_hide_button(int $firewallId, string $name): void
+{
+    if ($name === '') {
+        return;
+    }
+    ?>
+    <form method="post" style="margin:0">
+        <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
+        <input type="hidden" name="action" value="hide_interface">
+        <input type="hidden" name="firewall_id" value="<?= $firewallId ?>">
+        <input type="hidden" name="if_name" value="<?= App::e($name) ?>">
+        <button class="btn btn-ghost btn-sm" type="submit">Hide</button>
+    </form>
     <?php
 }
 

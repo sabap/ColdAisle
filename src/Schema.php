@@ -1765,6 +1765,8 @@ class Schema
     private static function ensureFirewallColumns(): void
     {
         self::ensureColumn('firewalls', 'if_graph_json', 'NVARCHAR(MAX) NULL');
+        self::ensureColumn('firewalls', 'if_hide_json', 'NVARCHAR(MAX) NULL');
+        self::ensureColumn('firewalls', 'device_id', 'INT NULL');
         self::ensureColumn('firewalls', 'platform', 'NVARCHAR(20) NULL');
         self::ensureColumn('firewalls', 'ha_group', 'NVARCHAR(80) NULL');
         self::ensureColumn('firewalls', 'fmc_host', 'NVARCHAR(255) NULL');

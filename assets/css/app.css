@@ -4556,6 +4556,28 @@ body.site-tour-open { overflow: hidden; }
 }
 .fw-if-switch { margin: .2rem 0; }
 .fw-if-switch-name { font-size: .92rem; }
+.dash-fw-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: .75rem;
+}
+.dash-fw-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .7rem .8rem;
+  background: var(--surface-2);
+  min-width: 0;
+}
+.dash-fw-name { font-weight: 650; }
+.dash-fw-links { margin-top: .45rem; font-size: .82rem; }
+.dash-fw-links > div {
+  display: flex;
+  justify-content: space-between;
+  gap: .5rem;
+  align-items: center;
+  margin-top: .28rem;
+}
+fieldset.card-body { padding: 1.15rem; }
 @media (max-width: 800px) {
   .fw-chart-grid, .fw-vpn-row, .fw-templates { grid-template-columns: 1fr; }
   .fw-if-spans { grid-template-columns: 1fr; }

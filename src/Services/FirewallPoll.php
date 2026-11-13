@@ -796,6 +796,7 @@ class FirewallPoll
         $inDrop = self::walkQuiet($session, $inDropOid);
         $outDrop = self::walkQuiet($session, $outDropOid);
         $types = self::walkQuiet($session, '1.3.6.1.2.1.2.2.1.3');
+        $admin = self::walkQuiet($session, '1.3.6.1.2.1.2.2.1.7');
         $rows = [];
         foreach ($names as $idx => $name) {
             $name = substr(trim($name), 0, 128);
@@ -804,10 +805,12 @@ class FirewallPoll
             }
             $op = self::numeric($oper[$idx] ?? null);
             $typeN = self::numeric($types[$idx] ?? null);
-            $rows[] = [
+            $adminN = self::numeric($admin[$idx] ?? null);
+            $row = [
                 'name' => $name,
                 'type' => $typeN !== null ? (int)$typeN : null,
                 'oper' => self::ifOper($op),
+                'admin' => self::ifAdmin($adminN),
                 'speed_mbps' => ($sp = self::numeric($speed[$idx] ?? null)) !== null ? (int)round($sp) : null,
                 'in_octets' => self::octetString($inB[$idx] ?? null),
                 'out_octets' => self::octetString($outB[$idx] ?? null),
@@ -816,6 +819,10 @@ class FirewallPoll
                 'in_discards' => self::octetString($inDrop[$idx] ?? null),
                 'out_discards' => self::octetString($outDrop[$idx] ?? null),
             ];
+            if (!self::keepInterface($row)) {
+                continue;
+            }
+            $rows[] = $row;
             if (count($rows) >= self::INTERFACE_KEEP) {
                 break;
             }
@@ -1511,6 +1518,56 @@ class FirewallPoll
             return $map[(int)$code];
         }
         return 'unknown';
+    }
+
+    /** ifAdminStatus. Empty when the agent did not report it. */
+    private static function ifAdmin(?float $code): string
+    {
+        $map = [1 => 'up', 2 => 'down', 3 => 'testing'];
+        if ($code !== null && isset($map[(int)$code])) {
+            return $map[(int)$code];
+        }
+        return '';
+    }
+
+    /**
+     * Tunnel / VTI. Type 131 is authoritative. The name is used only when the poll has no type.
+     */
+    public static function isVti(array $iface): bool
+    {
+        $type = $iface['type'] ?? null;
+        if ($type === null || $type === '') {
+            return self::nameLooksLikeVti((string)($iface['name'] ?? ''));
+        }
+        return is_numeric($type) && (int)$type === 131;
+    }
+
+    public static function nameLooksLikeVti(string $name): bool
+    {
+        return (bool)preg_match('/^(?:Tunnel|VTI)[-_ ]?\d+/i', trim($name));
+    }
+
+    /**
+     * Drop blank, internal, not-present, and administratively down tunnel rows.
+     * An admin-up tunnel that is oper down stays, so a live VTI still shows as Down.
+     *
+     * @param array<string,mixed> $row
+     */
+    public static function keepInterface(array $row): bool
+    {
+        $name = substr(trim((string)($row['name'] ?? '')), 0, 128);
+        if ($name === '' || preg_match('/^Internal-/i', $name)) {
+            return false;
+        }
+        $oper = strtolower(trim((string)($row['oper'] ?? '')));
+        if ($oper === 'not present') {
+            return false;
+        }
+        $admin = strtolower(trim((string)($row['admin'] ?? '')));
+        if ($admin === 'down' && self::isVti($row)) {
+            return false;
+        }
+        return true;
     }
 
     /**
