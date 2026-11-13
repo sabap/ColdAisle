@@ -19,6 +19,17 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.24] - 2026-11-13
+
+### Enhancements
+
+- **Firewalls:** The interface table shows the type the firewall reports for each interface. A virtual tunnel interface is labeled tunnel when that is the reported type
+
+### Bug fixes
+
+- **Firewalls:** The interface table keeps 128 interfaces from the poll. The previous limit of 32 dropped virtual tunnel interfaces that the firewall listed after the physical ports
+
+---
 ## [1.0.23] - 2026-11-13
 
 ### Bug fixes
