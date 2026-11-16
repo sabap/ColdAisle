@@ -70,7 +70,7 @@ Each tagged release should have categorized notes in [`CHANGELOG.md`](CHANGELOG.
 | **Field** | Tech mode and cabinet QR labels |
 | **Lifecycle** | Disposal workflow with notifications |
 | **Audits** | Physical audit jobs + system audit trail |
-| **Reports** | Inventory, utilization, power, warranty, cables, orphans, audits |
+| **Reports** | Inventory, utilization, power, cooling, temperature, and humidity, warranty, cables, orphans, audits |
 | **RBAC** | Administrator, Operator, Auditor, Viewer roles |
 
 ## Requirements

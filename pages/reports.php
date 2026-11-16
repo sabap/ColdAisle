@@ -5,6 +5,7 @@ require_once dirname(__DIR__) . '/src/App.php';
 require_once dirname(__DIR__) . '/includes/layout.php';
 require_once dirname(__DIR__) . '/includes/power_helpers.php';
 require_once dirname(__DIR__) . '/includes/work_order_helpers.php';
+require_once dirname(__DIR__) . '/includes/cooling_helpers.php';
 App::boot();
 $user = App::requirePermission('view_reports');
 
@@ -295,6 +296,537 @@ function report_export_btn(array $extra = []): void
     echo '<a class="btn btn-sm btn-secondary" href="' . App::e(report_export_url($extra)) . '">Export CSV</a>';
 }
 
+function report_fmt_temp(mixed $celsius): string
+{
+    if ($celsius === null || $celsius === '' || !is_numeric($celsius)) {
+        return '';
+    }
+    if (class_exists('TempUnitService')) {
+        return TempUnitService::format((float)$celsius, 1, true);
+    }
+    $s = rtrim(rtrim(number_format((float)$celsius, 1, '.', ''), '0'), '.');
+    return ($s === '' || $s === '-' ? '0' : $s) . ' °C';
+}
+
+function report_fmt_rh(mixed $rh): string
+{
+    if ($rh === null || $rh === '' || !is_numeric($rh)) {
+        return '';
+    }
+    $s = rtrim(rtrim(number_format((float)$rh, 1, '.', ''), '0'), '.');
+    return ($s === '' || $s === '-' ? '0' : $s) . ' %RH';
+}
+
+function report_dash(string $value): string
+{
+    return $value !== '' ? $value : '—';
+}
+
+/**
+ * Latest cooling-unit telemetry and aisle/room sensor readings, including humidity.
+ *
+ * @return array{units:list<array<string,mixed>>,sensors:list<array<string,mixed>>}
+ */
+function report_cooling(): array
+{
+    $types = cooling_unit_types();
+    $roles = cooling_unit_roles();
+    $kinds = env_sensor_kinds();
+    $placements = env_sensor_placements();
+    $hosts = env_sensor_hosts();
+    $units = [];
+    try {
+        $rows = Database::fetchAll(
+            'SELECT u.cooling_unit_id, u.name, u.unit_type, u.unit_role, u.snmp_last_poll_at,
+                    u.last_poll_json, rm.name AS room_name
+             FROM cooling_units u
+             LEFT JOIN rooms rm ON rm.room_id = u.room_id
+             WHERE u.is_active = 1
+             ORDER BY u.name'
+        );
+    } catch (Throwable $e) {
+        $rows = [];
+    }
+    foreach ($rows as $u) {
+        $snap = cooling_poll_snapshot_promote($u['last_poll_json'] ?? null);
+        $rhSet = '';
+        foreach ($snap['display'] as $item) {
+            if (($item['key'] ?? '') === 'return_humidity_setpoint') {
+                $rhSet = (string)($item['value'] ?? '');
+                break;
+            }
+        }
+        $coolPct = $snap['cooling_capacity_pct'];
+        $units[] = [
+            'cooling_unit_id' => (int)$u['cooling_unit_id'],
+            'name' => (string)$u['name'],
+            'room' => (string)($u['room_name'] ?? ''),
+            'type' => $types[(string)($u['unit_type'] ?? '')] ?? (string)($u['unit_type'] ?? ''),
+            'role' => $roles[(string)($u['unit_role'] ?? '')] ?? (string)($u['unit_role'] ?? ''),
+            'state' => (string)($snap['system_state'] ?? ''),
+            'supply' => report_fmt_temp($snap['supply_temp']),
+            'return' => report_fmt_temp($snap['return_temp']),
+            'humidity' => report_fmt_rh($snap['humidity']),
+            'humidity_setpoint' => $rhSet,
+            'cooling_pct' => $coolPct !== null ? ((string)(int)round((float)$coolPct) . '%') : '',
+            'polled' => (string)($u['snmp_last_poll_at'] ?? ($snap['polled_at'] ?? '')),
+        ];
+    }
+
+    $sensorKindSql = "s.sensor_kind IN ('temperature', 'temp_humidity', 'humidity', 'dew_point')";
+    $sensorSql = "SELECT s.*,
+                    rm.name AS room_name,
+                    cu.name AS cooling_unit_name,
+                    p.name AS pdu_name,
+                    d.label AS device_label,
+                    d.device_type AS device_type,
+                    cab.name AS cabinet_name
+             FROM env_sensors s
+             LEFT JOIN rooms rm ON rm.room_id = s.room_id
+             LEFT JOIN cooling_units cu ON cu.cooling_unit_id = s.cooling_unit_id
+             LEFT JOIN pdus p ON p.pdu_id = s.pdu_id
+             LEFT JOIN devices d ON d.device_id = s.device_id
+             LEFT JOIN cabinets cab ON cab.cabinet_id = COALESCE(s.cabinet_id, d.cabinet_id)
+             WHERE s.is_active = 1
+               AND $sensorKindSql
+             ORDER BY s.name";
+    $sensorSqlPlain = "SELECT s.*,
+                    rm.name AS room_name,
+                    cu.name AS cooling_unit_name,
+                    p.name AS pdu_name,
+                    d.label AS device_label,
+                    d.device_type AS device_type
+             FROM env_sensors s
+             LEFT JOIN rooms rm ON rm.room_id = s.room_id
+             LEFT JOIN cooling_units cu ON cu.cooling_unit_id = s.cooling_unit_id
+             LEFT JOIN pdus p ON p.pdu_id = s.pdu_id
+             LEFT JOIN devices d ON d.device_id = s.device_id
+             WHERE s.is_active = 1
+               AND $sensorKindSql
+             ORDER BY s.name";
+    try {
+        $sensorRows = Database::fetchAll($sensorSql);
+    } catch (Throwable $e) {
+        try {
+            $sensorRows = Database::fetchAll($sensorSqlPlain);
+        } catch (Throwable $e2) {
+            $sensorRows = [];
+        }
+    }
+    $sensors = [];
+    foreach ($sensorRows as $s) {
+        $kind = (string)($s['sensor_kind'] ?? '');
+        $val = isset($s['last_value']) && $s['last_value'] !== null && $s['last_value'] !== '' && is_numeric($s['last_value'])
+            ? (float)$s['last_value'] : null;
+        $hum = isset($s['last_humidity']) && $s['last_humidity'] !== null && $s['last_humidity'] !== '' && is_numeric($s['last_humidity'])
+            ? (float)$s['last_humidity'] : null;
+        $tempText = '';
+        $humText = '';
+        if ($kind === 'humidity') {
+            $humText = report_fmt_rh($hum ?? $val);
+        } else {
+            $tempText = report_fmt_temp($val);
+            $humText = report_fmt_rh($hum);
+        }
+        $sensors[] = [
+            'sensor_id' => (int)$s['sensor_id'],
+            'name' => (string)$s['name'],
+            'kind' => env_sensor_kind_short($kind, $kinds),
+            'room' => (string)($s['room_name'] ?? ''),
+            'placement' => $placements[(string)($s['placement'] ?? '')] ?? '',
+            'host' => env_sensor_host_display($s, $hosts),
+            'temperature' => $tempText,
+            'humidity' => $humText,
+            'seen' => (string)($s['last_seen_at'] ?? ''),
+        ];
+    }
+
+    return ['units' => $units, 'sensors' => $sensors];
+}
+
+/**
+ * @return array{span:string,hours:int,label:string}
+ */
+function report_climate_span(): array
+{
+    $span = strtolower(trim((string)($_GET['span'] ?? '7d')));
+    if (!in_array($span, ['24h', '7d', '30d'], true)) {
+        $span = '7d';
+    }
+    $hours = match ($span) {
+        '24h' => 24,
+        '30d' => 24 * 30,
+        default => 24 * 7,
+    };
+    $label = match ($span) {
+        '24h' => 'the last 24 hours',
+        '30d' => 'the last 30 days',
+        default => 'the last 7 days',
+    };
+    return ['span' => $span, 'hours' => $hours, 'label' => $label];
+}
+
+function report_climate_room_id(): int
+{
+    if (!isset($_GET['room_id']) || $_GET['room_id'] === '') {
+        return 0;
+    }
+    return max(0, (int)$_GET['room_id']);
+}
+
+/** @return list<array<string,mixed>> */
+function report_climate_rooms(): array
+{
+    try {
+        return Database::fetchAll(
+            'SELECT r.room_id, r.name, dc.name AS dc_name
+             FROM rooms r
+             LEFT JOIN datacenters dc ON dc.datacenter_id = r.datacenter_id
+             WHERE r.is_active = 1
+             ORDER BY dc.name, r.name'
+        );
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+function report_climate_since(int $hours): string
+{
+    return date('Y-m-d H:i:s', time() - ($hours * 3600));
+}
+
+function report_climate_num(mixed $v): ?float
+{
+    if ($v === null || $v === '' || !is_numeric($v)) {
+        return null;
+    }
+    return (float)$v;
+}
+
+function report_climate_status_label(string $status): string
+{
+    return match ($status) {
+        'ok' => 'OK',
+        'warn' => 'Warn',
+        'crit' => 'Crit',
+        default => '',
+    };
+}
+
+function report_climate_status_html(string $status): string
+{
+    $label = report_climate_status_label($status);
+    if ($label === '') {
+        return '—';
+    }
+    $badge = match ($status) {
+        'crit' => 'badge-danger',
+        'warn' => 'badge-warning',
+        default => 'badge-success',
+    };
+    return '<span class="badge ' . $badge . '">' . App::e($label) . '</span>';
+}
+
+/**
+ * Min, average, and max from stored sensor samples.
+ *
+ * @return array<int,array<string,mixed>>
+ */
+function report_climate_sensor_stats(string $which, string $since): array
+{
+    $tempWhere = "s.sensor_kind IN ('temperature', 'temp_humidity', 'dew_point')
+              AND (r.metric IS NULL OR r.metric = '' OR r.metric IN ('temperature', 'temp', 'celsius', 'primary'))";
+    $humWhere = "(
+                (s.sensor_kind = 'humidity' AND (r.metric IS NULL OR r.metric = '' OR r.metric IN ('humidity', 'primary')))
+                OR (s.sensor_kind = 'temp_humidity' AND r.metric = 'humidity')
+              )";
+    $where = $which === 'humidity' ? $humWhere : $tempWhere;
+    $sql = "SELECT r.sensor_id,
+                   MIN(r.value) AS min_v,
+                   AVG(r.value) AS avg_v,
+                   MAX(r.value) AS max_v,
+                   COUNT(*) AS samples
+            FROM env_readings r
+            INNER JOIN env_sensors s ON s.sensor_id = r.sensor_id
+            WHERE s.is_active = 1
+              AND r.recorded_at >= ?
+              AND $where
+            GROUP BY r.sensor_id";
+    try {
+        $rows = Database::fetchAll($sql, [$since]);
+    } catch (Throwable $e) {
+        $fallback = $which === 'humidity'
+            ? "s.sensor_kind = 'humidity'"
+            : "s.sensor_kind IN ('temperature', 'temp_humidity', 'dew_point')";
+        try {
+            $rows = Database::fetchAll(
+                "SELECT r.sensor_id,
+                        MIN(r.value) AS min_v,
+                        AVG(r.value) AS avg_v,
+                        MAX(r.value) AS max_v,
+                        COUNT(*) AS samples
+                 FROM env_readings r
+                 INNER JOIN env_sensors s ON s.sensor_id = r.sensor_id
+                 WHERE s.is_active = 1
+                   AND r.recorded_at >= ?
+                   AND $fallback
+                 GROUP BY r.sensor_id",
+                [$since]
+            );
+        } catch (Throwable $e2) {
+            $rows = [];
+        }
+    }
+    $out = [];
+    foreach ($rows as $r) {
+        $out[(int)$r['sensor_id']] = $r;
+    }
+    return $out;
+}
+
+/** @return array<int,array<string,mixed>> */
+function report_climate_cooling_stats(string $since): array
+{
+    try {
+        $rows = Database::fetchAll(
+            'SELECT cooling_unit_id,
+                    MIN(supply_temp_c) AS supply_min, AVG(supply_temp_c) AS supply_avg, MAX(supply_temp_c) AS supply_max,
+                    MIN(return_temp_c) AS return_min, AVG(return_temp_c) AS return_avg, MAX(return_temp_c) AS return_max,
+                    MIN(humidity) AS hum_min, AVG(humidity) AS hum_avg, MAX(humidity) AS hum_max,
+                    SUM(CASE WHEN supply_temp_c IS NOT NULL THEN 1 ELSE 0 END) AS supply_n,
+                    SUM(CASE WHEN return_temp_c IS NOT NULL THEN 1 ELSE 0 END) AS return_n,
+                    SUM(CASE WHEN humidity IS NOT NULL THEN 1 ELSE 0 END) AS hum_n
+             FROM cooling_readings
+             WHERE polled_at >= ?
+             GROUP BY cooling_unit_id',
+            [$since]
+        );
+    } catch (Throwable $e) {
+        return [];
+    }
+    $out = [];
+    foreach ($rows as $r) {
+        $out[(int)$r['cooling_unit_id']] = $r;
+    }
+    return $out;
+}
+
+/**
+ * @param array<string,mixed>|null $stat
+ * @return array{min:string,avg:string,max:string,samples:int}
+ */
+function report_climate_stat_text(?array $stat, string $minKey, string $avgKey, string $maxKey, string $nKey, bool $temp): array
+{
+    $fmt = $temp
+        ? static fn (mixed $v): string => report_fmt_temp($v)
+        : static fn (mixed $v): string => report_fmt_rh($v);
+    $n = (int)($stat[$nKey] ?? $stat['samples'] ?? 0);
+    if ($stat === null || $n < 1) {
+        return ['min' => '', 'avg' => '', 'max' => '', 'samples' => 0];
+    }
+    return [
+        'min' => $fmt($stat[$minKey] ?? null),
+        'avg' => $fmt($stat[$avgKey] ?? null),
+        'max' => $fmt($stat[$maxKey] ?? null),
+        'samples' => $n,
+    ];
+}
+
+/**
+ * Temperature or humidity rows for Reports.
+ *
+ * @return list<array<string,mixed>>
+ */
+function report_climate(string $which): array
+{
+    $which = $which === 'humidity' ? 'humidity' : 'temperature';
+    $temp = $which === 'temperature';
+    $span = report_climate_span();
+    $since = report_climate_since($span['hours']);
+    $roomId = report_climate_room_id();
+    $kinds = env_sensor_kinds();
+    $placements = env_sensor_placements();
+    $hosts = env_sensor_hosts();
+    $unitTypes = cooling_unit_types();
+    $sensorStats = report_climate_sensor_stats($which, $since);
+    $coolingStats = report_climate_cooling_stats($since);
+    $kindSql = $temp
+        ? "s.sensor_kind IN ('temperature', 'temp_humidity', 'dew_point')"
+        : "s.sensor_kind IN ('humidity', 'temp_humidity')";
+    $sensorSql = "SELECT s.*,
+                    rm.name AS room_name,
+                    cu.name AS cooling_unit_name,
+                    p.name AS pdu_name,
+                    d.label AS device_label,
+                    d.device_type AS device_type,
+                    cab.name AS cabinet_name
+             FROM env_sensors s
+             LEFT JOIN rooms rm ON rm.room_id = s.room_id
+             LEFT JOIN cooling_units cu ON cu.cooling_unit_id = s.cooling_unit_id
+             LEFT JOIN pdus p ON p.pdu_id = s.pdu_id
+             LEFT JOIN devices d ON d.device_id = s.device_id
+             LEFT JOIN cabinets cab ON cab.cabinet_id = COALESCE(s.cabinet_id, d.cabinet_id)
+             WHERE s.is_active = 1
+               AND $kindSql
+             ORDER BY s.name";
+    $sensorSqlPlain = "SELECT s.*,
+                    rm.name AS room_name,
+                    cu.name AS cooling_unit_name,
+                    p.name AS pdu_name,
+                    d.label AS device_label,
+                    d.device_type AS device_type
+             FROM env_sensors s
+             LEFT JOIN rooms rm ON rm.room_id = s.room_id
+             LEFT JOIN cooling_units cu ON cu.cooling_unit_id = s.cooling_unit_id
+             LEFT JOIN pdus p ON p.pdu_id = s.pdu_id
+             LEFT JOIN devices d ON d.device_id = s.device_id
+             WHERE s.is_active = 1
+               AND $kindSql
+             ORDER BY s.name";
+    try {
+        $sensorRows = Database::fetchAll($sensorSql);
+    } catch (Throwable $e) {
+        try {
+            $sensorRows = Database::fetchAll($sensorSqlPlain);
+        } catch (Throwable $e2) {
+            $sensorRows = [];
+        }
+    }
+
+    $rows = [];
+    foreach ($sensorRows as $s) {
+        $sid = (int)$s['sensor_id'];
+        $sensorRoom = (int)($s['room_id'] ?? 0);
+        if ($roomId > 0 && $sensorRoom !== $roomId) {
+            continue;
+        }
+        $kind = (string)($s['sensor_kind'] ?? '');
+        $placement = $placements[(string)($s['placement'] ?? '')] ?? '';
+        if ($temp) {
+            $current = report_climate_num($s['last_value'] ?? null);
+            $currentText = report_fmt_temp($current);
+            $status = function_exists('env_sensor_threshold_status')
+                ? env_sensor_threshold_status($current, $s)
+                : '';
+            if ($status === 'unknown') {
+                $status = '';
+            }
+            $point = $kind === 'dew_point'
+                ? ($placement !== '' ? ('Dew point · ' . $placement) : 'Dew point')
+                : $placement;
+            $stat = report_climate_stat_text($sensorStats[$sid] ?? null, 'min_v', 'avg_v', 'max_v', 'samples', true);
+        } else {
+            $fromHumidity = report_climate_num($s['last_humidity'] ?? null);
+            $fromValue = report_climate_num($s['last_value'] ?? null);
+            $current = $kind === 'humidity' ? ($fromHumidity ?? $fromValue) : $fromHumidity;
+            $currentText = report_fmt_rh($current);
+            $status = '';
+            if ($kind === 'humidity' && function_exists('env_sensor_threshold_status')) {
+                $status = env_sensor_threshold_status($current, $s);
+                if ($status === 'unknown') {
+                    $status = '';
+                }
+            }
+            $point = $placement !== '' ? $placement : 'Humidity';
+            $stat = report_climate_stat_text($sensorStats[$sid] ?? null, 'min_v', 'avg_v', 'max_v', 'samples', false);
+        }
+        $rows[] = [
+            'source' => 'Sensor',
+            'name' => (string)($s['name'] ?? ''),
+            'href' => 'pages/env_sensors.php?id=' . $sid,
+            'room' => (string)($s['room_name'] ?? ''),
+            'point' => $point,
+            'host' => env_sensor_host_display($s, $hosts),
+            'location' => (string)($s['location_label'] ?? ''),
+            'current' => $currentText,
+            'min' => $stat['min'],
+            'avg' => $stat['avg'],
+            'max' => $stat['max'],
+            'samples' => $stat['samples'],
+            'status' => $status,
+            'seen' => (string)($s['last_seen_at'] ?? ''),
+            'kind' => env_sensor_kind_short($kind, $kinds),
+        ];
+    }
+
+    try {
+        $units = Database::fetchAll(
+            'SELECT u.cooling_unit_id, u.name, u.unit_type, u.room_id, u.snmp_last_poll_at,
+                    u.last_poll_json, rm.name AS room_name
+             FROM cooling_units u
+             LEFT JOIN rooms rm ON rm.room_id = u.room_id
+             WHERE u.is_active = 1
+             ORDER BY u.name'
+        );
+    } catch (Throwable $e) {
+        $units = [];
+    }
+    foreach ($units as $u) {
+        $uid = (int)$u['cooling_unit_id'];
+        if ($roomId > 0 && (int)($u['room_id'] ?? 0) !== $roomId) {
+            continue;
+        }
+        $snap = function_exists('cooling_poll_snapshot_promote')
+            ? cooling_poll_snapshot_promote($u['last_poll_json'] ?? null)
+            : [];
+        $stats = $coolingStats[$uid] ?? null;
+        $typeLabel = $unitTypes[(string)($u['unit_type'] ?? '')] ?? (string)($u['unit_type'] ?? '');
+        $seen = (string)($u['snmp_last_poll_at'] ?? '');
+        $points = $temp
+            ? [
+                ['Supply', 'supply_temp', 'supply_min', 'supply_avg', 'supply_max', 'supply_n', true],
+                ['Return', 'return_temp', 'return_min', 'return_avg', 'return_max', 'return_n', true],
+            ]
+            : [
+                ['Humidity', 'humidity', 'hum_min', 'hum_avg', 'hum_max', 'hum_n', false],
+            ];
+        foreach ($points as $p) {
+            [$point, $snapKey, $minKey, $avgKey, $maxKey, $nKey, $isTemp] = $p;
+            $current = report_climate_num($snap[$snapKey] ?? null);
+            $stat = report_climate_stat_text($stats, $minKey, $avgKey, $maxKey, $nKey, $isTemp);
+            if ($current === null && $stat['samples'] < 1) {
+                continue;
+            }
+            $rows[] = [
+                'source' => 'Cooling unit',
+                'name' => (string)($u['name'] ?? ''),
+                'href' => 'pages/cooling_units.php?id=' . $uid,
+                'room' => (string)($u['room_name'] ?? ''),
+                'point' => $point,
+                'host' => $typeLabel,
+                'location' => '',
+                'current' => $isTemp ? report_fmt_temp($current) : report_fmt_rh($current),
+                'min' => $stat['min'],
+                'avg' => $stat['avg'],
+                'max' => $stat['max'],
+                'samples' => $stat['samples'],
+                'status' => '',
+                'seen' => $seen,
+                'kind' => '',
+            ];
+        }
+    }
+
+    usort($rows, static function (array $a, array $b): int {
+        $rank = ['crit' => 0, 'warn' => 1, 'ok' => 2];
+        $ra = $rank[$a['status']] ?? 3;
+        $rb = $rank[$b['status']] ?? 3;
+        if ($ra !== $rb) {
+            return $ra <=> $rb;
+        }
+        $cmp = strcasecmp((string)$a['room'], (string)$b['room']);
+        if ($cmp !== 0) {
+            return $cmp;
+        }
+        $cmp = strcasecmp((string)$a['name'], (string)$b['name']);
+        if ($cmp !== 0) {
+            return $cmp;
+        }
+        return strcasecmp((string)$a['point'], (string)$b['point']);
+    });
+    return $rows;
+}
+
 function report_emit_csv(string $report): never
 {
     $stamp = date('Ymd-His');
@@ -530,6 +1062,76 @@ function report_emit_csv(string $report): never
         ], $rows);
     }
 
+    if ($report === 'cooling') {
+        $data = report_cooling();
+        $rows = [];
+        foreach ($data['units'] as $r) {
+            $rows[] = [
+                'Cooling unit',
+                $r['name'],
+                $r['room'],
+                $r['type'],
+                $r['role'],
+                '',
+                $r['state'],
+                $r['supply'],
+                $r['return'],
+                '',
+                $r['humidity'],
+                $r['humidity_setpoint'],
+                $r['cooling_pct'],
+                $r['polled'],
+            ];
+        }
+        foreach ($data['sensors'] as $r) {
+            $rows[] = [
+                'Sensor',
+                $r['name'],
+                $r['room'],
+                $r['kind'],
+                $r['placement'],
+                $r['host'],
+                '',
+                '',
+                '',
+                $r['temperature'],
+                $r['humidity'],
+                '',
+                '',
+                $r['seen'],
+            ];
+        }
+        ListPager::sendCsv($file, [
+            'Section', 'Name', 'Room', 'Type', 'Role or placement', 'Host', 'State',
+            'Supply', 'Return', 'Temperature', 'Humidity', 'Humidity setpoint', 'Cooling %', 'Last reading',
+        ], $rows);
+    }
+
+    if ($report === 'temperature' || $report === 'humidity') {
+        $rows = [];
+        foreach (report_climate($report) as $r) {
+            $rows[] = [
+                $r['source'],
+                $r['name'],
+                $r['room'],
+                $r['point'],
+                $r['host'],
+                $r['location'],
+                $r['current'],
+                $r['min'],
+                $r['avg'],
+                $r['max'],
+                $r['samples'],
+                report_climate_status_label((string)$r['status']),
+                $r['seen'],
+            ];
+        }
+        ListPager::sendCsv($file, [
+            'Source', 'Name', 'Room', 'Point', 'Host', 'Location',
+            'Current', 'Min', 'Avg', 'Max', 'Samples', 'Status', 'Last reading',
+        ], $rows);
+    }
+
     App::flash('error', 'That report cannot be exported as CSV.');
     App::redirect('pages/reports.php' . ($report !== '' ? '?report=' . rawurlencode($report) : ''));
 }
@@ -546,6 +1148,9 @@ $catalog = [
     'inventory_summary' => 'Inventory Summary',
     'cabinet_utilization' => 'Cabinet Utilization',
     'power_capacity' => 'Power Capacity',
+    'cooling' => 'Cooling',
+    'temperature' => 'Temperature',
+    'humidity' => 'Humidity',
     'warranty_expiration' => 'Warranty Expiration',
     'disposal_queue' => 'Disposal Queue',
     'cable_inventory' => 'Cable Inventory',
@@ -1419,6 +2024,206 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
             <?php endforeach; ?>
             <?php if (!$rows): ?>
                 <tr><td colspan="7" class="text-muted">No work orders yet.</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<?php elseif ($report === 'cooling'):
+    $cool = report_cooling();
+    $tempSym = class_exists('TempUnitService') ? TempUnitService::symbol() : '°C';
+    ?>
+<div class="card">
+    <div class="card-header flex-between">
+        <h2 style="margin:0">Cooling</h2>
+        <?php report_export_btn(); ?>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="margin:0">
+            Latest supply, return, and humidity for each cooling unit, plus temperature and humidity from aisle and room sensors.
+            Temperatures use the site unit (<?= App::e($tempSym) ?>). Humidity is relative humidity.
+        </p>
+    </div>
+</div>
+<div class="card">
+    <div class="card-header"><h2 style="margin:0">Cooling units</h2></div>
+    <div class="card-body flush">
+        <table class="data">
+            <thead>
+            <tr>
+                <th>Name</th><th>Room</th><th>Type</th><th>Role</th><th>State</th>
+                <th>Supply</th><th>Return</th><th>Humidity</th><th>Humidity setpoint</th>
+                <th>Cooling %</th><th>Last poll</th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($cool['units'] as $r): ?>
+                <tr>
+                    <td><a href="<?= App::e(App::url('pages/cooling_units.php?id=' . (int)$r['cooling_unit_id'])) ?>"><?= App::e((string)$r['name']) ?></a></td>
+                    <td><?= App::e(report_dash((string)$r['room'])) ?></td>
+                    <td><?= App::e((string)$r['type']) ?></td>
+                    <td><?= App::e((string)$r['role']) ?></td>
+                    <td><?= App::e(report_dash((string)$r['state'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['supply'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['return'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['humidity'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['humidity_setpoint'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['cooling_pct'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['polled'])) ?></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$cool['units']): ?>
+                <tr><td colspan="11" class="text-muted">No cooling units yet.</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+<div class="card">
+    <div class="card-header"><h2 style="margin:0">Sensors</h2></div>
+    <div class="card-body flush">
+        <table class="data">
+            <thead>
+            <tr>
+                <th>Name</th><th>Kind</th><th>Room</th><th>Placement</th><th>Host</th>
+                <th>Temperature</th><th>Humidity</th><th>Last seen</th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($cool['sensors'] as $r): ?>
+                <tr>
+                    <td><a href="<?= App::e(App::url('pages/env_sensors.php?id=' . (int)$r['sensor_id'])) ?>"><?= App::e((string)$r['name']) ?></a></td>
+                    <td><?= App::e((string)$r['kind']) ?></td>
+                    <td><?= App::e(report_dash((string)$r['room'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['placement'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['host'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['temperature'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['humidity'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['seen'])) ?></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$cool['sensors']): ?>
+                <tr><td colspan="8" class="text-muted">No temperature or humidity sensors yet.</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<?php elseif ($report === 'temperature' || $report === 'humidity'):
+    $climateWhich = $report === 'humidity' ? 'humidity' : 'temperature';
+    $climateTitle = $climateWhich === 'humidity' ? 'Humidity' : 'Temperature';
+    $climateSpan = report_climate_span();
+    $climateRoomId = report_climate_room_id();
+    $climateRooms = report_climate_rooms();
+    $climateRows = report_climate($climateWhich);
+    $tempSym = class_exists('TempUnitService') ? TempUnitService::symbol() : '°C';
+    $climateCounts = ['crit' => 0, 'warn' => 0, 'ok' => 0];
+    foreach ($climateRows as $cr) {
+        $st = (string)($cr['status'] ?? '');
+        if (isset($climateCounts[$st])) {
+            $climateCounts[$st]++;
+        }
+    }
+    $climateHasStatus = ($climateCounts['crit'] + $climateCounts['warn'] + $climateCounts['ok']) > 0;
+    ?>
+<div class="card mb-2">
+    <div class="card-header flex-between">
+        <h2 style="margin:0"><?= App::e($climateTitle) ?></h2>
+        <?php report_export_btn(); ?>
+    </div>
+    <div class="card-body">
+        <?php if ($climateWhich === 'humidity'): ?>
+            <p class="text-muted" style="margin-top:0">
+                Latest relative humidity, plus the minimum, average, and maximum over <?= App::e($climateSpan['label']) ?>.
+                A humidity sensor uses its warn and crit limits for status. A combined temperature and humidity probe keeps those limits on temperature, so its humidity row has no status.
+                Cooling units appear when they have a humidity reading or samples in this period.
+            </p>
+        <?php else: ?>
+            <p class="text-muted" style="margin-top:0">
+                Latest temperature in the site unit (<?= App::e($tempSym) ?>), plus the minimum, average, and maximum over <?= App::e($climateSpan['label']) ?>.
+                Dew point is included. Cooling units contribute supply and return when those readings exist.
+                Status compares the latest reading with the warn and crit limits on that sensor.
+            </p>
+        <?php endif; ?>
+        <form method="get" class="form-grid">
+            <input type="hidden" name="report" value="<?= App::e($climateWhich) ?>">
+            <div class="form-row"><label>Period</label>
+                <select class="form-control" name="span">
+                    <option value="24h"<?= $climateSpan['span'] === '24h' ? ' selected' : '' ?>>Last 24 hours</option>
+                    <option value="7d"<?= $climateSpan['span'] === '7d' ? ' selected' : '' ?>>Last 7 days</option>
+                    <option value="30d"<?= $climateSpan['span'] === '30d' ? ' selected' : '' ?>>Last 30 days</option>
+                </select>
+            </div>
+            <div class="form-row"><label>Room</label>
+                <select class="form-control" name="room_id">
+                    <option value="">All rooms</option>
+                    <?php foreach ($climateRooms as $rm): ?>
+                        <?php
+                        $rid = (int)$rm['room_id'];
+                        $dcName = trim((string)($rm['dc_name'] ?? ''));
+                        $roomLabel = $dcName !== '' ? ($dcName . ' / ' . (string)$rm['name']) : (string)$rm['name'];
+                        ?>
+                        <option value="<?= $rid ?>"<?= $climateRoomId === $rid ? ' selected' : '' ?>><?= App::e($roomLabel) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row" style="align-self:end">
+                <button class="btn btn-primary" type="submit">Apply</button>
+                <?php if ($climateSpan['span'] !== '7d' || $climateRoomId > 0): ?>
+                    <a class="btn btn-secondary" href="?report=<?= App::e($climateWhich) ?>">Clear</a>
+                <?php endif; ?>
+            </div>
+        </form>
+        <p class="text-muted" style="font-size:.85rem;margin:.75rem 0 0">
+            <?= count($climateRows) ?> row<?= count($climateRows) === 1 ? '' : 's' ?>
+            <?php if ($climateHasStatus): ?>
+                — <?= (int)$climateCounts['crit'] ?> crit, <?= (int)$climateCounts['warn'] ?> warn, <?= (int)$climateCounts['ok'] ?> OK
+            <?php endif; ?>
+        </p>
+    </div>
+</div>
+<div class="card">
+    <div class="card-body flush">
+        <table class="data">
+            <thead>
+            <tr>
+                <th>Source</th><th>Name</th><th>Room</th><th>Point</th><th>Host</th>
+                <th>Current</th><th>Min</th><th>Avg</th><th>Max</th><th>Samples</th>
+                <th>Status</th><th>Last reading</th>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($climateRows as $r): ?>
+                <tr>
+                    <td><?= App::e((string)$r['source']) ?></td>
+                    <td>
+                        <a href="<?= App::e(App::url((string)$r['href'])) ?>"><?= App::e((string)$r['name']) ?></a>
+                        <?php if ((string)$r['location'] !== ''): ?>
+                            <div class="text-muted" style="font-size:.8rem"><?= App::e((string)$r['location']) ?></div>
+                        <?php endif; ?>
+                    </td>
+                    <td><?= App::e(report_dash((string)$r['room'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['point'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['host'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['current'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['min'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['avg'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['max'])) ?></td>
+                    <td><?= (int)$r['samples'] > 0 ? (int)$r['samples'] : '—' ?></td>
+                    <td><?= report_climate_status_html((string)$r['status']) ?></td>
+                    <td><?= App::e(report_dash((string)$r['seen'])) ?></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$climateRows): ?>
+                <tr>
+                    <td colspan="12" class="text-muted">
+                        <?= $climateWhich === 'humidity'
+                            ? 'No humidity sensors, and no cooling unit reported humidity in this period.'
+                            : 'No temperature sensors, and no cooling unit reported supply or return in this period.' ?>
+                    </td>
+                </tr>
             <?php endif; ?>
             </tbody>
         </table>

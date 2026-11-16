@@ -103,7 +103,7 @@ function layout_help_catalog(): array
         ],
         'reports' => [
             'title' => 'Reports',
-            'html' => '<p>Capacity, power, inventory, warranty. Use reports for a printable or exportable slice instead of clicking through pages.</p>',
+            'html' => '<p>Capacity, power, inventory, warranty, cooling, temperature, and humidity. Use reports for a printable or exportable slice instead of clicking through pages.</p>',
         ],
         'users' => [
             'title' => 'Users &amp; departments',
