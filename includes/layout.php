@@ -153,6 +153,7 @@ function layout_nav_groups(): array
                 ['key' => 'docs', 'label' => 'Documentation', 'href' => 'pages/docs.php', 'icon' => '📖', 'tour' => null],
                 ['key' => 'dash_lab', 'label' => 'Hall lab', 'href' => 'pages/dash_lab.php', 'icon' => '⚗', 'tour' => null],
                 ['key' => 'settings', 'label' => 'Settings', 'href' => 'pages/settings.php', 'icon' => '⚙', 'tour' => 'nav-settings'],
+                ['key' => 'noc_views', 'label' => 'NOC views', 'href' => 'pages/noc_views.php', 'icon' => '', 'tour' => null],
             ],
         ],
     ];

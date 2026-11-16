@@ -86,6 +86,7 @@ class AuthManager
         'users' => 'manage_users',
         'docs' => 'view_dashboard',
         'settings' => 'manage_settings',
+        'noc_views' => 'manage_settings',
     ];
 
     /**

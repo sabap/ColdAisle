@@ -1025,6 +1025,18 @@ class Schema
             // Distinguish temp vs humidity series for combo probes
             self::ensureColumn('env_readings', 'metric', 'NVARCHAR(40) NULL');
 
+            self::ensureTable(
+                'noc_views',
+                "CREATE TABLE noc_views (
+                    view_id INT IDENTITY(1,1) PRIMARY KEY,
+                    name NVARCHAR(60) NOT NULL,
+                    slug NVARCHAR(40) NOT NULL,
+                    layout_json NVARCHAR(MAX) NOT NULL,
+                    created_at DATETIME2 NOT NULL CONSTRAINT DF_noc_views_created DEFAULT SYSUTCDATETIME(),
+                    updated_at DATETIME2 NOT NULL CONSTRAINT DF_noc_views_updated DEFAULT SYSUTCDATETIME(),
+                    CONSTRAINT UQ_noc_views_slug UNIQUE (slug)
+                )"
+            );
             self::ensureIpam();
             self::ensureAirflow();
             self::ensureFirewalls();

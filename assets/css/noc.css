@@ -1531,3 +1531,71 @@ html, body {
   .noc-footer { flex-wrap: wrap; white-space: normal; }
   .noc-metrics { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
+
+/* Named views: a fixed 1920×1080 stage, scaled to the screen. Tiles cannot scroll. */
+body.noc-locked {
+  overflow: hidden;
+  background: #05080f;
+}
+.noc-scale {
+  width: 1920px;
+  height: 1080px;
+  position: fixed;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  overflow: hidden;
+}
+.noc-root.noc-custom {
+  width: 1920px;
+  height: 1080px;
+  max-height: 1080px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+.noc-custom .noc-error {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 64px;
+  z-index: 8;
+}
+.noc-board {
+  grid-column: 1;
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-rows: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.noc-tile {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.noc-tile > .noc-3d-wrap,
+.noc-tile > .noc-panel-wrap,
+.noc-tile > .noc-alerts-glass {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  grid-row: auto;
+  grid-column: auto;
+}
+.noc-tile-alerts .noc-alerts-glass {
+  max-height: none;
+  height: 100%;
+  border-top: 0;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+}
+.noc-tile-alerts .noc-alerts-glass-list {
+  height: auto;
+}

@@ -114,9 +114,14 @@ function layout_help_catalog(): array
             'title' => 'Documentation',
             'html' => '<p>Operator how-tos and the machine API. The circled ? on other pages is the short version of the same topics.</p>',
         ],
+        'noc_views' => [
+            'title' => 'NOC views',
+            'html' => '<p>Named walls for the TVs. Drag the 3D hall, alerts, a module, or rotating pages onto the 1920×1080 board. A tile that would spill off is refused, so the wall does not scroll. Each view has a public URL and uses the NOC access token from Settings.</p>',
+        ],
         'settings' => [
             'title' => 'Settings',
             'html' => '<p>Org, security, LDAP, mail, alerts, SNMP schedule, backups, updates, setup wizard, and the site tour.</p>'
+                . '<p>NOC views are named 1920×1080 walls. Each has a public URL and uses the NOC access token.</p>'
                 . '<p>If something “won’t stick,” it is usually here — or IIS app-pool write on <code>config/</code> and <code>storage/</code>.</p>',
         ],
         'notifications' => [
@@ -158,6 +163,7 @@ function layout_help_id_for_active(string $active): ?string
         'users' => 'users',
         'docs' => 'docs',
         'settings' => 'settings',
+        'noc_views' => 'noc_views',
         'notifications' => 'notifications',
     ];
     $id = $map[$active] ?? null;

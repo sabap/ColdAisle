@@ -1504,6 +1504,11 @@ try {
         <p class="text-muted" style="font-size:.8rem;word-break:break-all">
             URL: <code><?= App::e($nocUrl) ?></code>
         </p>
+        <p class="text-muted" style="font-size:.9rem">
+            Named walls, including a firewall-only wall, are built under
+            <a href="<?= App::e(App::url('pages/noc_views.php')) ?>">NOC views</a>.
+            Each one has its own public URL and uses this same access token.
+        </p>
         <form method="post" class="form-grid" style="margin-top:1rem">
             <input type="hidden" name="_csrf" value="<?= App::e(App::csrfToken()) ?>">
             <input type="hidden" name="section" value="noc">

@@ -55,6 +55,7 @@ require_once __DIR__ . '/Services/ItsmSnowService.php';
 require_once __DIR__ . '/Services/ItsmZendeskService.php';
 require_once __DIR__ . '/Services/ItsmJiraService.php';
 require_once __DIR__ . '/Services/ItsmFreshserviceService.php';
+require_once __DIR__ . '/Services/NocViewService.php';
 
 class App
 {

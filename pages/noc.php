@@ -36,8 +36,8 @@ $apiUrl = App::url('api/noc.php');
 if ($gotToken !== '') {
     $apiUrl .= (str_contains($apiUrl, '?') ? '&' : '?') . 'token=' . rawurlencode($gotToken);
 }
-$cssUrl = App::url('assets/css/noc.css') . '?v=19';
-$jsUrl = App::url('assets/js/noc.js') . '?v=30';
+$cssUrl = App::url('assets/css/noc.css') . '?v=20';
+$jsUrl = App::url('assets/js/noc.js') . '?v=31';
 $speckUrl = App::url('assets/js/firewall-specks.js') . '?v=1';
 $threeUrl = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
 $dcim3dUrl = App::url('assets/js/dcim-3d.js') . '?v=41';
@@ -69,7 +69,23 @@ try {
     $nocCamZoomPct = max(0, min(100, (int)SettingsService::get('noc_cam_zoom_pct', '72')));
 } catch (Throwable $e) {
 }
-$title = ($org !== '' ? $org . ' — ' : '') . 'NOC';
+$viewSlug = strtolower(trim((string)($_GET['view'] ?? '')));
+$nocView = null;
+if ($viewSlug !== '') {
+    $nocView = NocViewService::findBySlug($viewSlug);
+    if ($nocView === null) {
+        http_response_code(404);
+        header('Content-Type: text/html; charset=utf-8');
+        echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>NOC</title></head><body style="font-family:sans-serif;background:#0a0f18;color:#e2e8f0;padding:2rem">';
+        echo '<h1>That NOC view does not exist</h1><p>Check the name on the URL.</p></body></html>';
+        exit;
+    }
+}
+$title = ($org !== '' ? $org . ' — ' : '') . ($nocView ? (string)$nocView['name'] : 'NOC');
+if ($nocView) {
+    require dirname(__DIR__) . '/includes/noc_wall.php';
+    exit;
+}
 ?><!DOCTYPE html>
 <html lang="en">
 <head>

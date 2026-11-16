@@ -41,7 +41,11 @@
   var sceneLoadedAt = 0;
   var hidden = false;
   var lastData = null;
-  var panels = ['overview', 'power', 'zones', 'cooling'];
+  var customLayout = !!(cfg.layout && typeof cfg.layout === 'object');
+  var rotatePages = customLayout && Array.isArray(cfg.layout.rotatePages) ? cfg.layout.rotatePages.slice() : null;
+  var panels = customLayout
+    ? (rotatePages || []).filter(function (name) { return name !== 'firewalls'; })
+    : ['overview', 'power', 'zones', 'cooling'];
   var panelIdx = 0;
   var panelTimer = null;
   var fwPageIdx = 0;
@@ -812,6 +816,15 @@
     });
 
     if (!newIds.length) {
+      if (host.closest && host.closest('.noc-tile-alerts')) {
+        host.hidden = false;
+        if (countEl) countEl.textContent = '';
+        if (!list.querySelector('.noc-empty')) {
+          list.innerHTML = '<div class="noc-empty" style="grid-column:1 / -1">No recent alerts</div>';
+        }
+        alertsBootstrapped = true;
+        return;
+      }
       if (!host.hidden) {
         // Soft clear without hard flash
         Object.keys(alertChipEls).forEach(function (k) {
@@ -830,6 +843,8 @@
       return;
     }
 
+    var emptyNote = list.querySelector('.noc-empty');
+    if (emptyNote && emptyNote.parentNode) emptyNote.parentNode.removeChild(emptyNote);
     var wasHidden = !!host.hidden;
     host.hidden = false;
     if (wasHidden) {
@@ -1070,8 +1085,12 @@
     }
     var hint = $('nocPanelHint');
     if (hint) {
-      hint.textContent = 'Panel every ' + Math.round(panelRotateMs / 1000) + 's'
-        + (nocAutoRotate ? ' · 3D orbit on' : ' · 3D orbit off');
+      if (customLayout && (!rotatePages || !rotatePages.length)) {
+        hint.textContent = 'Fixed tiles' + (nocAutoRotate ? ' · 3D orbit on' : '');
+      } else {
+        hint.textContent = 'Panel every ' + Math.round(panelRotateMs / 1000) + 's'
+          + (nocAutoRotate ? ' · 3D orbit on' : ' · 3D orbit off');
+      }
     }
   }
 
@@ -1104,19 +1123,34 @@
   function syncFirewallPanel(data) {
     var list = (data && data.firewalls) || [];
     var has = list.length > 0;
-    var tab = document.querySelector('.noc-tab[data-panel="firewalls"]');
+    var scope = document.querySelector('.noc-rotate-tile');
+    var tab = scope
+      ? scope.querySelector('.noc-tab[data-panel="firewalls"]')
+      : document.querySelector('.noc-tab[data-panel="firewalls"]');
     var panel = $('panel-firewalls');
+    var inRotate = !!(scope && panel && scope.contains(panel));
     if (tab) {
       if (has) tab.removeAttribute('hidden');
       else tab.setAttribute('hidden', '');
     }
-    if (panel) {
+    // A fixed Firewalls tile stays visible so an empty hall still says so.
+    // A rotator that is only Firewalls stays visible for the same reason.
+    if (panel && !customLayout) {
       if (has) panel.removeAttribute('hidden');
       else panel.setAttribute('hidden', '');
+    } else if (panel && inRotate) {
+      if (has || (rotatePages && rotatePages.length === 1)) panel.removeAttribute('hidden');
+      else panel.setAttribute('hidden', '');
     }
+    var allowRotate = !customLayout || (rotatePages && rotatePages.indexOf('firewalls') >= 0);
+    if (!allowRotate) return;
     var idx = panels.indexOf('firewalls');
     if (has && idx < 0) {
       panels.push('firewalls');
+      if (!panelTimer && panels.length) {
+        panelTimer = setInterval(nextPanel, panelRotateMs);
+      }
+      if (customLayout && panels.length === 1) showPanel('firewalls');
     } else if (!has && idx >= 0) {
       panels.splice(idx, 1);
       if (panelIdx >= panels.length) panelIdx = 0;
@@ -1407,7 +1441,7 @@
     if (p) p.innerHTML = renderPower(data);
     if (z) z.innerHTML = renderZones(data);
     if (c) c.innerHTML = renderCooling(data);
-    if (f && !f.hidden) f.innerHTML = renderFirewalls(data);
+    if (f && (!f.hidden || customLayout)) f.innerHTML = renderFirewalls(data);
     syncFwPageTimer();
     renderRecentAlerts(data);
 
@@ -1435,10 +1469,11 @@
     var idx = panels.indexOf(name);
     if (idx < 0) return;
     panelIdx = idx;
-    document.querySelectorAll('.noc-panel').forEach(function (el) {
+    var scope = document.querySelector('.noc-rotate-tile') || document;
+    scope.querySelectorAll('.noc-panel').forEach(function (el) {
       el.classList.toggle('active', el.getAttribute('data-panel') === name);
     });
-    document.querySelectorAll('.noc-tab').forEach(function (el) {
+    scope.querySelectorAll('.noc-tab').forEach(function (el) {
       el.classList.toggle('active', el.getAttribute('data-panel') === name);
     });
     var hint = $('nocPanelHint');
@@ -1614,7 +1649,8 @@
 
   function poll(forceScene) {
     if (hidden || reloadingForUpdate) return;
-    var needScene = forceScene || !view3d || (Date.now() - sceneLoadedAt > sceneReloadMs);
+    var wantScene = !!document.getElementById('noc3d');
+    var needScene = wantScene && (forceScene || !view3d || (Date.now() - sceneLoadedAt > sceneReloadMs));
     setStatus(null, 'Live'); // amber “updating” pulse; label stays Live
     fetch(apiUrl(needScene), {
       credentials: 'same-origin',
@@ -1696,11 +1732,13 @@
 
   setClock();
   setInterval(setClock, 1000);
-  showPanel('overview');
+  if (panels.length) {
+    showPanel(panels[0]);
+    panelTimer = setInterval(nextPanel, panelRotateMs);
+  }
   setStatus(null, 'Connecting…');
   poll(true);
   setInterval(function () { poll(false); }, pollMs);
   // Watchdog: if polls stop (frozen TV / hung tab), turn the live dot red
   setInterval(checkPollWatchdog, 5000);
-  panelTimer = setInterval(nextPanel, panelRotateMs);
 })();
