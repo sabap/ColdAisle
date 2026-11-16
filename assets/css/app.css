@@ -881,6 +881,43 @@ body.gs-palette-open { overflow: hidden; }
 .metric-card.warning { border-color: #f59e0b44; }
 .metric-card.danger { border-color: #ef444444; }
 .exec-chart { width: 100%; height: auto; display: block; }
+.catalog-card { display: flex; flex-direction: column; }
+.catalog-card .value { font-size: 1rem; }
+.catalog-card.is-on { border-color: #2563eb88; }
+.catalog-picks { display: flex; gap: .85rem; margin-top: .65rem; }
+.catalog-picks a {
+  font-size: .8rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  color: #93c5fd;
+  text-decoration: none;
+}
+.catalog-picks a:hover { color: #dbeafe; }
+.catalog-picks a.is-on { color: #f8fafc; }
+.report-mode {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  margin: 0 0 1rem;
+  flex-wrap: wrap;
+}
+.report-mode-switch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.report-mode-switch a {
+  padding: .4rem .95rem;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: .85rem;
+  font-weight: 600;
+}
+.report-mode-switch a.is-on { background: #2563eb; color: #fff; }
+.report-mode-switch a:hover:not(.is-on) { color: #e5eef7; }
 .exec-chart-frame {
   background:
     radial-gradient(900px 220px at 15% 0%, rgba(56, 189, 248, .1), transparent 60%),

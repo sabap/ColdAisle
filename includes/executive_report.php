@@ -1,6 +1,7 @@
 <?php
 /**
- * Executive climate brief: aisle temperatures, humidity, trend graph, PDF.
+ * Executive briefs: one-page summary, graph, and PDF for each catalog report.
+ * Temperature and humidity still read stored sensor samples only.
  */
 declare(strict_types=1);
 
@@ -314,17 +315,24 @@ function report_exec_send_pdf(array $brief): never
 function report_exec_svg(array $chart, string $periodLabel): string
 {
     $geo = report_exec_geometry($chart);
+    $bar = ($geo['kind'] ?? '') === 'bar';
+    $xCount = count($geo['x_labels'] ?? []);
+    $rotate = $bar && $xCount > 5;
     $w = 760;
-    $h = 292;
+    $h = $rotate ? 340 : 292;
     $left = 54.0;
     $right = 16.0;
     $top = 16.0;
-    $plotH = 196.0;
-    $aria = trim((string)($chart['title'] ?? 'Chart') . ' over ' . $periodLabel);
+    $plotH = $rotate ? 168.0 : 196.0;
+    $aria = trim((string)($chart['title'] ?? 'Chart') . ($periodLabel !== '' ? (' over ' . $periodLabel) : ''));
     $svg = '<svg class="exec-chart" viewBox="0 0 ' . $w . ' ' . $h . '" role="img" aria-label="' . App::e($aria) . '">';
     $svg .= '<rect x="0" y="0" width="' . $w . '" height="' . $h . '" fill="none"/>';
     if (!empty($geo['empty'])) {
-        $svg .= '<text x="380" y="150" text-anchor="middle" fill="#8b9bb0" font-size="14">No samples in this period</text>';
+        $emptyText = trim((string)($chart['empty'] ?? ''));
+        if ($emptyText === '') {
+            $emptyText = $bar ? 'Nothing to chart yet' : 'No samples in this period';
+        }
+        $svg .= '<text x="380" y="150" text-anchor="middle" fill="#8b9bb0" font-size="14">' . App::e($emptyText) . '</text>';
         $svg .= '</svg>';
         return $svg;
     }
@@ -334,6 +342,21 @@ function report_exec_svg(array $chart, string $periodLabel): string
         $y = $top + (1 - (float)$tick['y']) * $plotH;
         $svg .= '<line x1="' . report_exec_px($left) . '" y1="' . report_exec_px($y) . '" x2="' . report_exec_px($left + $plotW) . '" y2="' . report_exec_px($y) . '" stroke="rgba(148,163,184,.22)" stroke-width="1"/>';
         $svg .= '<text x="' . report_exec_px($left - 8) . '" y="' . report_exec_px($y + 4) . '" text-anchor="end" fill="#8b9bb0" font-size="11">' . App::e((string)$tick['label']) . '</text>';
+    }
+    if ($bar && isset($geo['zero_y'])) {
+        $zy = $top + (1 - (float)$geo['zero_y']) * $plotH;
+        $svg .= '<line x1="' . report_exec_px($left) . '" y1="' . report_exec_px($zy) . '" x2="' . report_exec_px($left + $plotW) . '" y2="' . report_exec_px($zy) . '" stroke="rgba(148,163,184,.55)" stroke-width="1"/>';
+    }
+    if ($bar) {
+        foreach ($geo['bars'] ?? [] as $rect) {
+            $x = $left + (float)$rect['x'] * $plotW;
+            $bw = max(2.0, (float)$rect['w'] * $plotW);
+            $yTop = $top + (1 - max((float)$rect['y0'], (float)$rect['y1'])) * $plotH;
+            $yBot = $top + (1 - min((float)$rect['y0'], (float)$rect['y1'])) * $plotH;
+            $bh = max(2.0, $yBot - $yTop);
+            $color = report_exec_safe_hex((string)$rect['color']);
+            $svg .= '<rect x="' . report_exec_px($x) . '" y="' . report_exec_px($yTop) . '" width="' . report_exec_px($bw) . '" height="' . report_exec_px($bh) . '" rx="2" fill="' . App::e($color) . '" fill-opacity="0.9"/>';
+        }
     }
     foreach ($geo['series'] as $series) {
         $color = (string)$series['color'];
@@ -368,16 +391,22 @@ function report_exec_svg(array $chart, string $periodLabel): string
     }
     foreach ($geo['x_labels'] as $i => $tick) {
         $x = $left + (float)$tick['x'] * $plotW;
+        $label = App::e((string)$tick['label']);
+        if ($rotate) {
+            $y = $baseY + 14;
+            $svg .= '<text x="' . report_exec_px($x) . '" y="' . report_exec_px($y) . '" text-anchor="end" fill="#8b9bb0" font-size="11" transform="rotate(-38 ' . report_exec_px($x) . ' ' . report_exec_px($y) . ')">' . $label . '</text>';
+            continue;
+        }
         $anchor = 'middle';
-        if ($i === 0) {
+        if (!$bar && $i === 0) {
             $anchor = 'start';
-        } elseif ($i === count($geo['x_labels']) - 1) {
+        } elseif (!$bar && $i === count($geo['x_labels']) - 1) {
             $anchor = 'end';
         }
-        $svg .= '<text x="' . report_exec_px($x) . '" y="' . report_exec_px($baseY + 20) . '" text-anchor="' . $anchor . '" fill="#8b9bb0" font-size="11">' . App::e((string)$tick['label']) . '</text>';
+        $svg .= '<text x="' . report_exec_px($x) . '" y="' . report_exec_px($baseY + 20) . '" text-anchor="' . $anchor . '" fill="#8b9bb0" font-size="11">' . $label . '</text>';
     }
     $lx = $left;
-    $ly = $baseY + 48;
+    $ly = $rotate ? ($baseY + 86) : ($baseY + 48);
     foreach ($geo['series'] as $series) {
         $label = (string)$series['label'];
         $color = (string)$series['color'];
@@ -393,7 +422,10 @@ function report_exec_pdf_url(): string
 {
     $q = $_GET;
     unset($q['export']);
-    $q['report'] = 'executive';
+    if (($q['report'] ?? '') === '' || ($q['report'] ?? '') === 'executive') {
+        $q['report'] = 'temperature';
+    }
+    $q['mode'] = 'executive';
     $q['export'] = 'pdf';
     $qs = http_build_query($q);
     return App::url('pages/reports.php' . ($qs !== '' ? '?' . $qs : ''));
@@ -406,11 +438,70 @@ function report_exec_pdf_binary(array $brief): string
 {
     $pdf = new ExecutiveReportPdf();
     report_exec_pdf_page($pdf, $brief);
-    $exceptions = $brief['exceptions'] ?? [];
-    if (is_array($exceptions) && $exceptions !== []) {
-        report_exec_pdf_exceptions($pdf, $brief, $exceptions);
+    $table = is_array($brief['table'] ?? null) ? $brief['table'] : [];
+    $rows = is_array($table['rows'] ?? null) ? $table['rows'] : [];
+    if ($rows !== []) {
+        report_exec_pdf_table($pdf, $brief, $table);
+    } else {
+        $exceptions = $brief['exceptions'] ?? [];
+        if (is_array($exceptions) && $exceptions !== []) {
+            report_exec_pdf_exceptions($pdf, $brief, $exceptions);
+        }
     }
     return $pdf->render();
+}
+
+/**
+ * @param array<string,mixed> $brief
+ * @param array<string,mixed> $table
+ */
+function report_exec_pdf_table(ExecutiveReportPdf $pdf, array $brief, array $table): void
+{
+    $headers = array_values(array_filter(
+        is_array($table['headers'] ?? null) ? $table['headers'] : [],
+        static fn($h): bool => is_scalar($h)
+    ));
+    $headers = array_slice($headers, 0, 5);
+    $rows = is_array($table['rows'] ?? null) ? $table['rows'] : [];
+    $count = count($headers);
+    if ($count < 1 || $rows === []) {
+        return;
+    }
+    $perPage = 16;
+    $pages = array_chunk($rows, $perPage);
+    $pageCount = count($pages);
+    $title = trim((string)($table['title'] ?? ''));
+    if ($title === '') {
+        $title = 'Detail';
+    }
+    $width = 720.0 / $count;
+    $clip = max(8, (int)floor(($width - 12) / 4.6));
+    foreach ($pages as $index => $pageRows) {
+        report_exec_pdf_header($pdf, $brief, $title);
+        $y = 520.0;
+        $note = trim((string)($table['note'] ?? ''));
+        if ($note !== '' && $index === 0) {
+            $pdf->text(36, $y, report_exec_clip($note, 110), 10, false, [0.28, 0.35, 0.42]);
+            $y -= 18;
+        }
+        $pdf->rect(36, $y - 16, 720, 22, [0.09, 0.12, 0.16], null);
+        foreach ($headers as $i => $head) {
+            $pdf->text(36 + ($i * $width) + 6, $y - 10, report_exec_clip((string)$head, $clip), 9, true, [1, 1, 1]);
+        }
+        $y -= 22;
+        foreach ($pageRows as $n => $row) {
+            $cells = is_array($row) ? array_values($row) : [];
+            $fill = ($n % 2) === 0 ? [0.973, 0.980, 0.988] : [1, 1, 1];
+            $pdf->rect(36, $y - 16, 720, 20, $fill, null);
+            for ($i = 0; $i < $count; $i++) {
+                $pdf->text(36 + ($i * $width) + 6, $y - 10, report_exec_clip((string)($cells[$i] ?? ''), $clip), 9, false, [0.06, 0.09, 0.16]);
+            }
+            $y -= 20;
+        }
+        $pdf->text(36, 36, 'Page ' . ($index + 2) . ' of ' . ($pageCount + 1), 8, false, [0.39, 0.45, 0.55]);
+        $pdf->text(620, 36, 'ColdAisle', 8, false, [0.39, 0.45, 0.55]);
+        $pdf->endPage();
+    }
 }
 
 /**
@@ -456,8 +547,11 @@ function report_exec_pdf_exceptions(ExecutiveReportPdf $pdf, array $brief, array
  */
 function report_exec_pdf_page(ExecutiveReportPdf $pdf, array $brief): void
 {
-    $symbol = (string)($brief['symbol'] ?? 'C');
-    report_exec_pdf_header($pdf, $brief, 'Executive climate brief');
+    $pageTitle = trim((string)($brief['title'] ?? ''));
+    if ($pageTitle === '') {
+        $pageTitle = 'Executive climate brief';
+    }
+    report_exec_pdf_header($pdf, $brief, $pageTitle);
     $leadLines = report_exec_wrap((string)($brief['lead'] ?? ''), 10, 720);
     $leadLines = array_slice($leadLines, 0, 3);
     $y = 528.0;
@@ -465,7 +559,7 @@ function report_exec_pdf_page(ExecutiveReportPdf $pdf, array $brief): void
         $pdf->text(36, $y, $line, 10, false, [0.12, 0.16, 0.22]);
         $y -= 14;
     }
-    if (empty($brief['has_samples'])) {
+    if (array_key_exists('has_samples', $brief) && empty($brief['has_samples'])) {
         $pdf->text(36, $y, 'No samples were stored in this period. Figures are the latest reading kept on each sensor.', 9, false, [0.39, 0.45, 0.55]);
         $y -= 16;
     }
@@ -499,24 +593,45 @@ function report_exec_pdf_page(ExecutiveReportPdf $pdf, array $brief): void
         }
     }
 
-    $cursor = $cardY - 18;
-    $tempChart = is_array($brief['temp_chart'] ?? null) ? $brief['temp_chart'] : [];
-    $humChart = is_array($brief['hum_chart'] ?? null) ? $brief['hum_chart'] : [];
-    $tempH = 156.0;
-    $cursor = report_exec_pdf_chart($pdf, $tempChart, 36, $cursor - $tempH, 720, $tempH, (string)$symbol);
-    $caption = report_exec_cool_caption($brief);
-    if ($caption !== '') {
-        $pdf->text(36, $cursor - 12, $caption, 9, false, [0.28, 0.35, 0.42]);
-        $cursor -= 18;
+    $cursor = $cardY - 14;
+    $charts = report_exec_brief_charts($brief);
+    $room = $cursor - 46;
+    $heights = [];
+    if (count($charts) === 1) {
+        $heights = [min(210.0, max(150.0, $room))];
+    } elseif (count($charts) >= 2) {
+        $each = max(90.0, ($room - 28) / 2);
+        $heights = [min(156.0, $each), min(120.0, $each)];
     }
-    $cursor -= 8;
-    $cursor = report_exec_pdf_chart($pdf, $humChart, 36, $cursor - 124, 720, 124, '%RH');
-    $outside = (int)($brief['outside'] ?? 0);
-    $totalPages = 1 + ($outside > 0 ? (int)ceil($outside / 18) : 0);
-    $note = $outside > 0
-        ? ($outside . ' sensor' . ($outside === 1 ? '' : 's') . ' outside limits. The list is on the next page.')
-        : 'Sensors with limits are inside them.';
-    $pdf->text(36, 28, $note, 9, false, [0.2, 0.25, 0.33]);
+    foreach ($charts as $i => $chart) {
+        if (!isset($heights[$i])) {
+            break;
+        }
+        $h = $heights[$i];
+        $unit = (string)($chart['unit'] ?? '');
+        $cursor = report_exec_pdf_chart($pdf, $chart, 36, $cursor - $h, 720, $h, $unit);
+        if (!isset($brief['charts']) && $i === 0) {
+            $caption = report_exec_cool_caption($brief);
+            if ($caption !== '') {
+                $pdf->text(36, $cursor - 12, $caption, 9, false, [0.28, 0.35, 0.42]);
+                $cursor -= 18;
+            }
+        }
+        $cursor -= 8;
+    }
+    $extraPages = report_exec_extra_pages($brief);
+    $totalPages = 1 + $extraPages;
+    if (array_key_exists('footer_note', $brief)) {
+        $note = trim((string)$brief['footer_note']);
+    } else {
+        $outside = (int)($brief['outside'] ?? 0);
+        $note = $outside > 0
+            ? ($outside . ' sensor' . ($outside === 1 ? '' : 's') . ' outside limits. The list is on the next page.')
+            : 'Sensors with limits are inside them.';
+    }
+    if ($note !== '') {
+        $pdf->text(36, 28, report_exec_clip($note, 108), 9, false, [0.2, 0.25, 0.33]);
+    }
     $pageMark = '1 of ' . $totalPages;
     $pdf->text(756 - $pdf->textWidth($pageMark, 8), 28, $pageMark, 8, false, [0.39, 0.45, 0.55]);
     $pdf->endPage();
@@ -532,22 +647,50 @@ function report_exec_pdf_chart(ExecutiveReportPdf $pdf, array $chart, float $x, 
     $plotH = $h - 40;
     $pdf->rect($plotX, $plotY, $plotW, $plotH, [1, 1, 1], [0.86, 0.90, 0.93]);
     $geo = report_exec_geometry($chart);
+    $xLabelCount = count(is_array($geo['x_labels'] ?? null) ? $geo['x_labels'] : []);
+    $tiltLabels = ($geo['kind'] ?? '') === 'bar' && $xLabelCount > 5;
     $padL = 42.0;
     $padR = 12.0;
     $padT = 10.0;
-    $padB = 22.0;
+    $padB = $tiltLabels ? 50.0 : 22.0;
     $innerX = $plotX + $padL;
     $innerY = $plotY + $padB;
     $innerW = $plotW - $padL - $padR;
     $innerH = $plotH - $padT - $padB;
     if (!empty($geo['empty']) || $innerW <= 0 || $innerH <= 0) {
-        $pdf->text($plotX + ($plotW / 2) - 70, $plotY + ($plotH / 2), 'No samples in this period', 10, false, [0.39, 0.45, 0.55]);
+        $msg = trim((string)($chart['empty'] ?? ''));
+        if ($msg === '') {
+            $msg = (($chart['kind'] ?? 'line') === 'bar') ? 'Nothing to chart yet' : 'No samples in this period';
+        }
+        $tw = $pdf->textWidth($msg, 10);
+        $pdf->text($plotX + ($plotW / 2) - ($tw / 2), $plotY + ($plotH / 2), $msg, 10, false, [0.39, 0.45, 0.55]);
         return $y;
     }
     foreach ($geo['y_labels'] as $tick) {
         $yy = $innerY + ((float)$tick['y'] * $innerH);
         $pdf->line($innerX, $yy, $innerX + $innerW, $yy, [0.886, 0.910, 0.941], 0.6);
         $pdf->text($plotX + 4, $yy - 3, (string)$tick['label'], 8, false, [0.39, 0.45, 0.55]);
+    }
+    if (($geo['kind'] ?? '') === 'bar') {
+        if (isset($geo['zero_y'])) {
+            $zy = $innerY + ((float)$geo['zero_y'] * $innerH);
+            $pdf->line($innerX, $zy, $innerX + $innerW, $zy, [0.62, 0.66, 0.72], 0.8);
+        }
+        foreach ($geo['bars'] ?? [] as $rect) {
+            $x0 = $innerX + ((float)$rect['x'] * $innerW);
+            $bw = max(1.5, (float)$rect['w'] * $innerW);
+            $y0 = $innerY + ((float)$rect['y0'] * $innerH);
+            $y1 = $innerY + ((float)$rect['y1'] * $innerH);
+            $yLo = min($y0, $y1);
+            $bh = abs($y1 - $y0);
+            if ($bh < 1.2) {
+                $bh = 1.2;
+                $yLo = $y1 >= $y0 ? $y0 : ($y0 - 1.2);
+            }
+            $pdf->rect($x0, $yLo, $bw, $bh, report_exec_hex_rgb(report_exec_safe_hex((string)$rect['color'])), null);
+        }
+        report_exec_pdf_chart_labels($pdf, $geo, $innerX, $innerW, $innerY, $plotY, $x, $y);
+        return $y;
     }
     foreach ($geo['series'] as $series) {
         $rgb = report_exec_hex_rgb((string)$series['color']);
@@ -600,6 +743,99 @@ function report_exec_pdf_chart(ExecutiveReportPdf $pdf, array $chart, float $x, 
 }
 
 /**
+ * @param array<string,mixed> $geo
+ */
+function report_exec_pdf_chart_labels(ExecutiveReportPdf $pdf, array $geo, float $innerX, float $innerW, float $innerY, float $plotY, float $x, float $y): void
+{
+    $xLabels = is_array($geo['x_labels'] ?? null) ? $geo['x_labels'] : [];
+    $bar = ($geo['kind'] ?? '') === 'bar';
+    $last = count($xLabels) - 1;
+    $tilt = $bar && count($xLabels) > 5;
+    if ($tilt) {
+        $deg = 40.0;
+        $rad = deg2rad($deg);
+        $cos = cos($rad);
+        $sin = sin($rad);
+        $anchorY = $innerY - 3.0;
+        foreach ($xLabels as $tick) {
+            $label = (string)$tick['label'];
+            $tw = $pdf->textWidth($label, 8);
+            $xx = $innerX + ((float)$tick['x'] * $innerW);
+            $pdf->textRotated($xx - ($tw * $cos), $anchorY - ($tw * $sin), $label, 8, false, [0.39, 0.45, 0.55], $deg);
+        }
+    } else {
+        foreach ($xLabels as $i => $tick) {
+            $xx = $innerX + ((float)$tick['x'] * $innerW);
+            $label = (string)$tick['label'];
+            $tw = $pdf->textWidth($label, 8);
+            if ($bar || ($i !== 0 && $i !== $last)) {
+                $tx = $xx - ($tw / 2);
+            } elseif ($i === 0) {
+                $tx = $xx;
+            } else {
+                $tx = $xx - $tw;
+            }
+            $pdf->text($tx, $plotY + 6, $label, 8, false, [0.39, 0.45, 0.55]);
+        }
+    }
+    $lx = $x;
+    $ly = $y + 4;
+    foreach ($geo['series'] ?? [] as $series) {
+        if (!is_array($series)) {
+            continue;
+        }
+        $rgb = report_exec_hex_rgb(report_exec_safe_hex((string)($series['color'] ?? '')));
+        $pdf->line($lx, $ly + 3, $lx + 16, $ly + 3, $rgb, 2.4);
+        $pdf->text($lx + 20, $ly, (string)($series['label'] ?? ''), 9, false, [0.12, 0.16, 0.22]);
+        $lx += 28 + (strlen((string)($series['label'] ?? '')) * 5.2);
+    }
+}
+
+/**
+ * Charts to draw. A brief with a charts list wins. The climate brief still draws temperature, then humidity.
+ *
+ * @param array<string,mixed> $brief
+ * @return list<array<string,mixed>>
+ */
+function report_exec_brief_charts(array $brief): array
+{
+    if (isset($brief['charts']) && is_array($brief['charts'])) {
+        $charts = [];
+        foreach ($brief['charts'] as $chart) {
+            if (is_array($chart)) {
+                $charts[] = $chart;
+            }
+        }
+        return $charts;
+    }
+    $charts = [];
+    if (is_array($brief['temp_chart'] ?? null)) {
+        $charts[] = $brief['temp_chart'];
+    }
+    if (is_array($brief['hum_chart'] ?? null)) {
+        $charts[] = $brief['hum_chart'];
+    }
+    return $charts;
+}
+
+/**
+ * @param array<string,mixed> $brief
+ */
+function report_exec_extra_pages(array $brief): int
+{
+    $table = is_array($brief['table'] ?? null) ? $brief['table'] : [];
+    $rows = is_array($table['rows'] ?? null) ? $table['rows'] : [];
+    if ($rows !== []) {
+        return (int)ceil(count($rows) / 16);
+    }
+    $exceptions = $brief['exceptions'] ?? [];
+    if (is_array($exceptions) && $exceptions !== []) {
+        return (int)ceil(count($exceptions) / 18);
+    }
+    return 0;
+}
+
+/**
  * @param array<string,mixed> $brief
  */
 function report_exec_pdf_header(ExecutiveReportPdf $pdf, array $brief, string $title): void
@@ -610,10 +846,14 @@ function report_exec_pdf_header(ExecutiveReportPdf $pdf, array $brief, string $t
     $brand = ($org !== '' && strcasecmp($org, 'My Organization') !== 0) ? $org : 'ColdAisle';
     $pdf->text(36, 586, report_exec_clip($brand, 28), 16, true, [1, 1, 1]);
     $pdf->text(36, 568, $title, 10, false, [0.73, 0.82, 0.91]);
-    $span = is_array($brief['span'] ?? null) ? $brief['span'] : [];
-    $when = ucfirst((string)($span['label'] ?? 'the last 7 days'));
-    $room = (string)($brief['room_label'] ?? 'All rooms');
-    $right = report_exec_clip($when . ' · ' . $room, 42);
+    $context = trim((string)($brief['context'] ?? ''));
+    if ($context === '') {
+        $span = is_array($brief['span'] ?? null) ? $brief['span'] : [];
+        $when = ucfirst((string)($span['label'] ?? 'the last 7 days'));
+        $room = (string)($brief['room_label'] ?? 'All rooms');
+        $context = $when . ' · ' . $room;
+    }
+    $right = report_exec_clip($context, 48);
     $rw = $pdf->textWidth($right, 9);
     $pdf->text(756 - $rw, 586, $right, 9, false, [0.80, 0.86, 0.93]);
     $gen = 'Generated ' . (string)($brief['generated'] ?? '');
@@ -643,7 +883,7 @@ function report_exec_cool_caption(array $brief): string
 /**
  * @param array<string,mixed> $brief
  */
-function report_exec_lead(array $brief): string
+function report_exec_lead(array $brief, bool $includeHumidity = true): string
 {
     $span = is_array($brief['span'] ?? null) ? $brief['span'] : [];
     $period = (string)($span['label'] ?? 'the last 7 days');
@@ -671,9 +911,9 @@ function report_exec_lead(array $brief): string
     } elseif (($brief['temp_now'] ?? null) !== null) {
         $bits[] = 'temperature is ' . report_fmt_temp($brief['temp_now']) . ' now';
     }
-    if (($brief['rh_period'] ?? null) !== null) {
+    if ($includeHumidity && ($brief['rh_period'] ?? null) !== null) {
         $bits[] = 'relative humidity averaged ' . report_exec_fmt_display((float)$brief['rh_period'], '%RH');
-    } elseif (($brief['rh_now'] ?? null) !== null) {
+    } elseif ($includeHumidity && ($brief['rh_now'] ?? null) !== null) {
         $bits[] = 'relative humidity is ' . report_fmt_rh($brief['rh_now']) . ' now';
     }
     $outside = (int)($brief['outside'] ?? 0);
@@ -683,7 +923,11 @@ function report_exec_lead(array $brief): string
         $bits[] = 'sensors with limits are inside them';
     }
     if ($bits === []) {
-        return ucfirst(trim($where . 'no temperature or humidity readings yet.')) . '.';
+        $none = $includeHumidity
+            ? 'no temperature or humidity readings yet'
+            : 'no temperature readings yet';
+        $head = $where !== '' ? ($where . $none) : ucfirst($none);
+        return rtrim($head, '.') . '.';
     }
     $text = $where !== '' ? ($where . $bits[0]) : ucfirst($bits[0]);
     for ($i = 1, $c = count($bits); $i < $c; $i++) {
@@ -767,10 +1011,12 @@ function report_exec_chart(string $title, string $unit, array $labels, array $se
         $pretty[] = $stepSec >= 86400 ? date('M j', $ts) : date('M j ga', $ts);
     }
     return [
+        'kind' => 'line',
         'title' => $title,
         'unit' => $unit,
         'labels' => $pretty,
         'series' => $out,
+        'empty' => 'No samples in this period',
     ];
 }
 
@@ -780,6 +1026,9 @@ function report_exec_chart(string $title, string $unit, array $labels, array $se
  */
 function report_exec_geometry(array $chart): array
 {
+    if (($chart['kind'] ?? 'line') === 'bar') {
+        return report_exec_bar_geometry($chart);
+    }
     $series = is_array($chart['series'] ?? null) ? $chart['series'] : [];
     $labels = is_array($chart['labels'] ?? null) ? $chart['labels'] : [];
     $n = count($labels);
@@ -848,11 +1097,145 @@ function report_exec_geometry(array $chart): array
         ];
     }
     return [
+        'kind' => 'line',
         'empty' => $drawn === [],
         'series' => $drawn,
+        'bars' => [],
         'x_labels' => $xLabels,
         'y_labels' => $yLabels,
     ];
+}
+
+/**
+ * Bars grow from zero when every value is at least zero.
+ * A mix of positive and negative values, such as warranty days, keeps the zero line inside the plot.
+ *
+ * @param array<string,mixed> $chart
+ * @return array<string,mixed>
+ */
+function report_exec_bar_geometry(array $chart): array
+{
+    $seriesIn = is_array($chart['series'] ?? null) ? $chart['series'] : [];
+    $labels = is_array($chart['labels'] ?? null) ? array_values($chart['labels']) : [];
+    $n = count($labels);
+    $vals = [];
+    $usable = [];
+    foreach ($seriesIn as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+        $any = false;
+        foreach ($item['points'] ?? [] as $point) {
+            if ($point !== null && is_numeric($point)) {
+                $vals[] = (float)$point;
+                $any = true;
+            }
+        }
+        if ($any) {
+            $usable[] = $item;
+        }
+    }
+    if ($vals === [] || $n < 1 || $usable === []) {
+        return ['kind' => 'bar', 'empty' => true, 'series' => [], 'bars' => [], 'x_labels' => [], 'y_labels' => []];
+    }
+    $minV = min($vals);
+    $maxV = max($vals);
+    if ($minV >= 0) {
+        $minV = 0.0;
+    }
+    if ($maxV <= 0) {
+        $maxV = 0.0;
+    }
+    if ($maxV <= $minV) {
+        $maxV = $minV + 1.0;
+    }
+    $ticks = report_exec_ticks($minV, $maxV);
+    $min = $ticks[0];
+    $max = $ticks[count($ticks) - 1];
+    $span = $max - $min;
+    if ($span <= 0) {
+        $span = 1.0;
+    }
+    $seriesCount = count($usable);
+    $slot = 1.0 / $n;
+    $inner = min($slot * 0.78, $seriesCount > 1 ? 0.28 : 0.14);
+    $gap = ($slot - $inner) / 2.0;
+    $seriesSpan = $inner / $seriesCount;
+    $barW = $seriesSpan * 0.86;
+    $bars = [];
+    $legend = [];
+    foreach ($usable as $sIndex => $item) {
+        $baseColor = report_exec_safe_hex((string)($item['color'] ?? '#0ea5e9'));
+        $pointColors = is_array($item['colors'] ?? null) ? $item['colors'] : [];
+        $legend[] = [
+            'label' => (string)($item['label'] ?? ''),
+            'color' => $baseColor,
+            'segs' => [],
+        ];
+        $points = array_values($item['points'] ?? []);
+        for ($i = 0; $i < $n; $i++) {
+            $point = $points[$i] ?? null;
+            if ($point === null || !is_numeric($point)) {
+                continue;
+            }
+            $color = $baseColor;
+            if (isset($pointColors[$i]) && is_string($pointColors[$i]) && $pointColors[$i] !== '') {
+                $color = report_exec_safe_hex($pointColors[$i]);
+            }
+            $x = ($i * $slot) + $gap + ($sIndex * $seriesSpan) + (($seriesSpan - $barW) / 2.0);
+            $bars[] = [
+                'x' => $x,
+                'w' => $barW,
+                'y0' => report_exec_unit((0.0 - $min) / $span),
+                'y1' => report_exec_unit(((float)$point - $min) / $span),
+                'color' => $color,
+            ];
+        }
+    }
+    $clipAt = $n <= 4 ? 22 : ($n <= 6 ? 16 : ($n <= 8 ? 12 : 9));
+    $xLabels = [];
+    for ($i = 0; $i < $n; $i++) {
+        $xLabels[] = [
+            'x' => ($i + 0.5) * $slot,
+            'label' => report_exec_clip((string)$labels[$i], $clipAt),
+        ];
+    }
+    $yLabels = [];
+    foreach ($ticks as $tick) {
+        $yLabels[] = [
+            'y' => ($tick - $min) / $span,
+            'label' => report_exec_tick_label($tick),
+        ];
+    }
+    return [
+        'kind' => 'bar',
+        'empty' => $bars === [],
+        'series' => $seriesCount > 1 ? $legend : [],
+        'bars' => $bars,
+        'x_labels' => $xLabels,
+        'y_labels' => $yLabels,
+        'zero_y' => report_exec_unit((0.0 - $min) / $span),
+    ];
+}
+
+function report_exec_unit(float $n): float
+{
+    if ($n < 0) {
+        return 0.0;
+    }
+    if ($n > 1) {
+        return 1.0;
+    }
+    return $n;
+}
+
+function report_exec_safe_hex(string $hex): string
+{
+    $hex = strtolower(trim($hex));
+    if (!preg_match('/^#[0-9a-f]{6}$/', $hex)) {
+        return '#0ea5e9';
+    }
+    return $hex;
 }
 
 /** @return list<float> */
@@ -1432,6 +1815,17 @@ final class ExecutiveReportPdf
         $this->ops .= '1 0 0 1 ' . $this->n($x) . ' ' . $this->n($y) . " Tm\n" . $literal . " Tj\nET\n";
     }
 
+    /** @param array{0:float,1:float,2:float} $rgb */
+    public function textRotated(float $x, float $y, string $text, float $size, bool $bold, array $rgb, float $degrees): void
+    {
+        $font = $bold ? '/F2' : '/F1';
+        $literal = report_exec_pdf_literal(report_exec_winansi($text));
+        $rad = deg2rad($degrees);
+        $this->ops .= "BT\n" . $this->rgb($rgb) . " rg\n" . $font . ' ' . $this->n($size) . " Tf\n";
+        $this->ops .= $this->n(cos($rad)) . ' ' . $this->n(sin($rad)) . ' ' . $this->n(-sin($rad)) . ' ' . $this->n(cos($rad));
+        $this->ops .= ' ' . $this->n($x) . ' ' . $this->n($y) . " Tm\n" . $literal . " Tj\nET\n";
+    }
+
     public function textWidth(string $text, float $size): float
     {
         $encoded = report_exec_winansi($text);
@@ -1534,3 +1928,5 @@ function report_exec_pdf_literal(string $encoded): string
 {
     return '(' . str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $encoded) . ')';
 }
+
+require_once __DIR__ . '/executive_briefs.php';

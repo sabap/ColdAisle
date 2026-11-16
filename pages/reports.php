@@ -10,7 +10,12 @@ require_once dirname(__DIR__) . '/includes/executive_report.php';
 App::boot();
 $user = App::requirePermission('view_reports');
 
-$report = $_GET['report'] ?? '';
+$report = (string)($_GET['report'] ?? '');
+if ($report === 'executive') {
+    $report = 'temperature';
+    $_GET['report'] = 'temperature';
+    $_GET['mode'] = 'executive';
+}
 
 // Power history report filters
 $phPreset = strtolower(trim((string)($_GET['preset'] ?? 'week')));
@@ -273,6 +278,41 @@ function report_work_orders(): array
              ORDER BY w.updated_at DESC"
         );
     }
+}
+
+/** @return array<string,string> */
+function report_catalog(): array
+{
+    return [
+        'power_history' => 'Power History',
+        'power_path' => 'Power Path',
+        'inventory_summary' => 'Inventory Summary',
+        'cabinet_utilization' => 'Cabinet Utilization',
+        'power_capacity' => 'Power Capacity',
+        'cooling' => 'Cooling',
+        'temperature' => 'Temperature',
+        'humidity' => 'Humidity',
+        'warranty_expiration' => 'Warranty Expiration',
+        'disposal_queue' => 'Disposal Queue',
+        'cable_inventory' => 'Cable Inventory',
+        'orphaned_devices' => 'Orphaned Devices',
+        'work_orders' => 'Work orders',
+        'audit_history' => 'Audit History',
+    ];
+}
+
+/** Detail or Executive URL for the open report. Keeps the current filters. */
+function report_mode_href(bool $executive): string
+{
+    $q = $_GET;
+    unset($q['export']);
+    if ($executive) {
+        $q['mode'] = 'executive';
+    } else {
+        unset($q['mode']);
+    }
+    $qs = http_build_query($q);
+    return $qs === '' ? '?' : ('?' . $qs);
 }
 
 /** Current report URL with export=csv (keeps filters). */
@@ -1133,17 +1173,14 @@ function report_emit_csv(string $report): never
         ], $rows);
     }
 
-    if ($report === 'executive') {
-        $csv = report_executive()['csv'];
-        ListPager::sendCsv($file, $csv['headers'], $csv['rows']);
-    }
-
     App::flash('error', 'That report cannot be exported as CSV.');
     App::redirect('pages/reports.php' . ($report !== '' ? '?report=' . rawurlencode($report) : ''));
 }
 
-if ($report === 'executive' && strtolower(trim((string)($_GET['export'] ?? ''))) === 'pdf') {
-    report_exec_send_pdf(report_executive());
+$catalog = report_catalog();
+$execMode = strtolower(trim((string)($_GET['mode'] ?? ''))) === 'executive';
+if ($execMode && isset($catalog[$report]) && strtolower(trim((string)($_GET['export'] ?? ''))) === 'pdf') {
+    report_exec_send_pdf(report_exec_brief((string)$report));
 }
 
 if (class_exists('ListPager') && ListPager::wantsCsv() && $report !== '' && $report !== 'power_history') {
@@ -1151,24 +1188,6 @@ if (class_exists('ListPager') && ListPager::wantsCsv() && $report !== '' && $rep
 }
 
 layout_header('Reports', $user, 'reports');
-
-$catalog = [
-    'power_history' => 'Power History',
-    'power_path' => 'Power Path',
-    'inventory_summary' => 'Inventory Summary',
-    'cabinet_utilization' => 'Cabinet Utilization',
-    'power_capacity' => 'Power Capacity',
-    'cooling' => 'Cooling',
-    'temperature' => 'Temperature',
-    'humidity' => 'Humidity',
-    'executive' => 'Executive',
-    'warranty_expiration' => 'Warranty Expiration',
-    'disposal_queue' => 'Disposal Queue',
-    'cable_inventory' => 'Cable Inventory',
-    'orphaned_devices' => 'Orphaned Devices',
-    'work_orders' => 'Work orders',
-    'audit_history' => 'Audit History',
-];
 
 // Power path filters
 $ppZone = isset($_GET['zone_id']) && $_GET['zone_id'] !== '' ? (int)$_GET['zone_id'] : 0;
@@ -1183,16 +1202,259 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
     <div class="card-body">
         <div class="metrics">
             <?php foreach ($catalog as $key => $label): ?>
-                <a class="metric-card" href="?report=<?= urlencode($key) ?>" style="color:inherit;text-decoration:none">
+                <div class="metric-card catalog-card<?= $report === $key ? ' is-on' : '' ?>">
                     <div class="label">Report</div>
-                    <div class="value" style="font-size:1rem"><?= App::e($label) ?></div>
-                </a>
+                    <div class="value"><?= App::e($label) ?></div>
+                    <div class="catalog-picks">
+                        <a class="<?= ($report === $key && !$execMode) ? 'is-on' : '' ?>" href="<?= App::e('?report=' . urlencode($key)) ?>">Detail</a>
+                        <a class="<?= ($report === $key && $execMode) ? 'is-on' : '' ?>" href="<?= App::e('?report=' . urlencode($key) . '&mode=executive') ?>">Executive</a>
+                    </div>
+                </div>
             <?php endforeach; ?>
         </div>
     </div>
 </div>
 
-<?php if ($report === 'power_history'):
+<?php if ($report !== '' && isset($catalog[$report])): ?>
+<div class="report-mode">
+    <strong><?= App::e($catalog[$report]) ?></strong>
+    <div class="report-mode-switch">
+        <a class="<?= $execMode ? '' : 'is-on' ?>" href="<?= App::e(report_mode_href(false)) ?>">Detail</a>
+        <a class="<?= $execMode ? 'is-on' : '' ?>" href="<?= App::e(report_mode_href(true)) ?>">Executive</a>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php if ($execMode && isset($catalog[$report])):
+    $brief = report_exec_brief((string)$report);
+    $briefCharts = is_array($brief['charts'] ?? null) ? $brief['charts'] : [];
+    $briefTable = is_array($brief['table'] ?? null) ? $brief['table'] : [];
+    $briefRows = is_array($briefTable['rows'] ?? null) ? $briefTable['rows'] : [];
+    $briefHeads = is_array($briefTable['headers'] ?? null) ? $briefTable['headers'] : [];
+    ?>
+<div class="card mb-2">
+    <div class="card-header flex-between">
+        <h2 style="margin:0"><?= App::e((string)($brief['title'] ?? 'Executive')) ?></h2>
+        <div class="flex gap-1">
+            <a class="btn btn-sm btn-primary" href="<?= App::e(report_exec_pdf_url()) ?>">Export PDF</a>
+            <?php if ($report === 'power_history'):
+                $csvQs = http_build_query(array_filter([
+                    'scope' => $phScope,
+                    'id' => $phId,
+                    'preset' => $phPreset !== 'custom' ? $phPreset : null,
+                    'from' => $phPreset === 'custom' ? $phFrom : null,
+                    'to' => $phPreset === 'custom' ? $phTo : null,
+                    'format' => 'csv',
+                ], static fn($v) => $v !== null && $v !== ''));
+                ?>
+                <a class="btn btn-sm btn-secondary" href="<?= App::e(App::url('api/power_history.php?' . $csvQs)) ?>">Export CSV</a>
+            <?php else: ?>
+                <?php report_export_btn(); ?>
+            <?php endif; ?>
+        </div>
+    </div>
+    <div class="card-body">
+        <p style="margin-top:0"><?= App::e((string)($brief['lead'] ?? '')) ?></p>
+        <?php if (trim((string)($brief['note'] ?? '')) !== ''): ?>
+            <p class="text-muted" style="margin-top:0"><?= App::e((string)$brief['note']) ?></p>
+        <?php endif; ?>
+        <?php if ($report === 'temperature' || $report === 'humidity'):
+            $execSpan = report_climate_span();
+            $execRoomId = report_climate_room_id();
+            $execRooms = report_climate_rooms();
+            ?>
+            <form method="get" class="form-grid">
+                <input type="hidden" name="report" value="<?= App::e($report) ?>">
+                <input type="hidden" name="mode" value="executive">
+                <div class="form-row"><label>Period</label>
+                    <select class="form-control" name="span">
+                        <option value="24h"<?= $execSpan['span'] === '24h' ? ' selected' : '' ?>>Last 24 hours</option>
+                        <option value="7d"<?= $execSpan['span'] === '7d' ? ' selected' : '' ?>>Last 7 days</option>
+                        <option value="30d"<?= $execSpan['span'] === '30d' ? ' selected' : '' ?>>Last 30 days</option>
+                    </select>
+                </div>
+                <div class="form-row"><label>Room</label>
+                    <select class="form-control" name="room_id">
+                        <option value="">All rooms</option>
+                        <?php foreach ($execRooms as $rm): ?>
+                            <?php
+                            $rid = (int)$rm['room_id'];
+                            $dcName = trim((string)($rm['dc_name'] ?? ''));
+                            $roomLabel = $dcName !== '' ? ($dcName . ' / ' . (string)$rm['name']) : (string)$rm['name'];
+                            ?>
+                            <option value="<?= $rid ?>"<?= $execRoomId === $rid ? ' selected' : '' ?>><?= App::e($roomLabel) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row" style="align-self:end">
+                    <button class="btn btn-primary" type="submit">Apply</button>
+                    <?php if ($execSpan['span'] !== '7d' || $execRoomId > 0): ?>
+                        <a class="btn btn-secondary" href="<?= App::e('?report=' . urlencode($report) . '&mode=executive') ?>">Clear</a>
+                    <?php endif; ?>
+                </div>
+            </form>
+        <?php elseif ($report === 'power_history'): ?>
+            <form method="get" class="form-grid" id="power-history-report-form">
+                <input type="hidden" name="report" value="power_history">
+                <input type="hidden" name="mode" value="executive">
+                <div class="form-row"><label>Range</label>
+                    <select class="form-control" name="preset" id="ph_preset">
+                        <option value="week" <?= $phPreset === 'week' ? 'selected' : '' ?>>Last 7 days</option>
+                        <option value="month" <?= $phPreset === 'month' ? 'selected' : '' ?>>Last 31 days</option>
+                        <option value="year" <?= $phPreset === 'year' ? 'selected' : '' ?>>Last 365 days</option>
+                        <option value="custom" <?= $phPreset === 'custom' ? 'selected' : '' ?>>Custom range</option>
+                    </select>
+                </div>
+                <div class="form-row ph-custom" <?= $phPreset !== 'custom' ? 'style="display:none"' : '' ?>><label>From</label>
+                    <input class="form-control" type="date" name="from" value="<?= App::e($phFrom) ?>"></div>
+                <div class="form-row ph-custom" <?= $phPreset !== 'custom' ? 'style="display:none"' : '' ?>><label>To</label>
+                    <input class="form-control" type="date" name="to" value="<?= App::e($phTo) ?>"></div>
+                <div class="form-row"><label>Scope</label>
+                    <select class="form-control" name="scope" id="ph_scope">
+                        <option value="site" <?= $phScope === 'site' ? 'selected' : '' ?>>Entire site</option>
+                        <option value="zone" <?= $phScope === 'zone' ? 'selected' : '' ?>>Zone</option>
+                        <option value="pdu" <?= $phScope === 'pdu' ? 'selected' : '' ?>>PDU</option>
+                    </select>
+                </div>
+                <div class="form-row" id="ph_zone_row" <?= $phScope !== 'zone' ? 'style="display:none"' : '' ?>><label>Zone</label>
+                    <select class="form-control" name="id" id="ph_zone_id" <?= $phScope !== 'zone' ? 'disabled' : '' ?>>
+                        <option value="">— select —</option>
+                        <?php foreach ($phZones as $z): ?>
+                            <option value="<?= (int)$z['zone_id'] ?>" <?= $phScope === 'zone' && $phId === (int)$z['zone_id'] ? 'selected' : '' ?>><?= App::e($z['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row" id="ph_pdu_row" <?= $phScope !== 'pdu' ? 'style="display:none"' : '' ?>><label>PDU</label>
+                    <select class="form-control" name="id" id="ph_pdu_id" <?= $phScope !== 'pdu' ? 'disabled' : '' ?>>
+                        <option value="">— select —</option>
+                        <?php foreach ($phPdus as $p): ?>
+                            <option value="<?= (int)$p['pdu_id'] ?>" <?= $phScope === 'pdu' && $phId === (int)$p['pdu_id'] ? 'selected' : '' ?>><?= App::e($p['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row" style="align-self:end">
+                    <button class="btn btn-primary" type="submit">Apply</button>
+                </div>
+            </form>
+            <script>
+            (function () {
+                var preset = document.getElementById('ph_preset');
+                var scope = document.getElementById('ph_scope');
+                function syncCustom() {
+                    var custom = preset && preset.value === 'custom';
+                    document.querySelectorAll('.ph-custom').forEach(function (el) {
+                        el.style.display = custom ? '' : 'none';
+                    });
+                }
+                function syncScope() {
+                    var v = scope ? scope.value : 'site';
+                    var zr = document.getElementById('ph_zone_row');
+                    var pr = document.getElementById('ph_pdu_row');
+                    var zi = document.getElementById('ph_zone_id');
+                    var pi = document.getElementById('ph_pdu_id');
+                    if (zr) zr.style.display = v === 'zone' ? '' : 'none';
+                    if (pr) pr.style.display = v === 'pdu' ? '' : 'none';
+                    if (zi) { zi.disabled = v !== 'zone'; if (v !== 'zone') zi.name = ''; else zi.name = 'id'; }
+                    if (pi) { pi.disabled = v !== 'pdu'; if (v !== 'pdu') pi.name = ''; else pi.name = 'id'; }
+                    if (v === 'site') {
+                        if (zi) zi.name = '';
+                        if (pi) pi.name = '';
+                    }
+                }
+                if (preset) preset.addEventListener('change', syncCustom);
+                if (scope) scope.addEventListener('change', syncScope);
+                syncCustom();
+                syncScope();
+            })();
+            </script>
+        <?php elseif ($report === 'power_path'):
+            $execZones = [];
+            try {
+                $execZones = Database::fetchAll('SELECT zone_id, name FROM power_zones ORDER BY name');
+            } catch (Throwable $e) {
+                $execZones = [];
+            }
+            ?>
+            <form method="get" class="form-grid">
+                <input type="hidden" name="report" value="power_path">
+                <input type="hidden" name="mode" value="executive">
+                <div class="form-row"><label>Zone</label>
+                    <select class="form-control" name="zone_id">
+                        <option value="">All zones</option>
+                        <?php foreach ($execZones as $z): ?>
+                            <option value="<?= (int)$z['zone_id'] ?>"<?= $ppZone === (int)$z['zone_id'] ? ' selected' : '' ?>><?= App::e((string)$z['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-row" style="align-self:end">
+                    <button class="btn btn-primary" type="submit">Apply</button>
+                </div>
+            </form>
+        <?php endif; ?>
+        <?php if (array_key_exists('has_samples', $brief) && empty($brief['has_samples'])): ?>
+            <p class="text-muted" style="font-size:.85rem;margin:.75rem 0 0">
+                No samples were stored in this period. The figures above are the latest reading on each sensor.
+            </p>
+        <?php endif; ?>
+    </div>
+</div>
+<?php if (!empty($brief['kpis'])): ?>
+<div class="metrics">
+    <?php foreach ($brief['kpis'] as $kpi): ?>
+        <div class="metric-card <?= App::e((string)($kpi['tone'] ?? '')) ?>">
+            <div class="label"><?= App::e((string)($kpi['label'] ?? '')) ?></div>
+            <div class="value"><?= App::e((string)($kpi['value'] ?? '')) ?></div>
+            <div class="sub"><?= App::e((string)($kpi['sub'] ?? '')) ?></div>
+        </div>
+    <?php endforeach; ?>
+</div>
+<?php endif; ?>
+<?php foreach ($briefCharts as $chart): ?>
+    <?php if (!is_array($chart)) { continue; } ?>
+    <div class="card mb-2">
+        <div class="card-header"><h2 style="margin:0"><?= App::e((string)($chart['title'] ?? 'Chart')) ?></h2></div>
+        <div class="card-body">
+            <div class="exec-chart-frame">
+                <?= report_exec_svg($chart, (string)($brief['context'] ?? '')) ?>
+            </div>
+        </div>
+    </div>
+<?php endforeach; ?>
+<?php if ($briefRows !== []): ?>
+<div class="card">
+    <div class="card-header"><h2 style="margin:0"><?= App::e((string)($briefTable['title'] ?? 'Detail')) ?></h2></div>
+    <div class="card-body flush">
+        <table class="data">
+            <thead>
+            <tr>
+                <?php foreach ($briefHeads as $head): ?>
+                    <th><?= App::e((string)$head) ?></th>
+                <?php endforeach; ?>
+            </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($briefRows as $row): ?>
+                <?php if (!is_array($row)) { continue; } ?>
+                <tr>
+                    <?php foreach ($row as $cell): ?>
+                        <?php $cellText = (string)$cell; $cellKey = strtolower($cellText); ?>
+                        <td><?php
+                            if (in_array($cellKey, ['crit', 'warn', 'ok'], true)) {
+                                echo report_climate_status_html($cellKey);
+                            } else {
+                                echo App::e($cellText);
+                            }
+                        ?></td>
+                    <?php endforeach; ?>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php elseif ($report === 'power_history'):
     $hoursMap = ['week' => 24 * 7, 'month' => 24 * 31, 'year' => 24 * 365];
     $phHours = $hoursMap[$phPreset] ?? 24 * 7;
     $phFromArg = $phPreset === 'custom' ? $phFrom : null;
@@ -2248,115 +2510,6 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
     </div>
 </div>
 
-<?php elseif ($report === 'executive'):
-    $exec = report_executive();
-    $execSpan = $exec['span'];
-    $execRoomId = (int)$exec['room_id'];
-    $execRooms = report_climate_rooms();
-    ?>
-<div class="card mb-2">
-    <div class="card-header flex-between">
-        <h2 style="margin:0">Executive</h2>
-        <div class="flex gap-1">
-            <a class="btn btn-sm btn-primary" href="<?= App::e(report_exec_pdf_url()) ?>">Export PDF</a>
-            <?php report_export_btn(); ?>
-        </div>
-    </div>
-    <div class="card-body">
-        <p style="margin-top:0"><?= App::e((string)$exec['lead']) ?></p>
-        <p class="text-muted" style="margin-top:0">
-            Cold aisle and hot aisle follow sensor placement. Supply and return come from cooling units.
-            Temperatures use the site unit (<?= App::e((string)$exec['symbol']) ?>).
-        </p>
-        <form method="get" class="form-grid">
-            <input type="hidden" name="report" value="executive">
-            <div class="form-row"><label>Period</label>
-                <select class="form-control" name="span">
-                    <option value="24h"<?= $execSpan['span'] === '24h' ? ' selected' : '' ?>>Last 24 hours</option>
-                    <option value="7d"<?= $execSpan['span'] === '7d' ? ' selected' : '' ?>>Last 7 days</option>
-                    <option value="30d"<?= $execSpan['span'] === '30d' ? ' selected' : '' ?>>Last 30 days</option>
-                </select>
-            </div>
-            <div class="form-row"><label>Room</label>
-                <select class="form-control" name="room_id">
-                    <option value="">All rooms</option>
-                    <?php foreach ($execRooms as $rm): ?>
-                        <?php
-                        $rid = (int)$rm['room_id'];
-                        $dcName = trim((string)($rm['dc_name'] ?? ''));
-                        $roomLabel = $dcName !== '' ? ($dcName . ' / ' . (string)$rm['name']) : (string)$rm['name'];
-                        ?>
-                        <option value="<?= $rid ?>"<?= $execRoomId === $rid ? ' selected' : '' ?>><?= App::e($roomLabel) ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </div>
-            <div class="form-row" style="align-self:end">
-                <button class="btn btn-primary" type="submit">Apply</button>
-                <?php if ($execSpan['span'] !== '7d' || $execRoomId > 0): ?>
-                    <a class="btn btn-secondary" href="?report=executive">Clear</a>
-                <?php endif; ?>
-            </div>
-        </form>
-        <?php if (!$exec['has_samples']): ?>
-            <p class="text-muted" style="font-size:.85rem;margin:.75rem 0 0">
-                No samples were stored in this period. The figures above are the latest reading on each sensor.
-            </p>
-        <?php endif; ?>
-    </div>
-</div>
-<div class="metrics">
-    <?php foreach ($exec['kpis'] as $kpi): ?>
-        <div class="metric-card <?= App::e((string)$kpi['tone']) ?>">
-            <div class="label"><?= App::e((string)$kpi['label']) ?></div>
-            <div class="value"><?= App::e((string)$kpi['value']) ?></div>
-            <div class="sub"><?= App::e((string)$kpi['sub']) ?></div>
-        </div>
-    <?php endforeach; ?>
-</div>
-<div class="card mb-2">
-    <div class="card-header"><h2 style="margin:0">Temperature</h2></div>
-    <div class="card-body">
-        <div class="exec-chart-frame">
-            <?= report_exec_svg($exec['temp_chart'], (string)$execSpan['label']) ?>
-        </div>
-        <?php $execCaption = report_exec_cool_caption($exec); ?>
-        <?php if ($execCaption !== ''): ?>
-            <p class="text-muted" style="font-size:.85rem;margin:.75rem 0 0"><?= App::e($execCaption) ?></p>
-        <?php endif; ?>
-    </div>
-</div>
-<div class="card mb-2">
-    <div class="card-header"><h2 style="margin:0">Humidity</h2></div>
-    <div class="card-body">
-        <div class="exec-chart-frame">
-            <?= report_exec_svg($exec['hum_chart'], (string)$execSpan['label']) ?>
-        </div>
-    </div>
-</div>
-<div class="card">
-    <div class="card-header"><h2 style="margin:0">Outside limits</h2></div>
-    <div class="card-body flush">
-        <table class="data">
-            <thead>
-            <tr><th>Status</th><th>Name</th><th>Room</th><th>Point</th><th>Current</th></tr>
-            </thead>
-            <tbody>
-            <?php foreach ($exec['exceptions'] as $r): ?>
-                <tr>
-                    <td><?= report_climate_status_html((string)$r['status']) ?></td>
-                    <td><a href="<?= App::e(App::url((string)$r['href'])) ?>"><?= App::e((string)$r['name']) ?></a></td>
-                    <td><?= App::e(report_dash((string)$r['room'])) ?></td>
-                    <td><?= App::e(report_dash((string)$r['point'])) ?></td>
-                    <td><?= App::e(report_dash((string)$r['current'])) ?></td>
-                </tr>
-            <?php endforeach; ?>
-            <?php if (!$exec['exceptions']): ?>
-                <tr><td colspan="5" class="text-muted">Sensors with limits are inside them.</td></tr>
-            <?php endif; ?>
-            </tbody>
-        </table>
-    </div>
-</div>
 <?php endif; ?>
 
 <?php layout_footer(); ?>
