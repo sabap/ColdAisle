@@ -19,6 +19,14 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.29] - 2026-11-16
+
+### New features
+
+- **Reports:** Cooling lists each cooling unit with supply, return, humidity, and humidity setpoint, plus temperature and humidity from aisle and room sensors
+- **Reports:** Temperature and Humidity list the latest reading and the minimum, average, and maximum for a chosen period. Temperature includes sensor and cooling-unit supply and return readings in the site unit. Humidity includes sensor and cooling-unit relative humidity
+
+---
 ## [1.0.28] - 2026-11-13
 
 ### Enhancements
