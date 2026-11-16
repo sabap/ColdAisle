@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.30] - 2026-11-16
+
+### Enhancements
+
+- **Reports:** Temperature and Humidity say when the chosen period has no stored samples. The latest reading on each sensor still shows
+
+---
 ## [1.0.29] - 2026-11-16
 
 ### New features
