@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.32] - 2026-11-16
+
+### New features
+
+- **Reports:** Executive is a brief on each catalog report, with a graph when the report has metrics, and a PDF export
+
+---
 ## [1.0.31] - 2026-11-16
 
 ### New features
