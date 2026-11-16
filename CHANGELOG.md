@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.33] - 2026-11-16
+
+### New features
+
+- **NOC:** Named views with their own public URL. Drag modules, including the 3D hall and an optional page rotator, onto a 1920×1080 board. A tile that would scroll is refused
+
+---
 ## [1.0.32] - 2026-11-16
 
 ### New features
