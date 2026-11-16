@@ -6,6 +6,7 @@ require_once dirname(__DIR__) . '/includes/layout.php';
 require_once dirname(__DIR__) . '/includes/power_helpers.php';
 require_once dirname(__DIR__) . '/includes/work_order_helpers.php';
 require_once dirname(__DIR__) . '/includes/cooling_helpers.php';
+require_once dirname(__DIR__) . '/includes/executive_report.php';
 App::boot();
 $user = App::requirePermission('view_reports');
 
@@ -1132,8 +1133,17 @@ function report_emit_csv(string $report): never
         ], $rows);
     }
 
+    if ($report === 'executive') {
+        $csv = report_executive()['csv'];
+        ListPager::sendCsv($file, $csv['headers'], $csv['rows']);
+    }
+
     App::flash('error', 'That report cannot be exported as CSV.');
     App::redirect('pages/reports.php' . ($report !== '' ? '?report=' . rawurlencode($report) : ''));
+}
+
+if ($report === 'executive' && strtolower(trim((string)($_GET['export'] ?? ''))) === 'pdf') {
+    report_exec_send_pdf(report_executive());
 }
 
 if (class_exists('ListPager') && ListPager::wantsCsv() && $report !== '' && $report !== 'power_history') {
@@ -1151,6 +1161,7 @@ $catalog = [
     'cooling' => 'Cooling',
     'temperature' => 'Temperature',
     'humidity' => 'Humidity',
+    'executive' => 'Executive',
     'warranty_expiration' => 'Warranty Expiration',
     'disposal_queue' => 'Disposal Queue',
     'cable_inventory' => 'Cable Inventory',
@@ -2231,6 +2242,116 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
                             : 'No temperature sensors, and no cooling unit reported supply or return in this period.' ?>
                     </td>
                 </tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<?php elseif ($report === 'executive'):
+    $exec = report_executive();
+    $execSpan = $exec['span'];
+    $execRoomId = (int)$exec['room_id'];
+    $execRooms = report_climate_rooms();
+    ?>
+<div class="card mb-2">
+    <div class="card-header flex-between">
+        <h2 style="margin:0">Executive</h2>
+        <div class="flex gap-1">
+            <a class="btn btn-sm btn-primary" href="<?= App::e(report_exec_pdf_url()) ?>">Export PDF</a>
+            <?php report_export_btn(); ?>
+        </div>
+    </div>
+    <div class="card-body">
+        <p style="margin-top:0"><?= App::e((string)$exec['lead']) ?></p>
+        <p class="text-muted" style="margin-top:0">
+            Cold aisle and hot aisle follow sensor placement. Supply and return come from cooling units.
+            Temperatures use the site unit (<?= App::e((string)$exec['symbol']) ?>).
+        </p>
+        <form method="get" class="form-grid">
+            <input type="hidden" name="report" value="executive">
+            <div class="form-row"><label>Period</label>
+                <select class="form-control" name="span">
+                    <option value="24h"<?= $execSpan['span'] === '24h' ? ' selected' : '' ?>>Last 24 hours</option>
+                    <option value="7d"<?= $execSpan['span'] === '7d' ? ' selected' : '' ?>>Last 7 days</option>
+                    <option value="30d"<?= $execSpan['span'] === '30d' ? ' selected' : '' ?>>Last 30 days</option>
+                </select>
+            </div>
+            <div class="form-row"><label>Room</label>
+                <select class="form-control" name="room_id">
+                    <option value="">All rooms</option>
+                    <?php foreach ($execRooms as $rm): ?>
+                        <?php
+                        $rid = (int)$rm['room_id'];
+                        $dcName = trim((string)($rm['dc_name'] ?? ''));
+                        $roomLabel = $dcName !== '' ? ($dcName . ' / ' . (string)$rm['name']) : (string)$rm['name'];
+                        ?>
+                        <option value="<?= $rid ?>"<?= $execRoomId === $rid ? ' selected' : '' ?>><?= App::e($roomLabel) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="form-row" style="align-self:end">
+                <button class="btn btn-primary" type="submit">Apply</button>
+                <?php if ($execSpan['span'] !== '7d' || $execRoomId > 0): ?>
+                    <a class="btn btn-secondary" href="?report=executive">Clear</a>
+                <?php endif; ?>
+            </div>
+        </form>
+        <?php if (!$exec['has_samples']): ?>
+            <p class="text-muted" style="font-size:.85rem;margin:.75rem 0 0">
+                No samples were stored in this period. The figures above are the latest reading on each sensor.
+            </p>
+        <?php endif; ?>
+    </div>
+</div>
+<div class="metrics">
+    <?php foreach ($exec['kpis'] as $kpi): ?>
+        <div class="metric-card <?= App::e((string)$kpi['tone']) ?>">
+            <div class="label"><?= App::e((string)$kpi['label']) ?></div>
+            <div class="value"><?= App::e((string)$kpi['value']) ?></div>
+            <div class="sub"><?= App::e((string)$kpi['sub']) ?></div>
+        </div>
+    <?php endforeach; ?>
+</div>
+<div class="card mb-2">
+    <div class="card-header"><h2 style="margin:0">Temperature</h2></div>
+    <div class="card-body">
+        <div class="exec-chart-frame">
+            <?= report_exec_svg($exec['temp_chart'], (string)$execSpan['label']) ?>
+        </div>
+        <?php $execCaption = report_exec_cool_caption($exec); ?>
+        <?php if ($execCaption !== ''): ?>
+            <p class="text-muted" style="font-size:.85rem;margin:.75rem 0 0"><?= App::e($execCaption) ?></p>
+        <?php endif; ?>
+    </div>
+</div>
+<div class="card mb-2">
+    <div class="card-header"><h2 style="margin:0">Humidity</h2></div>
+    <div class="card-body">
+        <div class="exec-chart-frame">
+            <?= report_exec_svg($exec['hum_chart'], (string)$execSpan['label']) ?>
+        </div>
+    </div>
+</div>
+<div class="card">
+    <div class="card-header"><h2 style="margin:0">Outside limits</h2></div>
+    <div class="card-body flush">
+        <table class="data">
+            <thead>
+            <tr><th>Status</th><th>Name</th><th>Room</th><th>Point</th><th>Current</th></tr>
+            </thead>
+            <tbody>
+            <?php foreach ($exec['exceptions'] as $r): ?>
+                <tr>
+                    <td><?= report_climate_status_html((string)$r['status']) ?></td>
+                    <td><a href="<?= App::e(App::url((string)$r['href'])) ?>"><?= App::e((string)$r['name']) ?></a></td>
+                    <td><?= App::e(report_dash((string)$r['room'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['point'])) ?></td>
+                    <td><?= App::e(report_dash((string)$r['current'])) ?></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$exec['exceptions']): ?>
+                <tr><td colspan="5" class="text-muted">Sensors with limits are inside them.</td></tr>
             <?php endif; ?>
             </tbody>
         </table>

@@ -880,6 +880,15 @@ body.gs-palette-open { overflow: hidden; }
 .metric-card.success { border-color: #22c55e44; }
 .metric-card.warning { border-color: #f59e0b44; }
 .metric-card.danger { border-color: #ef444444; }
+.exec-chart { width: 100%; height: auto; display: block; }
+.exec-chart-frame {
+  background:
+    radial-gradient(900px 220px at 15% 0%, rgba(56, 189, 248, .1), transparent 60%),
+    linear-gradient(180deg, rgba(15, 23, 42, .35), transparent 70%);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: .35rem .5rem .15rem;
+}
 .metric-unit { font-size: .85rem; font-weight: 600; color: var(--muted); }
 
 /* Power dashboard */

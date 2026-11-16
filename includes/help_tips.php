@@ -103,7 +103,7 @@ function layout_help_catalog(): array
         ],
         'reports' => [
             'title' => 'Reports',
-            'html' => '<p>Capacity, power, inventory, warranty, cooling, temperature, and humidity. Use reports for a printable or exportable slice instead of clicking through pages.</p>',
+            'html' => '<p>Capacity, power, inventory, warranty, cooling, temperature, and humidity. Executive is a one-page climate brief with a trend graph and a PDF export.</p>',
         ],
         'users' => [
             'title' => 'Users &amp; departments',
