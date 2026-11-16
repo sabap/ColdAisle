@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.31] - 2026-11-16
+
+### New features
+
+- **Reports:** Executive is a climate brief with cold aisle, hot aisle, humidity, and outside-limit counts, a trend graph, and a PDF export
+
+---
 ## [1.0.30] - 2026-11-16
 
 ### Enhancements
