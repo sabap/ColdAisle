@@ -2120,11 +2120,13 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
     $climateRows = report_climate($climateWhich);
     $tempSym = class_exists('TempUnitService') ? TempUnitService::symbol() : '°C';
     $climateCounts = ['crit' => 0, 'warn' => 0, 'ok' => 0];
+    $climateSamples = 0;
     foreach ($climateRows as $cr) {
         $st = (string)($cr['status'] ?? '');
         if (isset($climateCounts[$st])) {
             $climateCounts[$st]++;
         }
+        $climateSamples += (int)($cr['samples'] ?? 0);
     }
     $climateHasStatus = ($climateCounts['crit'] + $climateCounts['warn'] + $climateCounts['ok']) > 0;
     ?>
@@ -2182,6 +2184,11 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
                 — <?= (int)$climateCounts['crit'] ?> crit, <?= (int)$climateCounts['warn'] ?> warn, <?= (int)$climateCounts['ok'] ?> OK
             <?php endif; ?>
         </p>
+        <?php if ($climateRows && $climateSamples === 0): ?>
+            <p class="text-muted" style="font-size:.85rem;margin:.35rem 0 0">
+                No samples were stored in this period. Current is the latest reading kept on each sensor.
+            </p>
+        <?php endif; ?>
     </div>
 </div>
 <div class="card">
