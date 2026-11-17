@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.35] - 2026-11-17
+
+### Bug fixes
+
+- **Reports:** Inventory full detail fills manufacturer, model, and the other template fields when the device row itself is blank
+
+---
 ## [1.0.34] - 2026-11-17
 
 ### New features
