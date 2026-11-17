@@ -83,6 +83,13 @@ function report_inventory_device_sql(): string
             parent.label AS parent_label,
             mf.name AS template_manufacturer,
             tpl.model AS template_model,
+            tpl.device_type AS template_device_type,
+            tpl.u_height AS template_u_height,
+            tpl.weight_kg AS template_weight_kg,
+            tpl.watts AS template_watts,
+            tpl.num_data_ports AS template_data_ports,
+            tpl.num_power_ports AS template_power_ports,
+            tpl.snmp_template AS template_snmp,
             d.nominal_watts,
             d.weight_kg,
             d.num_data_ports,
@@ -220,11 +227,19 @@ function report_inventory_cell(array $row, string $key): string
 {
     return match ($key) {
         'device_id' => report_inventory_whole($row['device_id'] ?? null),
-        'position_u', 'u_height', 'num_data_ports', 'num_power_ports' => report_inventory_whole($row[$key] ?? null),
+        'position_u' => report_inventory_whole($row['position_u'] ?? null),
+        'u_height' => report_inventory_whole(report_inventory_first($row['u_height'] ?? null, $row['template_u_height'] ?? null)),
+        'num_data_ports' => report_inventory_whole(report_inventory_first($row['num_data_ports'] ?? null, $row['template_data_ports'] ?? null)),
+        'num_power_ports' => report_inventory_whole(report_inventory_first($row['num_power_ports'] ?? null, $row['template_power_ports'] ?? null)),
+        'manufacturer' => report_inventory_or($row['manufacturer'] ?? null, $row['template_manufacturer'] ?? null),
+        'model' => report_inventory_or($row['model'] ?? null, $row['template_model'] ?? null),
+        'device_type' => report_inventory_or($row['device_type'] ?? null, $row['template_device_type'] ?? null),
+        'snmp_version' => report_inventory_or($row['snmp_version'] ?? null, $row['template_snmp'] ?? null),
         'face' => report_inventory_on($row['back_side'] ?? null) ? 'Rear' : 'Front',
         'depth' => report_inventory_on($row['half_depth'] ?? null) ? 'Half' : 'Full',
         'template' => report_inventory_pair($row['template_manufacturer'] ?? null, $row['template_model'] ?? null),
-        'nominal_watts', 'weight_kg' => report_inventory_plain_num($row[$key] ?? null),
+        'nominal_watts' => report_inventory_plain_num(report_inventory_first($row['nominal_watts'] ?? null, $row['template_watts'] ?? null)),
+        'weight_kg' => report_inventory_plain_num(report_inventory_first($row['weight_kg'] ?? null, $row['template_weight_kg'] ?? null)),
         'manufacture_date', 'install_date', 'warranty_end', 'purchase_date' => report_inventory_day($row[$key] ?? null),
         'purchase_cost' => report_inventory_money($row['purchase_cost'] ?? null),
         'custom_fields' => report_inventory_custom($row['custom_fields'] ?? null),
@@ -234,6 +249,20 @@ function report_inventory_cell(array $row, string $key): string
         'created_at', 'updated_at' => report_inventory_stamp($row[$key] ?? null),
         default => report_inventory_scalar($row[$key] ?? null),
     };
+}
+
+/** Device value when it is set. Otherwise the linked template value. */
+function report_inventory_first(mixed $own, mixed $fallback): mixed
+{
+    if (report_inventory_scalar($own) !== '') {
+        return $own;
+    }
+    return $fallback;
+}
+
+function report_inventory_or(mixed $own, mixed $fallback): string
+{
+    return report_inventory_scalar(report_inventory_first($own, $fallback));
 }
 
 function report_inventory_scalar(mixed $value): string
