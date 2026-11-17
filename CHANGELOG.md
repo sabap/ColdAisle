@@ -19,6 +19,13 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
+## [1.0.34] - 2026-11-17
+
+### New features
+
+- **Reports:** The catalog report is named Inventory, with Summary and Full detail. Full detail lists each device except live readings, and both views keep Detail and Executive
+
+---
 ## [1.0.33] - 2026-11-16
 
 ### New features
