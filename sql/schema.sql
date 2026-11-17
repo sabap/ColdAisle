@@ -1224,7 +1224,7 @@ GO
 
 IF NOT EXISTS (SELECT 1 FROM report_definitions WHERE report_key = 'inventory_summary')
 INSERT INTO report_definitions (name, report_key, description, category) VALUES
-('Inventory Summary', 'inventory_summary', 'Devices by type, status, and datacenter', 'inventory'),
+('Inventory', 'inventory_summary', 'Active devices, as counts or a full list without live readings', 'inventory'),
 ('Cabinet Utilization', 'cabinet_utilization', 'U-space used vs available per cabinet', 'capacity'),
 ('Power Capacity', 'power_capacity', 'Power zone and PDU utilization', 'power'),
 ('Warranty Expiration', 'warranty_expiration', 'Devices with warranty ending soon', 'lifecycle'),

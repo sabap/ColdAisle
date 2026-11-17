@@ -502,8 +502,94 @@ function report_exec_brief_power_path(): array
 }
 
 /** @return array<string,mixed> */
+function report_exec_brief_inventory_full(): array
+{
+    if (!function_exists('report_inventory_devices')) {
+        require_once __DIR__ . '/report_inventory.php';
+    }
+    $rows = report_inventory_devices();
+    $total = count($rows);
+    $withSerial = 0;
+    $withWarranty = 0;
+    $unassigned = 0;
+    $byDc = [];
+    foreach ($rows as $row) {
+        if (report_inventory_scalar($row['serial_no'] ?? null) !== '') {
+            $withSerial++;
+        }
+        if (report_inventory_scalar($row['warranty_end'] ?? null) !== '') {
+            $withWarranty++;
+        }
+        $cabinet = report_inventory_scalar($row['cabinet_name'] ?? null);
+        if ($cabinet === '') {
+            $unassigned++;
+            $dc = 'Unassigned';
+        } else {
+            $dc = report_inventory_scalar($row['datacenter_name'] ?? null);
+            if ($dc === '') {
+                $dc = 'Unassigned';
+            }
+        }
+        $byDc[$dc] = ($byDc[$dc] ?? 0) + 1;
+    }
+    $named = 0;
+    foreach ($byDc as $name => $_n) {
+        if ($name !== 'Unassigned') {
+            $named++;
+        }
+    }
+    $pairs = [];
+    foreach ($byDc as $name => $n) {
+        $pairs[] = [report_exec_label((string)$name), (int)$n];
+    }
+    usort($pairs, static function (array $a, array $b): int {
+        if ($a[1] !== $b[1]) {
+            return $b[1] <=> $a[1];
+        }
+        return strcasecmp((string)$a[0], (string)$b[0]);
+    });
+    $bits = [];
+    if ($total === 0) {
+        $bits[] = 'no active devices yet';
+    } else {
+        $deviceWord = 'active device' . ($total === 1 ? '' : 's');
+        if ($named === 0) {
+            $bits[] = report_exec_int($total) . ' ' . $deviceWord . ', none assigned to a data center';
+        } else {
+            $bits[] = report_exec_int($total) . ' ' . $deviceWord
+                . ' across ' . $named . ' data center' . ($named === 1 ? '' : 's');
+            if ($unassigned > 0) {
+                $bits[] = report_exec_int($unassigned) . ($unassigned === 1 ? ' is' : ' are') . ' not in a cabinet';
+            }
+        }
+    }
+    $footer = count($pairs) > 12 ? 'The graph shows the 12 largest data centers.' : '';
+    return report_exec_pack(
+        'Executive · Inventory',
+        report_exec_sentences($bits),
+        'Full detail',
+        [
+            report_exec_card('Devices', report_exec_int($total), 'Active', 'accent'),
+            report_exec_card('With serial', report_exec_int($withSerial), 'Of ' . report_exec_int($total), 'accent'),
+            report_exec_card('With warranty', report_exec_int($withWarranty), 'Warranty end set', 'accent'),
+            report_exec_card('Unassigned', report_exec_int($unassigned), 'No cabinet', $unassigned > 0 ? 'warning' : 'success'),
+        ],
+        [report_exec_count_chart('Devices by data center', $pairs, 'Devices')],
+        [],
+        $footer,
+        'The detail report lists every device field except live readings.'
+    );
+}
+
+/** @return array<string,mixed> */
 function report_exec_brief_inventory(): array
 {
+    if (!function_exists('report_inventory_view')) {
+        require_once __DIR__ . '/report_inventory.php';
+    }
+    if (report_inventory_view() === 'full') {
+        return report_exec_brief_inventory_full();
+    }
     $data = report_inventory_summary();
     $byType = is_array($data['by_type'] ?? null) ? $data['by_type'] : [];
     $byStatus = is_array($data['by_status'] ?? null) ? $data['by_status'] : [];

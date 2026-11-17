@@ -7,6 +7,7 @@ require_once dirname(__DIR__) . '/includes/power_helpers.php';
 require_once dirname(__DIR__) . '/includes/work_order_helpers.php';
 require_once dirname(__DIR__) . '/includes/cooling_helpers.php';
 require_once dirname(__DIR__) . '/includes/executive_report.php';
+require_once dirname(__DIR__) . '/includes/report_inventory.php';
 App::boot();
 $user = App::requirePermission('view_reports');
 
@@ -46,27 +47,6 @@ try {
 } catch (Throwable $e) {
     $phZones = [];
     $phPdus = [];
-}
-
-function report_inventory_summary(): array
-{
-    return [
-        'by_type' => Database::fetchAll(
-            "SELECT device_type, COUNT(*) AS cnt FROM devices WHERE is_active = 1 GROUP BY device_type ORDER BY cnt DESC"
-        ),
-        'by_status' => Database::fetchAll(
-            "SELECT status, COUNT(*) AS cnt FROM devices WHERE is_active = 1 GROUP BY status ORDER BY cnt DESC"
-        ),
-        'by_dc' => Database::fetchAll(
-            "SELECT dc.name, COUNT(d.device_id) AS cnt
-             FROM datacenters dc
-             LEFT JOIN rooms r ON r.datacenter_id = dc.datacenter_id
-             LEFT JOIN cabinets c ON c.room_id = r.room_id AND c.is_active = 1
-             LEFT JOIN devices d ON d.cabinet_id = c.cabinet_id AND d.is_active = 1
-             WHERE dc.is_active = 1
-             GROUP BY dc.name ORDER BY dc.name"
-        ),
-    ];
 }
 
 function report_cabinet_utilization(): array
@@ -286,7 +266,7 @@ function report_catalog(): array
     return [
         'power_history' => 'Power History',
         'power_path' => 'Power Path',
-        'inventory_summary' => 'Inventory Summary',
+        'inventory_summary' => 'Inventory',
         'cabinet_utilization' => 'Cabinet Utilization',
         'power_capacity' => 'Power Capacity',
         'cooling' => 'Cooling',
@@ -874,6 +854,32 @@ function report_emit_csv(string $report): never
     $file = 'coldaisle-report-' . preg_replace('/\W+/', '-', $report) . '-' . $stamp . '.csv';
 
     if ($report === 'inventory_summary') {
+        if (report_inventory_view() === 'full') {
+            try {
+                $devices = report_inventory_devices();
+            } catch (Throwable $e) {
+                App::log('Inventory full detail export failed: ' . $e->getMessage(), 'error');
+                App::flash('error', 'That report could not be exported.');
+                $q = $_GET;
+                unset($q['export']);
+                $qs = http_build_query($q);
+                App::redirect('pages/reports.php' . ($qs !== '' ? '?' . $qs : ''));
+            }
+            $cols = report_inventory_columns();
+            $rows = [];
+            foreach ($devices as $device) {
+                $line = [];
+                foreach ($cols as $col) {
+                    $line[] = report_inventory_cell($device, $col['key']);
+                }
+                $rows[] = $line;
+            }
+            $heads = [];
+            foreach ($cols as $col) {
+                $heads[] = $col['label'];
+            }
+            ListPager::sendCsv('coldaisle-report-inventory-full-' . $stamp . '.csv', $heads, $rows);
+        }
         $data = report_inventory_summary();
         $rows = [];
         foreach ($data['by_type'] as $r) {
@@ -1201,13 +1207,20 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
     <div class="card-header"><h2>Report Catalog</h2></div>
     <div class="card-body">
         <div class="metrics">
-            <?php foreach ($catalog as $key => $label): ?>
+            <?php foreach ($catalog as $key => $label):
+                $detailHref = '?report=' . urlencode($key);
+                $execHref = $detailHref . '&mode=executive';
+                if ($key === 'inventory_summary' && report_inventory_view() === 'full') {
+                    $detailHref .= '&inv=full';
+                    $execHref .= '&inv=full';
+                }
+                ?>
                 <div class="metric-card catalog-card<?= $report === $key ? ' is-on' : '' ?>">
                     <div class="label">Report</div>
                     <div class="value"><?= App::e($label) ?></div>
                     <div class="catalog-picks">
-                        <a class="<?= ($report === $key && !$execMode) ? 'is-on' : '' ?>" href="<?= App::e('?report=' . urlencode($key)) ?>">Detail</a>
-                        <a class="<?= ($report === $key && $execMode) ? 'is-on' : '' ?>" href="<?= App::e('?report=' . urlencode($key) . '&mode=executive') ?>">Executive</a>
+                        <a class="<?= ($report === $key && !$execMode) ? 'is-on' : '' ?>" href="<?= App::e($detailHref) ?>">Detail</a>
+                        <a class="<?= ($report === $key && $execMode) ? 'is-on' : '' ?>" href="<?= App::e($execHref) ?>">Executive</a>
                     </div>
                 </div>
             <?php endforeach; ?>
@@ -1218,9 +1231,18 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
 <?php if ($report !== '' && isset($catalog[$report])): ?>
 <div class="report-mode">
     <strong><?= App::e($catalog[$report]) ?></strong>
-    <div class="report-mode-switch">
-        <a class="<?= $execMode ? '' : 'is-on' ?>" href="<?= App::e(report_mode_href(false)) ?>">Detail</a>
-        <a class="<?= $execMode ? 'is-on' : '' ?>" href="<?= App::e(report_mode_href(true)) ?>">Executive</a>
+    <div class="report-mode-tools">
+        <?php if ($report === 'inventory_summary'):
+            $invView = report_inventory_view(); ?>
+        <div class="report-mode-switch">
+            <a class="<?= $invView === 'full' ? '' : 'is-on' ?>" href="<?= App::e(report_inventory_view_href('summary')) ?>">Summary</a>
+            <a class="<?= $invView === 'full' ? 'is-on' : '' ?>" href="<?= App::e(report_inventory_view_href('full')) ?>">Full detail</a>
+        </div>
+        <?php endif; ?>
+        <div class="report-mode-switch">
+            <a class="<?= $execMode ? '' : 'is-on' ?>" href="<?= App::e(report_mode_href(false)) ?>">Detail</a>
+            <a class="<?= $execMode ? 'is-on' : '' ?>" href="<?= App::e(report_mode_href(true)) ?>">Executive</a>
+        </div>
     </div>
 </div>
 <?php endif; ?>
@@ -1912,7 +1934,63 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
 <?php endif; ?>
 
 <?php elseif ($report === 'inventory_summary'):
-    $data = report_inventory_summary(); ?>
+    if (report_inventory_view() === 'full'):
+        $invDevices = null;
+        try {
+            $invDevices = report_inventory_devices();
+        } catch (Throwable $e) {
+            App::log('Inventory full detail failed: ' . $e->getMessage(), 'error');
+            $invDevices = null;
+        }
+        $invCols = report_inventory_columns();
+        $invCount = is_array($invDevices) ? count($invDevices) : 0;
+        ?>
+<div class="flex-between mb-2">
+    <p class="text-muted mb-0"><?php
+        if ($invDevices === null) {
+            echo 'This report could not be built.';
+        } else {
+            echo App::e((string)$invCount) . ' active device' . ($invCount === 1 ? '' : 's') . '. Live readings are left out.';
+        }
+    ?></p>
+    <?php report_export_btn(); ?>
+</div>
+<?php if (is_array($invDevices)): ?>
+<div class="card">
+    <div class="card-header"><h2>Full detail</h2></div>
+    <div class="card-body flush">
+        <div class="table-wrap">
+            <table class="data inventory-full">
+                <thead><tr>
+                    <?php foreach ($invCols as $col): ?>
+                        <th><?= App::e($col['label']) ?></th>
+                    <?php endforeach; ?>
+                </tr></thead>
+                <tbody>
+                <?php if ($invDevices === []): ?>
+                    <tr><td colspan="<?= count($invCols) ?>" class="text-muted">No active devices.</td></tr>
+                <?php endif; ?>
+                <?php foreach ($invDevices as $device): ?>
+                    <tr>
+                    <?php foreach ($invCols as $col):
+                        $text = report_inventory_cell($device, $col['key']);
+                        $wrap = !empty($col['wrap']) ? ' class="inv-wrap"' : '';
+                        if ($col['key'] === 'label' && $text !== ''): ?>
+                        <td<?= $wrap ?>><a href="<?= App::e(App::url('pages/devices.php?id=' . (int)$device['device_id'])) ?>"><?= App::e($text) ?></a></td>
+                        <?php else: ?>
+                        <td<?= $wrap ?>><?= $text === '' ? '—' : App::e($text) ?></td>
+                        <?php endif;
+                    endforeach; ?>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+    <?php else:
+        $data = report_inventory_summary(); ?>
 <div class="flex-between mb-2">
     <p class="text-muted mb-0">Active devices by type, status, and data center.</p>
     <?php report_export_btn(); ?>
@@ -1931,6 +2009,7 @@ if (!in_array($ppView, ['all', 'unmapped', 'single_feed', 'half_map', 'no_row_fe
     <div class="card-body flush"><table class="data"><thead><tr><th>Data Center</th><th>Devices</th></tr></thead><tbody>
     <?php foreach ($data['by_dc'] as $r): ?><tr><td><?= App::e($r['name']) ?></td><td><?= (int)$r['cnt'] ?></td></tr><?php endforeach; ?>
     </tbody></table></div></div>
+    <?php endif; ?>
 
 <?php elseif ($report === 'cabinet_utilization'):
     $rows = report_cabinet_utilization(); ?>
